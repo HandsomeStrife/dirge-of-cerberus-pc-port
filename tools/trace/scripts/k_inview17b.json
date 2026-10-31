@@ -1,0 +1,47 @@
+{
+ "name": "k_inview17b",
+ "frames": 1379,
+ "log_from": 1080,
+ "doc": "worker 0163: in-view mode 5. k_enemy_engage8's route (message closed, ladder, run east across trigger 95, which wakes #66 / #67 at f784; stick released at 787) without its shots; TRACE_POKE sets every 'AI mode 2' argument of scripts 108 / 109 (records 44 / 45: events 2 / 3 / 8 / 19) to 5, so both wake in brain mode 5 with Vincent standing ~30 u away in view. Run 5 windows (a-e, 299 frames each; frames = log_from + 299) with TRACE_FIELDSET=path TRACE_PATH_BODY=1 TRACE_ERECS=44,45 TRACE_ENEMIES=2 TRACE_LOG_AT=A5000 TRACE_POKE=ffbab0=5,ffbd90=5,ffbea8=5,ffc428=5,ffca08=5,ffcc58=5,ffcd70=5,ffd2b0=5",
+ "events": [
+  {
+   "from": 10,
+   "to": 230,
+   "lx": 0.6,
+   "ly": -1.0
+  },
+  {
+   "from": 240,
+   "to": 244,
+   "buttons": [
+    "cross"
+   ]
+  },
+  {
+   "from": 280,
+   "to": 284,
+   "buttons": [
+    "cross"
+   ]
+  },
+  {
+   "from": 300,
+   "to": 470,
+   "lx": 0.6,
+   "ly": -1.0
+  },
+  {
+   "from": 490,
+   "to": 494,
+   "buttons": [
+    "cross"
+   ]
+  },
+  {
+   "from": 500,
+   "to": 787,
+   "lx": 0.6,
+   "ly": -1.0
+  }
+ ]
+}

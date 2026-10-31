@@ -75,13 +75,45 @@ export function nearestNode(G, p, r = 40.0, flat = false, best = true) {
   return hit;
 }
 
-// FUN_00563970(a, -1) (the actor's node, actor +0x108): with no node, FUN_0033daf0(40, G, p, 0, 1);
-// with one, FUN_0033dda8(40, G, node, p, 0) (MISSING: the neighbourhood search from the old node is not
-// read; GUESS: the same nearest-node search). p = FUN_0054a720 = the actor's position. Then FUN_00563a50.
-export function trackNode(G, a, warn = () => {}) {
+// FUN_0033dda8(r, G, n, p, flat): from the actor's last node n, the best of n and its neighbours (every
+// link, open or not: vt+0x14) by |node - p| over x / z + 2 |dy| (one VADDz: horizontal, plus the height
+// twice; T: w161_chase, every frame of 46 / 47 matches). Under r -> that node; else FUN_0033daf0(r, G, p,
+// flat, 1), and with none the old node. flat (param 5) re-measures the best in 3D first (no caller here).
+export function nodeFrom(G, n, p, r = 40.0, flat = false) {
+  const q = node(G, n);
+  if (n !== -1 && q) {
+    const score = i => {
+      const v = G.nodes[i];
+      const x = f(v[0] - p[0]), y = f(v[1] - p[1]), z = f(v[2] - p[2]);
+      return f(f(Math.sqrt(f(f(x * x) + f(z * z)))) + Math.abs(f(y + y)));
+    };
+    let best = n, bs = score(n);
+    for (let k = 0; k < q[3]; k++) {
+      const nb = neighbour(G, n, k);
+      if (!node(G, nb)) continue;
+      const s = score(nb);
+      if (s < bs) { best = nb; bs = s; }
+    }
+    if (flat) bs = dist(pos(G, best), p);
+    if (bs < r) return best;
+  }
+  const h = nearestNode(G, p, r, flat, true);
+  return h !== -1 ? h : (q ? n : -1);
+}
+// FUN_00563970(a, -1) (the actor's node, actor +0x108): with no node, FUN_0033daf0(40, G, p, 0, 1); with
+// one, FUN_0033dda8(40, G, node, p, 0). p = FUN_0054a720 = the actor's position. Then FUN_00563a50.
+// The game runs it for an actor when its position is set (vt+0x234: FUN_0055ef78, +0x28 bit 0x10; the
+// player's FUN_00573c60 calls it first), from the action layers, and from listener events 0 / 3.
+export function trackNode(G, a, p = a.pos) {
   if (!G) return;
-  if (a.node108 !== -1) warn('nav_graph: FUN_0033dda8 (node search from the last node) not translated: nearest node instead');
-  setNode(G, a, nearestNode(G, a.pos, 40.0, false, true));
+  if (a.node108 === undefined) a.node108 = -1;
+  setNode(G, a, a.node108 === -1 ? nearestNode(G, p, 40.0, false, true) : nodeFrom(G, a.node108, p, 40.0, false));
+}
+// FUN_00559748's tail (an actor taking its AI / the stage): FUN_0033daf0(50, G, p, 0, 1) -> FUN_00563a50
+export function spawnNode(G, a) {
+  if (!G) return;
+  if (a.node108 === undefined) a.node108 = -1;
+  setNode(G, a, nearestNode(G, a.pos, 50.0, false, true));
 }
 // FUN_00563a50(a, n): a new node moves the actor's +0x1e count from the old node to it; C+0x398 = n
 export function setNode(G, a, n) {
@@ -95,13 +127,12 @@ export function setNode(G, a, n) {
 }
 
 // vt+0x34 (0x33ec98): the heuristic of node a toward goal b by the request's mode
+// (modes 1 / 2 / 5 need no goal: the mode-1 requests of layers 2 / 3 go out with goal -1 when the target
+// has no free neighbour, FUN_0055a628 does not check it)
 function heuristic(G, R, a, b) {
+  if (R.mode === 1 || R.mode === 2 || R.mode === 5) return 0;
   const d = dist(pos(G, a), pos(G, b));
-  switch (R.mode) {
-    case 1: case 2: case 5: return 0;
-    case 3: case 4: return f(-d);
-    default: return d;                         // 0, 6 and >= 7 (sltiu 7 fails -> 0x33ed70)
-  }
+  return R.mode === 3 || R.mode === 4 ? f(-d) : d;   // 0, 6 and >= 7 (sltiu 7 fails -> 0x33ed70): distance
 }
 // vt+0x24 (0x33ee38): goal test for node n at depth k. Mode 0 (or >= 7): n is the goal. Modes 1-6: n is
 // further than c from the start with k >= 3, or k reached the cap (max - 1).
@@ -160,64 +191,126 @@ function openInsert(S, r) {
   S.open.splice(i, 0, r);
 }
 
-// FUN_003682e8 (synchronous search) -> FUN_00369d88 + FUN_00369ed8: the node list (C+0x3a8: u16 nodes from
-// the start, -1 ended), or null when the pool is full at the start (the request fails, list untouched).
-// R: the request; rng: the shared random stream (mode 1 costs). pool = records free (POOL).
-export function search(G, R, rng = Math.random, warn = () => {}, pool = POOL) {
-  if (!(0 < pool)) return null;
-  const S = { open: [], closed: [], used: 0, res: null, state: 0, cur: null, i: 0 };
-  const alloc = (node, g, h, parent, depth) => { S.used++; return { node, g, h, parent, depth }; };
-  const full = () => !(S.used < pool);
-  // state 0 (FUN_003692e0)
-  if (full()) return [R.start, -1];
-  {
-    const r = alloc(R.start, 0, heuristic(G, R, R.start, R.goal), null, 0);
+// One search (the 0x50-byte record of FUN_00369d88 / FUN_00369140): open / closed lists, the state
+// A+0x10 (0 start, 1 next record, 2 one link, 3 done) and the result. Records come from the service's
+// pool (svc+0x14: 3000; FUN_00369238 gives them back when the search ends).
+export function makeService(o = {}) {
+  // DAT_0046e290 +100 (save RAM): +0 = 40 search steps per update (FUN_00369e40), +4 = 1 queue slot,
+  // +0x14 pool of 3000 records
+  return { budget: o.budget ?? 40, slots: new Array(o.slots ?? 1).fill(null), next: 0, pool: o.pool ?? POOL, used: 0 };
+}
+export function searchBegin(G, R, rng = Math.random, warn = () => {}, svc = makeService()) {
+  return { G, R, rng, warn, svc, open: [], closed: [], used: 0, res: null, state: 0, cur: null, i: 0 };
+}
+function alloc(S, node, g, h, parent, depth) { S.used++; S.svc.used++; return { node, g, h, parent, depth }; }
+const full = S => !(S.svc.used < S.svc.pool);
+// FUN_00369180: one call of the search's state function
+export function searchStep(S) {
+  const { G, R, rng, warn } = S;
+  if (S.state === 0) {                                        // FUN_003692e0
+    if (full(S)) { S.res = null; S.state = 3; return; }
+    const r = alloc(S, R.start, 0, heuristic(G, R, R.start, R.goal), null, 0);
     openInsert(S, r);
     if (isGoal(G, R, R.start, 1)) { S.res = r; S.state = 3; } else S.state = 1;
+    return;
   }
+  if (S.state === 1) {                                        // FUN_003693c0
+    S.cur = S.open[0] || null;
+    if (!S.cur) { S.res = null; S.state = 3; return; }
+    S.i = 0; S.state = 2;
+    return;
+  }
+  if (S.state !== 2) return;                                  // 3: FUN_00369720 (done)
+  // FUN_003693f0: one link of the current record per call
+  const cur = S.cur;
+  const nb = neighbour(G, cur.node, S.i);
+  if (nb === -1) {
+    S.open.splice(S.open.indexOf(cur), 1);                    // unlink
+    S.closed.push(cur);                                       // FUN_003698d0
+    S.state = 1;
+    return;
+  }
+  if (passable(G, cur.node, S.i)) {
+    if (!S.closed.some(r => r.node === nb)) {                 // FUN_00369728
+      const g = f(cur.g + cost(G, R, cur.node, S.i, rng, warn));
+      const o = S.open.find(r => r.node === nb);              // FUN_00369750
+      if (o) {
+        if (cur.depth < R.max - 1 && g < o.g) {
+          o.parent = cur; o.g = g; o.depth = cur.depth + 1;
+          S.open.splice(S.open.indexOf(o), 1); openInsert(S, o);
+        }
+      } else {
+        let r = cur, stop = false;
+        if (cur.depth < R.max - 1) {
+          if (!full(S)) {
+            r = alloc(S, nb, g, 0, cur, cur.depth + 1);
+            r.h = heuristic(G, R, nb, R.goal);
+            openInsert(S, r);
+          } else stop = true;                                 // pool full: end on the current record
+        }
+        if (isGoal(G, R, nb, r.depth) || stop) { S.res = r; S.state = 3; return; }
+      }
+    }
+  }
+  S.i++;
+}
+// FUN_00369f40 + FUN_00369238: the node list, the records back to the pool
+function searchEnd(S) {
+  S.svc.used -= S.used; S.used = 0;
+  return nodeList(S.R, S.res);
+}
+// FUN_003682e8 (synchronous search) -> FUN_00369d88 + FUN_00369ed8 (FUN_003691f8: steps until state 3): the
+// node list (C+0x3a8: u16 nodes from the start, -1 ended), or null when the pool is full (the request
+// fails, the list is untouched). R: the request; rng: the shared random stream (mode 1 costs).
+// svc: the service (makeService); a number = a lone pool of that many records (tests).
+export function search(G, R, rng = Math.random, warn = () => {}, svc = POOL) {
+  if (typeof svc === 'number') svc = makeService({ pool: svc });
+  if (!(svc.used < svc.pool)) return null;
+  const S = searchBegin(G, R, rng, warn, svc);
   let guard = 0;
   while (S.state !== 3) {
     if (++guard > 50000000) { warn('nav_graph: search did not end'); break; }
-    if (S.state === 1) {                                      // FUN_003693c0
-      S.cur = S.open[0] || null;
-      if (!S.cur) { S.res = null; S.state = 3; break; }
-      S.i = 0; S.state = 2;
-      continue;
-    }
-    // state 2 (FUN_003693f0): one link of the current record per call
-    const cur = S.cur;
-    const nb = neighbour(G, cur.node, S.i);
-    if (nb === -1) {
-      S.open.splice(S.open.indexOf(cur), 1);                  // unlink
-      S.closed.push(cur);                                     // FUN_003698d0
-      S.state = 1;
-      continue;
-    }
-    if (passable(G, cur.node, S.i)) {
-      if (!S.closed.some(r => r.node === nb)) {               // FUN_00369728
-        const g = f(cur.g + cost(G, R, cur.node, S.i, rng, warn));
-        const o = S.open.find(r => r.node === nb);            // FUN_00369750
-        if (o) {
-          if (cur.depth < R.max - 1 && g < o.g) {
-            o.parent = cur; o.g = g; o.depth = cur.depth + 1;
-            S.open.splice(S.open.indexOf(o), 1); openInsert(S, o);
-          }
-        } else {
-          let r = cur, stop = false;
-          if (cur.depth < R.max - 1) {
-            if (!full()) {
-              r = alloc(nb, g, 0, cur, cur.depth + 1);
-              r.h = heuristic(G, R, nb, R.goal);
-              openInsert(S, r);
-            } else stop = true;                               // pool full: end on the current record
-          }
-          if (isGoal(G, R, nb, r.depth) || stop) { S.res = r; S.state = 3; break; }
-        }
-      }
-    }
-    S.i++;
+    searchStep(S);
   }
-  return nodeList(R, S.res);
+  return searchEnd(S);
+}
+// FUN_00368120: the pool and the queue both have room
+export const queueFree = svc => svc.used < svc.pool && svc.slots.some(j => !j);
+// FUN_00368250 (queued search; FUN_00368900 takes the next free slot from svc.next round): out = the
+// object whose .list the result goes to (C+0x3a8; FUN_00369d88 sets list[0] = -1 now). Returns the slot,
+// or -1 (0xffff) when the pool or the queue is full.
+export function enqueue(svc, G, R, out, rng = Math.random, warn = () => {}) {
+  if (!(svc.used < svc.pool)) return -1;
+  const n = svc.slots.length;
+  for (let k = 0; k < n; k++) {
+    const i = (svc.next + k) % n;
+    if (svc.slots[i]) continue;
+    svc.next = (i + 1) % n;
+    svc.slots[i] = { S: searchBegin(G, { ...R }, rng, warn, svc), out };
+    out.list = [-1];
+    return i;
+  }
+  return -1;
+}
+// FUN_00368420 (once a frame, first in FUN_00323128): each busy slot gets FUN_00369e40: up to svc+0 calls;
+// a call that finds the search done writes the list (FUN_00369f40), gives the records back and frees the
+// slot (FUN_00368a40) instead of stepping.
+export function serviceUpdate(svc) {
+  for (let i = 0; i < svc.slots.length; i++) {
+    const j = svc.slots[i];
+    if (!j) continue;
+    for (let k = 0; k < svc.budget; k++) {
+      if (j.S.state === 3) { j.out.list = searchEnd(j.S); svc.slots[i] = null; break; }
+      searchStep(j.S);
+    }
+  }
+}
+// FUN_00368398(svc, slot): a busy slot is dropped (FUN_0036a000: its records back) and freed
+export function cancel(svc, i) {
+  if (!(i >= 0 && i < svc.slots.length) || !svc.slots[i]) return false;
+  svc.used -= svc.slots[i].S.used;
+  svc.slots[i] = null;
+  return true;
 }
 // FUN_00369f40: the list from the start to rec (depth order), -1 after; no record -> [start, -1]
 export function nodeList(R, rec) {

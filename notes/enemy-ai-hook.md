@@ -690,3 +690,111 @@ re-made each AI run (interval 10) while the layer stays in its state.
 - **Next:** mover 0xd (FUN_00351928 + FUN_00353700 + the 0x10-link helpers), the queued search budget (FUN_00368250
   service update), FUN_0033fa58, then action layers 2 / 5 / 6 / 7 on top. Exact list checks need a mode-0 request
   (FUN_00352f18: no random term) or the RNG logged in the trace.
+
+## Mover 0xd, action layers 2 / 3, nodes (worker 0163, 2026-10-31)
+
+Part 3 of soldier walking: the nav-graph path follower, wired to action layers 2 and 3.
+
+- **Frame order** (FUN_00323128): the search service FUN_00368420, the AI FUN_00365008, the actors FUN_0053b500
+  (the player tick sets Vincent's position), the bodies FUN_00348fe8 (movers). enemy_ai.js tick follows it.
+- **Nodes.** FUN_00563970 runs when an actor's position is set (vt+0x234; soldiers FUN_0055ef78 with +0x28 bit
+  0x10, Vincent's FUN_00573c60 (vtable 0x58f128) calls it first; his +0x28 = 0x20901f in the save). Known node ->
+  FUN_0033dda8: the node and its neighbours (every link) scored by sqrt(dx2 + dz2) + 2 |dy| (one VADDz), under 40
+  -> best, else FUN_0033daf0, else the old node. T: 558/558 soldier frames. Spawn (FUN_00559748 tail):
+  FUN_0033daf0(50). Vincent's node in w161_chase = 111. GUESS (when): every frame for all.
+- **Requests.** Layer 3 state 1 (0x366908): same area -> queue room (FUN_00368120) ? FUN_0055a590 (FUN_00352f18:
+  mode 0, +4 2, cap 0x80, flags 6 | 0x60, c 0, queued) : FUN_0055a628 mode 6 (+4 4, cap 7, flags 0x87 | 0x60);
+  else C+0x1c0 |= 0x10 and mode 1 (+4 6, cap 10, flags 0x8f | 0x60 = 0xef; +4 / cap are immediates at 0x366a6c / 0x366ad8, not the floats Ghidra shows); c 100; started -> state 2. Layer 2
+  state 0 (target out of view): same area -> queued / mode 6 (+4 4, cap 7, flags 7 | 0x60), state 1; else mode 1
+  (+4 6, cap 10, flags 0x17 | 0x60 = 0x77: the trace's) and the state stays 0. FUN_0055a628: alive, node ->
+  FUN_00353080 (stop, FUN_00369040, clear), copy (start = node), FUN_0055a4e0 (turn 6 with target + gun, else 5 +
+  C+0x1c0 0x8000), FUN_0034edf0(C, 0xd) (list[0] -1, C+0x318 0, clock 0, slot 0xf, len 0, C+0x1c0 |= 0x6000,
+  climb 0, C+0x316 -1) -> FUN_0034f178 case 0xd (state 0; enter mode 0xc; C+0x45c bits 19-21 from C+0x1c0 24-26).
+- **Search service** (DAT_0046e290 +100, save RAM): +0 40 steps per update, +4 1 slot, pool 3000. Queued
+  (FUN_00368250 -> FUN_00368900 slot, FUN_00369d88 list[0] = -1); FUN_00369e40 per frame: up to 40 calls, a call
+  that finds the search done writes the list, frees records and slot. Mode 1 / 0xef / 0x77 have bit 0: sync.
+- **FUN_00351928** (C+0x314): 0 search (sync -> 2, queued -> slot, 1); 1 wait for list[0] != -1; 2 length (< 0xff),
+  state 3, FUN_00353700 (+0x1d up); 3 one node: walk at it (state 5) else at mid(0, 1) (state 4; FUN_0033f850 on
+  link 0 -> end); 4 leg list[i] -> list[i+1]: on the ground, vertical link (0x10, no bit 22) -> FUN_00352788 else
+  FUN_003528d8 (stuck: bit 18, 61 frames within 1.5 u -> link flags |= 2, end); the actor's node C+0x398 must be
+  a leg node or openly linked (FUN_0033f650) else end; target: FUN_00261038(A - p, B - p) < 45 deg -> mid(A, B)
+  (B with bit 18 and C+0x1d8 = 0), else by fr = |A-p| / (|A-p| + |B-p|): < 0.5 lerp(A, B, fr + 0.5), < 1
+  lerp(B, N, fr - 0.5), else N; next node when |B - p|xz < 5, or past the corner (|A-p|xz > |N-p|xz and > |B-p|xz),
+  or fr > 0.5 (the FUN_002614f4 test: returns -Q = -1, always true), and |dy| < 10: event 5 (list[i]), clear link
+  bit 2, i++, FUN_0033f850 on the next link (end), steer at B (mid(B, B)), state 4 or 5 at the last leg; 5 last
+  node: within 3 u xz and 10 u dy -> end. Steering FUN_0034b200(1.0 or 0.3 with C+0x1c0 bit 4, 3D unit). Every
+  "end" returns 1: FUN_0034f8c0 -> FUN_00352a60 case 0xd (+0x1d down, pending queue job cancelled, list[0] -1,
+  C+0x45c bits from C+0x1c0 24-26) and listener event 4 with list[len - 1] (read after the stop).
+- **Listener** (FUN_005690c8): 5 -> FUN_00563a50(node) + manager 0x12 -> script event 0x27 (node); 4 ->
+  FUN_00563a50 unless -1, manager 0x11 -> script event 0x26 (FUN_00588550 cases 0x5886c0 / 0x5886d4).
+- **Layer 3 state 2**: cone (FUN_0035e9b0: |yaw| < 30, |pitch| < 40 deg) with d38 < 150 and dy > -25, or d38 < 10;
+  bit 18 clear; in view when d38 >= 50 -> mover 3, state 3. Else within 0x709 ticks or while the path has a last
+  node (FUN_0034aa28): mover 0 -> state 0; target > 30 u from that node and d38 < 60 -> turn 6, state 1. Else
+  time reset, state 0. C+0x1c0 bit 20 -> FUN_0055a828 (FUN_003533e0: mode 0xc C+0x1d0 = -1 + FUN_0034b110(0),
+  FUN_00352a60, mover 0), turn 6, state 4.
+- **Layer 2** (FUN_00366390; vtable 0x4a29f8): see enemy_ai.js `action2`.
+- **Also fixed:** FUN_00352a60's tail keeps move mode 0xc (FUN_0034b110(0)); the page zeroed it. The heuristic
+  skips the distance for modes 1 / 2 / 5 (a mode-1 request may carry goal -1).
+- **Numbers vs the game (w161_chase):** node tracking 558/558; follow state 518/518; wanted move 516/518 (2 frames
+  where the game's move is 0 after the mover: writer not found); closed loop with the game's lists fed in worst
+  1.45 / 4.37 u (46 / 47): FUN_00357d48's body+0x40 rewrite (not translated) makes the page's body turn faster.
+- **Page:** record 70 (damage script -> mode 5) shot with Vincent 251 u away walks 246 u on the graph (layer 2 /
+  mover 0xd, then layer 3 / mover 3 in view) and starts his melee (actor state 0x80) at 19.9 u. Whether the swing
+  connects needs the hit volume (FUN_00541310, not decoded). Record 69 is placed at y 0 (no walk polygon): he
+  cannot walk on the page (placement question, not chased).
+- **Layers 5 / 6** (FUN_003670e8 / FUN_003672d8, both small): no target / busy -> 0; state 0: soldier node + the
+  target's node (+0x108 as is) -> one request, +4 3; state 1 waits for the mover to end -> 0. 5: mode 3 (away from
+  the target), c 150, flags 0xe | 0x60, queue room -> cap 0x14 + (int)(r x 11) queued, else | 1, cap 7 + (int)(r x 3);
+  state 1 only if started. 6: C+0x1c0 bit 4 cleared, mode 2 (cost | |goal - n| - c | x 0.1: keep the distance),
+  c = d34, flags 0xe, queue room -> cap 10 + (int)(r x 6) else | 1 cap 5; then (int)(r x 11) < 8 -> bit 4 set (0.3
+  speed); state 1 always. So in view at range brain 5 fires and repositions (states 6 / 12 / 13 / 5); it closes in
+  only through states 7 / 8 (layer 3) and melees inside 22 u. Node sim (page LOS), record 70: from 177 u melee at
+  frame ~550; from 218 u he drifts out to ~325 u first and swings at ~1450-1490.
+- **Fixed on the way:** enemy_ai.js already used C.req as the motion-request counter; the nav request is C.nreq.
+- MISSING: the vertical-link jump (FUN_00352788 -> FUN_0034a8e0), FUN_0035fe08, layers 1 / 4 / 7 / 0xb, the cover
+  cost (FUN_0033fa58), a trace of the in-view case. GUESS: FUN_0035ef18 = 0x60.
+- Tests: test_nav_walk.mjs (new: hand cases, node tracking, open / closed loop vs w161_chase), test_approach
+  (updated: out of view -> mover 0xd; Vincent's tracked node and the goal; after the approach layers 5 / 6 move
+  him), test_enemies_page 10 / 10b. Flake: step 10 required HP to drop; a hit's damage / flinch are random (one run
+  had HP unchanged and no flinch), now it checks the mode change. 26/26 mutants killed.
+- **In-view trace k_inview17a-e** (worker 0163). k_enemy_engage8's route without shots, f784 wake of #66 / #67
+  (records 44 / 45) with TRACE_POKE turning every 'AI mode 2' in scripts 108 / 109 into 5 (ffbab0, ffbd90, ffbea8,
+  ffc428, ffca08, ffcc58, ffcd70, ffd2b0: argument words found by matching each event's bytecode in save RAM; the
+  same method gives 0161's 0x1005350). Vincent stands in view: #66 31 u, #67 118 u. Five 299-frame windows
+  (f780-2278; env in the scripts' doc). Game: both cycle 6 -> 12 -> 13 (layer 6) -> 5 -> 6; layer 6 requests (12)
+  all mode 2, +4 3, flags 0xe, cap 10-15, goal 111 (Vincent's node), c = AI +0x34 exactly; bit 4 / 0.3 speed on
+  most walks, full speed on some; aimed walk clips r_wk_a / r_lwk_a / r_rwk_a / r_bwk_a / r_rrn_a (not ported).
+  #66: 7 -> 8 at ~60 u (f1323), layer 3: one mode-6 request (+4 4, cap 7, flags 0xe7, c 100), then mover 3, state
+  10 at 20.0 u, melee r_atk_0 at f1455 and again f1803, then 14 -> 16 (layer 5: mode 3, +4 3, flags 0x6e, c 150,
+  cap 20-27; 5-frame paths, re-requested every ~12 frames) -> 5 -> 6. #67 stays 70-120 u for all 1500 frames: his
+  layer-6 paths toward Vincent's node cross an 11 u drop (nodes 133 -> 136); he turns back and the node check
+  ends the path (f1545 / f1652). Page vs game: the follower on the game's own list reproduces this (node changes
+  f1576 / 1601 / 1639 vs 1576 / 1606 / 1651, end f1640 vs f1652, 0.37 u); the port's search gives 13 / 21 of the
+  game's mode-2 / 3 lists exactly (empty occupancy, no cover cost); the others part at one near-tie, which the
+  occupancy (flags 2 / 4) and cover (flags 8, MISSING) terms decide. A node sim from the same start reproduces
+  the cycle and requests; its #67 took the other branch and walked in to melee (f1208). The page also re-ran the
+  soldiers' wake when their own bullets crossed trigger 75 (FUN_0035f268 resets the brain state, as the game's);
+  the game run's bullets didn't cross it. Fixed from the trace: layer 3's request +4 is 4 (mode 6) / 6 (mode 1).
+  test_nav_walk section 6.
+
+## Review fixes: nodes given back on hit / death / switch-off (worker 0164, 2026-10-31)
+
+- **Hit / death during mover 0xd leaked the path's nodes.** slide() / die() stopped only movers 1 / 3, then
+  overwrote C.mover, so mover 0xd never ran its stop: each list node kept its +0x1d count (+10 cost in every later
+  search with flags 4) and a queued search kept the single service slot and later wrote into C.list. Fixed as the
+  game: FUN_0034edf0 calls FUN_00352a60 for any non-zero C+0x300 (slide: PM.moverStop for every mover), and
+  FUN_00560fc8 runs FUN_003533e0 (die: PM.stopAll). Both reach navStop (counts back, FUN_00368398 cancel).
+- **Switch-off (FUN_00559748 off path):** decoded that it calls FUN_00563a50(a, -1) before FUN_00558bb8, so the
+  actor's +0x1e count goes back (enemy_ai `setActive`: setNode(-1)); each 0x108 / 0x109 cycle used to add one.
+  The held path: FUN_00558bb8 -> FUN_00588330 only detaches the body (actor +0xe8 = 0, C+0x564 bit 24, which no
+  function in the decomp reads); FUN_0054c430 / FUN_00347250 / FUN_00340680 / FUN_00340488 don't touch the mover.
+  Where the game gives a detached body's list back was not found in two passes, so the page stops the mover there
+  (PM.stopAll): GUESS, audit 'Actor deactivation: everything else'.
+- navLeg: a malformed list (list[i + 2] not in the graph) now takes the missing-node warning path (was a throw).
+- Cone comment: FUN_00260f54's out[0] / out[1] are compared with 40 / 30 deg; which one is the yaw is guessed.
+- Tests (test_nav_walk, new hand cases): flinch / death on a walking path and with a queued search pending
+  (counts back, slot free, C.list untouched by later service updates), switch-off + 3 on / off cycles, per-frame
+  tracking, event 5's node, closed first link (flags 1), the corner `near` test, the 40-step budget, layer 2's
+  queue-room branch and its 'mover ended -> 0', layers 5 / 6 sync caps (8 / 5), layer 3 state 2's bit-20 stop, the
+  malformed list. Mutants: the review's 9 survivors + 6 new (slide / die / switch-off stops, setNode(-1), the null
+  check, the cancel): 15/15 red. Hooks: world.t gains action2 / navOf.

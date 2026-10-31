@@ -18,6 +18,7 @@
 //   C.poly / C.arcs  the polyline C+0x3a0 and its cumulative lengths C+0x3a4
 //   C.s214 turn mode, C.t2c0 +0x2c0 turn target   C.dir +0x90 move direction
 //   C.mover +0x300   C.path +0x310   C.node +0x314   C.last +0x318   C.p31c..C.p32c +0x31c..+0x32c
+import * as NG from './nav_graph.js';
 const f = Math.fround;
 
 // FUN_00310c40 = G+0x64: 48 in the save (the gate in FUN_0034f4a0: > 8 sets the spline's points C+0x100..)
@@ -142,11 +143,24 @@ export function moverStart(a, paths, warn = () => {}) {
 export function moverStop(a, warn = () => {}) {
   const C = a.C;
   if (C.mover >= 3 && C.mover <= 0xb) { approachStop(a); return; }          // cases 3-0xb (and the tail)
+  if (C.mover === 0xd) { navStop(a); return; }                              // case 0xd (and the tail)
   if (C.mover === 1) C.dur = C.p32c;
   else if (C.mover) warn(`path_mover: stop of mover ${C.mover} (FUN_00352a60) not translated`);
   C.mover = 0;
   C.f1c4 = ((C.f1c4 & ~0x20) | 0x100) >>> 0;
-  C.mm = 0;
+  if (C.mm === 0xc) wantFace(a, 0); else C.mm = 0;                          // FUN_0034b110(0, C) in mode 0xc
+}
+
+// FUN_003533e0 (FUN_0055a828's stop): FUN_0034d870(C, 0) (move mode 0xc: FUN_0034bcc8(-1): C+0x1d0 = -1,
+// FUN_0034b110(0); modes 0 / 9 (the default case): mode 0, C+0x1c4 bit 0 clear / bit 2 set), FUN_00352a60,
+// mover 0. Other move modes: not translated (warned).
+export function stopAll(a, warn = () => {}) {
+  const C = a.C;
+  if (C.mm === 0xc) { C.dur = -1.0; wantFace(a, 0); }
+  else if (C.mm === 0 || C.mm === 9) { C.mm = 0; C.f1c4 = ((C.f1c4 & ~1) | 4) >>> 0; }
+  else warn(`path_mover: FUN_0034d870 for move mode ${C.mm} not translated`);
+  moverStop(a, warn);
+  C.mover = 0;
 }
 
 // FUN_0034f4a0(C, p, i): the segment from node i to node i + 1
@@ -491,15 +505,346 @@ function mode0xc(a, step, walk, warn) {
 // or null; walk = the walk-mesh step. sliding = a slide mover (9 / 0xb) runs: in the game its FUN_0034f178
 // case only enters mode 0xc too, but the page keeps the slides' flat step (enemy_ai slide GUESS), so the
 // mode-0xc body step is skipped then. Returns 'done' on the frame mover 3 ends (no listener event for it).
-export function approachFrame(a, tpos, step, walk, warn = () => {}, sliding = false) {
+export function approachFrame(a, tpos, step, walk, warn = () => {}, sliding = false, nav = null) {
   const C = a.C;
   if (C.f1c0 & 0x20) return null;
   if (!(step > 0)) return null;
   let ev = null;
   if (C.mover === 3 && approachTick(a, tpos)) { approachStop(a); ev = 'done'; }
+  else if (C.mover === 0xd) {
+    // FUN_0034f8c0 case 0xd: FUN_00351928; on a non-zero return FUN_00352a60, then the listener's event 4
+    // with list[C+0x310 - 1] (read after the stop set list[0] = -1)
+    if (!nav) warn('path_mover: mover 0xd without the nav graph');
+    else if (navTick(a, nav)) {
+      navStop(a, nav);
+      const n = C.nlen - 1;
+      if (nav.event) nav.event(4, n >= 0 && n < C.list.length ? C.list[n] : -1);
+      ev = 'nav end';
+    }
+  }
   if (C.mm === 0xc && !sliding) mode0xc(a, step, walk, warn);
   if (C.s214 === 5) turnMode5(a, step, warn);
   return ev;
+}
+
+// ------------------------------------------------ mover 0xd: follow a nav-graph path (worker 0163)
+// FUN_0055a628 / FUN_0055a590 copy a search request into C+0x330 (FUN_00353080 / FUN_00352f18) and start the
+// mover with FUN_0034edf0(C, 0xd); every frame FUN_00351928 runs the search, then walks the node list as a
+// mode-0xc body (steering only: C+0xc0 / C+0xcc through FUN_0034b200, the body step is mode0xc's).
+// nav = { G (nav_graph makeGraph), svc (makeService), rng, warn, event(ev, node) = the body listener C+0x540
+// (FUN_005690c8 cases 4 / 5) }. Fields (C+0x310.. is a union with mover 1's path fields, kept apart here):
+//   C.nreq  +0x330 request   C.list *(C+0x3a8) node list, -1 ended   C.nlen +0x310 list length   C.nidx +0x312
+//   C.nst  +0x314 follow state   C.qslot +0x315 low nibble (queue slot, 0xf none)   C.climb +0x315 high nibble
+//   C.n316 +0x316 the actor's node as last checked   C.n318 +0x318 stuck clock   C.stuck +0x320 stuck point
+//   C.n398 +0x398 the actor's node (FUN_00563a50)
+const npos = (G, n) => { const q = NG.node(G, n); return q ? [q[0], q[1], q[2], 1.0] : null; };   // FUN_00310f50 + vitof12 x 16
+const sub4 = (a, b) => [f(a[0] - b[0]), f(a[1] - b[1]), f(a[2] - b[2]), 0];
+const sq3 = v => f(f(f(v[0] * v[0]) + f(v[1] * v[1])) + f(v[2] * v[2]));                             // VADDy + VADDz
+const sqxz = v => f(f(v[0] * v[0]) + f(v[2] * v[2]));                                               // VMUL.xz + VADDz
+// FUN_0033f650(a, b): a == b, or the link a -> b exists with flags & 0x11 clear
+function linkOpen(G, a, b) {
+  if (a === b) return true;
+  const l = NG.linkTo(G, a, b);
+  return !!l && (l[2] & 0x11) === 0;
+}
+// FUN_0033f6a0(a, b): a node x linked from a (link flags 1 / 2 clear), x != b, whose link to b has flags 1 / 2 clear
+function detour(G, a, b) {
+  const q = NG.node(G, a);
+  if (!q || !NG.node(G, b)) return -1;
+  for (let k = 0; k < q[3]; k++) {
+    const x = NG.neighbour(G, a, k);
+    if (!NG.node(G, x) || x === b) continue;
+    const l = G.links[q[4] + k];
+    if ((l[2] & 2) || (l[2] & 1)) continue;
+    const r = NG.node(G, x);
+    for (let m = 0; m < r[3]; m++) {
+      if (NG.neighbour(G, x, m) !== b) continue;
+      const fl = G.links[r[4] + m][2];
+      if (!(fl & 2) && !(fl & 1)) return x;
+    }
+  }
+  return -1;
+}
+// FUN_0033f850(link, a, b): the link is closed (flags 1), or marked (flags 2) with a way round through detour
+function blocked(G, l, a, b) {
+  if (l[2] & 1) return true;
+  if (!(l[2] & 2)) return false;
+  if (!NG.node(G, a) || !NG.node(G, b)) return false;
+  return detour(G, a, b) !== -1;
+}
+// FUN_002614f4(out, p, a, d): the point a - d x q, q = ((a - p) . d) / (d . d) (VDIV), returns -q (VSUBq vf0.x - Q)
+function project(p, a, d) {
+  const v = sub4(a, p);
+  const q = f(f(f(f(v[0] * d[0]) + f(v[1] * d[1])) + f(v[2] * d[2])) / sq3(d));
+  return [[f(a[0] - f(d[0] * q)), f(a[1] - f(d[1] * q)), f(a[2] - f(d[2] * q)), 1.0], f(-q)];
+}
+const limitsFrom1c0 = C => {                    // C+0x1c0 bits 24 / 25 / 26 -> body flags C+0x45c bits 19 / 20 / 21
+  if (C.f1c0 & 0x1000000) C.f45c = (C.f45c | 0x80000) >>> 0;
+  if (C.f1c0 & 0x2000000) C.f45c = (C.f45c | 0x100000) >>> 0;
+  if (C.f1c0 & 0x4000000) C.f45c = (C.f45c | 0x200000) >>> 0;
+};
+function navClear(C) {                          // the follow fields FUN_00353080 / FUN_00352f18 reset
+  C.nidx = 0; C.nlen = 0; C.nst = 0; C.climb = 0;
+  if (!C.list) C.list = [];
+  C.list[0] = -1;
+}
+// FUN_00353080(C) + FUN_0055a628's copy: the mover stopped, C+0x330 = req with start = the actor's node
+export function navRequest(a, req, start, warn = () => {}) {
+  const C = a.C;
+  if (C.mover !== 0) moverStop(a, warn);
+  C.nreq = { ...req, start };                    // FUN_00369040 first, then the whole 16 bytes are copied
+  navClear(C);
+  C.n316 = -1;
+}
+// FUN_00352f18(C, start, goal) (FUN_0055a590's request): mode 0 to the goal, flags 6 | f40 (FUN_0035ef18's
+// 0x60 / 0x40 through C+0x54c), +4 = 2, cap 0x80, c = 0 (FUN_00369040)
+export function navRequestTo(a, start, goal, f40, warn = () => {}) {
+  const C = a.C;
+  if (C.mover !== 0) moverStop(a, warn);
+  C.nreq = { start, goal, s4: 2, max: 0x80, mode: 0, flags: 6 | f40, c: 0 };
+  navClear(C);
+}
+// FUN_0034edf0(C, 0xd) and FUN_0034f178 case 0xd. place = FUN_00356d98(C+0x3b0, C+0x30, 0, 0, 0) (the page's
+// placeBody: the body's polygon; its two flags (1, 1 for mover 3) are not modelled). False without a graph.
+export function navStart(a, nav, place) {
+  const C = a.C;
+  if (C.mover !== 0) moverStop(a, nav.warn);
+  C.f1c4 = (C.f1c4 & ~0x80) >>> 0;
+  if (!nav.G) return false;
+  C.nav = nav;
+  if (!C.list) C.list = [];
+  C.list[0] = -1; C.n318 = 0; C.t = 0; C.qslot = 0xf; C.nlen = 0;
+  C.f1c0 = (C.f1c0 | 0x6000) >>> 0;
+  C.climb = 0; C.n316 = -1;
+  C.mover = 0xd;
+  C.f1c4 = ((C.f1c4 & ~0x100) | 0x20) >>> 0;
+  C.nst = 0;                                                                // FUN_0034f178 case 0xd
+  if (C.mm !== 0xc) { wantFace(a, 0); place(a); setMode0xc(a); }
+  limitsFrom1c0(C);
+  return true;
+}
+// FUN_00352a60 case 0xd (and the tail): each list node's +0x1d count back down, a queued search still
+// running is dropped (FUN_00368398), list[0] = -1, the body limits from C+0x1c0 bits 24-26 set again
+export function navStop(a) {
+  const C = a.C, nav = C.nav || null, G = nav ? nav.G : null;
+  const L = C.list || [-1];
+  if (G && L[0] !== -1) {
+    for (let i = 0; ;) {
+      const n = L[i];
+      i++;
+      if (NG.node(G, n)) G.occ1d[n] = (G.occ1d[n] - 1) & 0xff;
+      if (0xff < i || L[i] === -1 || L[i] === undefined) break;
+    }
+  }
+  if (C.qslot !== 0xf && L[0] === -1) {
+    if (nav) NG.cancel(nav.svc, C.qslot);
+    C.qslot = 0xf;
+  }
+  L[0] = -1; C.list = L;
+  limitsFrom1c0(C);
+  C.mover = 0;
+  C.f1c4 = ((C.f1c4 & ~0x20) | 0x100) >>> 0;
+  if (C.mm === 0xc) wantFace(a, 0); else C.mm = 0;
+}
+// FUN_003528d8(C, link): with C+0x1c0 bit 18 (the walk's contact bit, FUN_00357d48), a clock C+0x318 from a
+// point C+0x320; past 60 frames still within 1.5 u (3D) of it -> the link gets flags 2 (FUN_0033e660: +100,
+// FUN_0033f850) and the mover ends; else the clock restarts. Without bit 18 the clock is 0.
+function stuckTest(a, link) {
+  const C = a.C;
+  if (!(C.f1c0 & 0x40000)) { C.n318 = 0; return 0; }
+  if (C.n318 === 0) C.stuck = [a.pos[0], a.pos[1], a.pos[2], 1.0];
+  C.n318 = (C.n318 + 1) << 16 >> 16;
+  if (0x3c < C.n318) {
+    if (f(Math.sqrt(sq3(sub4(C.stuck, a.pos)))) < 1.5) {
+      wantFace(a, 0);
+      if (link) link[2] |= 2;
+      return 1;
+    }
+    C.n318 = 0;
+  }
+  return 0;
+}
+// FUN_00352788(C, p, q): a vertical link (flags 0x10) on the ground. While the count C+0x315 >> 4 is under 2:
+// FUN_0034a8e0(dy + DAT_0046f484 when p is below q's height (dy = p.y - q.y > 0), else DAT_0046f484) = a
+// jump, the parent's FUN_0056ab30(.., 1), count + 1; then the mover ends (FUN_0034b230(0), 1).
+// MISSING: the jump FUN_0034a8e0 and FUN_0056ab30 are not translated (warned): the count still runs, so a
+// soldier on a vertical link stands two frames and his path ends, as when the game's jump fails twice.
+function climb(a, p, q, nav) {
+  const C = a.C;
+  if (((C.climb << 28) >> 28) < 2) {
+    nav.warn('path_mover: mover 0xd vertical link: the jump (FUN_00352788 -> FUN_0034a8e0) not translated');
+    C.climb = (C.climb + 1) & 0xf;
+    return 0;
+  }
+  wantFace(a, 0);
+  return 1;
+}
+// FUN_00353700: each list node's +0x1d count up (paths holding it)
+function holdNodes(G, L) {
+  if (L[0] === -1) return;
+  for (let i = 0; ;) {
+    const n = L[i];
+    i++;
+    if (NG.node(G, n)) G.occ1d[n] = (G.occ1d[n] + 1) & 0xff;
+    if (0xff < i || L[i] === -1 || L[i] === undefined) return;
+  }
+}
+// FUN_00351928 (mover 0xd, every frame). Returns 1 when the mover ends.
+export function navTick(a, nav) {
+  const C = a.C, G = nav.G;
+  let ret = 0;
+  // FUN_003577c8: body states 2 / 3 / 6 / 7 use the body's own position (body+0x10); the page's soldier
+  // bodies take state 0 only (mode0xc warns otherwise), so C+0x30
+  if ([2, 3, 6, 7].includes(a.B && a.B.state)) nav.warn('path_mover: mover 0xd in body state 2/3/6/7 (body+0x10 position) not translated');
+  const p = [a.pos[0], a.pos[1], a.pos[2], 1.0];
+  const s = (C.f1c0 & 0x10) ? f(0.3) : 1.0;
+  const toward = q => wantDir(a, s, unit3(sub4(q, p)));                     // FUN_0034b200(s, C, unit(q - p))
+  const L = () => C.list;
+  switch (C.nst) {
+    case 0:
+      if (!(C.nreq.flags & 1)) {
+        const k = NG.enqueue(nav.svc, G, C.nreq, C, nav.rng, nav.warn);      // FUN_00368250
+        if (k === -1) return 0;
+        C.qslot = k & 0xf; C.nst = 1;
+        return 0;
+      }
+      {
+        const l = NG.search(G, C.nreq, nav.rng, nav.warn, nav.svc);         // FUN_003682e8
+        if (!l) return 0;
+        C.list = l;
+      }
+      C.qslot = 0xf; C.nst = 2;
+      break;
+    case 1:
+      if (L()[0] === -1) return 0;
+      C.nst = 2;
+      break;
+    case 2: break;
+    case 3: return navLeg0(a, nav, p, s, toward);
+    case 4: return navLeg(a, nav, p, s, toward);
+    case 5: return navLast(a, nav, p, s, toward);
+    default: return 0;
+  }
+  // the list's length (< 0xff), list[0xff] = -1, state 3, FUN_00353700
+  const l = L();
+  C.nlen = 0;
+  if (l[0] !== -1) { let n = 0; do { n++; } while (!(l[n] === -1 || l[n] === undefined || 0xfe < n)); C.nlen = n; }
+  if (l.length > 0xff) l[0xff] = -1;
+  C.nst = 3; C.nidx = 0; C.n318 = 0; C.qslot = 0xf; C.climb = 0; C.n316 = -1;
+  holdNodes(G, l);
+  return navLeg0(a, nav, p, s, toward);
+}
+// state 3: one node -> walk at it (state 5, index 1); else at the midpoint of nodes 0 / 1 (state 4), and the
+// mover ends at once when the first link is blocked (FUN_0033f850)
+function navLeg0(a, nav, p, s, toward) {
+  const C = a.C, G = nav.G, l = C.list;
+  if (C.nlen < 2) {
+    const A = npos(G, l[0]);
+    if (!A) { wantFace(a, 0); return 1; }
+    toward(A);
+    C.nidx = 1; C.nst = 5;
+    return 0;
+  }
+  const A = npos(G, l[0]), B = npos(G, l[1]);
+  if (!A || !B) { wantFace(a, 0); return 1; }
+  toward(lerp4(A, B, 0.5));                                                  // FUN_002611f4(0.5)
+  let r = 0;
+  const lk = NG.linkTo(G, l[0], l[1]);
+  if (lk && blocked(G, lk, l[0], l[1])) { r = 1; wantFace(a, 0); }
+  C.nidx = 0; C.nst = 4;
+  return r;
+}
+// state 4: on the leg list[i] -> list[i + 1]
+function navLeg(a, nav, p, s, toward) {
+  const C = a.C, G = nav.G, l = C.list, i = C.nidx;
+  const A = npos(G, l[i]), B = npos(G, l[i + 1]);
+  const N = C.nlen - 2 <= i ? B : npos(G, l[i + 2]);
+  if (!A || !B || !N) { nav.warn('path_mover: mover 0xd: a list node is not in the graph'); wantFace(a, 0); return 1; }
+  const lk = NG.linkTo(G, l[i], l[i + 1]);                                   // FUN_0033f608
+  let r = 0;
+  if (C.f1c0 & 0x200) {
+    if (!lk || !(lk[2] & 0x10) || (C.f1c0 & 0x400000)) r = stuckTest(a, lk) ? 1 : 0;
+    else r = climb(a, p, B, nav);
+  }
+  if (r) return r;
+  // the actor's node C+0x398 must be one of the leg's nodes or linked open to one (else the mover ends)
+  if (C.n316 !== C.n398) {
+    if (linkOpen(G, C.n398, l[i]) || linkOpen(G, C.n398, l[i + 1])) C.n316 = C.n398;
+    else { wantFace(a, 0); return 1; }
+  }
+  const last = C.nlen - 2 <= i;
+  const vA = sub4(A, p), vB = sub4(B, p), vN = sub4(N, p);
+  let near = false;
+  const dB = f(Math.sqrt(sq3(vB)));
+  const free = !(C.f1c0 & 0x40000) || C.speed !== 0;
+  let tg;
+  if (angle(vA, vB) < 0.7853982) tg = free ? lerp4(A, B, 0.5) : B;          // FUN_00261038: A and B seen in one direction
+  else if (!free) tg = B;
+  else {
+    const dA = f(Math.sqrt(sq3(vA)));
+    const fr = f(dA / f(dA + dB));                                           // how far along A -> B
+    if (fr < 0.5) tg = lerp4(A, B, f(fr + 0.5));
+    else if (fr < 1.0) tg = lerp4(B, N, f(fr - 0.5));
+    else tg = N.slice();
+    if (0.5 < fr) {
+      if (1.0 <= f(Math.sqrt(sqxz(sub4(tg, p))))) {
+        const [e, t] = project(p, B, vB);                                    // FUN_002614f4
+        if (t < 0.0 && f(Math.sqrt(sqxz(sub4(e, p)))) < 1.0) near = true;
+      } else near = true;
+    }
+  }
+  toward(tg);
+  // next node: within 5 u of B (x / z), or past the corner (N nearer than A, and B nearer than A), or near
+  if (25.0 <= sqxz(vB) && !near) {
+    if (last) return 0;
+    if (sqxz(vA) <= sqxz(vN)) return 0;
+    if (sqxz(vA) <= sqxz(vB)) return 0;
+  }
+  if (!(Math.abs(vB[1]) < 10.0)) return 0;
+  if (nav.event) nav.event(5, l[i]);                                         // listener event 5 (node)
+  if (lk && (lk[2] & 2)) lk[2] &= 0xfd;
+  const j = C.nidx = i + 1;
+  const l2 = NG.linkTo(G, l[j], l[j + 1]);
+  if (l2) { r = blocked(G, l2, l[j], l[j + 1]) ? 1 : 0; if (r) wantFace(a, 0); }
+  if (j < C.nlen - 1) {
+    // FUN_002611f4(0.5, out, B, list[j]) with list[j] = B: the midpoint is B itself
+    toward(lerp4(B, npos(G, l[j]), 0.5));
+    C.nst = 4;
+  } else {
+    toward(B);
+    C.nst = 5;
+  }
+  C.climb = 0; C.n316 = -1;
+  return r;
+}
+// state 5: at the last node: within 3 u (x / z) and 10 u of height -> done
+function navLast(a, nav, p, s, toward) {
+  const C = a.C, G = nav.G, l = C.list, n = C.nlen;
+  const P = n >= 1 ? npos(G, l[n - 1]) : null;
+  if (1 < n && C.n316 !== C.n398) {
+    if (linkOpen(G, C.n398, l[n - 2]) || linkOpen(G, C.n398, l[n - 1])) C.n316 = C.n398;
+    else { wantFace(a, 0); return 1; }
+  }
+  if (!P) { wantFace(a, 0); return 1; }
+  if (9.0 < sqxz(sub4(p, P)) || 10.0 <= Math.abs(f(p[1] - P[1]))) toward(P);
+  else { wantFace(a, 0); return 1; }
+  if (1 < n) {
+    const lk = NG.linkTo(G, l[n - 2], l[n - 1]);
+    if (!lk) return 0;
+    if (!(C.f1c0 & 0x200)) return 0;
+    if ((lk[2] & 0x10) && !(C.f1c0 & 0x400000)) return climb(a, p, P, nav);
+    return stuckTest(a, lk) ? 1 : 0;
+  }
+  if (!NG.node(G, C.n398)) return 0;
+  if (l[n - 1] === C.n398) return 1;
+  const lk = NG.linkTo(G, C.n398, l[n - 1]);
+  return lk ? (lk[2] & 1) : 1;
+}
+// FUN_0034aa28: the path's last node (mover 2 / 0xd, a list, state > 1), else -1
+export function navGoal(C) {
+  if (C.mover !== 2 && C.mover !== 0xd) return -1;
+  if (!C.list || C.list[0] === -1 || !(1 < C.nst)) return -1;
+  return C.list[C.nlen - 1];
 }
 
 // the turn alone (tests: hand-built facing / direction / ground speed)

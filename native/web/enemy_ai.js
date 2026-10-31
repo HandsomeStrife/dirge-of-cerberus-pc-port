@@ -362,7 +362,7 @@ export function createEnemyAI(opts) {
   // Manager event queue (manager +0x1268 head / +0x126c tail, FUN_0053fbe8 appends {type, object id}),
   // drained in order by FUN_0053fde8 at the end of the manager frame FUN_0053b500 (switch on type + 1).
   const mgrQueue = [];
-  const postManager = (type, id) => { mgrQueue.push({ type, id }); };
+  const postManager = (type, id, arg = 0) => { mgrQueue.push({ type, id, arg }); };
   const mailbox = [];           // 0x101 messages posted this frame, delivered next frame (GUESS: FUN_0053e9e0 consumer not decoded)
   const events = [];            // per-frame record of what happened (tests / page debug)
 
@@ -483,6 +483,9 @@ export function createEnemyAI(opts) {
     // +0x60 byte; C+0x664 0x2a-0x2b / 0x2d or +0x118 bit 16 -> 3) need bits not exported. Motion
     // class 3 is not ported (no update). The save's soldiers (play.js AWAKE) pass their traced state.
     if (init.astate === undefined) setActorState(a, 2, 1);
+    // FUN_00559748's tail: the actor's nav node (+0x108) = the nearest within 50 u (FUN_0033daf0)
+    a.node108 = -1;
+    NG.spawnNode(G, a);
     objects.set(a.id, a);
     actors.push(a);
     queueInsert(a.ai);
@@ -650,11 +653,19 @@ export function createEnemyAI(opts) {
     // (the fire timer leaves the list DAT_0046f4e4 +0x2c); then +0x184 = 0, +0x140 = 0xff.
     // Reactivation builds a new AI (FUN_00365c50 in the on path), so nothing of the old one stays.
     // HP stays on the status (FUN_00559748 does not write +0x20; the record object keeps it).
+    // Before FUN_00558bb8, FUN_00559748 runs FUN_0054c430(a, 0, 0) and FUN_00563a50(a, -1): the actor's
+    // +0x1e node count goes back (setNode -1).
     // GUESS: the rest (body / weapon release, FUN_00588330, flags28 kept) is not translated;
     // notes/fidelity-audit.md 'Actor deactivation'.
     t.flags28 &= ~1;
     if (t.kind === 'actor') {
       const i = actors.indexOf(t); if (i >= 0) actors.splice(i, 1);
+      if (G) NG.setNode(G, t, -1);                                          // FUN_00559748: FUN_00563a50(a, -1)
+      // GUESS: the body's mover is stopped here (FUN_003533e0, so mover 0xd gives its list's +0x1d counts
+      // back and drops a queued search). FUN_00588330 only detaches the body (actor +0xe8 = 0, C+0x564 bit
+      // 24, read nowhere in the decomp); where the game releases a detached body's path was not found.
+      // notes/fidelity-audit.md 'Actor deactivation'.
+      if (t.C && t.C.mover !== 0) PM.stopAll(t, warnOnce);
       if (t.ai) {
         const j = S.q.indexOf(t.ai); if (j >= 0) S.q.splice(j, 1);           // FUN_003659d8 unlink
         stopFire(t.ai);                                                     // FUN_0035e6f8 -> FUN_00360820
@@ -1019,12 +1030,11 @@ export function createEnemyAI(opts) {
   // now), then the layer's start. Layers 1-7 / 0xb = vtables 0x4a2a28..0x4a2908 / 0x4a28d8 (updates: 2
   // FUN_00366390, 3 FUN_003667b0, 5 FUN_003670e8, 6 FUN_003672d8, 7 FUN_00367508). The old layer's vt+0xc
   // (layer 3: 0x367ac0) only frees it and layer 3's start 0x3667a8 is empty, so a running mover carries on.
-  // Layer 3 is translated (action3) up to its nav-graph branch; MISSING: layers 1, 2, 4-7 / 0xb (they plan
-  // paths on the nav graph: nav_graph.js has the search, the follower mover 0xd FUN_00351928 is not
-  // translated; notes/enemy-ai-hook.md 'Nav graph and search'). Those soldiers stand.
+  // Layers 2 (action2), 3 (action3), 5 / 6 (action56) are translated, with the nav-graph follower mover 0xd
+  // (path_mover.js). MISSING: layers 1, 4, 7 / 0xb (notes/enemy-ai-hook.md 'Mover 0xd'). Those soldiers stand.
   function setActionLayer(ai, m) {
     ai.amode = m; ai.astate28 = 0; ai.atime = short(S.now);
-    if (m && m !== 3) warnOnce(`enemy_ai: action layer ${m} (move) not translated: the soldier stands`);
+    if (m && ![2, 3, 5, 6].includes(m)) warnOnce(`enemy_ai: action layer ${m} (move) not translated: the soldier stands`);
   }
   const aTime = ai => short(S.now - (ai.atime & 0xffff));                     // FUN_0035eb68
   // FUN_00360aa8: the actor is busy (FUN_0055ab08), C+0x564 bit 14, or attacking (FUN_0055bb40)
@@ -1032,12 +1042,167 @@ export function createEnemyAI(opts) {
   // FUN_0035edc0: the target, alive (vt+0x8c -> FUN_0055a370 -> FUN_00316d08)
   const liveTarget = ai => { const t = target(ai); return !!t && !deadFinal(t); };
 
+  // ---- nav-graph requests (worker 0163; path_mover.js mover 0xd)
+  // FUN_0035ef18(ai): 0x60, or 0x40 when the AI's +0xf4 object's +0x9c record has +0x92 bit 5 set.
+  // GUESS: always 0x60 (that record is not exported; T: every request of 46 / 47 in w161_chase carries 0x60).
+  function searchFlags(ai) { return 0x60; }
+  // the two nodes' areas (+0xe) are the same (both nodes valid)
+  function sameArea(sn, goal) {
+    if (!G || sn === -1 || goal === -1) return false;
+    const p = NG.node(G, sn), q = NG.node(G, goal);
+    return !!(p && q) && p[5] === q[5];
+  }
+  // FUN_0055a4e0(a): turn mode 6 when the AI has a target (FUN_0035eda0) and C+0x590 bit 24 (gun out, as
+  // cmd 0x131 reads it), else (actor +0xe4 bit 0 clear: not modelled) turn mode 5 with C+0x1c0 |= 0x8000
+  function navTurn(a) {
+    if (a.ai && target(a.ai) && a.C.gun) { PM.setTurn(a, 6); return; }
+    PM.setTurn(a, 5);
+    a.C.f1c0 = (a.C.f1c0 | 0x8000) >>> 0;
+  }
+  // FUN_0055a628(a, req): alive (FUN_00316cf8), has a body, FUN_00563970 gives a node -> FUN_00353080 + the
+  // request (start = that node), FUN_0055a4e0, FUN_0034edf0(C, 0xd). True when started.
+  function navPath(a, req) {
+    if (dead(a) || !a.C) return false;
+    NG.trackNode(G, a);
+    if (!G || a.node108 === -1) return false;
+    PM.navRequest(a, req, a.node108, warnOnce);
+    navTurn(a);
+    PM.navStart(a, navOf(a), placeBody);
+    return true;
+  }
+  // FUN_0055a590(a, goal): the same checks, goal != -1 -> FUN_00352f18 (queued mode 0 to the goal)
+  function navPathTo(a, goal) {
+    if (dead(a) || !a.C) return false;
+    NG.trackNode(G, a);
+    if (!G || a.node108 === -1) return false;
+    if (goal === -1) return false;
+    PM.navRequestTo(a, a.node108, goal, searchFlags(a.ai), warnOnce);
+    navTurn(a);
+    PM.navStart(a, navOf(a), placeBody);
+    return true;
+  }
+  // FUN_00563bc0(t, n): |t - node n| (FUN_0054a888: 3D from the actor's position), 10000 without the node
+  function nodeDist(t, n) {
+    const q = G ? NG.node(G, n) : null;
+    if (!q) return 10000.0;
+    const x = f(t.pos[0] - q[0]), y = f(t.pos[1] - q[1]), z = f(t.pos[2] - q[2]);
+    return f(Math.sqrt(f(f(f(x * x) + f(y * y)) + f(z * z))));
+  }
+  // FUN_0035e9b0(ai, out): the unit direction to the target (FUN_0054a720) through the actor's matrix
+  // (FUN_0054a5e8, FUN_00261540: transposed 3x3), then FUN_00260f54 -> out[0], out[1]. Layer 3 state 2
+  // compares |out[1]| with 30 deg and |out[0]| with 40 deg.
+  // GUESS: FUN_00260f54 is not decoded (same stand-in as attackAngles; notes/fidelity-audit.md 'Attack pick
+  // angles'): the page returns [pitch, yaw] as [out[0], out[1]]. Which component is the yaw (so which angle
+  // gets the 30 deg limit) is part of the guess, not only the signs.
+  function coneAngles(a, t) {
+    const u = unit3(sub3(t.pos, a.pos));
+    const fw = unit3([a.face[0], 0, a.face[2]]);
+    const rt = [fw[2], 0, -fw[0]];
+    const x = dot3(u, rt), z = dot3(u, fw), y = -u[1];
+    return [Math.atan2(y, Math.hypot(x, z)), Math.atan2(x, z)];
+  }
+
+  // Action layer 2 (vtable 0x4a29f8: start 0x366388 empty, end 0x367a78 frees it; update FUN_00366390):
+  // move about while the target is out of view. Busy -> state 0. No live target: FUN_0035fe08 (a new target,
+  // MISSING: warned), then in state 3 its wait, else stop (FUN_0055a828) and state 0. State AI +0x28:
+  // 0 (target out of view): a path near the target: same area -> queued mode 0 (queue room) or mode 6 (+4 4,
+  // cap 7, flags 7), state 1; else mode 1 (+4 6, cap 10, flags 0x17; T: w161_chase) and the state stays 0 (a
+  // new request every run). C+0x1c0 |= 0x10 either way. 1 / 2: after 0x79 ticks with d34 > 50 C+0x1c0 bit 4
+  // clears; in view after 0x1e ticks -> bit 4 set, state 3; mover ended -> 0; C+0x1c0 bit 20 -> stop, 0;
+  // bit 19 toggles 1 / 2 (in 2 for 0x3c ticks -> stop, 3); 3 waits 0x3d ticks -> stop, 0.
+  function action2(ai) {
+    const a = ai.owner, C = a.C;
+    if (actBusy(a)) { ai.astate28 = 0; return; }
+    if (!liveTarget(ai)) warnOnce('enemy_ai: action layer 2 with no target: FUN_0035fe08 (new target) not translated');
+    const stop0 = () => { PM.stopAll(a, warnOnce); ai.astate28 = 0; };       // FUN_0055a828, state 0
+    if (!liveTarget(ai) && ai.astate28 !== 3) { stop0(); return; }
+    const vis = !!(ai.flags & 2);                                             // FUN_00360bb8(ai, 1)
+    switch (ai.astate28) {
+      case 0: {
+        if (vis) return;
+        NG.trackNode(G, a);                                                   // FUN_00563970(a, -1)
+        const sn = G ? a.node108 : -1;
+        const goal = G ? NG.freeNeighbour(G, target(ai), rng) : -1;           // FUN_00563d20(t, 1, 1)
+        if (sameArea(sn, goal)) {
+          if (!NG.queueFree(svc)) navPath(a, { goal, s4: 4, max: 7, mode: 6, flags: 7 | searchFlags(ai), c: 100.0 });
+          else navPathTo(a, goal);
+          ai.atime = short(S.now);                                            // FUN_0035eb88
+          ai.astate28 = 1;
+          C.f1c0 = (C.f1c0 | 0x10) >>> 0;
+          return;
+        }
+        C.f1c0 = (C.f1c0 | 0x10) >>> 0;
+        navPath(a, { goal, s4: 6, max: 10, mode: 1, flags: 0x17 | searchFlags(ai), c: 100.0 });
+        return;
+      }
+      case 1: case 2: {
+        if (!(aTime(ai) < 0x79) && 50.0 < ai.d34) C.f1c0 = (C.f1c0 & ~0x10) >>> 0;
+        if (vis && 0x1e < aTime(ai)) {
+          C.f1c0 = (C.f1c0 | 0x10) >>> 0;
+          ai.atime = short(S.now); ai.astate28 = 3; return;
+        }
+        if (C.mover === 0) { ai.astate28 = 0; return; }
+        if (C.f1c0 & 0x100000) { stop0(); return; }
+        if (!(C.f1c0 & 0x80000)) {
+          if (ai.astate28 !== 2) return;
+          ai.astate28 = 1; ai.atime = short(S.now); return;
+        }
+        if (ai.astate28 === 1) { ai.astate28 = 2; ai.atime = short(S.now); return; }
+        if (aTime(ai) < 0x3c) return;
+        PM.stopAll(a, warnOnce);
+        ai.atime = short(S.now); ai.astate28 = 3; return;
+      }
+      case 3:
+        if (aTime(ai) < 0x3d) return;
+        stop0(); return;
+    }
+  }
+
+  // Action layers 5 (vtable 0x4a2968, update FUN_003670e8) and 6 (vtable 0x4a2938, update FUN_003672d8; starts
+  // 0x3670e0 / 0x3672d0 empty, ends 0x367b50 / 0x367b98 free only). No live target or busy -> state 0. State 0:
+  // with the soldier's node (FUN_00563970) and the target's node (its +0x108 as it is), one nav request from one to
+  // the other, +4 3, then state 1 (layer time reset); state 1 waits for the mover to end -> state 0 (time reset).
+  //   5: mode 3 (away from the target: cost -|goal - n| x 0.1, +20 nearer), c 150, flags 0xe | FUN_0035ef18; queue
+  //      room -> queued, cap 20 + (int)(r x 11), else sync (| 1), cap 7 + (int)(r x 3); state 1 only when started.
+  //   6: C+0x1c0 bit 4 cleared first; mode 2 (keep the distance: cost | |goal - n| - c | x 0.1), c = d34, flags 0xe;
+  //      queue room -> queued, cap 10 + (int)(r x 6), else sync (| 1), cap 5; then (int)(r x 11) < 8 -> C+0x1c0 bit 4
+  //      set (0.3 speed) else clear; state 1 whether or not FUN_0055a628 started. r = FUN_0040b5c0 draws.
+  function action56(ai, m) {
+    const a = ai.owner, C = a.C;
+    if (!liveTarget(ai) || actBusy(a)) { ai.astate28 = 0; return; }
+    if (ai.astate28 === 1) {
+      if (C.mover !== 0) return;
+      ai.atime = short(S.now); ai.astate28 = 0; return;
+    }
+    if (ai.astate28 !== 0) return;
+    if (m === 6) C.f1c0 = (C.f1c0 & ~0x10) >>> 0;
+    NG.trackNode(G, a);
+    const sn = G ? a.node108 : -1, t = target(ai), tn = t.node108 ?? -1;
+    if (sn === -1 || tn === -1) { ai.atime = short(S.now); ai.astate28 = 0; return; }
+    let req;
+    if (m === 5) {
+      const q = NG.queueFree(svc);
+      const max = q ? Math.trunc(f(f(rng()) * 11.0)) + 0x14 : Math.trunc(f(f(rng()) * 3.0)) + 7;
+      req = { goal: tn, s4: 3, max, mode: 3, flags: 0xe | searchFlags(ai) | (q ? 0 : 1), c: 150.0 };
+      if (!navPath(a, req)) return;
+    } else {
+      const q = NG.queueFree(svc);
+      const max = q ? Math.trunc(f(f(rng()) * 6.0)) + 10 : 5;
+      req = { goal: tn, s4: 3, max, mode: 2, flags: 0xe | (q ? 0 : 1), c: ai.d34 };
+      if (Math.trunc(f(f(rng()) * 11.0)) < 8) C.f1c0 = (C.f1c0 | 0x10) >>> 0;
+      else C.f1c0 = (C.f1c0 & ~0x10) >>> 0;
+      navPath(a, req);
+    }
+    ai.atime = short(S.now); ai.astate28 = 1;
+  }
+
   // Action layer 3 (vtable 0x4a29c8, update FUN_003667b0): walk at the target. State AI +0x28:
   // 0 wait until d38 >= 5; 1 pick: target visible (AI +0x14 bit 1) within 100 (or 50) and C+0x1c0 bit 18
   // clear -> under 20 state 4, else mover 3 (FUN_00353110(20, 1000, C, target) + FUN_0034edf0(C, 3)) and
-  // state 3; otherwise a nav-graph path (MISSING, see below); 3 while mover 3 runs: back to 1 once the target
-  // is out of view beyond 100, or C+0x1c0 bit 18 with d34 > 24; 0 when the mover ended; 4 wait 0x3d ticks
-  // and d38 > 5, then 1. State 2 (following a nav path) needs mover 0xd.
+  // state 3; otherwise a nav-graph path (mover 0xd) and state 2; 2 on the path: back to mover 3 inside the
+  // view cone, on to 1 when the path ends far from the target; 3 while mover 3 runs: back to 1 once the
+  // target is out of view beyond 100, or C+0x1c0 bit 18 with d34 > 24; 0 when the mover ended; 4 wait 0x3d
+  // ticks and d38 > 5, then 1.
   function action3(ai) {
     const a = ai.owner, C = a.C;
     if (!liveTarget(ai)) return;
@@ -1052,43 +1217,57 @@ export function createEnemyAI(opts) {
           PM.approachStart(a, target(ai), 20.0, 1000.0, placeBody, warnOnce);
           ai.astate28 = 3; return;
         }
-        // The nav-graph branch (0x366908): FUN_00563970(a, -1) = the soldier's node (nav_graph.js trackNode);
-        // the target alive (FUN_0035edc0) else state 0; goal = FUN_00563d20(target, 1, 1), a free neighbour of
-        // the target's node, which draws FUN_0040b5c0 once when there is one. MISSING: the page doesn't run
-        // FUN_00563970 for Vincent (its caller for the player is not found), so his node (+0x108, t.node108) is
-        // unknown, the goal is -1 and that draw never happens: the shared random stream drifts from the game's
-        // here. Same area (+0xe) of the two nodes -> the mode 6 / mode 0 request, else mode 1 with
-        // C+0x1c0 |= 0x10 (set before the request, kept when it fails).
-        if (a.node108 === undefined) a.node108 = -1;                          // actor +0x108 starts at -1
-        NG.trackNode(G, a, warnOnce);
+        // The nav-graph branch (0x366908): FUN_00563970(a, -1) = the soldier's node; the target alive
+        // (FUN_0035edc0) else state 0; goal = FUN_00563d20(target, 1, 1), a free neighbour of the target's node
+        // (one FUN_0040b5c0 draw when there is one). Same area (+0xe): the queue has room (FUN_00368120) ->
+        // FUN_0055a590 (queued mode 0 to the goal), else FUN_0055a628 with mode 6 (+4 4, cap 7, flags 0x87);
+        // other area: C+0x1c0 |= 0x10, FUN_0055a628 with mode 1 (+4 6, cap 10, flags 0x8f). c = 100. Either way the
+        // flags take FUN_0035ef18's 0x60. Started -> state 2 (layer time reset); failed -> stays in state 1.
+        NG.trackNode(G, a);
         const sn = G ? a.node108 : -1;
         if (!liveTarget(ai)) { ai.astate28 = 0; return; }
         const goal = G ? NG.freeNeighbour(G, target(ai), rng) : -1;
-        let same = false;
-        if (sn !== -1 && goal !== -1 && G) {
-          const p = NG.node(G, sn), q = NG.node(G, goal);
-          if (p && q) same = p[5] === q[5];
+        let started;
+        if (sameArea(sn, goal)) {
+          started = NG.queueFree(svc) ? navPathTo(a, goal)
+            : navPath(a, { goal, s4: 4, max: 7, mode: 6, flags: 0x87 | searchFlags(ai), c: 100.0 });
+        } else {
+          C.f1c0 = (C.f1c0 | 0x10) >>> 0;
+          started = navPath(a, { goal, s4: 6, max: 10, mode: 1, flags: 0x8f | searchFlags(ai), c: 100.0 });
         }
-        if (!same) C.f1c0 = (C.f1c0 | 0x10) >>> 0;
-        // The request: FUN_0055a628 (mode 6 / mode 1) or FUN_0055a590 (queued mode 0, with FUN_00368120). Both
-        // fail when the soldier is dead (FUN_00316cf8) or has no node after another FUN_00563970; else they
-        // copy the request (FUN_00353080 / FUN_00352f18), set the turn (FUN_0055a4e0) and start mover 0xd with
-        // FUN_0034edf0(C, 0xd), whose FUN_00352a60 ends mover 3, and the layer goes to state 2.
-        // MISSING: mover 0xd (FUN_00351928), FUN_0055a4e0 and state 2 are not translated, so on success the
-        // page only ends mover 3 (the soldier stops instead of following a path) and stays in state 1.
-        NG.trackNode(G, a, warnOnce);
-        if (!dead(a) && G && a.node108 !== -1) {
-          if (C.mover !== 0) PM.moverStop(a, warnOnce);                       // FUN_0034edf0 -> FUN_00352a60
-          warnOnce('enemy_ai: action layer 3 nav-graph path (mover 0xd, FUN_00351928) not translated: the soldier stands');
-        }
+        if (!started) return;
+        ai.atime = short(S.now);                                              // FUN_0035eb88
+        ai.astate28 = 2;
         return;
       }
-      case 2:
-        // MISSING: never reached on the page (needs mover 0xd). The game re-approaches here only with the target
-        // visible in the 30 / 40 deg cone (FUN_0035e9b0) with d38 < 150 and dy > -25, or d38 < 10 with bit 18 clear;
-        // the page stays in state 1, whose rule (visible, d34 < 100, any direction) starts mover 3 more often.
-        warnOnce('enemy_ai: action layer 3 state 2 (mover 0xd) not translated');
-        return;
+      case 2: {
+        // following the path (mover 0xd). Back to mover 3 when the target is in view inside the cone
+        // (FUN_0035e9b0: |out[1]| < 30 deg, |out[0]| < 40 deg; out = [pitch, yaw] is a GUESS, see coneAngles) with d38 < 150 and dy > -25, or d38 < 10; either
+        // with C+0x1c0 bit 18 clear, and in view when d38 >= 50
+        let go = false;
+        if (vis) {
+          const [pitch, yaw] = coneAngles(a, target(ai));
+          if (Math.abs(yaw) < 0.5235988 && Math.abs(pitch) < 0.69813174 && ai.d38 < 150.0 && -25.0 < ai.d40) go = true;
+          else go = ai.d38 < 10.0 && !(C.f1c0 & 0x40000);
+        }
+        if (go && (!(50.0 <= ai.d38) || vis) && !(C.f1c0 & 0x40000)) {
+          PM.approachStart(a, target(ai), 20.0, 1000.0, placeBody, warnOnce);   // FUN_00353110 + FUN_0034edf0(C, 3)
+          ai.astate28 = 3; return;
+        }
+        // LAB_00366ca4: within 0x709 ticks of the layer time, or while the path has a last node (FUN_0034aa28)
+        if (aTime(ai) < 0x709 || PM.navGoal(C) !== -1) {
+          if (C.mover === 0) { ai.astate28 = 0; return; }
+          const t = liveTarget(ai) ? target(ai) : null;
+          const n = t ? PM.navGoal(C) : -1;
+          // FUN_00563bc0(t, n): |t - node n| (FUN_0054a888, 3D), 10000 without the node
+          if (n !== -1 && 30.0 < nodeDist(t, n) && ai.d38 < 60.0) { PM.setTurn(a, 6); ai.astate28 = 1; return; }
+        } else { ai.atime = short(S.now); ai.astate28 = 0; }
+        if (!(C.f1c0 & 0x100000)) return;
+        ai.atime = short(S.now);
+        PM.stopAll(a, warnOnce);                                              // FUN_0055a828 -> FUN_003533e0
+        PM.setTurn(a, 6);
+        ai.astate28 = 4; return;
+      }
       case 3:
         if (C.mover === 0) { ai.astate28 = 0; return; }
         if (ai.d34 <= 100.0 || vis) {
@@ -1111,6 +1290,25 @@ export function createEnemyAI(opts) {
   // z128 has a nav graph: without it (a stale ai.json) every nav request fails and mover 3 keeps
   // homing out of view, as on a stage with no graph; make that visible
   if (!G) warnOnce('enemy_ai: ai.json has no nav block (re-export with export_web_triggers.py): nav requests fail, approach movement is wrong');
+  // The search service DAT_0046e290 +100 (nav_graph.js makeService: 40 steps a frame, 1 queue slot, 3000 records)
+  const svc = NG.makeService();
+  // Node tracking: the game runs FUN_00563970 when an actor's position is set (vt+0x234; soldiers: FUN_0055ef78,
+  // T: w161_chase, 46 / 47's +0x108 follows FUN_0033dda8 from the last frame's node on all 560 frames).
+  // GUESS (when): every frame for every actor and Vincent; whether a standing actor's position is set each
+  // frame is not traced (a repeat at the same point can only step to a neighbour that scores lower).
+  function trackMoved(a) { if (G) NG.trackNode(G, a); }
+  // The body listener C+0x540 (FUN_005690c8) for mover 0xd: event 5 (node passed) -> FUN_00563a50(node) and
+  // FUN_00588550 case 5 (0x5886d4: manager event 0x12 with the node -> script event 0x27); event 4 (path end)
+  // -> FUN_00563a50(node) unless -1, then case 4 (0x5886c0: manager event 0x11 -> script event 0x26)
+  function navOf(a) {
+    return a.navCtx || (a.navCtx = {
+      G, svc, rng, warn: warnOnce,
+      event(ev, n) {
+        if (ev === 5) { NG.setNode(G, a, n); postManager(0x12, a.id, n); }
+        else if (ev === 4) { if (n !== -1) NG.setNode(G, a, n); postManager(0x11, a.id, n); }
+      },
+    });
+  }
   function bodyOf(a) {
     return a.B || (a.B = { poly: null, state: 0, vel: [0, 0, 0], want: [0, 0, 0], acc: 2.5, turn: f(4 * Math.PI), dt: f(0.019999999552965164) });
   }
@@ -2476,9 +2674,8 @@ export function createEnemyAI(opts) {
   // has 0x8000 / 0x10000
   function die(a, dir) {
     const C = a.C;
-    if (C.mover === 1) PM.moverStop(a, warnOnce);                             // FUN_003533e0 -> FUN_00352a60
-    else if (C.mover === 3) PM.approachStop(a);
-    C.mover = 0; C.slide = null;                                              // FUN_003533e0
+    PM.stopAll(a, warnOnce);                                                  // FUN_003533e0 (FUN_0034d870, FUN_00352a60: mover 0xd gives its nodes back)
+    C.slide = null;
     slide(a, 0xb, 12.0, 16.0, dir);
     if (a.s64 & 0x40) warnOnce('enemy_ai: status bit 6 death (FUN_0056b620) not translated');
     if (!(a.f118 & 0x18000)) setActorState(a, 7);
@@ -2487,8 +2684,7 @@ export function createEnemyAI(opts) {
   // deceleration speed / T per tick
   function slide(a, mode, d, T, dir) {
     const C = a.C, v = f(f(d + d) / T);
-    if (C.mover === 1) PM.moverStop(a, warnOnce);                             // FUN_0034edf0 -> FUN_00352a60 (a path walk ends)
-    else if (C.mover === 3) PM.approachStop(a);
+    if (C.mover !== 0) PM.moverStop(a, warnOnce);                             // FUN_0034edf0: C+0x300 != 0 -> FUN_00352a60 (any mover)
     C.slide = { dir: unit3(dir), v, dv: f(v / T) };
     C.mover = mode;
   }
@@ -2509,7 +2705,9 @@ export function createEnemyAI(opts) {
       // game (FUN_0034f178 cases 9 / 0xb only enter 0xc); the page keeps their flat step below (GUESS, see slide).
       bodyOf(a);
       const t = C.tgt, sliding = !!s && (C.mover === 9 || C.mover === 0xb);
-      if (PM.approachFrame(a, t && t.pos ? t.pos : null, step, walkBody, warnOnce, sliding) === 'done') events.push(`approach end ${a.id}`);
+      const r = PM.approachFrame(a, t && t.pos ? t.pos : null, step, walkBody, warnOnce, sliding, navOf(a));
+      if (r === 'done') events.push(`approach end ${a.id}`);
+      else if (r === 'nav end') events.push(`nav end ${a.id}`);
       if (!sliding) return;
     } else if (C.mover === 1 || C.mm || C.s214 === 5) {
       if (PM.bodyFrame(a, data.paths, step, PM.MOVE_DT, warnOnce) === 'done') {
@@ -2546,6 +2744,8 @@ export function createEnemyAI(opts) {
       else if (ai.brain.mode === 5) brain5(ai);
       else if (ai.brain.mode === 6) brain6(ai);
       if (ai.amode === 3) action3(ai);                                        // action layer (+0xe4, FUN_00365110)
+      else if (ai.amode === 2) action2(ai);
+      else if (ai.amode === 5 || ai.amode === 6) action56(ai, ai.amode);
       if (ai.combat) combat2(ai);                                             // combat layer (+0xe8)
     }
     ai.last = S.now;
@@ -2595,8 +2795,13 @@ export function createEnemyAI(opts) {
     events.length = 0;
     S.frame++;                                                                // DAT_0046e938 +0x20 (frames)
     activated.length = 0;
+    // 0. the nav search service FUN_00368420 (first in FUN_00323128): queued searches take their 40 steps
+    if (G) NG.serviceUpdate(svc);
     // 1. AI
     scheduler(step);
+    // 1a. Vincent's position is set in the player tick (FUN_0053b500, after the AI): vt+0x234 = FUN_00573c60
+    // -> FUN_0055ef78 -> FUN_00563970 (his +0x28 = 0x20901f in the save: bit 0x10 set): his nav node
+    if (G && P && P.pos) NG.trackNode(G, P, playerNew || P.pos);
     // 1b. Vincent's shot (queueShot). FUN_00323128 runs the AI scheduler FUN_00365008 first, then the
     // object update FUN_0053b500, which ticks the player (vt+0x214 of vtable 0x58f128 = FUN_005747a0
     // -> FUN_005786e8 -> FUN_00579570 -> FUN_00577480: the cone draws) before its object lists
@@ -2611,7 +2816,7 @@ export function createEnemyAI(opts) {
       // GUESS: a dead soldier stops turning. In the game the turn runs in FUN_0034ea18 until C+0x214 is 0;
       // the death path (FUN_0055cac8 -> FUN_0035f728) isn't seen to clear it, so he may keep turning
       // toward his last aim point (notes/fidelity-audit.md 'Dead soldier stops turning').
-      if (dead(a)) { bodyUpdate(a, step); continue; }
+      if (dead(a)) { bodyUpdate(a, step); trackMoved(a); continue; }
       // FUN_00343160 (motion update): C+0x564 bit 30 -> FUN_00342650: the C+0x6c2 object's vt+0x5c
       // point -> FUN_003424c0 (no parent-frame transform: vt+0x34 = no parent on the static room, L)
       // T: the point is where Vincent was before this frame's move (record f's position fits the
@@ -2620,6 +2825,7 @@ export function createEnemyAI(opts) {
         setAim(a, targetPoint(a.target === P && playerOld ? { pos: playerOld } : a.target));
       if (a.C.s214 === 6) a.face = turnBody(a.face, a.pos, a.C.t2b0, step);
       bodyUpdate(a, step);
+      trackMoved(a);
     }
     // 4. messages posted last frame -> event 2 of the receiver (r0 = n, r2 = sender)
     const mail = mailbox.splice(0);
@@ -2645,6 +2851,8 @@ export function createEnemyAI(opts) {
       if (e.type === 7) { runEvent(o, 3); objects.get(e.id).flags28 &= ~0x100000; }
       else if (e.type === 8) runEvent(o, 4);
       else if (e.type === 0xf) runEvent(o, 0x13);                              // case 0x10: event 0x13, no args (0x4ef400)
+      else if (e.type === 0x11) runEvent(o, 0x26);                             // case 0x12: event 0x26, no args (the node is dropped)
+      else if (e.type === 0x12) runEvent(o, 0x27, [e.arg, 0]);                 // case 0x13: event 0x27 (node, 0)
       else warnOnce(`enemy_ai: manager event ${e.type} (FUN_0053fde8 case ${e.type + 1}) not translated`);
     }
   }
@@ -2656,6 +2864,6 @@ export function createEnemyAI(opts) {
                   playerShot, queueShot, lockTargets, pushOut, boneWorld: opts.boneWorld || null,
                   attackPick: a => attackPick(a.ai),     // FUN_0035ff98 on an actor's AI (tests)
                   // single translated functions, for the tests' direct state checks
-                  t: { brain5, brain6, stateMotion, setActorState, bulletEnd, target, send, setMode, setTarget, setActionLayer, action3, flinch, die } };
+                  t: { brain5, brain6, stateMotion, setActorState, bulletEnd, target, send, setMode, setTarget, setActionLayer, action2, action3, action56, flinch, die, navOf } };
   return world;
 }

@@ -24,7 +24,11 @@
 //      attack (m_atk drawn);
 //   9. a shot over the platform (trigger 77, bullets only) wakes records 46-49; 46 / 47 walk stage paths 5 / 8
 //      (cmd 0x131, path_mover.js: running clip r_grn, stop where the game stops them, trace w159_walk95,
-//      then script event 0x13: AI mode 1); no console errors or page errors.
+//      then script event 0x13: AI mode 1);
+//   10. a shot soldier (record 70, mode 5) with Vincent ~250 u away walks to him on the nav graph (action layer 2,
+//      mover 0xd), hands over to the approach (layer 3, mover 3) and starts his melee attack; 10b. the same
+//      soldier with Vincent in view at 177 u keeps firing, repositions with layer 6 (mode-2 path on mover 0xd)
+//      and later closes in and swings; no console errors or page errors.
 //   node native/web/test_enemies_page.mjs          (needs data/enemies + playwright; else SKIP, exit 0)
 // Serves native/web with python3 http.server on a free port. three.js comes from the CDN (play.html importmap).
 import { existsSync, readFileSync } from 'node:fs';
@@ -508,6 +512,89 @@ try {
     ok(steps.length > 30 && steps.every(x => Math.abs(x - 0.6) < 1e-4),
        `#46 drawn r_grn advances ${[...new Set(steps.map(x => x.toFixed(4)))].join(' / ')} frames per game frame over ${steps.length} frames (0.6 = rate 0.5 x step 1.2)`);
   }
+  // 10. Dan / the manager: "shot soldiers never come and melee". Record 70 (e027; its damage script, event 8,
+  // sets AI mode 5) activated (cmd 0x108); Vincent ~250 u away on nav node 10 (test aid: position write); one
+  // straight bullet into the soldier's chest (enemy_ai queueShot = aim.js onShot's path; test aids: no spread,
+  // fired from 40 u in front of him). The game's chain: event 8 -> mode 5 -> action layer 2 -> mover 0xd along
+  // the graph while Vincent is out of view (w161_chase: mover 0xd within ~10 frames of mode 5), then state 7 /
+  // 8 -> layer 3 -> mover 3 in view -> d34 < 22 -> the attack pick (actor state 0x80+, the e027 melee).
+  await pg.goto(`http://127.0.0.1:${port}/play.html`, { waitUntil: 'load' });
+  await pg.waitForFunction(() => window.__play && window.__play.stats.ticks > 30, null, { timeout: 120000 });
+  const ch = await pg.evaluate(async () => {
+    const P = window.__play, ai = P.enemyAI, c = P.ctrl, obj = k => ai.objects.get(k + 22);
+    const all = await fetch('data/enemies/ai.json').then(r => r.json());
+    const Wp = await fetch('data/aim/weapon.json').then(r => r.json());
+    const rec = all.records[70], vn = all.nav.nodes[10];
+    const wait = async (fn, ms) => { const t = performance.now(); while (!fn() && performance.now() - t < ms) await new Promise(r => setTimeout(r, 50)); return fn(); };
+    c.pos = { x: vn[0], y: vn[1], z: vn[2] }; c.prev = { ...c.pos }; c.locate(); if (c.onTeleport) c.onTeleport();
+    ai.setActive(obj(70), 1);
+    if (!await wait(() => ai.actors.some(a => a.rec === 70), 15000)) return null;
+    const a = ai.actors.find(x => x.rec === 70);
+    const V = () => [c.pos.x, c.pos.y, c.pos.z];
+    const dist = () => Math.hypot(a.pos[0] - c.pos.x, a.pos[2] - c.pos.z);
+    const d0 = dist(), p0 = a.pos.slice();
+    const chest = [a.pos[0], a.pos[1] - 14, a.pos[2]], fw = [a.face[0], 0, a.face[2]];
+    const muzzle = [chest[0] + fw[0] * 40, chest[1], chest[2] + fw[2] * 40];
+    const hp0 = a.hp, mode0 = a.ai.mode;
+    ai.queueShot(muzzle, chest, { ...Wp, spread: null, pellets: 1 });
+    const layers = new Set(), movers = new Set(), t0 = ai.tick;
+    let dmin = d0, firstNav = null, n = 0, free = null;
+    const busy = () => a.C.mover === 9 || (a.C.f564 & 0x8000) || a.astate !== 3;     // the flinch (mover 9 slide, busy bit)
+    ai.tick = (...x) => { const ev = t0(...x); n++; layers.add(a.ai.amode); movers.add(a.C.mover);
+                          if (free == null && n > 1 && !busy()) free = n;
+                          if (a.C.mover === 0xd && firstNav == null) firstNav = n; dmin = Math.min(dmin, dist()); return ev; };
+    const swung = await wait(() => a.astate >= 0x80 && a.astate < 0xc0, 90000);
+    const out = { free, d0, hit: mode0 !== 5 && a.ai.mode === 5, hp: [hp0, a.hp], mode: a.ai.mode, layers: [...layers], movers: [...movers], firstNav, frames: n,
+                  dmin, dEnd: dist(), astate: a.astate, swung, walked: Math.hypot(a.pos[0] - p0[0], a.pos[2] - p0[2]), vhp: P.php.hp };
+    ai.tick = t0;
+    return out;
+  });
+  ok(ch && ch.hit && ch.movers.includes(0xd) && ch.firstNav != null && ch.free != null && ch.firstNav - ch.free <= 20,
+     `record 70 shot ${ch?.d0?.toFixed(0)} u from Vincent (HP ${ch?.hp}; the hit runs event 8 -> mode 5; damage and flinch are random): AI mode ${ch?.mode}, layers ${ch?.layers}, movers ${ch?.movers}; the flinch ends at frame ${ch?.free}, mover 0xd from frame ${ch?.firstNav} (the game: within ~10 frames of mode 5, w161_chase)`);
+  ok(ch && ch.swung && ch.dEnd < 25 && ch.walked > 100,
+     `walks ${ch?.walked?.toFixed(0)} u along the graph and swings (actor state 0x${ch?.astate?.toString(16)}) at ${ch?.dEnd?.toFixed(1)} u after ${ch?.frames} frames; Vincent HP ${ch?.vhp} (melee hit volume not decoded)`);
+  // 10b. The in-view case (Dan: he shoots a soldier who can see him). Record 70 again, Vincent on nav node 37
+  // (177 u, in his view by the page's LOS, collision.js segment). The decode (FUN_003639d0 states 6 / 12 / 13,
+  // FUN_003672d8): he keeps firing; every ~0x79 ticks state 13 runs action layer 6, a mode-2 path from his
+  // node toward Vincent's node that keeps the distance (cost | |goal - n| - c | x 0.1, c = d34): he repositions at
+  // range, layer 5 (mode 3) backs off after a failed attack pick; he closes in only through states 7 / 8 (layer 3,
+  // mover 3) and melees inside 22 u. Node sim (same LOS): melee at frame ~550-560, 145-148 shots.
+  await pg.goto(`http://127.0.0.1:${port}/play.html`, { waitUntil: 'load' });
+  await pg.waitForFunction(() => window.__play && window.__play.stats.ticks > 30, null, { timeout: 120000 });
+  const cv = await pg.evaluate(async () => {
+    const P = window.__play, ai = P.enemyAI, c = P.ctrl, obj = k => ai.objects.get(k + 22);
+    const all = await fetch('data/enemies/ai.json').then(r => r.json());
+    const Wp = await fetch('data/aim/weapon.json').then(r => r.json());
+    const vn = all.nav.nodes[37];
+    const wait = async (fn, ms) => { const t = performance.now(); while (!fn() && performance.now() - t < ms) await new Promise(r => setTimeout(r, 50)); return fn(); };
+    c.pos = { x: vn[0], y: vn[1], z: vn[2] }; c.prev = { ...c.pos }; c.locate(); if (c.onTeleport) c.onTeleport();
+    ai.setActive(obj(70), 1);
+    if (!await wait(() => ai.actors.some(a => a.rec === 70), 15000)) return null;
+    const a = ai.actors.find(x => x.rec === 70), body = () => P.enemies.actors.find(x => x.rec === 70);
+    const dist = () => Math.hypot(a.pos[0] - c.pos.x, a.pos[2] - c.pos.z);
+    const d0 = dist(), mode0 = a.ai.mode;
+    const chest = [a.pos[0], a.pos[1] - 14, a.pos[2]], fw = [a.face[0], 0, a.face[2]];
+    ai.queueShot([chest[0] + fw[0] * 40, chest[1], chest[2] + fw[2] * 40], chest, { ...Wp, spread: null, pellets: 1 });
+    const t0 = ai.tick, layers = new Set(), on6 = new Set(), clips = new Set();
+    let n = 0, vis = 0, walked6 = 0, last = a.pos.slice(), dmax = d0, shots = 0;
+    ai.tick = (...x) => {
+      const ev = t0(...x); n++;
+      for (const e of ev) if (/^shot /.test(e) && e.split(' ')[1] === String(a.id)) shots++;
+      layers.add(a.ai.amode); if (a.ai.flags & 2) vis++;
+      const b = body(); if (b && b.head) clips.add(b.head.clip);
+      const step = Math.hypot(a.pos[0] - last[0], a.pos[2] - last[2]); last = a.pos.slice();
+      if (a.ai.amode === 6) { on6.add(a.C.mover); walked6 += step; }
+      dmax = Math.max(dmax, dist());
+      return ev;
+    };
+    const swung = await wait(() => a.astate >= 0x80 && a.astate < 0xc0, 120000);
+    ai.tick = t0;
+    return { shots, d0, hit: mode0 !== 5 && a.ai.mode === 5, mode: a.ai.mode, layers: [...layers], on6: [...on6], walked6, vis, n, fired: [...clips].filter(x => /_st_f$/.test(x)).join() || false, clipsSeen: [...clips].join(), swung, dEnd: dist(), dmax, astate: a.astate };
+  });
+  ok(cv && cv.hit && cv.mode === 5 && cv.vis > cv.n * 0.9 && cv.shots > 0 && cv.layers.includes(6) && cv.on6.includes(0xd) && cv.walked6 > 5,
+     `in view (${cv?.vis}/${cv?.n} frames) at ${cv?.d0?.toFixed(0)} u: AI mode ${cv?.mode}, fires ${cv?.shots} rounds (clips ${cv?.clipsSeen}), layers ${cv?.layers}; layer 6 walks him ${cv?.walked6?.toFixed(1)} u on mover 0xd (repositioning; farthest ${cv?.dmax?.toFixed(0)} u)`);
+  ok(cv && cv.swung && cv.dEnd < 25,
+     `then closes in (layer 3) and swings: actor state 0x${cv?.astate?.toString(16)} at ${cv?.dEnd?.toFixed(1)} u after ${cv?.n} frames`);
   ok(errs.length === 0, `no console errors${errs.length ? ': ' + errs.slice(0, 3).join(' | ') : ''}`);
 } finally {
   await browser.close();

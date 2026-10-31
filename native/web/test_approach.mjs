@@ -157,12 +157,20 @@ if (!existsSync(dataPath)) { skip('data/enemies/ai.json missing (build_web.sh)')
     const d = Math.hypot(player.pos[0] - a.pos[0], player.pos[2] - a.pos[2]);
     if (moved == null && a.C.mover === 3) moved = i;
     if (ev.some(e => e === `approach end ${a.id}`)) stop = [i, d];
-    log.push([a.ai.bstate, a.ai.amode, a.ai.astate28, a.C.mover]);
+    log.push([a.ai.bstate, a.ai.amode, a.ai.astate28, a.C.mover, d, a.pos[1]]);
   }
   const d = Math.hypot(player.pos[0] - a.pos[0], player.pos[2] - a.pos[2]);
   ok(moved != null, `mode 5 state 7 -> action layer 3 -> mover 3 with Vincent 40 u away and in view (frame ${moved})`);
   ok(stop && stop[1] < 20.0 && stop[1] > 19.0, `walks in and the mover ends just inside 20 u (frame ${stop && stop[0]}, ${stop && stop[1].toFixed(2)} u)`);
-  ok(d < 20.0 && Math.abs(a.pos[1] - rec.pos[1]) < 1e-6, `stays there (${d.toFixed(2)} u; the walk mesh keeps his height)`);
+  // after the stop he stays inside 20 u until brain 5 hands him to layer 5 (away from the target, mode 3) or 6
+  // (reposition, mode 2): any later walk is mover 0xd under one of those, never mover 3 again from outside
+  // (until his own bullets cross trigger 77, whose script 127 puts him on stage path 5: mover 1, the path's heights)
+  const after0 = stop ? log.slice(stop[0] + 1) : [];
+  const wake = after0.findIndex(x => x[3] === 1);
+  const after = wake < 0 ? after0 : after0.slice(0, wake);
+  const out = after.findIndex(x => x[4] > 20.5);
+  ok(stop && (out < 0 || after.slice(0, out + 1).some(x => (x[1] === 5 || x[1] === 6) && x[3] === 0xd)) && after.every(x => Math.abs(x[5] - rec.pos[1]) < 1e-4),
+     `after the stop: inside 20 u until layer 5 / 6 move him (mover 0xd; layers seen ${[...new Set(after.map(x => x[1]))]} over ${after.length} frames${wake < 0 ? '' : ', then trigger 77 wakes him onto path 5'}; the walk mesh keeps his height)`);
   // case 3 sees the mover end (C+0x300 = 0) -> state 0 -> 1 -> 4 (inside 20 u)
   ok(stop && log.slice(stop[0]).some(x => x[1] === 3 && (x[2] === 0 || x[2] === 4)), `after the stop: case 3 -> state 0 (mover ended) -> 4 (states ${[...new Set(log.slice(stop ? stop[0] : 0).filter(x => x[1] === 3).map(x => x[2]))]})`);
   ok(log.some(x => x[0] === 10 || x[0] === 0xb || x[0] === 0xe), `brain 5 leaves state 8 once d34 < 25 (states seen ${[...new Set(log.map(x => x[0]))].join(',')})`);
@@ -195,8 +203,8 @@ if (!existsSync(dataPath)) { skip('data/enemies/ai.json missing (build_web.sh)')
       ok((st.f45c & 0x300000) === 0x300000 && !(b.C.f45c & 0x380000) && (b.C.f1c4 & 0x100), `flinch slide ends mover 3 through FUN_00352a60 (body flags ${b.C.f45c.toString(16)}, C+0x1c4 bit 8)`);
   }
 
-  // Vincent out of view beyond 100 u during mover 3: case 3 -> state 1; the nav branch's FUN_0055a628 would end
-  // mover 3 for mover 0xd (MISSING): the page stops him (no walk at Vincent), C+0x1c0 |= 0x10 (mode 1 request)
+  // Vincent out of view beyond 100 u during mover 3: case 3 -> state 1; the nav branch's FUN_0055a628 ends
+  // mover 3 and starts mover 0xd (a nav-graph path toward Vincent's node), state 2
   {
     const pl = { pos: [rec.pos[0] + 60, rec.pos[1], rec.pos[2]], hp: 780, id: 0x16, f118: 0, s64: 0 };
     let blocked = false;
@@ -210,28 +218,28 @@ if (!existsSync(dataPath)) { skip('data/enemies/ai.json missing (build_web.sh)')
     const p0 = b.pos.slice(), seen = new Set();
     for (let i = 0; i < 400; i++) { W4.tick(1.2, pl.pos, pl.pos); if (b.ai.amode === 3) seen.add(b.ai.astate28); }
     const walked = Math.hypot(b.pos[0] - p0[0], b.pos[2] - p0[2]);
-    ok(on && b.C.mover === 0 && walked < 5 && seen.has(1), `out of view at 300 u: state 3 -> 1, mover 3 ended, ${walked.toFixed(2)} u walked (states ${[...seen]})`);
-    ok((b.C.f1c0 & 0x10) !== 0, 'nav branch, mode 1 request: C+0x1c0 bit 4 set');
+    ok(on && seen.has(1) && seen.has(2), `out of view at 300 u: state 3 -> 1 -> 2 (states ${[...seen]})`);
+    ok(b.C.mover === 0xd || walked > 5, `mover 3 ended, mover 0xd follows the graph (mover ${b.C.mover}, ${walked.toFixed(2)} u walked)`);
   }
-  // FUN_00563d20 draws once per nav-branch run when Vincent's node has a free neighbour (his node is MISSING
-  // on the page: set here by hand); without a node, no draw
+  // FUN_00563d20 draws once per nav-branch run when Vincent's node has a free neighbour; Vincent's node is
+  // tracked each frame (FUN_00573c60 -> FUN_00563970). Far from every node (no node within 40 u): no draw
   if (data.nav) {
     const NG = await import(pathToFileURL(path.join(here, 'nav_graph.js')).href);
     const G = NG.makeGraph(data.nav);
     const vp = [rec.pos[0] + 60, rec.pos[1], rec.pos[2] + 120];
     const vn = NG.nearestNode(G, vp);
-    const draws = node => {
-      let n = 0;
-      const pl = { pos: vp.slice(), hp: 780, id: 0x16, f118: 0, s64: 0, node108: node };
-      const W5 = AI.createEnemyAI({ data, player: pl, rand: () => { n++; return 0.5; }, quiet: true, log: () => {}, walkMesh: mesh, los: () => true });
+    const run = far => {
+      const pl = { pos: far ? [1e5, 0, 1e5] : vp.slice(), hp: 780, id: 0x16, f118: 0, s64: 0 };
+      const W5 = AI.createEnemyAI({ data, player: pl, rand: () => 0.5, quiet: true, log: () => {}, walkMesh: mesh, los: () => true });
       const b = W5.addActor({ rec: 46, astate: 3, f118: 0, face: [1, 0, 0] });
       W5.t.setTarget(b.ai, pl); W5.t.setMode(b.ai, 5); b.ai.bstate = 7;
-      let runs = 0;
-      for (let i = 0; i < 100; i++) { const was = b.ai.last; W5.tick(1.2, pl.pos, pl.pos); if (b.ai.last !== was && b.ai.amode === 3 && b.ai.astate28 === 1) runs++; }
-      return [n, runs];
+      for (let i = 0; i < 100 && !b.C.nreq; i++) W5.tick(1.2, pl.pos, pl.pos);
+      return [pl.node108, b.C.nreq ? b.C.nreq.goal : null];
     };
-    const [n0] = draws(-1), [n1, runs] = draws(vn);
-    ok(vn !== -1 && n1 - n0 > 0 && n1 - n0 <= runs, `FUN_00563d20: ${n1 - n0} extra draws with Vincent on node ${vn} (${runs} state-1 runs), none without a node`);
+    const [nn, g0] = run(true), [vn1, g1] = run(false);
+    const nbs = new Set(Array.from({ length: G.nodes[vn][3] }, (_, k) => NG.neighbour(G, vn, k)));
+    ok(vn1 === vn && nbs.has(g1), `Vincent's node tracked (${vn1}); the request's goal ${g1} is a neighbour of it (FUN_00563d20)`);
+    ok(nn === -1 && g0 === -1, `far from every node: no node, goal -1 (${nn}, ${g0})`);
   } else skip('ai.json has no nav block');
   // FUN_00360aa8 busy (C+0x564 bit 14 here): any state -> 0
   {
@@ -254,7 +262,7 @@ if (!existsSync(dataPath)) { skip('data/enemies/ai.json missing (build_web.sh)')
     // state 1, out of view at 300 u: the nav branch's mode 1 request sets C+0x1c0 bit 4
     b.ai.flags &= ~2; b.ai.d34 = 300; b.ai.d38 = 300; b.ai.astate28 = 1; b.C.f1c0 = (b.C.f1c0 & ~0x10) >>> 0;
     W6.t.action3(b.ai);
-    ok((b.C.f1c0 & 0x10) !== 0 && b.ai.astate28 === 1, `state 1 nav branch (mode 1): C+0x1c0 bit 4 set, state stays 1 (mover 0xd MISSING)`);
+    ok((b.C.f1c0 & 0x10) !== 0 || b.ai.astate28 === 2, `state 1 nav branch: a path (mode 1 sets C+0x1c0 bit 4), state ${b.ai.astate28}, mover ${b.C.mover}`);
   }
   // state 4 waits 0x3d ticks (FUN_0035eb68) before state 1
   {
@@ -271,8 +279,8 @@ if (!existsSync(dataPath)) { skip('data/enemies/ai.json missing (build_web.sh)')
     }
     ok(gap != null && gap >= 0x3d - 1.2, `state 4 holds ${gap && gap.toFixed(1)} ticks (>= 0x3d) before state 1`);
   }
-  // the same at 15 u (state 4: no mover) and at 40 u out of view (the nav-graph branch, MISSING: stands)
-  for (const [dist, los, want] of [[15, undefined, 4], [40, () => true, 1]]) {
+  // the same at 15 u (state 4: no mover) and at 40 u out of view (the nav-graph branch: state 2, mover 0xd)
+  for (const [dist, los, want] of [[15, undefined, 4], [40, () => true, 2]]) {
     const pl = { pos: [rec.pos[0] + dist, rec.pos[1], rec.pos[2]], hp: 780, id: 0x16, f118: 0, s64: 0 };
     const W2 = AI.createEnemyAI({ data, player: pl, rand: () => 0.5, quiet: true, log: () => {}, walkMesh: mesh, los });
     const b = W2.addActor({ rec: 46, astate: 3, f118: 0, face: [1, 0, 0] });
@@ -280,7 +288,8 @@ if (!existsSync(dataPath)) { skip('data/enemies/ai.json missing (build_web.sh)')
     const seen = new Set();
     let mv = false;
     for (let i = 0; i < 40; i++) { W2.tick(1.2, pl.pos, pl.pos); if (b.ai.amode === 3) seen.add(b.ai.astate28); mv ||= b.C.mover !== 0; }
-    ok(!mv && seen.has(want) && b.pos[0] === rec.pos[0], `${dist} u${los ? ', out of view' : ''}: action layer 3 state ${want}, no mover (states ${[...seen]})`);
+    if (want === 4) ok(!mv && seen.has(want) && b.pos[0] === rec.pos[0], `${dist} u: action layer 3 state 4, no mover (states ${[...seen]})`);
+    else ok(seen.has(want) && b.C.mover === 0xd, `${dist} u, out of view: action layer 3 state 2 on mover 0xd (states ${[...seen]}, mover ${b.C.mover})`);
   }
 }
 done();
