@@ -242,3 +242,9 @@ record + 22); set `TRACE_ENEMIES` to their count. `TRACE_LOG_AT=<hex>` (hook.py)
 scripts over 1024 frames (script frames = (LOG - 0x97000) / 24). Script w159_walk95 (with
 `TRACE_POKE=9540a4=6e,10a2140=6e`: trigger 95 runs script 110) wakes 46 / 47 at f783; notes/enemy-ai-hook.md
 'Path walking'.
+`TRACE_PATH_BODY=1` (worker 0161) adds per soldier the AI block (`ai` +0x14..0x43: action state +0x28, distances),
+`ai_e0` (brain / action / combat layer pointers), `want` (C+0xc0 move dir / per-frame distance), `bvel` / `bst` / `blim`
+(body+0x30 / +0x40 velocities, +0xa8 state, +0xac flags, +0xc4 / +0xc8 limits), `c430` (actor push), `c310` / `srch`
+(mover 0xd follow state, C+0x330 search request), `c398` / `a108` (nav node) and `list` (*(C+0x3a8), logged from the
+word below: skip 2 bytes). Script w161_chase (frames 1280, log from 1000; `TRACE_LOG_AT=9E800`; pokes as its doc):
+46 / 47 in brain mode 5 taking nav-graph paths; notes/enemy-ai-hook.md 'Nav graph and search'.

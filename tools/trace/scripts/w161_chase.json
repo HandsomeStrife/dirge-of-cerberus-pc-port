@@ -1,0 +1,47 @@
+{
+ "name": "w161_chase",
+ "frames": 1280,
+ "log_from": 1000,
+ "doc": "worker 0161: brain mode 5 soldiers moving by themselves (they take nav-graph paths, mover 0xd: Vincent is 260-310 u away). w159_walk95's route and wake (TRACE_POKE 9540a4=6e,10a2140=6e), plus 1005350=5,10060dc=5: scripts 127 / 128 event 19 cmd 0x143 argument 1 -> 5, so 46 / 47 take brain mode 5 at the path end instead of mode 1. TRACE_FIELDSET=path TRACE_PATH_BODY=1 TRACE_ERECS=46,47 TRACE_ENEMIES=2 TRACE_LOG_AT=9E800 (log f1000-f1279).",
+ "events": [
+  {
+   "from": 10,
+   "to": 230,
+   "lx": 0.6,
+   "ly": -1.0
+  },
+  {
+   "from": 240,
+   "to": 244,
+   "buttons": [
+    "cross"
+   ]
+  },
+  {
+   "from": 280,
+   "to": 284,
+   "buttons": [
+    "cross"
+   ]
+  },
+  {
+   "from": 300,
+   "to": 470,
+   "lx": 0.6,
+   "ly": -1.0
+  },
+  {
+   "from": 490,
+   "to": 494,
+   "buttons": [
+    "cross"
+   ]
+  },
+  {
+   "from": 500,
+   "to": 787,
+   "lx": 0.6,
+   "ly": -1.0
+  }
+ ]
+}

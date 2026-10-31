@@ -86,7 +86,8 @@ def find_enemies(mem):
         if not (C and ST and AI) or not u32(mem, o + 0x28) & 1:
             continue
         out.update({"E%d" % n: o, "EC%d" % n: C, "ES%d" % n: ST, "EA%d" % n: AI, "EI%d" % n: i,
-                    "EM%d" % n: u32(mem, C + 0x7C8)})     # motion player, as the player's MP (C+0x7c8)
+                    "EM%d" % n: u32(mem, C + 0x7C8),      # motion player, as the player's MP (C+0x7c8)
+                    "EL%d" % n: u32(mem, C + 0x3A8) & ~3})   # nav node list *(C+0x3a8), word-aligned down (FUN_00369f40)
         n += 1
         if n == ENEMY_MAX:
             break
@@ -365,6 +366,25 @@ for _k in range(ENEMY_MAX):
         (_p + "c590", _C, 0x590, "bytes:8", "D", "C+0x590 posture bits 16-19 (FUN_003419e0), bit 24 gun out"),
         (_p + "mp_head", _M, 0x440, "bytes:16", "D", "MP+0x440 flags, +0x448 head layer, +0x449 count"),
     ]
+# TRACE_PATH_BODY=1 (worker 0161, mover 3 = FUN_003504b0): the AI's distances / action state and the
+# walk-mesh body the approach drives (FUN_0034af98 -> FUN_0034c388 move mode 0xc -> FUN_003590c8).
+if __import__("os").environ.get("TRACE_PATH_BODY"):
+    for _k in range(ENEMY_MAX):
+        _C, _I, _p = "EC%d" % _k, "EA%d" % _k, "e%d_" % _k
+        PATH_FIELDS += [
+            (_p + "ai", _I, 0x14, "bytes:48", "D", "AI +0x14 flags, +0x28 action state (FUN_003667b0), +0x2a action time, +0x34 / +0x38 / +0x40 target distance / minus radii / dy"),
+            (_p + "ai_e0", _I, 0xE0, "bytes:16", "D", "AI +0xe0 brain, +0xe4 action layer, +0xe8 combat layer, +0xec"),
+            (_p + "want", _C, 0xC0, "bytes:32", "D", "C+0xc0 wanted move dir, +0xcc per-frame distance (FUN_0034af98), +0xd0 last"),
+            (_p + "bvel", _C, 0x3E0, "bytes:32", "D", "body+0x30 wanted velocity, +0x40 velocity (FUN_00358fb8 / FUN_003590c8)"),
+            (_p + "bst", _C, 0x458, "bytes:8", "D", "body+0xa8 state, +0xac flags (bits 19-21 accel / speed / turn limits)"),
+            (_p + "blim", _C, 0x470, "bytes:16", "D", "body+0xc0.., +0xc4 speed change / s, +0xc8 turn rate / s (FUN_003590c8)"),
+            (_p + "c430", _C, 0x430, "vec4", "D", "C+0x430 actor push (FUN_00542ab8)"),
+            (_p + "c310", _C, 0x310, "bytes:16", "D", "C+0x310 s16 list length, +0x312 index, +0x314 byte follow state, +0x316, +0x318 (FUN_00351928)"),
+            (_p + "srch", _C, 0x330, "bytes:16", "D", "C+0x330 search: +0 start node, +2 goal, +4, +6 max length, +8 mode, +0xa flags, +0xc f32 (FUN_0055a628)"),
+            (_p + "c398", _C, 0x398, "u32", "D", "C+0x398 s16 = actor +0x108 node (FUN_00563a50)"),
+            (_p + "a108", "E%d" % _k, 0x108, "u32", "D", "actor +0x108 s16 nav node (FUN_00563970)"),
+            (_p + "list", "EL%d" % _k, 0x0, "bytes:68", "D", "*(C+0x3a8) u16 node list, -1 ended (FUN_00369f40); logged from the word below (skip ptr & 3 bytes: 2 for 46 / 47)"),
+        ]
 if __import__("os").environ.get("TRACE_PATH_LAYERS"):
     for _k in range(ENEMY_MAX):
         PATH_FIELDS += [("e%d_mp_layers" % _k, "EM%d" % _k, 0x200, "layers", "L", "8 layers x 0x30 at MP+0x200")]

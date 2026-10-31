@@ -38,6 +38,13 @@ Decoded (D) layout, read here, nothing copied into the repo:
     with path flags 6), +0x18 segment length (FUN_0034edf0 / FUN_0034f4a0 -> C+0x31c), +0x20 / +0x30 /
     +0x40 rows, +0x50 position (the spline's control point, FUN_0034f4a0 -> FUN_0034aea8).
     The path walk (cmd 0x131) is notes/enemy-ai-hook.md 'Path walking'.
+  - sections 5 / 6 / 7 = the nav graph (FUN_0033ef48 -> FUN_0033d918(graph, sec 7, sec 5, sec 6) at
+    DAT_0046e878 +0x10; needs G+0x64 >= 0x13): section 7 = header (+2 s16 node count), section 5 = nodes
+    (0x20 B: words 0-2 low 24 bits = x / y / z x 256 (psllw / psraw 8, vitof12, x16), +7 s8 link count,
+    +0xc u16 first link, +0xe area byte (FUN_003667b0 compares two), +0x1d / +0x1e runtime counts),
+    section 6 = links (8 B: +2 s16 neighbour node, +4 u8 cost x 100, +5 flags: bit 0 closed (FUN_0033e5d0),
+    bit 1 +100, bit 4 vertical). ai.json `nav` = {nodes: [x, y, z, links, first, area], links: [to, cost,
+    flags]}; notes/enemy-ai-hook.md 'Nav graph'.
 
 Usage: export_web_triggers.py STAGE.bin OUTDIR
 (the stance file is read from STAGE's directory: 06800009.bin next to 06800001.bin)
@@ -109,6 +116,37 @@ def paths(d):
         out.append(dict(idx=k, n=cnt, s2=s2, first=first, flags=flags, tension=round(tension, 6),
                         length=round(length, 6), nodes=nodes))
     return out
+
+
+def nav_graph(d):
+    """Sections 5 / 6 / 7: the stage's nav graph (FUN_0033ef48 / FUN_0033d918; nodes FUN_0033e118,
+    neighbours vt+0x14 0x33e540, link records FUN_0033e190)."""
+    sec = SE.sections(d)
+    o5, n5, s5 = sec[5]
+    o6, n6, s6 = sec[6]
+    o7, n7, s7 = sec[7]
+    if n5 == 0 or n6 == 0 or n7 == 0:
+        return None                          # FUN_0033ef48: graph pointer 0
+    if (s5, s6, s7) != (0x20, 8, 0x10):
+        raise ValueError('nav sections 5 / 6 / 7 stride %#x / %#x / %#x, expected 0x20 / 8 / 0x10' % (s5, s6, s7))
+    cnt = struct.unpack_from('<h', d, o7 + 2)[0]
+    if cnt != n5:
+        raise ValueError('nav header count %d != section 5 count %d' % (cnt, n5))
+    s24 = lambda w: (w & 0xffffff) - (1 << 24) if w & 0x800000 else (w & 0xffffff)
+    nodes = []
+    for i in range(n5):
+        q = o5 + i * 0x20
+        w = struct.unpack_from('<3I', d, q)
+        nl = struct.unpack_from('<b', d, q + 7)[0]
+        first = struct.unpack_from('<H', d, q + 0xc)[0]
+        if nl > 0 and first + nl > n6:
+            raise ValueError('nav node %d links %d..%d outside section 6 (%d)' % (i, first, first + nl, n6))
+        nodes.append([s24(w[0]) / 256, s24(w[1]) / 256, s24(w[2]) / 256, nl, first, d[q + 0xe]])
+    links = []
+    for j in range(n6):
+        to, cost, fl = struct.unpack_from('<hBB', d, o6 + j * 8 + 2)
+        links.append([to, cost, fl])
+    return dict(nodes=nodes, links=links)
 
 
 def script(d, si):
@@ -420,7 +458,7 @@ def main():
                zones=zone_sets(d, recs, boxes), stances=st, model_clips=model_clips(recs, st, atk), attacks=atk,
                sizes={str(r['zones']): zone_size(d, r['zones']) for r in recs if r['zones'] >= 0},
                lock_bones={str(r['zones']): lock_bone(d, r['zones']) for r in recs if r['zones'] >= 0},
-               paths=paths(d))
+               paths=paths(d), nav=nav_graph(d))
     path = os.path.join(out, 'ai.json')
     with open(path, 'w') as fh:
         json.dump(res, fh, separators=(',', ':'))

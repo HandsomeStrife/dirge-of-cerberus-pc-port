@@ -141,6 +141,7 @@ export function moverStart(a, paths, warn = () => {}) {
 // (C+0x1c8 0xc -> FUN_0034b110 instead: not a path walker's)
 export function moverStop(a, warn = () => {}) {
   const C = a.C;
+  if (C.mover >= 3 && C.mover <= 0xb) { approachStop(a); return; }          // cases 3-0xb (and the tail)
   if (C.mover === 1) C.dur = C.p32c;
   else if (C.mover) warn(`path_mover: stop of mover ${C.mover} (FUN_00352a60) not translated`);
   C.mover = 0;
@@ -289,6 +290,216 @@ function turnMode5(a, step, warn) {
   if (C.f1c0 & 0x100) v = unit3([v[0], 0, v[2]]);
   else warn('path_mover: FUN_0034a5a8 without C+0x1c0 bit 8 not translated');
   a.face = v;
+}
+
+// ------------------------------------------------ mover 3: walk at an object (worker 0161)
+// Action layer 3 (FUN_003667b0) starts it with FUN_00353110(20, 1000, C, target) + FUN_0034edf0(C, 3).
+// The soldier walks the stage walk mesh as a physics body (move mode 0xc), so the body object
+// a.B (C+0x3b0) is a walk-mesh body as player.js's: B.poly (body polygon), B.vel body+0x40, B.want
+// body+0x30, B.flags body+0xac, B.acc / B.turn body+0xc4 / +0xc8.
+//   C.tgt  +0x310 target (the object; the game keeps its id +0x4c << 16 | +0x20)
+//   C.lo / C.hi  +0x314 / +0x318 distance window   C.want / C.wk  +0xc0 move direction / +0xcc per frame
+
+// FUN_0034b110(k, C): C+0xc0 = the facing row C+0x20, C+0xcc = k (C+0xd0 = the last non-zero C+0xc0)
+function wantFace(a, k) {
+  const C = a.C;
+  C.want = [a.face[0], a.face[1], a.face[2]];
+  C.wk = f(k);
+}
+// FUN_0034af98(k, C, d): C+0xc0 = d (no parent frame: C+0x54c vt+0x34 = 0 for the stage's soldiers),
+// C+0xcc = k. FUN_0034b200(s, C, d) = FUN_0034af98(C+0x1d4 x s / 60, C, d); FUN_0034b230 = FUN_0034b110.
+function wantDir(a, s, d) {
+  const C = a.C;
+  C.want = [d[0], d[1], d[2]];
+  C.wk = f(f(f(C.spd * s) * 0.016666668));
+}
+
+// FUN_00353110(lo, hi, C, target) then FUN_0034edf0(C, 3) and its FUN_0034f178 case 3. place(B, pos) =
+// FUN_00356d98(C+0x3b0, C+0x30, 1, 1, 0) (body at the position, FUN_00356740 finds its walk polygon).
+export function approachStart(a, target, lo, hi, place, warn = () => {}) {
+  const C = a.C;
+  if (C.mover !== 0) moverStop(a, warn);                                    // FUN_00353110
+  C.tgt = target || null;
+  C.lo = f(lo); C.hi = f(hi); C.p320 = 1.0; C.p31c = 0;
+  if (C.mover !== 0) moverStop(a, warn);                                    // FUN_0034edf0
+  C.f1c4 = (C.f1c4 & ~0x80) >>> 0;
+  if (!C.tgt) return false;                                                 // case 3: FUN_0053e068 finds nothing
+  C.f1c0 = (C.f1c0 | 0x6000) >>> 0;
+  C.mover = 3;
+  C.f1c4 = ((C.f1c4 & ~0x100) | 0x20) >>> 0;
+  if (C.mm !== 0xc) {                                                       // FUN_0034f178 case 3
+    wantFace(a, 0);                                                         // FUN_0034b230(0, C)
+    place(a);                                                               // FUN_00356d98(body, C+0x30, 1, 1, 0)
+    setMode0xc(a);                                                          // FUN_0034db80(C, 0xc, 0)
+  }
+  C.f45c = (C.f45c | 0x300000) >>> 0;                                      // body+0xac: speed and turn limits
+  return true;
+}
+// FUN_0034db80(C, 0xc, 0) (FUN_00326298(0xd) = script flag 13, set in z128): C+0x1c8 = 0xc, C+0x1c4 bit 2
+// clear / bit 0 set, C+0x1cc = 0 unless C+0x1c4 bit 4, FUN_0034bd10 case 0xc (C+0x1d8 = 0, C+0xf0 = C+0xc0),
+// C+0x1c0 bit 11 clear
+function setMode0xc(a) {
+  const C = a.C;
+  C.mm = 0xc;
+  C.f1c4 = ((C.f1c4 & ~4) | 1) >>> 0;
+  if (!(C.f1c4 & 0x10)) C.t = 0;
+  C.speed = 0;
+  C.f1c0 = (C.f1c0 & ~0x800) >>> 0;
+}
+// FUN_00352a60 cases 3-0xb: turn mode 8 -> 0, C+0x45c bits 19-21 clear; then mover 0, C+0x1c4 bit 5
+// clear / bit 8 set, and in move mode 0xc FUN_0034b110(0, C) (else move mode 0)
+export function approachStop(a) {
+  const C = a.C;
+  if (C.s214 === 8) C.s214 = 0;
+  C.f45c = (C.f45c & 0xffc7ffff) >>> 0;
+  C.mover = 0;
+  C.f1c4 = ((C.f1c4 & ~0x20) | 0x100) >>> 0;
+  if (C.mm === 0xc) wantFace(a, 0); else C.mm = 0;
+}
+// FUN_003504b0 (mover 3, every frame). tpos = FUN_0054a720(target) (its position C+0x30); the body's
+// own point = C+0x54c vt+0x1c = C+0x30. Horizontal distance d to the target; speed scale 1 beyond lo + 25,
+// 0.3 + (x - 20) 0.14 between lo + 20 and lo + 25, else 0.3 (x = d - lo); FUN_0034b200(scale, C, dir).
+// Returns 1 (the mover ends) when the target is gone or d leaves [lo, hi]. With C+0x1c0 bit 9 clear
+// (airborne) it waits for body state 6 (FUN_00357850: not a state the page's bodies take) and does nothing.
+function approachTick(a, tpos) {
+  const C = a.C;
+  if (!tpos) return 1;
+  if (!(C.f1c0 & 0x200) && a.B.state !== 6) return 0;
+  const v = [f(tpos[0] - a.pos[0]), 0, f(tpos[2] - a.pos[2])];
+  const d = len3(v);
+  const dir = unit3(v);
+  let s = f(d - C.lo);
+  if (25.0 < s) s = 1.0;
+  else if (20.0 < s) s = f(f(f(s - 20.0) * 0.14) + 0.3);
+  else s = 0.3;
+  wantDir(a, s, dir);
+  return (C.lo <= d && d <= C.hi) ? 0 : 1;
+}
+export const approachTest = approachTick;
+
+// FUN_00261038: the angle between a and b (acos of the cosine; 0 at >= 1, pi at <= -1)
+function angle(a, b) {
+  const aa = f(f(f(a[0] * a[0]) + f(a[1] * a[1])) + f(a[2] * a[2]));
+  const bb = f(f(f(b[0] * b[0]) + f(b[1] * b[1])) + f(b[2] * b[2]));
+  const ab = f(f(f(a[0] * b[0]) + f(a[1] * b[1])) + f(a[2] * b[2]));
+  const c = f(ab / f(Math.sqrt(f(aa * bb))));
+  if (!(c < 1.0)) return 0;
+  if (!(-1.0 < c)) return f(Math.PI);
+  return f(Math.acos(c));
+}
+// FUN_0025a560(t, out, a, b): a turned toward b by t x their angle about a x b (FUN_00259f60 axis-angle,
+// FUN_0026138c), length lerped |a| -> |b|; under 0.0001 rad the lerp FUN_002611f4 of the unit vectors
+function slerp(t, a, b) {
+  const la = len3(a), lb = len3(b);
+  const L = f(f(f(lb - la) * t) + la);
+  const ua = unit3(a), ub = unit3(b);
+  const th = angle(ua, ub);
+  let r;
+  if (th < 0.0001) r = lerp4([...ua, 0], [...ub, 0], t).slice(0, 3);
+  else {
+    // > 3.1414928: axis (0, -1, 0) (the up axis); else ua x ub (vopmula / vopmsub)
+    let k = th > 3.1414928 ? [0, -1, 0]
+      : unit3([f(f(ua[1] * ub[2]) - f(ua[2] * ub[1])), f(f(ua[2] * ub[0]) - f(ua[0] * ub[2])), f(f(ua[0] * ub[1]) - f(ua[1] * ub[0]))]);
+    const g = f(th * t), cs = Math.cos(g), sn = Math.sin(g);
+    const kd = k[0] * ua[0] + k[1] * ua[1] + k[2] * ua[2];
+    const kx = [k[1] * ua[2] - k[2] * ua[1], k[2] * ua[0] - k[0] * ua[2], k[0] * ua[1] - k[1] * ua[0]];
+    // GUESS (rounding only): Rodrigues in doubles for FUN_00259f60's matrix (its float order not traced)
+    r = [0, 1, 2].map(c => f(ua[c] * cs + kx[c] * sn + k[c] * kd * (1 - cs)));
+  }
+  return unit3(r).map(c => f(c * L));
+}
+// FUN_003590c8's velocity update for flags bit 5 (body states 0 / 2): bit 19 -> the velocity vector moves
+// toward the wanted one by at most body+0xc4 x DAT_004eeb28 per frame; else bit 20 -> the speed changes by
+// at most that (direction = the wanted one); neither -> the wanted velocity at once. Then bit 21 ->
+// the direction turns by at most body+0xc8 x DAT_004eeb28 from the last velocity (FUN_0025a560 when
+// both are non-zero, else FUN_002611f4). dt = DAT_004eeb28.
+export function limitVel(B, flags, want, dt) {
+  let n = want.slice(0, 3);
+  if ((flags >> 19) & 1) {
+    // bit 19: the velocity moves toward the wanted one by at most body+0xc4 x dt (as a vector)
+    const lim = f(B.acc * dt);
+    const dv = [f(want[0] - B.vel[0]), f(want[1] - B.vel[1]), f(want[2] - B.vel[2])];
+    if (lim < len3(dv)) { const u = unit3(dv); n = [0, 1, 2].map(c => f(B.vel[c] + f(u[c] * lim))); }
+  } else if ((flags >> 20) & 1) {
+    const lim = f(B.acc * dt);
+    const lv = len3(B.vel), dl = f(len3(want) - lv);
+    if (lim < Math.abs(dl)) {
+      const u = unit3(want);
+      const L = 0.0 < dl ? f(lv + lim) : f(lv - lim);
+      n = u.map(c => f(c * L));
+    }
+  }
+  if ((flags >> 21) & 1) {
+    const lim = f(B.turn * dt);
+    const th = angle(n, B.vel);
+    if (lim < th) {
+      const t = f(lim / th);
+      const sv = f(f(f(B.vel[0] * B.vel[0]) + f(B.vel[1] * B.vel[1])) + f(B.vel[2] * B.vel[2]));
+      const sn = f(f(f(n[0] * n[0]) + f(n[1] * n[1])) + f(n[2] * n[2]));
+      n = (0.0 < sv && 0.0 < sn) ? slerp(t, B.vel, n) : lerp4([...B.vel, 0], [...n, 0], t).slice(0, 3);
+    }
+  }
+  B.vel = n;
+  return n;
+}
+
+// FUN_0034c388, move mode 0xc, for a soldier (C+0x1c0 bit 22 clear): body+0x30 = C+0xc0 x C+0xcc
+// (FUN_00358fb8; y = 0 when airborne), the body step FUN_003590c8 (walk(B, move) = its walk-mesh part:
+// collision.js navMove from B.poly by move = body+0x40 x step, returns the new position), C+0x30 = the body's
+// position. C+0x1c0 bit 13 (set by mover 3): C+0x1d8 = the measured speed (0 below 0.001 u; 0.1 when under
+// 0.1 u and not moving back against the wanted direction, or with no push), else C+0xcc x 60. Bit 14 (set):
+// C+0x90 = the measured direction when it moved more than 0.05 u and within 80 deg of C+0xc0 (or with no
+// push), else C+0xc0 with C+0x1d8 = 0; under 0.05 u C+0x90 stays. Bit 9 = on the ground.
+function mode0xc(a, step, walk, warn) {
+  const C = a.C, B = a.B;
+  if (C.f1c0 & 0x400000) warn('path_mover: move mode 0xc with C+0x1c0 bit 22 not translated');
+  const k = C.wk;
+  const w = [f(C.want[0] * k), B.state === 2 ? 0 : f(C.want[1] * k), f(C.want[2] * k)];
+  B.want = w;
+  const old = a.pos.slice();
+  if (B.state !== 0) warn(`path_mover: soldier body state ${B.state} (FUN_003590c8) not translated`);
+  else if (C.f45c & 0x20) limitVel(B, C.f45c, w, B.dt);
+  else warn('path_mover: body flags without bit 5 (FUN_003590c8 acceleration) not translated');
+  const p = walk(a, [f(B.vel[0] * step), f(B.vel[1] * step), f(B.vel[2] * step)]);
+  a.pos = p;
+  const dv = [f(p[0] - old[0]), f(p[1] - old[1]), f(p[2] - old[2])];
+  const dl = len3(dv);
+  const noPush = !(C.c430 && len3(C.c430) !== 0);
+  if (!(C.f1c0 & 0x2000)) C.speed = f(C.wk * 60.0);
+  else if (0.001 <= dl) {
+    if (0.1 < dl) C.speed = f(f(dl * 60.0) / step);
+    else {
+      const dt = f(f(f(C.want[0] * dv[0]) + f(C.want[1] * dv[1])) + f(C.want[2] * dv[2]));
+      C.speed = (0.0 <= dt || noPush) ? f(0.1) : 0;
+    }
+  } else C.speed = 0;
+  if (!(C.f1c0 & 0x4000)) C.dir = unit3(C.want);
+  else if (0.05 < dl) {
+    // FUN_00259d18: the signed angle C+0xc0 -> move (wrapped to [-pi, pi])
+    const h = Math.atan2(dv[0], dv[2]) - Math.atan2(C.want[0], C.want[2]);
+    let g = f(h);
+    while (g < -Math.PI) g = f(g + 6.2831855);
+    while (Math.PI < g) g = f(g - 6.2831855);
+    if (Math.abs(g) < 1.3962635 || noPush) C.dir = unit3(dv);
+    else { C.dir = unit3(C.want); C.speed = 0; }
+  }
+  if (B.state === 2) C.f1c0 = (C.f1c0 & ~0x200) >>> 0; else C.f1c0 = (C.f1c0 | 0x200) >>> 0;
+}
+
+// FUN_0034ea18 for a soldier in move mode 0xc: the mover (FUN_0034f8c0 -> FUN_003504b0 for mover 3; at its end
+// FUN_00352a60), the move (mode 0xc), then the turn (FUN_0034de50: turn mode 5). tpos = the target's position
+// or null; walk = the walk-mesh step. sliding = a slide mover (9 / 0xb) runs: in the game its FUN_0034f178
+// case only enters mode 0xc too, but the page keeps the slides' flat step (enemy_ai slide GUESS), so the
+// mode-0xc body step is skipped then. Returns 'done' on the frame mover 3 ends (no listener event for it).
+export function approachFrame(a, tpos, step, walk, warn = () => {}, sliding = false) {
+  const C = a.C;
+  if (C.f1c0 & 0x20) return null;
+  if (!(step > 0)) return null;
+  let ev = null;
+  if (C.mover === 3 && approachTick(a, tpos)) { approachStop(a); ev = 'done'; }
+  if (C.mm === 0xc && !sliding) mode0xc(a, step, walk, warn);
+  if (C.s214 === 5) turnMode5(a, step, warn);
+  return ev;
 }
 
 // the turn alone (tests: hand-built facing / direction / ground speed)

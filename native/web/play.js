@@ -636,6 +636,8 @@ async function main() {
   try {
     if (enemies) enemies.mpHead = vin.body;            // newer actors draw before older ones (enemies.js add)
     enemyAI = ENEMY_AI && aiData && enemies ? createEnemyAI({ data: aiData, player: php, log: m => console.log(m), damage: ENEMY_DMG,
+      // the walk mesh for soldiers' physics bodies (mover 3, move mode 0xc; body flags 0x36: not a block80 body)
+      walkMesh: col,
       // the save's dead records (41-43): FUN_00559748 refuses to activate them
       deadRecs: enemies.deadRecs,
       // cmd 0x108 / 0x109 / 0x130 on a section-1 record: its body appears / goes (enemies.js add / remove)

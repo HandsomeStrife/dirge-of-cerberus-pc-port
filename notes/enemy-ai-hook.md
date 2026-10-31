@@ -610,3 +610,83 @@ Dan: "go ahead with soldier walking". Part 1 = the stage-path walk of cmd 0x131 
   '46 / 47 wake' (path start events), test_enemy_hits 'hits on the path walk', test_enemies_page 9 (46 / 47 walk, stop
   within 0.01 u of the game's stops (measured 0.005 / 0.007), r_grn drawn at 0.6 frames / game frame, AI mode 1 after;
   its wake through trigger 77 is page-only, see the audit).
+
+## Nav graph and search, mover 3, action layer 3 (worker 0161, 2026-10-31)
+
+Part 2 of soldier walking. **What the game does here** (trace w161_chase: w159_walk95's wake with scripts 127 / 128
+event 19 putting 46 / 47 in brain mode 5, `TRACE_POKE=...,1005350=5,10060dc=5` = the cmd 0x143 argument 1 -> 5;
+`TRACE_PATH_BODY=1`): within 10 frames of mode 5, action layer 2 sends both on **mover 0xd** (nav-graph path) at
+50 x 0.3 = 15 u/s (FUN_00351928's C+0x1c0 bit 4 scale), body flags 0x280036 (bits 19 / 21 from C+0x1c0
+0x1000000 / 0x4000000, mode 5's start); ~100 frames later state 6 -> 7 (Vincent not in view) -> action layer 3,
+again mover 0xd (Vincent 260-310 u away). Every request is mode 1 (flags 0x77 / 0xef, max 10, c 100) and is
+re-made each AI run (interval 10) while the layer stays in its state.
+
+- **Graph** (FUN_0033ef48 -> FUN_0033d918; needs G+0x64 >= 0x13): section 7 header (+2 count), 5 nodes (0x20 B:
+  words 0-2 low 24 bits / 256 = x y z (EE psllw / psraw 8, vitof12, x16), +7 s8 link count, +0xc u16 first link,
+  +0xe area, +0x10..+0x1b cover masks, +0x1d paths holding it, +0x1e actors on it), 6 links (8 B: +2 neighbour, +4
+  cost x 100, +5 flags: 1 closed, 2 +100, 0x10 vertical). z128: 4237 nodes, 24900 links (72 closed). Graph vtable
+  0x4a18b0: +0x14 0x33e540 neighbour, +0x1c FUN_0033e5d0 open (flags & 1; 0x11 below G+0x64 0x2c), +0x24 0x33ee38
+  goal test, +0x2c FUN_0033e660 cost, +0x34 0x33ec98 heuristic (the three hex ones are not Ghidra functions).
+- **Search** (service DAT_0046e290 +100: pool 3000 records, queue 1): FUN_003682e8 sync / FUN_00368250 queued ->
+  FUN_00369d88, then states FUN_003692e0 (start record, goal test at depth 1) / FUN_003693c0 (current = open head) /
+  FUN_003693f0 (one link per call: closed list skip, g = g + cost, better g in the open list re-sorts, else a new
+  record with depth + 1 under the cap max - 1, goal test **when generated**; at the cap the test runs on the
+  current record) -> FUN_00369f40 (list start..record, -1). Open list FUN_00369788: by g + h, a new record after
+  equal ones. Request (C+0x330): +0 start (actor +0x108), +2 goal, +4, +6 max, +8 mode, +0xa flags, +0xc c.
+  Mode 0 (and >= 7): to the goal, h = distance; 1-6: goal test = further than c from the start after 3 links, or
+  the cap; h 0 for 1 / 2 / 5, -distance for 3 / 4, distance for 6. Cost: link cost / 100, flags 2 / 4 x20 / x10
+  the neighbour's +0x1e / +0x1d, link flag 1 +1000 / 2 +100, vertical links +1 with flags 0x20 (up) / 0x40 (down)
+  else +1000, 0x80 climbing away from the goal +10 / +100 (+30 vertical), modes: 1 + rand x 10 (FUN_0040b5c0), 2
+  | |goal - n| - c | x 0.1, 3 -|goal - n| x 0.1 (+20 nearer), 4 / 5 | |goal - n| - |start - n| | x 0.05, 6 +5
+  further from the goal. **MISSING:** flags 8 / 0x10 = FUN_0033fa58 (both nodes' cover masks by yaw sector,
+  FUN_0033fc50 / FUN_003724b0).
+- **Nodes of actors.** FUN_00563970(a, -1): FUN_0033daf0(40, G, pos, 0, 1) (nearest within 40; grid branch over
+  section 12 not decoded) or FUN_0033dda8 from the last node; FUN_00563a50 moves the +0x1e count and sets
+  C+0x398. Goal nodes: FUN_00563d20(target, 1, 1) = a random free neighbour of the target's node (FUN_0040b5c0).
+- **Callers.** Action layer 2 (FUN_00366390) / 3 (FUN_003667b0): same area (+0xe) -> FUN_00368120 (queue free) ?
+  FUN_0055a590 -> FUN_00352f18 (mode 0, max 0x80, flags 6 | 0x60, queued) : FUN_0055a628 (mode 6, max 7); else
+  FUN_0055a628 (mode 1, max 10). FUN_0055a628: FUN_00316cf8 alive, FUN_00563970, copy the request + start,
+  FUN_0055a4e0 (turn 5 / 6), FUN_0034edf0(C, 0xd) (C+0x1c0 |= 0x6000, list cleared) -> FUN_0034f178 case 0xd
+  (move mode 0xc, body flags from C+0x1c0 bits 24-26).
+- **Mover 0xd per frame (FUN_00351928), decode notes, not translated:** follow states in C+0x314: 0 request (sync
+  if +0xa bit 0), 1 wait for the queue, 2 list length -> FUN_00353700, 3 first leg (one node: walk at it; else at
+  the midpoint of nodes 0 / 1, FUN_002611f4 0.5), 4 per frame: steer at the corner blend of the current / next
+  nodes (< 45 deg FUN_00261038: midpoint; else by the fraction along), FUN_0034b200(1.0 or 0.3 with C+0x1c0 bit 4),
+  next node when within 5 u (and the next leg not longer), listener event 5 (node), 0x10 links (FUN_00352788 /
+  FUN_003528d8: climbs / drops), 5 last node: within 3 u and |dy| < 10 -> done (listener event 4). The VU
+  values the decompiler drops there are the node positions read just before (FUN_00310f50).
+- **Mover 3** (FUN_003504b0; started by action layer 3 with Vincent in view within 100 u, d34 >= 20):
+  FUN_00353110(20, 1000, C, target), FUN_0034edf0(C, 3) (C+0x1c0 |= 0x6000), FUN_0034f178 case 3 (FUN_0034b230(0),
+  FUN_00356d98 body at C+0x30, move mode 0xc, body flags |= 0x300000). Per frame: horizontal direction to the
+  target, scale 1 beyond lo + 25 / 0.3 + (x - 20) 0.14 / 0.3, FUN_0034b200 (C+0xcc = C+0x1d4 x s / 60); ends outside
+  [lo, hi] -> FUN_00352a60 case 3 (body flags &= ~0x380000, turn mode 8 -> 0, FUN_0034b110(0)). Move mode 0xc
+  (FUN_0034c388): body+0x30 = C+0xc0 x C+0xcc, FUN_003590c8, C+0x1d8 measured (bit 13), C+0x90 measured (bit 14).
+- **Body step limits** (FUN_003590c8, flags bit 5): bit 19 vector change <= body+0xc4 dt, else bit 20 speed change
+  <= that; bit 21 turn <= body+0xc8 dt (FUN_0025a560 slerp, FUN_002611f4 when a vector is 0). Soldiers: +0xc4 2.5,
+  +0xc8 4 pi (T). Then FUN_00357d48 may rewrite body+0x40 to the contact-corrected move at that speed.
+- **Action layer 3** (FUN_003667b0) translated except its nav-graph branch / state 2 (the request is left out, so
+  the layer stays in state 1, as when the game's request fails). Layer vtable 0x4a29c8: end 0x367ac0 = free, start
+  0x3667a8 empty, update FUN_003667b0; FUN_00365110 runs brain, action layer (+0xe4), combat layer (+0xe8).
+- **Page effect:** a mode 5 soldier in state 7 / 8 with Vincent in view within 100 u now walks at him (walk mesh,
+  15-50 u/s) and stops inside 20 u; brain 5 then goes to the melee pick at d34 < 25. Beyond that, or out of view,
+  he still stands (mover 0xd). No aimed-walk clip yet (r_wk_a family not decoded).
+- **Review fixes (worker 0162, 2026-10-31).** (1) Move mode 0xc never runs bodyFrame (move mode 9's polyline):
+  FUN_00352a60 leaves mode 0xc after mover 3, and a later flinch / death slide crashed (no spline) or snapped back
+  onto a leftover path spline. Slides in mode 0xc now take the page's slide stand-in (GUESS: the game walks them
+  on the mesh through mode 0xc), the body takes the slide's velocity and the polygon under it. Turn mode 5 now runs
+  after the mode-0xc move as in FUN_0034ea18. (2) The nav branch of state 1: FUN_00563970 (soldier's node),
+  FUN_00563d20 (goal, one FUN_0040b5c0 draw when the target's node has a free neighbour), the area test and
+  C+0x1c0 |= 0x10 (mode 1 path, set even when the request fails) are translated. Where FUN_0055a628 / FUN_0055a590
+  would succeed (alive, has a node) it starts mover 0xd through FUN_0034edf0, whose FUN_00352a60 ends mover 3:
+  the page ends the mover (MISSING: mover 0xd) and stays in state 1, so a soldier no longer walks at Vincent out
+  of view. MISSING: Vincent's node (+0x108) is not tracked on the page, so the goal is -1 and the draw never happens
+  (the random stream drifts). (3) The page never reaches state 2 (mover 0xd). There the game re-approaches only
+  with Vincent visible in the 30 / 40 deg cone with d38 < 150 and dy > -25, or d38 < 10 with bit 18 clear; the page's
+  state 1 rule (visible and d34 < 100, any direction) starts mover 3 in cases where the game would keep walking
+  its path. (7) moverStop's `a.face` condition is gone (FUN_00352a60 has none).
+- Tests: test_nav_graph.mjs (hand A* cases, the trace's 40 requests), test_approach.mjs (FUN_003504b0 / limit hand
+  cases, |body+0x40| vs the trace, the AI world walk-in, 15 u and out-of-view cases). Trace fields:
+  tools/trace/README.md 'Soldier path walk' (TRACE_PATH_BODY).
+- **Next:** mover 0xd (FUN_00351928 + FUN_00353700 + the 0x10-link helpers), the queued search budget (FUN_00368250
+  service update), FUN_0033fa58, then action layers 2 / 5 / 6 / 7 on top. Exact list checks need a mode-0 request
+  (FUN_00352f18: no random term) or the RNG logged in the trace.
