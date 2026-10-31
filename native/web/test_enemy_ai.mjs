@@ -720,7 +720,8 @@ else {
      `mode 5 at 15 u (d34 < 22): attack at f${atk?.f} (the second brain run: state 6 -> 10, then 10 picks), actor state 0x${atk?.st?.toString(16)} (0x80), clip ${atk?.clip} (${T.names['0']}), combat layer ${atk?.comb} (0), hit window +${hitw}`);
   ok(endf && endf.f === T.entries[0].dur - 1 && endf.st === 3,
      `mode 5 attack ends +${endf?.f} (entry length ${T.entries[0].dur}), actor state ${endf?.st} (3: gun bit set by state 3's enter)`);
-  ok(C2.player.hp === 780, `melee does not damage Vincent (hit volume FUN_00541310 not decoded): HP ${C2.player.hp}`);
+  // no boneWorld here: the hit volume has no marker pose (warned), so no hit (test_melee.mjs covers the hit)
+  ok(C2.player.hp === 780 && C2.W.attackObjs.length === 0, `melee without a pose (boneWorld unset): no hit volume, HP ${C2.player.hp}`);
 }
 
 // Brain mode 6 (FUN_00364558): state 0 -> 2 (actor state 3, combat 2, action layer 5); close, the attack

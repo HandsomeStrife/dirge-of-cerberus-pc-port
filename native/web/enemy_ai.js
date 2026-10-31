@@ -104,7 +104,10 @@ export const PLAYER_STATUS = { lvl: 4, armour: null, f60: 0x8233, f27: 0, f64: 0
 // GUESS (save RAM): G = *DAT_0046dd68: G+0x60 story progress 20, G+0x14 table +0x270 level factors,
 // +0xaa / +0xae / +0xb2 difficulty cuts; DAT_004b8ac8 option bits 0, DAT_0046b328 1, DAT_0046b2fc 2.
 // ELF data: DAT_0046e220 {0, 50} (level factors before progress 7), DAT_004a02b0 element factors.
+// Offence (FUN_00317ef0, save RAM): G+0x14 +0x278 / +0x280 level factors, +0xa8 / +0xac / +0xb0 cuts,
+// DAT_0046e248 +0x24 = 60 (+0x44 = 0, FUN_003212a8).
 export const GAME = { progress: 20, lvlK: [0.33, 0.4], lvlK0: [0, 50], cut: { aa: 0, ae: 20, b2: 100 },
+                      offK: [0.75, 0], offK2: [0.27, 1.4], cutO: { a8: 0, ac: 0, b0: -50 }, d46e248: 60,
                       bits4b8ac8: 0, d46b328: 1, d46b2fc: 2, elem: [1, 0, 0.25, 0.5, 2], armour: null,
                       // T = G+0x14: +0xd0 / +0xd4 spread distance classes, +0x268 the spread level factors (FUN_0031cf08)
                       spreadD: [120, 380], spreadK: [0.15, 2.5] };
@@ -326,7 +329,7 @@ function inBoxBut(p, lo, hi, axis) {
 //   los     (a, b) => true when the probe-3 ray a->b is blocked (FUN_005449f0). Default: never
 //           blocked (GUESS until the page passes its room collision ray).
 //   damage  true: bullets test and damage the player (default false: the hit test is a GUESS,
-//           see BULLET_R; the page turns it on with ?enemydmg=1)
+//           see BULLET_R; the page turns it on with ?enemydmg=1). Melee hits (decoded) always damage.
 //   log     (msg) => void
 //   difficulty  FUN_00242c28() (default SAVE_DIFFICULTY = 1: manager 0xa6 / 0xa7 are false)
 //   eventFlags  {N: value} event flags (FUN_003ff738, manager cmd 0xc); default SAVE_EVENT_FLAGS
@@ -2163,11 +2166,196 @@ export function createEnemyAI(opts) {
         if (!attacking(a)) setActorState(a, 1);                               // event 4 op 0 (0x56a1f4)
       } else if (op === 2) {
         events.push(`melee ${a.id} hit ${c[2]}`);
-        warnOnce('enemy_ai: melee hit volume (FUN_00569dc0 -> FUN_00541310) not translated: the attack does not hit');
+        if (c[2] >= 0) makeAttack(a, T, c[2]);                                // FUN_003481e0 case 2 (arg 2 < 0: none)
       } else if (op === 0xe) return -2;
       else if (op !== 4 && op !== 5 && op !== 0xa) warnOnce(`enemy_ai: attack command ${op} not translated`);
     }
     return -1;
+  }
+
+  // ------------------------------------------------ melee hit volume: the attack object (class 0xd)
+  // op 2 -> FUN_003481e0 case 2: record = table +0x24 + arg 2 x 64 (ai.json attacks[set].volumes,
+  // export_web_triggers.hit_volume) -> owner event 4 (0x56a214) -> FUN_00569dc0(owner, record).
+  // T: k_melee18 (#66's r_atk_0): made f1460 (attack keyframe 6), updates from f1461, sphere test and hit
+  // f1463 (Vincent HP 560 -> 511), object gone that frame.
+  const attackObjs = [];
+  const REACT_EC = [2, 4, 8, 0];                                              // FUN_00579ef0: type -> +0xec
+  // Soldier status fields the attack damage reads (save RAM, all seven awake e027s): +0x60 0 (so
+  // FUN_00317630 = 0 and FUN_00317ef0's difficulty / FUN_003212a8 terms are skipped), +0x64 0
+  // (FUN_00317b68 false: no x2), +0xc0 0 (no armour), +0x12 / +0x13 levels 0.
+  const ENEMY_OFFENCE = { f60: 0, f64: 0, armour: null, l12: 0, l13: 0 };
+  function makeAttack(a, T, idx) {
+    const v = T.volumes && T.volumes[idx];
+    if (!v) { warnOnce(`enemy_ai: attack table has no hit volume ${idx} (old ai.json: rebuild data/enemies)`); return; }
+    // FUN_00541310: FUN_00541278 = FUN_0053db98(mgr, 0xd) (constructor FUN_00579d00) + activate
+    const o = { owner: a, v, shape: v.shape > 3 ? 0 : v.shape, ec: REACT_EC[v.type > 3 ? 0 : v.type],
+                c1: v.c1, life: f(v.life), every: v.every, r: 5.0, grow: 0, dmg: Math.min(v.dmg, 9999), kind: 1,
+                cand: [], local: v.off.slice(), fixed: null };
+    if (o.shape === 1 || o.shape === 3) o.r = f(v.p[0]);                       // +0xd0 = record +0x30
+    // shape 2 (+0xd8 / +0xd4 / +0xd0 / +0xdc) and 0 / 3 tests: not translated (e030's sets)
+    if (o.shape !== 1) { warnOnce(`enemy_ai: hit volume shape ${o.shape} (FUN_0057bc00 / target vt+0x1a4) not translated: no hit`); return; }
+    // FUN_00569dc0: owner weapon W (FUN_00317c70 = status +0xac, +0x60 bit 9 clear) and FUN_00317630 != 2:
+    // damage = (int)((dmg + 0.5) x 0.01 x (W+0x56 + 100)), FUN_00579ff8 cap 9999
+    const W = a.ai && a.ai.W;
+    if (W) {
+      if (W.w56 == null) warnOnce('enemy_ai: weapons have no w56 (W+0x56; old ai.json): melee damage unscaled');
+      o.dmg = Math.min(Math.trunc(f(f(f(f(o.dmg) + 0.5) * f(0.01)) * f((W.w56 ?? 0) + 100))), 9999);
+    }
+    // FUN_00317b68(owner status) -> FUN_0057a2b0 (x2, radius x 1.5): status +0x64 bit 5 is 0 (save RAM)
+    if (ENEMY_OFFENCE.f64 & 0x20) warnOnce('enemy_ai: FUN_0057a2b0 (doubled melee) not translated');
+    // FUN_0057a018(o, owner +0x100) -> FUN_00318bf8 -> FUN_0057a248: the owner's offence FUN_00317ef0
+    o.dmg = Math.min(offence(ENEMY_OFFENCE, o.dmg, o.kind), 9999);
+    // attach (record +5 / +6; +0xc1 bit 3 = follow the owner's marker every frame, else placed once)
+    if (v.m6 < 0 || v.m5 !== 0) { warnOnce(`enemy_ai: hit volume attach +5 ${v.m5} / +6 ${v.m6} (owner matrix / FUN_0054a7d0) not translated: no hit`); return; }
+    o.marker = v.m6;
+    if (!(o.c1 & 8)) { o.fixed = attackCentre(o); if (!o.fixed) return; }
+    attackObjs.push(o);
+    events.push(`attack object ${a.id} vol ${idx} dmg ${o.dmg}`);
+    // owner +0x28 bit 2 (FUN_00573360 + HUD) : the soldiers have it clear (0x208403)
+  }
+  // FUN_00317ef0(status, raw, kind): the attacker's level bonus, as defence's (FUN_00318120) mirror.
+  // Armour (+0xc0 with +0x61 bit 0): G+0x14 tables +0x40c / +0x43c / +0x45c: not translated (soldiers have none).
+  function offence(st, raw, kind, G = GAME) {
+    let L = 0;
+    if (st.armour) warnOnce('enemy_ai: FUN_00317ef0 armour bonus not translated');
+    else {
+      const k = G.progress < 7 ? G.lvlK0 : kind === 2 ? G.offK2 : G.offK;   // FUN_0031d0b0 / FUN_0031cd58
+      L = Math.trunc(f(f(f(k[0]) * (kind === 2 ? st.l13 : st.l12)) + f(k[1])) + 0.5);
+    }
+    if ((st.f60 & 2) && !(st.f60 & 0x100)) {
+      if (G.progress > 0x11) {                                                // FUN_00310c60
+        const d242c28 = (G.d46b2fc !== 0 && G.d46b328 === 0) ? 1 : G.d46b328;
+        let c = G.d46b2fc === 0 ? d242c28 : (((G.bits4b8ac8 >>> 0x11) & 1) ? 0 : d242c28 - 1);
+        L += c === 1 ? G.cutO.ac : (c < 2 || c > 3) ? G.cutO.a8 : G.cutO.b0;
+      }
+      L += G.d46e248;                                                         // FUN_003212a8
+    }
+    if (L < -100) L = -100;
+    const d = Math.trunc(f(f(f(raw) + 0.5) * f(L + 100) * f(0.01)));
+    let r = raw !== 0 ? d : 0;
+    if (raw > 0 && d === 0) r = 1;
+    return r;
+  }
+  // FUN_0054a720 of the attack object: with a parent (+8 = owner, +0x3a = marker, +0x3b = -1) its world =
+  // local x marker world (FUN_0054a5e8 -> FUN_0054a768 -> owner vt+0x24 FUN_005883c0 -> FUN_003462f8 ->
+  // FUN_005ad508 -> FUN_0030bef8: T(marker xyz) x bone palette, then x diag(1,-1,-1) (FUN_00342fa8) and
+  // the owner's world). The page's boneWorld (bone x model, the part test's) stands for the last three.
+  // Local row 3 = record +0x20 (the rows' rotation does not move a sphere's centre).
+  function attackCentre(o) {
+    if (o.fixed) return o.fixed;
+    const a = o.owner, mk = data.markers && data.markers[recModel(a)];
+    const m = mk && mk[o.marker];
+    if (!m) { warnOnce(`enemy_ai: no marker ${o.marker} for ${recModel(a)} (old ai.json: rebuild data/enemies)`); return null; }
+    const bw = world.boneWorld ? world.boneWorld(a) : null;
+    if (!bw || m[3] < 0) { warnOnce('enemy_ai: no pose for the melee hit volume (boneWorld unset)'); return null; }
+    const B = bw(m[3]);
+    const p = [0, 1, 2].map(k => f(m[k] + o.local[k]));
+    return [0, 1, 2].map(k => f(f(f(f(p[0] * B[0][k]) + f(p[1] * B[1][k])) + f(p[2] * B[2][k])) + B[3][k]));
+  }
+  // FUN_0025db68(rs, rc, c, a, b): sphere (c, rs) against the capsule a..b of radius rc. FUN_002614f4: t =
+  // (c - a).d / d.d, q = a + d t (not clamped); |q - c| < rs + rc, then s = t |d| in [-rs, rs + |d|]: on
+  // the segment -> hit; past an end by e -> hit when |q - c| <= rc + rs cos(e pi/2 / rs) (FUN_0045b428 = cosf).
+  function sphereCapsule(rs, rc, c, A, B) {
+    const d = sub3(B, A), dd = f(f(f(d[0] * d[0]) + f(d[1] * d[1])) + f(d[2] * d[2]));
+    const w = sub3(c, A), t = f(f(f(f(w[0] * d[0]) + f(w[1] * d[1])) + f(w[2] * d[2])) / dd);
+    const q = A.map((x, k) => f(x + f(d[k] * t))), e = sub3(q, c);
+    const dist = f(Math.sqrt(f(f(f(e[0] * e[0]) + f(e[1] * e[1])) + f(e[2] * e[2]))));
+    if (!(dist < f(rs + rc))) return false;
+    const L = f(Math.sqrt(dd));
+    let s = f(t * L);
+    if (!(-rs <= s && s <= f(rs + L))) return false;
+    if (s < 0) s = Math.abs(s);
+    else { if (s <= L) return true; s = f(s - L); }
+    const k = f(Math.cos(f(f(s * f(1.5707964)) / rs)));
+    return !(f(rc + f(rs * k)) < dist);
+  }
+  // Vincent's capsule (FUN_0055bc90 -> FUN_0054b2b0: +0x118 bit 24 and +0x28 bit 16 clear, T k_melee18):
+  // feet .. feet + up (0,-1,0) x P+0x30 (18), radius P+0x2c (5)
+  const playerCapsule = () => [P.pos.slice(), [P.pos[0], f(P.pos[1] - H_PLAYER), P.pos[2]]];
+  // Candidates (FUN_0057a9b8 first update, FUN_0057aed8 later ones): objects of grid M+0x1170 (type 6) in the
+  // box centre -/+ (r + growth x life) (vt+0x34 FUN_0057b968) with +0x28 bit 0, +0x40 bit 6, the filter vt+0x1dc
+  // FUN_0055e878 and a horizontal (xz) distance from the box middle < |box diagonal| / 2 + their +0x2c.
+  // Only Vincent: FUN_0055e878 rejects the soldiers by their +0x188 bit 39 (save RAM 0x8765430087652d01
+  // on all seven; their faction 1 -> 1 is also not hostile in DAT_004a0290 = 0x16 0x3d 0x3b 0 0 0x16 0).
+  // Vincent passes: +0x28 0x20901f, +0x40 0xf0, +0x188 0x00cccf20c00c0605 (faction 5: 0x3d bit 5 set),
+  // +0x118 0x20209. L: the grid cell lookup FUN_0036d400 is not read (the distance test decides); FUN_0055e878's
+  // FUN_003419c0 states 0x3c-0x3e (immune) and status +0x64 bits 0 / 1 are taken from P.motionClass / PST.f64.
+  // MISSING: nothing on the page sets P.motionClass yet, so the immunity never applies (notes/fidelity-audit.md).
+  function playerCandidate(o, c) {
+    if (dead(P)) return false;                                                // FUN_00316cf8 with +0x28 bit 5 clear
+    if (JITTER_ON && P.motionClass != null && P.motionClass >= 0x3c && P.motionClass <= 0x3e) return false;
+    if (PST.f64 & 3) return false;                                            // FUN_0055f0e0(P, 1) / (P, 0)
+    const h = f(f(o.r) + f(f(o.grow) * o.life)), diag = f(Math.sqrt(f(3 * f(f(2 * h) * f(2 * h)))));
+    const dx = f(P.pos[0] - c[0]), dz = f(P.pos[2] - c[2]);
+    return f(Math.sqrt(f(f(dx * dx) + f(dz * dz)))) < f(f(diag * 0.5) + R_PLAYER);
+  }
+  // FUN_0057a330, the object's update: hit = FUN_0057a428; life -= step; a hit that is not for every target
+  // (+0xc1 bits 0 / 2 clear) or life < 0 ends it (no hit recorded (bit 5) -> the owner's miss count
+  // FUN_00568e70 -> FUN_003609b0: AI +0x76 += 1, +0x58 = now); else FUN_0057b170: radius += growth x step.
+  function attackObjUpdate(o, step) {
+    const hit = attackHitTest(o);
+    o.life = f(o.life - step);
+    if ((hit && !(o.c1 & 1) && !(o.c1 & 4)) || o.life < 0) {
+      const ai = o.owner.ai;
+      if (!(o.c1 & 0x20) && ai) { ai.f76 = short((ai.f76 | 0) + 1); ai.f58 = S.now; }
+      events.push(`attack object end ${o.owner.id}${o.c1 & 0x20 ? ' hit' : ''}`);
+      return 1;
+    }
+    o.r = f(o.r + f(o.grow * step));                                          // shape 1 vt+0x2c (0x57b950)
+    return 0;
+  }
+  // FUN_0057a428: the candidate list (+0xea count, +0xf0 entries {id, flags, frame}), then per candidate
+  // the shape test (sphere: FUN_0057b8b8 -> target vt+0x19c FUN_0055c5f8 -> FUN_0025db68). A first hit
+  // ends the loop unless +0xc1 bit 0; bit 2 lets an entry hit again after +0x13c frames. The hit(s) go to
+  // FUN_0057a830.
+  function attackHitTest(o) {
+    const c = attackCentre(o);
+    if (!c) return false;
+    if (!(o.c1 & 0x80)) { o.cand = []; o.c1 |= 0x80; }                        // FUN_0057a9b8 (fresh) / FUN_0057aed8 (add)
+    if (o.cand.length < 16 && !o.cand.some(e => e.who === P) && playerCandidate(o, c)) o.cand.push({ who: P, fl: 0, fr: 0 });
+    let hit = false;
+    for (const e of o.cand) {
+      if (!(o.c1 & 4)) { if (e.fl & 1) continue; }
+      else if (e.fl & 2) { if (((S.frame - e.fr) << 24 >> 24) < o.every) continue; e.fl &= ~2; }
+      const [A, B] = playerCapsule();
+      if (!sphereCapsule(o.r, R_PLAYER, c, A, B)) continue;
+      e.fl |= 1;
+      if (o.c1 & 4) { e.fl |= 3; e.fr = S.frame & 0xff; }
+      attackApply(o, c, A, B);
+      hit = true;
+      if (!(o.c1 & 1)) break;
+    }
+    return hit;
+  }
+  // FUN_0057a830: target vt+0x1e4 (Vincent: FUN_005725d8 -> FUN_0055eac8), +0xc1 |= 0x20, the owner's hit
+  // count FUN_00568e48 -> FUN_00360990 (AI +0x7a += 1, +0x60 = now). Effects FUN_00541b08 / +0x130 / +0x134
+  // and the pad rumble FUN_00336508 are not on the page.
+  function attackApply(o, c, A, B) {
+    if (!((P.f118 | 0) & 0x20)) attackDamagePlayer(o, c, A, B);                 // FUN_005725d8: P+0x118 bit 5
+    o.c1 |= 0x20;
+    const ai = o.owner.ai;
+    if (ai) { ai.f7a = short((ai.f7a | 0) + 1); ai.f60 = S.now; }
+  }
+  // FUN_0055eac8(P, attack, point): no damage with status +0x64 bits 0 / 1 unless type 3; dmg = defence
+  // FUN_00318120(status, +0xc2, FUN_0057a218 = 1) (cap 9999); alive: +0x118 bits 5 / 6 -> 0, then vt+0x1ec
+  // FUN_0055c7f8 (as damagePlayer). The soldier's vt+0x314 / +0x31c (0x55e0c8 / 0x55e0d0) and Vincent's
+  // +0x184 (no AI) do nothing. Not behind opts.damage: that switch covers the bullets' GUESS hit test
+  // (BULLET_R); this test is decoded, so a melee hit always damages Vincent.
+  // MISSING: Vincent's reaction FUN_00565480(P, +0xec = 4, dir, point, alive) (the flags-4 branch: his state
+  // 0x18 in k_melee18, pushed back ~0.8 u per frame) and vt+0x324 FUN_00576ac8, FUN_0055d678, the voice
+  // FUN_0055ea50 ('h_dmg_N') and HUD FUN_00567fe8; script event 0x1d (vt+0x2f4): Vincent has no script here.
+  function attackDamagePlayer(o, c, A, B) {
+    events.push(`melee hit player ${o.owner.id}`);
+    if ((PST.f64 & 3) && (o.v.type & 3) !== 3) return;
+    let dmg = Math.min(defence(PST, o.dmg, o.kind), 9999);
+    if (dead(P)) return;
+    if ((P.f118 & 0x20) || (P.f118 & 0x40)) dmg = 0;
+    if ((P.f118 | 0) < 0 && P.hp <= dmg) dmg = P.hp - 1;                      // FUN_0055c7f8
+    const before = P.hp;
+    P.hp = Math.max(0, P.hp - dmg);                                           // FUN_003168c8
+    events.push(`hit player ${before}->${P.hp}`);
+    log(`enemy_ai: Vincent HP ${before} -> ${P.hp} (melee #${o.owner.id})`);
+    warnOnce('enemy_ai: Vincent\'s melee hit reaction (FUN_00565480 flags 4, state 0x18) not translated');
   }
 
   // FUN_00569340 -> FUN_005694f8 -> FUN_005409a8(mgr, muzzle, aim, W, status, 0, 0) -> FUN_00554568
@@ -2809,6 +2997,9 @@ export function createEnemyAI(opts) {
     for (const sh of pendingShots.splice(0)) playerShot(...sh);
     // 2. bullets (oldest first)
     for (const b of bullets.slice()) if (bulletUpdate(b, step)) bullets.splice(bullets.indexOf(b), 1);
+    // 2b. melee attack objects (FUN_0057a330), oldest first; one made in step 3 first updates next frame
+    // (T k_melee18: made f1460, first update f1461). L: their place among the manager's object lists.
+    for (const o of attackObjs.slice()) if (attackObjUpdate(o, step)) attackObjs.splice(attackObjs.indexOf(o), 1);
     // 3. bodies: turn (FUN_0034ea18 -> FUN_0034de50), then the motion state (may spawn bullets).
     // GUESS: turn before the motion state (their order inside the body update is not traced; the turn
     // reads only C+0x2b0, which neither changes)
@@ -2860,10 +3051,11 @@ export function createEnemyAI(opts) {
   // boneWorld: (actor) => (bone) => world rows of that bone (the MP's last posed skeleton), set by the
   // page (enemies.js partPose) or a test; the part test needs it. playerShot(muzzle, aim, W): Vincent
   // fired, now; queueShot: the same at this frame's player slot inside the next tick (the page).
-  const world = { S, actors, triggers, bullets, objects, addActor, tick, runEvent, recById, events, activated, setActive,
+  const world = { S, actors, triggers, bullets, attackObjs, objects, addActor, tick, runEvent, recById, events, activated, setActive,
                   playerShot, queueShot, lockTargets, pushOut, boneWorld: opts.boneWorld || null,
                   attackPick: a => attackPick(a.ai),     // FUN_0035ff98 on an actor's AI (tests)
                   // single translated functions, for the tests' direct state checks
-                  t: { brain5, brain6, stateMotion, setActorState, bulletEnd, target, send, setMode, setTarget, setActionLayer, action2, action3, action56, flinch, die, navOf } };
+                  t: { brain5, brain6, stateMotion, setActorState, bulletEnd, target, send, setMode, setTarget, setActionLayer, action2, action3, action56, flinch, die, navOf,
+                       makeAttack, attackObjUpdate, attackCentre, sphereCapsule, offence } };
   return world;
 }

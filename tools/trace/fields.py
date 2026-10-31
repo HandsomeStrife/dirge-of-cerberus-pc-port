@@ -47,6 +47,7 @@ def resolve_bases(mem):
     bases = dict(P=P, C=C, CAM=CAM, MP=MP, MP2=MP2, HUD=HUD, RET=RET, BM=BM)
     if FIELDSET == "path":
         bases.update(find_enemies(mem))
+        bases["PS"] = u32(mem, P + 0x17C)          # player status record (TRACE_MELEE's p_hp)
     elif FIELDSET == "enemy":
         bases.update(find_enemies(mem))
         # game-state bit set: FUN_00326068(n) -> FUN_0036b610(DAT_0046e294, n) tests word n>>5
@@ -385,6 +386,15 @@ if __import__("os").environ.get("TRACE_PATH_BODY"):
             (_p + "a108", "E%d" % _k, 0x108, "u32", "D", "actor +0x108 s16 nav node (FUN_00563970)"),
             (_p + "list", "EL%d" % _k, 0x0, "bytes:68", "D", "*(C+0x3a8) u16 node list, -1 ended (FUN_00369f40); logged from the word below (skip ptr & 3 bytes: 2 for 46 / 47)"),
         ]
+# TRACE_MELEE=1 (worker 0165, the melee hit FUN_00569dc0 -> FUN_00541310 / FUN_0057a330): Vincent's HP,
+# flags and state, so the call-log set 'melee' can be lined up with the frames.
+if __import__("os").environ.get("TRACE_MELEE"):
+    PATH_FIELDS += [
+        ("p_hp", "PS", 0x20, "u32", "D", "player status +0x20 = HP (FUN_0055c7f8 -> FUN_003168c8)"),
+        ("p_state", "P", 0x100, "bytes:16", "D", "P+0x100 u64 flags, +0x104 state byte"),
+        ("p_f118", "P", 0x118, "u32", "D", "P+0x118 flags (bit 0x20 / 0x40: no damage, FUN_0055eac8)"),
+        ("p_pos", "P", 0x60, "bytes:64", "D", "P+0x60 world matrix (FUN_0054a5e8; row 3 = position)"),
+    ]
 if __import__("os").environ.get("TRACE_PATH_LAYERS"):
     for _k in range(ENEMY_MAX):
         PATH_FIELDS += [("e%d_mp_layers" % _k, "EM%d" % _k, 0x200, "layers", "L", "8 layers x 0x30 at MP+0x200")]

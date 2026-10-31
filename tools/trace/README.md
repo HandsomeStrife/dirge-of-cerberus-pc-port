@@ -232,6 +232,15 @@ object pass off). Script k_push17 (k_push16 to f960, log from f790); its positio
 with the full `pushstep` set (an earlier run without the `push_out` hook was 0.08-0.1 u off before
 contact: not chased).
 
+### Melee hit (TRACE_MELEE=1, TRACE_CALLLOG=melee; worker 0165)
+With `TRACE_FIELDSET=path`, `TRACE_MELEE=1` adds Vincent's `p_hp`, `p_state`, `p_f118` and `p_pos` (P+0x60 matrix).
+Call-log set `melee`: `make` (FUN_00569dc0's FUN_00541310: the 64-byte record, v0 = the object), `update` (vt+0x214
+of vtable 0x58f9f0: position, +0xc0 flags / damage, +0xd0 radius .. +0xe0 life, +0xe8 owner / candidates),
+`sph_capsule` (FUN_0025db68: centre, capsule a / b; f12 = radius), `hit` (FUN_0057a830 entry), `defence`
+(FUN_00318120 in FUN_0055eac8), `p_damage` / `p_react` (Vincent's vt+0x1ec / +0x324) and `reaction`
+(FUN_00565480). With TRACE_LOG_AT set, the call-log control block moves to just below the frame log (calllog.py),
+so scripts over 1000 frames can log calls. Script k_melee18 (pokes in its doc): #66 hits Vincent at f1463.
+
 ### Soldier path walk (TRACE_FIELDSET=path, worker 0159)
 `TRACE_FIELDSET=path` logs a little of the player and camera (matrix, `cam_fwd` / `cam_eye` / `cam_lock`, `cam_a0` =
 CAM+0xa0 aim hit + 0xb0 far point) and per soldier the move state: `a100` (actor state, gait bits), `ai_mode`, `cmat`

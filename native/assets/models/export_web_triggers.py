@@ -238,7 +238,33 @@ def attacks(d, i):
             kfs.append(dict(frame=fr, cmds=cmds))
         entries.append(dict(dur=dur, kf=kfs, flags=fl, min=mn, max=mx, yaw=d[e + 0xc],
                             tol=struct.unpack_from('b', d, e + 0xd)[0], pitch=struct.unpack_from('<H', d, e + 0xe)[0]))
-    return dict(alt=alt, entries=entries, names=names)
+    used = [c[2] for e in entries for k in e['kf'] for c in k['cmds'] if c[0] == 2 and c[2] >= 0]
+    HV = T + SE.u32(d, T + 0x24)
+    return dict(alt=alt, entries=entries, names=names,
+                volumes=[hit_volume(d, HV + 64 * v) for v in range(max(used) + 1)] if used else [])
+
+
+def hit_volume(d, o):
+    """Attack table +0x24 record (64 B), the melee hit volume op 2 builds (FUN_003481e0 case 2: record =
+    T+0x24 + arg 2 x 64 -> owner event 4 -> FUN_00569dc0 -> FUN_00541310):
+      +0 type -> FUN_00579ef0 (attack +0xc0 bits 0-1; reaction flags +0xec: 0 -> 2, 1 -> 4, 2 -> 8, 3 -> 0)
+      +1 shape -> FUN_00579f70 (+0xc0 bits 2-3: 1 sphere DAT_0046ef3c, 2 DAT_0046ef40, 3 DAT_0046ef44, 0 ef38)
+      +2 / +3 axis indices into DAT_0058bab0 (16 B rows): local rows = cross(ax[+3], ax[+2]), ax[+3], ax[+2]
+      +4 low nibble -> +0xc0 bits 4-7 (FUN_0057b1b0: the reaction direction rule)
+      +5 / +6 attach: +6 < 0: +5 == 0 owner matrix, else marker +5 + 0xe; +6 >= 0: +5 == 0 marker +6,
+         else FUN_0054a7d0(+5 - 1)
+      +7 -> +0x13c (repeat interval, frames), +8 -> +0xc1 flags (bit 0 every target, bit 2 repeat, bit 3 follow
+      the owner, bit 1 / 4 the faction test), +0xa s16 life (+0xe0, frames x step), +0x10 damage (+0xc2),
+      +0x14 -> +0x130 (hit effect), +0x18 name (+0x134, effect), +0x20 xyz local offset, +0x30.. shape
+      parameters (shape 1 / 3: +0x30 radius -> +0xd0; shape 2: +0xd8 / +0xd0 / +0xd4 = +0x30 / +0x34 / +0x38,
+      +0xdc = +0x3c degrees)"""
+    r = d[o:o + 64]
+    return dict(type=r[0], shape=r[1], ax=[r[2], r[3]], nib=r[4] & 0xf, m5=struct.unpack_from('b', r, 5)[0],
+                m6=struct.unpack_from('b', r, 6)[0], every=r[7], c1=r[8], life=struct.unpack_from('<h', r, 10)[0],
+                dmg=struct.unpack_from('<I', r, 0x10)[0], fx=struct.unpack_from('<I', r, 0x14)[0],
+                name=r[0x18:0x20].split(b'\0')[0].decode('latin-1'),
+                off=[round(x, 6) for x in struct.unpack_from('<3f', r, 0x20)],
+                p=[round(x, 6) for x in struct.unpack_from('<4f', r, 0x30)])
 
 
 def stance_of(model, armed, wcls, params=True):
@@ -314,7 +340,7 @@ def weapons(d):
         f = lambda x: round(struct.unpack_from('<f', d, o + x)[0], 6)
         out.append(dict(idx=k, flags=SE.u32(d, o + 4), pellets=struct.unpack_from('b', d, o + 0x16)[0],
                         range=f(0x18), speed=f(0x2c), damage=h(0x40), first=h(0x42), interval=h(0x44),
-                        reload=h(0x46), mag=h(0x48), hit=d[o + 0x4a],
+                        reload=h(0x46), mag=h(0x48), hit=d[o + 0x4a], w56=h(0x56),   # W+0x56: melee damage % (FUN_00569dc0)
                         cls=d[o + 0x14] >> 2 & 7))          # W+0x14 bits 2-4: weapon class (FUN_00564228)
     return out
 
@@ -337,6 +363,23 @@ def hitboxes(model='e027'):
                 r = struct.unpack_from('<3fi3f', buf, b0 + 32 * i)
                 out.append(dict(offset=[round(x, 6) for x in r[:3]], bone=r[3], scale=[round(x, 6) for x in r[4:7]]))
             return out
+    raise ValueError('%s: no marker.mkd' % model)
+
+
+def markers(model='e027'):
+    """The model's markers (FUN_005ad508 -> FUN_0030bef8(mkd + 0x10, n, out, palette)): 'mk2' +4 u16 count,
+    +8 offset of 16-byte records {f32 xyz, s32 bone}; marker n's matrix = T(xyz) x bone n's palette matrix."""
+    import export_web_enemy as E, export_cerberus as EC
+    buf = open(E.paths(model)['cont'], 'rb').read()
+    for o in EC.entries(buf):
+        if buf[o + 8:o + 11] == b'mkd':
+            p = o + 0x10
+            if buf[p:p + 4] != b'mk2\0':
+                raise ValueError('%s marker.mkd: no mk2 header' % model)
+            n = struct.unpack_from('<H', buf, p + 4)[0]
+            m0 = p + struct.unpack_from('<I', buf, p + 8)[0]
+            return [[round(x, 6) for x in struct.unpack_from('<3f', buf, m0 + 16 * i)] +
+                    [struct.unpack_from('<i', buf, m0 + 16 * i + 12)[0]] for i in range(n)]
     raise ValueError('%s: no marker.mkd' % model)
 
 
@@ -458,7 +501,7 @@ def main():
                zones=zone_sets(d, recs, boxes), stances=st, model_clips=model_clips(recs, st, atk), attacks=atk,
                sizes={str(r['zones']): zone_size(d, r['zones']) for r in recs if r['zones'] >= 0},
                lock_bones={str(r['zones']): lock_bone(d, r['zones']) for r in recs if r['zones'] >= 0},
-               paths=paths(d), nav=nav_graph(d))
+               paths=paths(d), nav=nav_graph(d), markers={m: markers(m) for m in boxes})
     path = os.path.join(out, 'ai.json')
     with open(path, 'w') as fh:
         json.dump(res, fh, separators=(',', ':'))

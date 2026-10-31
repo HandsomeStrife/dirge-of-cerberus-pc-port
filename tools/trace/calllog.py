@@ -16,6 +16,11 @@ import struct
 import hook
 
 STUBS, CLOG_CTRL, CLOG_DESC = 0x96200, 0x9CC00, 0x9CC20   # CTRL2: lo, hi, wp, end
+# TRACE_LOG_AT moves the frame log up (hook.py); the control block then sits just below it, so a script
+# longer than 1000 frames can carry a call log too (worker 0165).
+if __import__("os").environ.get("TRACE_LOG_AT"):
+    CLOG_CTRL = hook.LOG - 0x400
+    CLOG_DESC = CLOG_CTRL + 0x20
 # CLOG_CTRL/DESC sit at the end of the script area: scripts must be <= 1000 frames.
 CLOG_BYTES = 0x30000
 ENTRY = 128
@@ -167,6 +172,27 @@ SETS["pushstep"] = [
     # FUN_0035a440(body, out, in): out = in + correction (wall / object contacts, then + body+0x80)
     dict(id=33, kind="site", where=(0x357D48, 0x358FB8, 0x35A440), name="push_out",
          copy=[cp("a1", 0, 4), cp("a2", 0, 4), cp("a0", 0x80, 4), cp("a0", 0xB0, 4)]),
+]
+
+# worker 0165: the melee hit volume. FUN_00569dc0 (owner event 4 op 2) -> FUN_00541310(mgr, record);
+# the attack object's update vt+0x214 = FUN_0057a330 (vtable 0x58f9f0); the sphere test FUN_0057b8b8 ->
+# target vt+0x19c FUN_0055c5f8 -> FUN_0025db68(r, R, centre, a, b); the hit FUN_0057a428 -> FUN_0057a830;
+# the damage FUN_0055eac8 -> FUN_00318120 and Vincent's vt+0x1ec FUN_0055c7f8 / vt+0x324 FUN_00576ac8.
+SETS["melee"] = [
+    dict(id=40, kind="site", where=(0x569DC0, 0x56A0A0, 0x541310), name="make",
+         copy=[cp("a1", 0, 16)]),                          # the 64-byte record; v0 = attack object
+    dict(id=41, kind="vt", where=(0x58F9F0, 0x214), name="update",
+         copy=[cp("a0", 0x90, 4), cp("a0", 0xC0, 2), cp("a0", 0xD0, 5), cp("a0", 0xE8, 4), cp("a0", 0x60, 4),
+               cp("a0", 0x13C, 1), cp("a0", 0x20, 1)]),
+    dict(id=42, kind="site", where=(0x55C5F8, 0x55C700, 0x25DB68), name="sph_capsule",
+         copy=[cp("a0", 0, 4), cp("a1", 0, 4), cp("a2", 0, 4)]),
+    dict(id=43, kind="site", where=(0x57A428, 0x57A830, 0x57A830), name="hit",
+         copy=[cp("a1", 0, 12)]),
+    dict(id=44, kind="site", where=(0x55EAC8, 0x55EF78, 0x318120), name="defence", copy=[]),
+    dict(id=45, kind="vt", where=(0x58F128, 0x1EC), name="p_damage", copy=[cp("a0", 0x118, 1), cp("a0", 0x28, 1)]),
+    dict(id=46, kind="vt", where=(0x58F128, 0x324), name="p_react", copy=[cp("a0", 0x100, 2)]),
+    dict(id=47, kind="site", where=(0x55EAC8, 0x55EF78, 0x565480), name="reaction",
+         copy=[cp("a2", 0, 4), cp("a3", 0, 4)]),
 ]
 
 

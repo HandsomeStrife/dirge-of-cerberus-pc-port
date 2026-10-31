@@ -1,0 +1,47 @@
+{
+ "name": "k_melee18",
+ "frames": 1530,
+ "log_from": 1430,
+ "doc": "worker 0165: the melee hit. k_inview17c's route and pokes (#66 / #67 wake in brain mode 5, #66 melees r_atk_0 at f1455); logs f1430-1529 with TRACE_FIELDSET=path TRACE_MELEE=1 TRACE_ERECS=44 TRACE_ENEMIES=1 TRACE_LOG_AT=A5000 TRACE_CALLLOG=melee TRACE_CALLLOG_FRAMES=1430:1530 TRACE_POKE=ffbab0=5,ffbd90=5,ffbea8=5,ffc428=5,ffca08=5,ffcc58=5,ffcd70=5,ffd2b0=5",
+ "events": [
+  {
+   "from": 10,
+   "to": 230,
+   "lx": 0.6,
+   "ly": -1.0
+  },
+  {
+   "from": 240,
+   "to": 244,
+   "buttons": [
+    "cross"
+   ]
+  },
+  {
+   "from": 280,
+   "to": 284,
+   "buttons": [
+    "cross"
+   ]
+  },
+  {
+   "from": 300,
+   "to": 470,
+   "lx": 0.6,
+   "ly": -1.0
+  },
+  {
+   "from": 490,
+   "to": 494,
+   "buttons": [
+    "cross"
+   ]
+  },
+  {
+   "from": 500,
+   "to": 787,
+   "lx": 0.6,
+   "ly": -1.0
+  }
+ ]
+}

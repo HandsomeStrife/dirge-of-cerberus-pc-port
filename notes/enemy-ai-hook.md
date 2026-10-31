@@ -798,3 +798,36 @@ Part 3 of soldier walking: the nav-graph path follower, wired to action layers 2
   queue-room branch and its 'mover ended -> 0', layers 5 / 6 sync caps (8 / 5), layer 3 state 2's bit-20 stop, the
   malformed list. Mutants: the review's 9 survivors + 6 new (slide / die / switch-off stops, setNode(-1), the null
   check, the cancel): 15/15 red. Hooks: world.t gains action2 / navOf.
+
+## Melee hit volume (worker 0165, 2026-10-31)
+
+**Decoded and translated** (enemy_ai.js `makeAttack` .. `attackDamagePlayer`; audit 'Melee hit volume').
+- Op 2 -> FUN_003481e0 case 2: record = T +0x24 + arg 2 x 64 (ai.json `attacks[set].volumes`,
+  export_web_triggers.hit_volume) -> owner event 4 (0x56a214) -> FUN_00569dc0 -> FUN_00541310 -> attack object
+  class 0xd (FUN_0053db98 case 0xd, constructor FUN_00579d00, vtable 0x58f9f0; update vt+0x214 FUN_0057a330).
+- Record: +0 type (reaction flags +0xec 2 / 4 / 8 / 0), +1 shape (1 = sphere, vtable 0x58f970), +2 / +3 local axes
+  (DAT_0058bab0), +5 / +6 attach (+6 >= 0, +5 0: marker +6 = the model 'mkd' marker table: T(xyz) x bone palette),
+  +7 repeat interval, +8 -> +0xc1 (bit 0 every target, 2 repeat, 3 follow the marker), +0xa life (x step), +0x10
+  damage, +0x20 local offset, +0x30 radius. z128: e027 zone 7 (r_atk_0): r 5, marker 15 (bone 26 = the rifle) +
+  (0,0,3), life 16, damage 50; zone 6 (m_atk): marker 8 (bone 13), life 8; e048 zone sets 3 / 4: marker 8; e030
+  set 8: volumes 0 / 3 / 4 spheres (marker 4 / 0), 1 / 2 shape 2 (not translated).
+- Damage at the make: (dmg + 0.5) x 0.01 x (W+0x56 + 100) (W+0x56 = 0 for every z128 weapon, ai.json `w56`), then the
+  owner's offence FUN_00317ef0 (soldiers: +0x60 0 -> bonus 0; save RAM). At the hit Vincent's defence (kind 1): 49.
+- Each update: FUN_0057a428 (first: candidates fresh, FUN_0057a9b8; then FUN_0057aed8 adds new ones): objects with
+  +0x28 bit 0, +0x40 bit 6, filter FUN_0055e878 and a horizontal distance from the volume < sqrt(3) x r + their
+  radius (13.66 for r 5); then the sphere vs the target's capsule (FUN_0025db68: feet .. feet - 18 y, r 5; past an
+  end by e the reach is rc + rs cos(e pi / 2rs)). A hit without bits 0 / 2 ends the object (one hit per swing);
+  else life -= step, < 0 ends it. AI +0x7a / +0x60 count hits, +0x76 / +0x58 misses (no reader on the page's path).
+  Soldiers are never candidates: +0x188 bit 39 (save RAM) and faction 1 -> 1 is not hostile (DAT_004a0290).
+- ?enemydmg: not used. It exists because the bullets' hit test is a GUESS (BULLET_R); the melee path is decoded,
+  so a melee hit always damages Vincent. The HUD now says 'bullet damage off'.
+- Trace k_melee18 (tools/trace/scripts/k_melee18.json; call-log set `melee`, TRACE_MELEE=1): #66 swings at f1455,
+  volume made f1460, life 14.8 / 13.6 / 12.4, hit f1463, HP 560 -> 511. The page reproduces it with the game's
+  positions fed in (test_melee.mjs; centre 0.0002 u). A call tagged k runs in the step from record k - 1 to k.
+- **MISSING, found on the way:** (1) the lunge: #66 moves 20.0 -> 12.9 u during r_atk_0 (clip root motion, op 0
+  bits 0-2 -> mover 8, C+0x310 written in FUN_00343160; audit 'Attack clip root motion'), so on the page a swing
+  started at 20 u misses; from 12 u it hits (test_enemies_page 8). (2) Vincent's reaction (FUN_00565480 flags 4:
+  state 0x18, pushed back ~0.8 u a frame). (3) shape 2 (e030).
+- Tests: `node native/web/test_melee.mjs` (hand cases, data, trace replay; 23/25 mutants killed, the two survivors
+  equivalent on z128: test-before-decrement with no growth, P+0x118 bit 5 zeroes the damage either way);
+  test_enemies_page 8 (a swing lowers Vincent's HP by 49); test_enemy_ai's mode-5 check without a pose.
