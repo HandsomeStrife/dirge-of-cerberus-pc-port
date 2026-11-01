@@ -168,8 +168,66 @@ Decoded (beyond the code map above)
 - Events FUN_003c0220 (id of the confirmed button): 3 Restart -> box 0x477a10 (0x25), 4 Tempsave ->
   0x477a50 (0x27), 5 Quit -> 0x477a30 (0x26). The boxes are type-8 widgets (FUN_003b65c0 ->
   FUN_003b66c0 -> FUN_003b7f38, layout 0x472ad8: root image 0xa 64,149 384x150, type-9 text
-  widget, buttons OK id 6 / CANCEL id 7, CANCEL focused for kind 2). NOT drawn on the page: the
-  type-9 text needs FUN_003cd7e8 (the non-'$&' renderer). Next job for the pause: that renderer +
-  a PCSX2 capture of the open box.
+  widget, buttons OK id 6 / CANCEL id 7, CANCEL focused for kind 2). Drawn since worker 0189 (below).
 - Freeze: the pause enters game state 0x17 (FUN_00241f40: script flag 0x12, FUN_00325490, sound
   volume FUN_003ed7d0(0x30)) and the destructor FUN_003c0110 leaves it, after the close.
+
+## Confirm box and the second text renderer (worker 0189, 2026-11-01): DONE, on the page
+
+pause.js `openBox` / `PauseFlow` (box flow), `initText9` / `setText9` / `measureText` /
+`renderText` / `glyph` (type-9 text, FUN_003cd7e8). Data: export_web_pause.py adds the box scripts,
+`widths20`, `boxTextOff` and the whole kelfnt0 page (448 rows, still equal to the GS memory);
+`--box-dump` / `--box-ok-dump` write pause_box_ref.json / pause_box_ok_ref.json. Capture:
+tools/trace/scripts/w189_box.json (Start f60, ✕ f130, left f260) + grab_gs.py at 220 / 340 ->
+tools/trace/out/w189/{cancel,ok}.gs + .p2s (gitignored). test_pause.mjs: all 282 menu draws of both
+dumps equal ours.
+
+Box flow (decoded)
+- FUN_003c0220: event 3 / 5 / 4 -> FUN_003c0a68(pause, script, id) -> FUN_003d4a20 -> FUN_003ddc18
+  builds the script: one type-8 widget (0x477a10: rgba 0, rect 64,177 384x94, text 0x80005c06,
+  id 0x25, op 0x1c kind 2; 0x477a30 Quit: 0x5c07, 0x26, kind 2; 0x477a50 Tempsave: 0x5c08, 0x27,
+  kind 1). FUN_003b71e0 / FUN_003d4e58 link the box to the pause (+0x1c, +0x12 = id), FUN_003b72f0
+  gives its root the pause root's priority (FUN_003caab8; it draws after the pause), FUN_003d4918
+  records it in the pause's child list (+0x20).
+- FUN_003b65c0 (type-8 ctor): auto-close (+0x3c) unless kind 3 / 0xc / 4 / 0x29 / 9;
+  FUN_003b66c0 takes a slot of DAT_0050db60 (8 x 0x28) and calls PTR_FUN_00472d68[kind]
+  (1, 2, 10, 11, 0x18, 0x19 = FUN_003b7eb8; kinds 0x18-0x1a also get FUN_003b72f0(slot, 100) in
+  FUN_003b66c0); bVar2 (kind 1 / 0xc / 0x18 / 0x2a) -> FUN_003b7eb8 focuses OK (6),
+  else CANCEL (7). FUN_003b7f38: layout 0x472ad8, language table DAT_00472f58 (4 bytes per language:
+  OK / CANCEL +0x60 text x, 0x7fff = keep; uk = 0x7fff / 22), sound 9, slot +8 / +0xc / +0x10 =
+  widgets 5 / 6 / 7.
+- FUN_003b6c10 -> FUN_003cb380(root, 64, 177, 0): position, vt+0x3c (inner rect), children
+  re-placed from +0x1c / +0x1e. FUN_003b6c98(384, 94): FUN_003cb450 on the root; the text widget
+  grows by (dw, dh) clamped at 0; buttons x += dw / 2 and, when centre below the root's old centre,
+  y += dh (-56 here). FUN_003b6a38: vt+0xcc of the text widget (FUN_003e6028) with id & 0x7fffffff.
+- Answers: FUN_003b80f8 (vt+0x24): id 6 -> FUN_003b7830(3) + sound 7, id 7 -> (4) + sound 8;
+  FUN_003b81b8 (vt+0x2c, ○) -> (4) + sound 8. FUN_003b7830: FUN_003b6910 (slot result),
+  FUN_003d4e68 -> the pause's FUN_003c0220({ id, answer }), FUN_003d4780(box, +0x40 = 0), and with
+  +0x3c: FUN_003d4f00 + vt+0x34 FUN_003b7930 -> FUN_003d4588 -> FUN_003d51c0 (100 ms close).
+- FUN_003c0220 case 0x25 answer 3: FUN_00240f28() (DAT_004b2590[0..4] >= 0) / FUN_00242a30()
+  (DAT_0046b320) -> box 0x477b10 (0x2d); both 0 in story mode (w189 RAM) -> FUN_003c0a20
+  (FUN_00380b00(DAT_0046f850), +0x1558 bit 51), FUN_003dee40(0xf) (DAT_004f3064, returned by the
+  menu manager FUN_003dce38 that frame), the pause closes (vt+0x14 (100, 1)). 0x26: FUN_003c0940
+  (title). 0x27: +0x6c = 1, FUN_003d4d00 (memory card).
+- Focus: the box takes DAT_004f3034; the pause buttons keep flag 2 but draw unlit (FUN_003caba8
+  needs the global focus). At the box's destruction FUN_003ddd78 -> FUN_003de9b0 refocuses the last
+  widget with flag 2 (Restart).
+
+Type 9 (FUN_003e5e98, vtable 0x4a6fb0; 0xc dtor, 0x1c draw FUN_003e5f58, 0xcc set text)
+- Fields: FUN_003cbf18 copies block +0x2c..+0x3f to +0x54..+0x67: +0x58 colour (0x80808080),
+  +0x5e flags (s36 = 0x212 for the box: centre 0x10, outline 2), +0x60 / +0x62 text offset,
+  +0x64 line gap (0: FUN_003e2760() != 0), +0x65 letter gap (0). FUN_003cf338 (measure, called by
+  vt+0xdc FUN_003e6158; Ghidra lost its arguments, RAM shows +0x44 width 338, +0x46 16, +0x68 = 37 =
+  glyph count incl. line breaks).
+- FUN_003cd7e8 (ASCII): glyph g = ((c + 0x877e) >> 8 - 0x81) x 0xbc - 0x41 + ((c + 0x877e) & 0xff)
+  (the SJIS full-width index); width nibble DAT_004f2250 + (c - 0x20) / 2 (+1); page g / 0x700 + 1,
+  CLUT 1 + (g & 0x3f > 0x1f), u = (g & 31) x 16, v = (g >> 6) x 16, 16 x 16 cells, x1 = x + w - 1/16.
+  Start: inner x + (iw - width) / 2 (flag 0x10), y = inner y; wrap at inner x + iw; line height
+  (+0x64 + 16). Per glyph: flag 1 shadow (+2, +2), flag 2 four copies (±1 x, -1 / +2 y), 0x4000 ring,
+  0x800 glow (-1, -1), then the glyph; shadow alpha = text alpha - 0x20, glow 0x40, all x the
+  screen's open fraction. TEX1 bilinear around it (FUN_003cc0a8).
+- Not translated: FUN_003d1d98 escapes ('$' codes: colours DAT_0047a7c0, flags 4 / 8 strips,
+  inline images, typewriter state +0x6c), code 1 colours (DAT_004f2008), Shift-JIS, pages 2-5,
+  FUN_003d0058 ('$&' measure). Such strings warn and are not drawn.
+Open: menu sounds (ids 7, 8, 9 recorded), the restart's checkpoint restore (page reloads), Start
+routing while the box has the focus (translated, not checked against the game).

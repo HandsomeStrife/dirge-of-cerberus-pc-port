@@ -357,6 +357,167 @@ export function numberCodes(v) {
 }
 export function hpText(cur, max) { return numberCodes(cur).concat([0x12], numberCodes(max)); }
 
+// ------------------------------------------------------------------ hit-direction ring (reticle kind 5)
+// Shown when a bullet hits Vincent: 8 segments on a ring tilted onto the floor around the screen
+// centre, turning with the camera; the segment toward the shooter shows an arrow for 2 s.
+const f32 = Math.fround;
+// FUN_00567c08(Vincent, bullet +0xc0) (from FUN_005720c8 when the bullet's +0x140 bit 1 is clear):
+// d = from - P+0x90 (FUN_0054a720: no parent), normalised; FUN_00260e74(d, (1,0,0), (0,1,0)) = the
+// angle from +X to d about +Y (both projected onto the XZ plane; acos FUN_00261040: 0 at >= 1, pi
+// at <= -1; negative when (d x X).y = d.z < 0); x 651.8986 (4096 / 2 pi), truncated (cvt.w.s).
+export function hitAngle(vpos, from) {
+  const dx = f32(from[0] - vpos[0]), dz = f32(from[2] - vpos[2]);
+  const l = Math.hypot(dx, dz);
+  // GUESS: no XZ component (shooter straight above / below Vincent, or d = 0) -> 0, read from the VU0 rules
+  // (not traced): RSQRT / DIV by 0 give +-max float (sign = XOR of the operands' signs), not NaN; the projected
+  // vectors are +0, so FUN_00261040's Q = +0 / sqrt(+0) = +max fails `q < 1` and it returns 0, and the outer
+  // product's +0 keeps the sign (see fidelity-audit 'Hit ring: zero-length direction')
+  if (!(l > 0)) return 0;
+  const q = f32(dx / l);
+  let a = q >= 1 ? 0 : q <= -1 ? f32(3.1415927) : f32(Math.acos(q));
+  if (dz < 0 || Object.is(dz, -0)) a = -a;
+  return Math.trunc(f32(a * f32(651.8986)));
+}
+// FUN_003af580 (from the HUD constructor FUN_003ad618): HUD +0x260 = S x R x P (row vectors, p' = p M):
+// S = diag(1/1024, 1/1024, 1/1024, 1) (0x3a800000), R = rotX(-1.2217 rad) (FUN_00259928) with row 3 z = 8
+// (+0x298), P = FUN_00445218 = sceVu0ViewScreenMatrix(scrz 256 / tanf(0.43633 = 25 deg), ax 1, ay 1.18,
+// cx 256, cy 224, ...; z terms unused here). Products FUN_0026125c(out, A, B) = B x A.
+export function ringMatrix() {
+  const scrz = f32(256.0 / f32(Math.tan(f32(0.43633232)))), c = f32(Math.cos(f32(-1.2217305))), s = f32(Math.sin(f32(-1.2217305)));
+  const S = [[f32(1 / 1024), 0, 0, 0], [0, f32(1 / 1024), 0, 0], [0, 0, f32(1 / 1024), 0], [0, 0, 0, 1]];
+  const R = [[1, 0, 0, 0], [0, c, s, 0], [0, -s, c, 0], [0, 0, 8, 1]];
+  // m = [scrz 0 0 0; 0 scrz 0 0; 0 0 0 1; 0 0 1 0] x mt = [ax 0 0 0; 0 ay 0 0; 0 0 az 0; cx cy cz 1]
+  // (X and Y only: the ring's Z is not drawn)
+  const P = [[scrz, 0, 0, 0], [0, f32(scrz * f32(1.18)), 0, 0], [256, 224, 0, 1], [0, 0, 1, 0]];
+  const mul = (A, B) => A.map(r => [0, 1, 2, 3].map(j => f32(f32(f32(f32(r[0] * B[0][j]) + f32(r[1] * B[1][j])) + f32(r[2] * B[2][j])) + f32(r[3] * B[3][j]))));
+  return mul(mul(S, R), P);
+}
+// FUN_003af580's other half: +0x238..+0x254 = 0 (eight segment timers), +0x234 = 0 (frame counter),
+// +0x230 = 1 (the ring is on). Kind 5's phase (RET+0x1b7 / +0x1d0 / +0x1e6: the reticle's phase arrays,
+// FUN_003b0490 / FUN_003b0588) lives here too; the HUD and the reticle are one object (DAT_00471380).
+export class HitRing {
+  constructor(v = null) {
+    this.on = v ? v.on : 1;                                    // HUD +0x230
+    this.f234 = v ? v.f234 >>> 0 : 0;                          // HUD +0x234 (counter, +1 per draw)
+    this.timers = v ? v.timers.slice() : new Array(8).fill(0); // HUD +0x238 + 4 i (clock ms, 0 = off)
+    this.phase = v ? v.phase : 0; this.end = v ? v.end >>> 0 : 0; this.len = v ? v.len : 0;
+    this.M = ringMatrix();
+    this.draw = null;                                          // what this frame's FUN_003b0ac0 draws
+  }
+  // FUN_003af6b8(HUD, a): +0x230 on -> sector ((0x1000 - ((a + 0xb00) & 0xfff)) >> 9) (8 is no segment)
+  // gets clock + 2000, and kind 5 is shown (FUN_003b0680)
+  hit(a, now, len) {
+    if (!this.on) return -1;
+    const sec = (0x1000 - ((a + 0xb00) & 0xfff)) >> 9;
+    if (sec < 8) this.timers[sec] = (now + 2000) >>> 0;
+    this.show(now, len);
+    return sec;
+  }
+  // FUN_003af740 (from the HUD update FUN_003add28): lapsed timers -> 0 (unsigned compare); kind 5 is
+  // hidden (FUN_003b0738) when one lapsed this frame and none is left
+  update(now, len) {
+    let n = 0, cleared = false;
+    for (let i = 0; i < 8; i++) {
+      if (this.timers[i] === 0) continue;
+      if ((now >>> 0) < (this.timers[i] >>> 0)) n++; else { this.timers[i] = 0; cleared = true; }
+    }
+    if (cleared && n === 0) this.hide(now, len);
+  }
+  // FUN_003b0680 / FUN_003b0738 for kind 5: phase < 4 always (FUN_003b0ac0 never steps kinds 4 / 5 into
+  // the on-target / locked phases), so only FUN_003b0490(.., 0, 1, 3, len) / FUN_003b0588(.., 2, 1, 3, len);
+  // len = DAT_00472110[5] (100 ms)
+  show(now, len) {
+    if (this.phase === 0) { this.len = len; this.end = (now + len) >>> 0; }
+    else if (this.phase === 3) { this.len = len; let e = len - (this.end - now); if (len < e) e = len; this.end = (now + e) >>> 0; }
+    else return;
+    this.phase = 1;
+  }
+  hide(now, len) {
+    if (this.phase === 2) { this.len = len; this.end = (now + len) >>> 0; }
+    else if (this.phase === 1) { this.len = len; let e = now - (this.end - len); if (len < e) e = len; this.end = (now + e) >>> 0; }
+    else return;
+    this.phase = 3;
+  }
+  // FUN_003b0ac0 for kind 5 (the HUD root's callback 0x3f, after kinds 1-4): the phase step (1 -> 2 and
+  // 3 -> 0 at the end time), the draw time t (elapsed in 1, remaining in 3, else the length), the draw
+  // (variant 0), then +0x234 += 1 unless the game state is 0x17 (pause; FUN_00241d68)
+  frame(now, camYaw, paused = false) {
+    now >>>= 0;
+    if (this.phase === 1 && now >= this.end) this.phase = 2;
+    else if (this.phase === 3 && now >= this.end) this.phase = 0;
+    let t = null;
+    if (this.phase === 1) t = (now - (this.end - this.len)) | 0;
+    else if (this.phase === 3) t = (this.end - now) | 0;
+    else if (this.phase !== 0) t = this.len;
+    this.draw = t == null ? null : { t, len: this.len, yaw: camYaw, timers: this.timers.slice(), f234: this.f234 };
+    if (!paused) this.f234 = (this.f234 + 1) >>> 0;
+  }
+}
+
+// FUN_003b1048(RET, ctx, 5, t, 0): kind 5's pieces (hud.json ring: DAT_00472790[15] -> 0x472630) -> GS strips.
+// Per piece: alpha (+0x10 bit 0: t a / len while t != len), the size / offset animation (bit 0x400 while
+// t != len: x, y, w, h x 1.5 -> x 1 over len), corners in 1/16 px (x - 1, y - 1, x + w + 1, y + h + 1; bit
+// 0x4000 adds a mirrored copy to the right, to x + 2 w + 1, its u end 1/2 texel in), n copies rotated by
+// 2 pi / n from -CAM+0x178 (bit 0x2000), each corner through HUD +0x260 (FUN_0026138c, / w, truncated to
+// whole HUD px, (int << 16) >> 12), drawn as PRIM 5 strips (FUN_003d3098 -> mapA) with menu1 (DAT_004727f0[10]),
+// bilinear (FUN_003d3830(1): kinds >= 5). Bit 0x108000 clear: the copy is drawn while its timer (HUD +0x238 + 4 i)
+// is 0, piece colour; set: while it is not 0, colour 0x4188c7 (199, 136, 65), or the piece colour when HUD
+// +0x234 bit 1 (the blink). Piece flags the ring doesn't use are not translated (warned).
+const RING_FLAGS = 0x1 | 0x400 | 0x2000 | 0x4000 | 0x8000;
+export function ringPrims(ring, M, d, frames, out = []) {
+  if (!ring || !d) return out;
+  const { t, len, yaw, timers, f234 } = d;
+  for (const pc of ring.pieces) {
+    if (pc.flags & ~RING_FLAGS & 0x3fffff) { warn('hud: ring piece flags 0x' + pc.flags.toString(16) + ' not translated; piece not drawn'); continue; }
+    const fr = frames[pc.sprite] && frames[pc.sprite][pc.frame];
+    if (!fr) { warn('hud: ring sprite ' + pc.sprite + ' has no frame (rebuild data/hud)'); continue; }
+    // FUN_003cb1f0 / FUN_003cb268: the frame's texel origin and size
+    const u0 = fr[0] * 16, v0 = fr[1] * 16;
+    let u1 = (fr[0] + fr[2]) * 16; const v1 = (fr[1] + fr[3]) * 16;
+    if (pc.flags & 0x4000) u1 -= 8;
+    let a = pc.rgba[3];
+    let x = ((pc.x << 20) >> 16), y = ((pc.y << 20) >> 16);
+    let w = (((pc.w === -1 ? Math.abs(fr[2]) : pc.w) << 20) >> 16), h = (((pc.h === -1 ? Math.abs(fr[3]) : pc.h) << 20) >> 16);
+    if (t !== len) {
+      if (pc.flags & 1) a = div0(t * a, len) & 0xff;
+      if (pc.flags & 0x400) {
+        const sw = w < 0 ? -1 : 0, sh = h < 0 ? -1 : 0;
+        h = (h + (((h - sh) >> 1) - div0(div0(t * h, 2), len))) << 16 >> 16;
+        x = (x + (div0(x, 2) - div0(div0(t * x, 2), len))) << 16 >> 16;
+        y = (y + (div0(y, 2) - div0(div0(t * y, 2), len))) << 16 >> 16;
+        w = (w + (((w - sw) >> 1) - div0(div0(t * w, 2), len))) << 16 >> 16;
+      }
+    }
+    const X0 = (x - 1) << 16 >> 16, Y0 = (y - 1) << 16 >> 16, X1 = (x + w + 1) << 16 >> 16, Y1 = (y + h + 1) << 16 >> 16;
+    const X2 = (x + w * 2 + 1) << 16 >> 16;
+    const pts = [[X0, Y0], [X1, Y0], [X0, Y1], [X1, Y1]];
+    if (pc.flags & 0x4000) pts.push([X2, Y0], [X2, Y1]);
+    const own = [pc.rgba[0], pc.rgba[1], pc.rgba[2], a], alt = [0xc7, 0x88, 0x41, a];
+    let ang = f32(0.0 - yaw);
+    const step = f32(6.2831855 / pc.copies);
+    for (let i = 0; i < pc.copies; i++, ang = f32(ang + step)) {
+      let cs, sn;
+      if (ang === 0) { cs = 1; sn = 0; } else if (ang === f32(1.5707964)) { cs = 0; sn = 1; }
+      else if (ang === f32(3.1415927)) { cs = -1; sn = 0; } else if (ang === f32(4.712389)) { cs = 0; sn = -1; }
+      else { cs = f32(Math.cos(ang)); sn = f32(Math.sin(ang)); }
+      const lit = timers[i] !== 0;
+      if (!!(pc.flags & 0x108000) !== lit) continue;
+      const c = (pc.flags & 0x108000) && !(f234 & 2) ? alt : own;
+      const P = pts.map(([px_, py_]) => {
+        const rx = f32(f32(px_ * cs) - f32(py_ * sn)), ry = f32(f32(px_ * sn) + f32(py_ * cs));
+        const q = [0, 1, 3].map(j => f32(f32(f32(rx * M[0][j]) + f32(ry * M[1][j])) + M[3][j]));
+        const iw = f32(1.0 / q[2]);
+        return mapA((Math.trunc(f32(q[0] * iw)) << 16) >> 12, (Math.trunc(f32(q[1] * iw)) << 16) >> 12);
+      });
+      const strip = (ix, uv) => out.push({ kind: 'strip', tex: 'menu1', bilinear: true, ring: true,
+        v: ix.map((k, n) => [px(P[k][0]), px(P[k][1]), px(uv[n][0]), px(uv[n][1])]), c: [c, c, c, c] });
+      strip([0, 1, 2, 3], [[u0, v0], [u1, v0], [u0, v1], [u1, v1]]);
+      if (pc.flags & 0x4000) strip([1, 4, 3, 5], [[u1, v0], [u0, v0], [u1, v1], [u0, v1]]);
+    }
+  }
+  return out;
+}
+
 export class HudState {
   constructor(data) {
     const v = data.values;
@@ -372,6 +533,22 @@ export class HudState {
     let slot = null;
     for (const e of this.chain) { if (e.depth === 0) slot = e.slot ?? null; e.inSlot = slot; }
     this.hpElem = this.find(5, 5);
+    // the hit-direction ring (reticle kind 5; hud.json "ring", the save's HUD +0x230.. in values.ring)
+    this.ringData = data.ring || null;
+    this.ring = new HitRing(data.values.ring || null);
+    if (!this.ringData) warn('hud: hud.json has no ring (rebuild data/hud with export_web_hud.py): no hit-direction ring');
+  }
+  // a bullet hit Vincent (FUN_005720c8 -> FUN_00567c08): vpos = his P+0x90, from = the bullet's +0xc0
+  hit(vpos, from) {
+    if (!this.ringData) return -1;
+    const a = hitAngle(vpos, from);
+    return this.ring.hit(a, this.now, this.ringData.len_show);
+  }
+  // once per game frame, after the clock: FUN_003af740 (HUD update), then FUN_003b0ac0's kind-5 step / draw state
+  ringFrame(camYaw, paused = false) {
+    if (!this.ringData) return;
+    this.ring.update(this.now, this.ringData.len_show);
+    this.ring.frame(this.now, camYaw, paused);
   }
   find(slot, id) { return this.chain.find(e => e.inSlot === slot && e.id === id && e.depth > 0) || null; }
   // FUN_00339988 -> FUN_003adda8(HUD, P+0x20, P+4, 1) when the status HP changes: FUN_003aec10 with the
@@ -401,7 +578,9 @@ export class HudState {
           else if (e.inSlot === 5 && e.id === 0x09) mpBar(out, this.data, this, e);  // +0x3c = 0x3ae9e8
           else if (e.inSlot === 6 && e.id === 0x2e) this.chainGauge(e, 0);           // LAB_003b4f50
           else if (e.inSlot === 6 && e.id === 0x32) this.chainGauge(e, 1);           // LAB_003b4f78
-          // other callbacks are not translated: root 0x3f = the reticle (aim.js draws it), slot 3 0x4e,
+          else if (e.inSlot === 'root' && e.id === 0x3f) ringPrims(this.ringData, this.ring.M, this.ring.draw, this.ringData ? this.ringData.frames : {}, out);
+          // root 0x3f = FUN_003b0ac0: kinds 1-4 (the reticle) are aim.js's (drawn before this layer), kind 5 (the ring) here
+          // other callbacks are not translated: slot 3 0x4e,
           // slot 4 0x46, slot 8 0x70, slot 9 0x74, slot 10 0x77 (their panels are off screen or empty at the save)
           break;
         default: break;                                        // type 10 (hidden in the save) not translated

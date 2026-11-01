@@ -201,6 +201,45 @@ def sprite_table(elf, ids):
     return out
 
 
+def ring_json(elf):
+    """The hit-direction ring = reticle kind 5 (FUN_003b1048(RET, ctx, 5, t, 0)): its pieces
+    DAT_00472790[5 * 3 + 0] (0x14-byte records, as export_web_aim.reticle_json reads kinds 1-4; all three
+    variants point at the same list), their sprite frames (DAT_0047bfc0[id] +0), the texture
+    PTR_DAT_0047d500[DAT_004727f0[10]] and the show / hide length DAT_00472110[5] (FUN_003b0680 / 0738)."""
+    k = 5
+    tex = elf.read(elf.u32(0x47d500 + 4 * elf.u8(0x4727f0 + 2 * k)), 8).split(b'\0')[0].decode('latin-1')
+    p = elf.u32(0x472790 + k * 0xc)
+    pieces, frames = [], {}
+    while p:
+        rec = elf.read(p + 0x14 * len(pieces), 0x14)
+        sid, frame, copies = struct.unpack_from('<HBb', rec, 0)
+        if sid == 0:
+            break
+        x, y, w, h = struct.unpack_from('<hhhh', rec, 4)
+        sx = lambda s: ((s & 0xfff) ^ 0x800) - 0x800     # (u16 << 20) >> 20
+        pieces.append({'sprite': sid, 'frame': frame, 'copies': copies, 'x': sx(x), 'y': sx(y),
+                       'w': -1 if w == -1 else sx(w), 'h': -1 if h == -1 else sx(h),
+                       'rgba': list(rec[0xc:0x10]), 'flags': struct.unpack_from('<I', rec, 0x10)[0]})
+        if len(pieces) > 64:
+            raise ValueError('kind 5: no end marker')
+    for sid in {pc['sprite'] for pc in pieces}:
+        sp = elf.u32(SPRITES + 0x10 * sid)
+        n = max(pc['frame'] for pc in pieces if pc['sprite'] == sid) + 1
+        frames[str(sid)] = [list(struct.unpack('<4h', elf.read(sp + 8 * i, 8))) for i in range(n)] if sp else []
+    return {'texture': tex, 'len_show': struct.unpack('<i', elf.read(0x472110 + 4 * k, 4))[0],
+            'pieces': pieces, 'frames': frames}
+
+
+def ring_state(mem):
+    """The ring's state in the save (FUN_003af580 / FUN_003af6b8): HUD +0x230 on, +0x234 frame counter,
+    +0x238 + 4 i segment timers; kind 5's phase / end / length RET+0x1b7 / +0x1d0 / +0x1e6 (one object)."""
+    u32 = lambda a: struct.unpack_from('<I', mem, a)[0]
+    H = u32(HUD_PTR)
+    return {'on': u32(H + 0x230), 'f234': u32(H + 0x234), 'timers': [u32(H + 0x238 + 4 * i) for i in range(8)],
+            'phase': mem[H + 0x1b2 + 5], 'end': u32(H + 0x1bc + 4 * 5),
+            'len': struct.unpack_from('<h', mem, H + 0x1dc + 2 * 5)[0]}
+
+
 def dump_hud(path):
     """The HUD draws of a GS dump's last frame (test reference for test_hud.mjs): every draw from the
     first sprite textured from menu3 (TBP 10828; the room streams other textures through that slot earlier) on, one record per GS primitive (a sprite or a 4-vertex
@@ -233,6 +272,42 @@ def dump_hud(path):
     return out
 
 
+def dump_ring(path, state):
+    """Test reference for the hit-direction ring (test_hud.mjs): the menu1 strips (TBP 10756) of a GS
+    dump's last frame drawn between the reticle and the HUD panels (FUN_003b0ac0 kind 5, before the first
+    menu3 sprite), as dump_hud's records, plus the ring state and camera yaw (CAM+0x178) of the save
+    state grabbed with it (grab_gs.py: the dump shows the 4th frame after the state)."""
+    sys.path.insert(0, os.path.join(ROOT, 'tools/gsdump/src'))
+    import gsrender2 as g, gsparse  # noqa: E402
+    buf = open(path, 'rb').read()
+    h = gsparse.read_header(buf)
+    gif = g.build(buf, h, sprite_uv=True)
+    a, b = g.pick_frame(gif, 'last')
+    start = next(i for i in range(a, b) if gif.tris[i][3]['tme'] and gif.tris[i][3]['ptype'] == 6
+                 and g.tex0_fields(gif.tris[i][3]['tex0'])['tbp0'] == 10828)
+    i = a
+    while i < start and not (gif.tris[i][3]['tme'] and g.tex0_fields(gif.tris[i][3]['tex0'])['tbp0'] == 10792):
+        i += 1                                                  # the reticle (menu2), when it is drawn
+    i = a if i == start else i
+    out = []
+    while i + 1 < start:
+        t0, t1 = gif.tris[i], gif.tris[i + 1]
+        c = t0[3]
+        if c['frame'] & 0x1ff != 224 or c['ptype'] != 4 or not c['tme'] or g.tex0_fields(c['tex0'])['tbp0'] != 10756:
+            i += 1
+            continue
+        ofx, ofy = (c['xyoffset'] & 0xffffffff) / 16, (c['xyoffset'] >> 32) / 16
+        out.append({'v': [[v[0] / 16 - ofx, v[1] / 16 - ofy, v[6] / 16, v[7] / 16, list(v[8:12])]
+                          for v in (t0[0], t0[1], t0[2], t1[2])], 'blend': list(c['blend'])})
+        i += 2
+    sys.path.insert(0, os.path.join(ROOT, 'tools/trace'))
+    from p2s import read_p2s  # noqa: E402
+    mem = read_p2s(state)['eeMemory.bin']
+    cam = struct.unpack_from('<I', mem, struct.unpack_from('<I', mem, 0x46e290)[0] + 0x40)[0]
+    return {'prims': out, 'ring': ring_state(mem), 'clock': struct.unpack_from('<I', mem, 0x4f58ec)[0],
+            'yaw': struct.unpack_from('<f', mem, cam + 0x178)[0]}
+
+
 def declare(out):
     """Declare hud.json in the page's scene.json ("hud": path from data/), so play.js fetches it only
     when it exists (no 404 in the console without it). export_web_room.py, which writes scene.json,
@@ -258,7 +333,15 @@ def main():
     ap.add_argument('--state', default=STATE)
     ap.add_argument('-o', '--out', default=OUT)
     ap.add_argument('--dump', help='also write OUT/dump_<name>.json: this GS dump\'s HUD draws (test reference)')
+    ap.add_argument('--ring-dump', nargs=2, metavar=('DUMP', 'STATE'),
+                    help='also write OUT/ring_<name>.json: the hit-direction ring\'s draws in this (decompressed) GS dump '
+                         'and the ring state / camera yaw of the save state grabbed with it (test reference)')
     a = ap.parse_args()
+    if a.ring_dump:
+        os.makedirs(a.out, exist_ok=True)
+        name = os.path.splitext(os.path.basename(a.ring_dump[0]))[0].replace(' ', '_')
+        with open(os.path.join(a.out, 'ring_%s.json' % name), 'w') as fh:
+            json.dump(dump_ring(*a.ring_dump), fh)
     if a.dump:
         os.makedirs(a.out, exist_ok=True)
         name = os.path.splitext(os.path.basename(a.dump))[0]
@@ -269,6 +352,7 @@ def main():
     from p2s import read_p2s  # noqa: E402
     mem = read_p2s(a.state)['eeMemory.bin']
     chain, values = read_tree(mem)
+    values['ring'] = ring_state(mem)
     layout = {i: parse_layout(elf, SLOT_TABLES[i]) for i in range(11)}
     ids = {e['sprite'] for e in chain}
     kinds = [list(struct.unpack('<HH8i', elf.read(KINDS + 0x24 * k, 0x24))) for k in range(5)]
@@ -301,7 +385,7 @@ def main():
         'chain': chain, 'values': values,
         'layout': {str(k): v for k, v in layout.items()},
         'sprites': {str(k): v for k, v in sprite_table(elf, ids).items()}, 'kinds': kinds, 'bars': bars,
-        'textures': textures,
+        'textures': textures, 'ring': ring_json(elf),
         'font': {'w': w, 'h': h, 'atlas': atlas.hex(), 'cluts': {str(k): v for k, v in cluts.items()},
                  'metrics': metrics.hex()},
     }

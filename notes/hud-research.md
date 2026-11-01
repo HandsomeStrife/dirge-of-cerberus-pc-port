@@ -70,11 +70,50 @@ the hero dump), `node native/web/test_hud_page.mjs` (browser: blend, pixel centr
 - test_hud: all 88 on-screen HUD primitives of the hero dump (z128_hero_163235) equal ours: texture +
   CLUT, 4 vertices x y u v rgba, scissor. 18 / 18 mutants killed. Review: review/w0175_hud.png.
 
+## Hit-direction ring (worker 0190, 2026-11-01)
+On the page: hud_core.js `hitAngle` / `ringMatrix` / `HitRing` / `ringPrims`, HudState `hit` / `ringFrame`; hud.js
+`hit()` (queued) and `tick()`; enemy_ai.js playerHandler -> `opts.hudHit(P.pos, b.start)` (also with ?enemydmg=0);
+play.js passes it and `camYaw: () => follow.yaw`. On with the game HUD (?gamehud=0 off). Data: hud.json `ring`
+(kind 5 from the ELF) and `values.ring` (the save's HUD +0x230..): **re-run export_web_hud.py**.
+- Trigger: FUN_005720c8 (Vincent's bullet handler) -> FUN_00567c08(P, bullet +0xc0) unless bullet +0x140 bit 1;
+  not after a deflect or with P+0x118 bit 0x20 (return 0). Melee doesn't (FUN_0055eac8). FUN_00570eb8 also calls
+  it (an HP loss toward object +0x268 with P+0x28 bit 2): not reached on the page.
+- Angle: d = from - P+0x90; FUN_00260e74(d, (1,0,0), (0,1,0)) = acos of the XZ-projected dot (FUN_00261040),
+  negative when (d x X).y = d.z < 0 (VU0 opmula / opmsub = d x X); x 651.8986, truncated.
+- FUN_003af6b8: HUD +0x230 != 0 -> sector s = (0x1000 - ((a + 0xb00) & 0xfff)) >> 9; s < 8 -> HUD +0x238 + 4s =
+  clock + 2000; FUN_003b0680(HUD, 5) always (a = 0x500 mod 0x1000 gives s = 8: shown, no timer, and it stays up
+  until some timer lapses: FUN_003af740 hides only when one lapses this frame and none is left).
+- Kind 5 uses the reticle's phase arrays (the HUD and RET are one object, DAT_00471380): 0 -> 1 (fade in
+  DAT_00472110[5] = 100 ms) -> 2; hide 2 -> 3 (100 ms) -> 0. FUN_003b0ac0 draws it after kinds 1-4, then
+  HUD +0x234 += 1 unless the game state is 0x17 (pause).
+- Matrix HUD +0x260 (FUN_003af580): S diag(2^-10) x rotX(-1.2217 rad, FUN_00259928) with row-3 z = 8 (+0x298) x
+  FUN_00445218 = sceVu0ViewScreenMatrix(scrz 256 / tanf(0.43633), ax 1, ay 1.18, cx 256, cy 224, ...).
+- Draw (FUN_003b1048 l.440-700, flag 0x2000 path): corners in 1/16 px rotated by i 2pi/8 - CAM+0x178 (exact
+  cos / sin at 0, pi/2, pi, 3pi/2), x M, / w, ((int) << 16) >> 12 (whole HUD px), FUN_003d3098 PRIM 5 (mapA),
+  menu1, bilinear (FUN_003d3830(1) for kinds >= 5). Piece 201 (grey 128,128,128 a 32; flag 0x4000 = a mirrored
+  second half, u end - 1/2 texel) when the copy's timer is 0; piece 203 (arrow) when set, colour 0x4188c7 =
+  (199,136,65) or its own (99,68,32) on HUD +0x234 bit 1 (blinks every 2 frames). While t != len: alpha t a / len
+  (bit 1), x y w h x 1.5 -> x 1 (bit 0x400).
+- Evidence: grab_gs.py on w174_pain_a (TRACE_FIELDSET=enemy TRACE_RNG=1 TRACE_LOG_AT=9E000; dumps + states in
+  tools/trace/out/w190, gitignored): hits at ~f787 and ~f1009 (states f792: timer 2 = 1900 ms left, phase 2;
+  f1013: 1920 ms, phase 1 t 80; f955: none). The dump is the 4th frame after its state (the blink's counter
+  agrees on both). test_hud: f1013's 15 ring strips equal ours vertex for vertex with the state's yaw; f792's with
+  a fitted yaw (the camera turned in between: any yaw in [1.63205, 1.63213]); the spent bullets' +0xc0 give
+  a = 193 / 156 -> sector 2 = the lit timer. 25 / 25 hud_core mutants killed (direction: sign, sector offset,
+  sector order, +yaw, copy order; timing: 2000, expiry compare, show length, hide rule, blink; placement: tilt, z,
+  ay, cx, fov, corners, u end, rounding, mapA, alpha, 1.5x, bilinear, not drawn) + the hook in enemy_ai.js
+  (test_hud_page). Comparison image: worker 0190's scratchpad w190_ring_compare.png.
+- Angle sign: settled by code + camera geometry (review, worker 0190's fixes): every traced hit lies within
+  sector 2, so the data can't tell the sign; test_hud checks that a shooter ahead of / right of / behind / left of
+  the camera puts the arrow above / right / below / left at yaws 0, 1, 1.632, -2.5 (the flipped sign fails all four),
+  and test_hud_page fires from +X and +Z (segments 2 and 0). Not tested by data: which frame's yaw the draw
+  reads (this frame's vs the last; the f792 yaw was fitted, f1013's camera was still).
+- Review fixes: the hook passes the frame's start position (enemy_ai pStart = P+0x90 during the bullet pass;
+  P.pos can move in the hit-reaction redo); play.js declares gameHud before createEnemyAI (no try / catch); a
+  direction with no XZ part gives angle 0 (GUESS, VU0 0/0 rules); the blink test checks one exact pattern.
+- Open: the clock order within a frame (fidelity-audit GUESS row); FUN_00570eb8's ring.
+
 ## Not done
-- Hit-direction ring (FUN_00567c08 -> FUN_003af6b8 / FUN_003af740 / FUN_003b1048 kind 5, decoded by
-  worker 0174): not translated. It draws through the reticle system (root callback 0x3f, aim.js) with
-  the projected matrix HUD+0x260 (FUN_003af580); needs that transform translated and a GS dump of a
-  hit frame (none yet; w174_pain_a f952 would do: grab with a gsgrab-style script, Shift+F8).
 - FUN_003cd7e8 text, low-HP / MP pulses FUN_003af1e0, type-10 elements, the other callbacks (slots 3,
   4, 8, 9, 10), weapon icon / ammo / item / CHAIN value updates (static at the save values: the page
   has no ammo, items or CHAIN).

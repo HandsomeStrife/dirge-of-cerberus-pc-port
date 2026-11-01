@@ -2971,6 +2971,10 @@ export function createEnemyAI(opts) {
     if (opts.effect) opts.effect.hit((b.from?.ai?.W?.cls ?? 0) & 3, hit.point); // FUN_0055db50 -> FUN_003361b8(param_3 = the hit point): bullet +0x150 = W+0x14 >> 2 & 3
     if (DAMAGE) damagePlayer(b);
     else events.push('hit player (damage off)');
+    // FUN_00567c08(P, bullet +0xc0 = b.start) unless bullet +0x140 bit 1 (never set on the page's soldier bullets):
+    // the HUD's hit-direction ring (hud_core.js HitRing). Also with ?enemydmg=0 (the hit itself is the game's)
+    // P+0x90 during the bullet pass = the frame's start position (pStart; P.pos can move in the hit-reaction redo)
+    if (opts.hudHit) opts.hudHit((pStart || P.pos).slice(), b.start.slice());
     return 1;
   }
   // FUN_00554ea8 (the bullet's end), bullet +0x120 bit 0x80 clear (never set here): the shooter (+0x128,

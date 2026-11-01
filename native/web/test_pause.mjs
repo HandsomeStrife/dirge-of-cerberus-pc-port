@@ -6,7 +6,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { loadPauseData, PauseScreen, PauseFlow, gsX, gsY, scissor } from './pause.js';
+import { loadPauseData, PauseScreen, PauseFlow, gsX, gsY, scissor, measureText } from './pause.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const dataPath = path.join(here, 'data/pause.json'), refPath = path.join(here, 'data/pause_ref.json');
@@ -48,10 +48,9 @@ eq(scissor(0, 0, 0x200, 0x1c0), [0, 0, 431, 511], 'full scissor');
 s.update(1000);
 // FUN_003d75a0 pulse: a = (0x2ee - |0x2ee - t % 0x5dc|) * 0x60 / 0x2ee + 0x20; t % 1500 = 470 -> 92
 const prims = s.draw(1500 + 470);
-if (!fs.existsSync(refPath)) console.log('SKIP draw-for-draw: no data/pause_ref.json');
-else {
-  const R = JSON.parse(fs.readFileSync(refPath)).draws;
-  eq(prims.length, R.length, 'draw count');
+// prims vs a dump's draws (xy, UV, RGBA, TEX0 / CLUT, CLAMP, TEX1), draw for draw
+function compareDraws(prims, R, label) {
+  eq(prims.length, R.length, label + ': draw count');
   const page = { 2: [10828, 10824], 3: [10960, 10956] };
   let bad = 0;
   for (let i = 0; i < Math.min(prims.length, R.length); i++) {
@@ -80,7 +79,12 @@ else {
     }
     if (e.length) { bad++; if (bad <= 10) console.log('  draw', i, e.slice(0, 3).join(' | ')); }
   }
-  ok(bad === 0, `${bad} of ${R.length} draws differ from the dump`);
+  ok(bad === 0, `${label}: ${bad} of ${R.length} draws differ from the dump`);
+  return bad;
+}
+if (!fs.existsSync(refPath)) console.log('SKIP draw-for-draw: no data/pause_ref.json');
+else {
+  compareDraws(prims, JSON.parse(fs.readFileSync(refPath)).draws, 'pause');
   const F = JSON.parse(fs.readFileSync(refPath)).font4hh;
   ok(F && F === D.font.idx, 'font texels (kelfnt0 TIM) = the GS memory the glyph draws sample (PSMT4HH, TBP 0)');
 }
@@ -146,7 +150,91 @@ ro.update(400);
 eq([ro.cur, ro.flags & 0x10], [100, 0], 'reopen: fully open at the old close end');
 const g = new PauseFlow(D); g.start(0); g.frame(200);
 eq(g.input(3, 210), { moved: 4 }, 'flow: down');
-eq(g.input(0, 220), { request: 'tempsave', id: 4 }, 'flow: ✕ on Tempsave');
+eq(g.input(0, 220), { box: 4, id: 0x27 }, 'flow: ✕ on Tempsave opens its box');
+
+// ---- the confirm box (worker 0189): FUN_003c0220 -> 0x477a10 -> FUN_003b65c0 / FUN_003b7f38
+eq(String.fromCharCode(...D.msg[0x5c08]), 'Create tempsave data and\nreturn to the title screen?', 'message 0x5c08');
+eq(text(D.msg[0x3800]), 'OK', 'message 0x3800');
+eq(text(D.msg[0x3801]), 'CANCEL', 'message 0x3801');
+const bf = new PauseFlow(D); bf.start(0); bf.frame(200);
+eq(bf.input(0, 300), { box: 3, id: 0x25 }, '✕ on Restart opens box 0x25');
+const bx = bf.box;
+// RAM at the open box (w189 cancel save state): root 64,177 384x94; text widget 76,189 360x44,
+// +0x44 = 338, +0x68 = 37; buttons moved up by 56 (FUN_003b6c98)
+eq([bx.root.x, bx.root.y, bx.root.w, bx.root.h], [64, 177, 384, 94], 'box root (FUN_003b6c10 / FUN_003b6c98)');
+const t9 = bx.byId(5);
+eq([t9.x, t9.y, t9.w, t9.h, t9.tw, t9.count, t9.flags5e & 0xfdff], [76, 189, 360, 44, 338, 37, 0x10 | 2], 'text widget + FUN_003cf338');
+eq([bx.byId(6).x, bx.byId(6).y, bx.byId(7).x, bx.byId(7).y], [127, 235, 269, 235], 'OK / CANCEL moved');
+eq(bx.byId(7).textOff[0], 22, 'CANCEL text x from DAT_00472f58 (language 2)');
+eq(bx.focus.id, 7, 'kind 2: CANCEL focused (FUN_003b7eb8)');
+eq(bf.screen.lit(bf.screen.focus), false, 'the pause buttons draw unlit while the box has the focus');
+const boxRef = path.join(here, 'data/pause_box_ref.json'), boxOkRef = path.join(here, 'data/pause_box_ok_ref.json');
+// pulse alpha 64 (CANCEL dump): t % 1500 = 250
+if (fs.existsSync(boxRef)) compareDraws(bf.frame(1750), JSON.parse(fs.readFileSync(boxRef)).draws, 'box, CANCEL lit');
+else console.log('SKIP box draw-for-draw: no data/pause_box_ref.json (export_web_pause.py --box-dump)');
+eq(bf.input(4, 1800), { moved: 6 }, 'left -> OK');
+if (fs.existsSync(boxOkRef)) compareDraws(bf.frame(3350), JSON.parse(fs.readFileSync(boxOkRef)).draws, 'box, OK lit');   // alpha 76: t % 1500 = 350
+eq(bf.input(4, 3400), null, 'left at OK: stays');
+// answers: CANCEL / ○ close the box and keep the pause; focus returns to Restart when it is gone
+const c1 = new PauseFlow(D); c1.start(0); c1.frame(200); c1.input(0, 300); c1.frame(450);
+eq(c1.input(0, 500), { answer: 'cancel', id: 0x25 }, '✕ on CANCEL -> answer 4');
+eq(c1.lastSE, 8, 'cancel sound 8 (FUN_003cb4a8)');
+eq(c1.input(2, 510), null, 'box input locked while it closes');
+c1.frame(550); ok(c1.box && !c1.screen.hasFocus, 'box still closing at +50');
+c1.frame(600); ok(!c1.box && c1.screen.hasFocus && c1.screen.lit(c1.screen.focus) && c1.screen.focus.id === 3, 'box gone at +100: Restart lit again');
+eq(c1.input(3, 610), { moved: 4 }, 'pause takes input again');
+const c2 = new PauseFlow(D); c2.start(0); c2.frame(200); c2.input(0, 300); c2.frame(450);
+eq(c2.input(1, 500), { answer: 'cancel', id: 0x25 }, '○ in the box -> answer 4 (FUN_003b81b8)');
+eq(c2.lastSE, 8, '○ in the box: cancel sound 8');
+ok(c2.active, 'the pause stays open after a cancel');
+const c3 = new PauseFlow(D); c3.start(0); c3.frame(200); c3.input(0, 300); c3.frame(450);
+c3.input(4, 460);
+eq(c3.input(0, 500), { answer: 'ok', id: 0x25, request: 'restart' }, 'OK on Restart -> restart (FUN_003c0a20, FUN_003dee40(0xf))');
+eq(c3.lastSE, 7, 'confirm sound 7');
+ok(c3.screen.flags & 0x20, 'the pause closes with it');
+const c4 = new PauseFlow(D); c4.start(0); c4.frame(200); c4.input(3, 210); c4.frame(250);
+eq(c4.input(0, 300), { box: 4, id: 0x27 }, '✕ on Tempsave opens box 0x27');
+eq(c4.box.focus.id, 6, 'kind 1: OK focused');
+eq(c4.box.byId(5).count, 52, 'two-line text: glyphs + the line break');
+eq(c4.input(0, 500), { answer: 'ok', id: 0x27, request: 'tempsave' }, 'OK on Tempsave -> request (no save system)');
+const c5 = new PauseFlow(D); c5.start(0); c5.frame(200); c5.input(3, 210); c5.input(3, 220); c5.frame(250);
+eq(c5.input(0, 300), { box: 5, id: 0x26 }, '✕ on Quit opens box 0x26');
+c5.input(4, 310);
+eq(c5.input(0, 500), { answer: 'ok', id: 0x26, request: 'quit' }, 'OK on Quit -> request (no title)');
+const c6 = new PauseFlow(D); c6.start(0); c6.frame(200); c6.input(0, 300); c6.frame(450);
+eq(c6.start(460), 'close', 'Start with the box open closes the pause (FUN_003bfd70)');
+c6.frame(560); ok(!c6.active && !c6.box, 'pause and box gone');
+
+// text alpha while the box opens (FUN_003cd7e8: +0x4c alpha, shadow alpha - 0x20, glow 0x40, x cur / total)
+const m = new PauseFlow(D); m.start(0); m.frame(200); m.input(0, 300);
+m.box.byId(5).flags5e |= 0x800;                   // glow on, to check its alpha too
+const half = m.frame(350).filter(p => p.tex === 'font' && (p.clut === 1 || p.clut === 2));
+eq(m.box.cur, 50, 'box half open at +50');
+const R0 = half.filter(p => p.v[0].c[0] === 0x80);     // glow and main both carry the text RGB
+eq([...new Set(R0.map(p => p.v[0].c[3]))].sort((a, b) => a - b), [0x40 * 50 / 100, 0x80 * 50 / 100], 'mid-open: glow 0x40 x 50%, glyph 0x80 x 50%');
+eq([...new Set(half.filter(p => p.v[0].c[0] === 0x10).map(p => p.v[0].c[3]))], [(0x80 - 0x20) * 50 / 100], 'mid-open: shadow (0x80 - 0x20) x 50%');
+// flag 0x40 (fixed pitch, FUN_003cf338 iVar15 += uVar18): every glyph takes a 14 px cell
+{
+  const w = m.box.byId(5), keep = w.flags5e;
+  w.flags5e = (keep | 0x40) & ~0x80;
+  eq(measureText(D, w, Uint8Array.from([0x41, 0x42, 0x69, 0])).w, 3 * 14, 'fixed pitch: 3 glyphs = 3 x 14 px');
+  w.flags5e = keep;
+}
+// a pause.json from before the box (no box scripts / widths20 / full font page): no throw, the
+// pre-0189 behaviour (the request at once)
+{
+  const J = JSON.parse(fs.readFileSync(dataPath));
+  for (const k of ['box_restart', 'box_quit', 'box_tempsave']) delete J.layouts[k];
+  delete J.widths20; delete J.boxTextOff;
+  J.font.v0 = 224; J.font.h = 64; J.font.idx = J.font.idx.substr(224 * 512, 64 * 512);
+  const old = new PauseFlow(loadPauseData(J)); old.start(0); old.frame(200);
+  const warn = console.warn; let w = ''; console.warn = x => { w += x; };
+  let r = null; try { r = old.input(0, 300); } catch (e) { r = 'threw ' + e; }
+  console.warn = warn;
+  eq(r, { request: 'restart', id: 3 }, 'old pause.json: ✕ on Restart = the request (no box)');
+  ok(w.includes('predates the confirm box'), 'old pause.json: warned');
+  ok(old.frame(320) !== null && !old.box, 'old pause.json: no box, the pause draws');
+}
 
 console.log(`${checks - fails}/${checks} checks passed`);
 process.exit(fails ? 1 : 0);

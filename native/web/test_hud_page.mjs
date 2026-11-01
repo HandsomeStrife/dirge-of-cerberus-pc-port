@@ -179,6 +179,47 @@ try {
     console.log(`     per HUD frame (${cost.frames} frames): ${(cost.draws / f).toFixed(1)} draw calls, ${(cost.bytes / f / 1024).toFixed(1)} KiB uploaded, ${(cost.ms / f).toFixed(2)} ms (with gl.finish)`);
     ok(cost.frames > 0 && cost.draws / f <= 120 && cost.bytes / f <= 64 * 1024,
       `play.html: the game HUD draws (${cost.frames} frames) with <= 120 draw calls and <= 64 KiB of uploads per frame (before the fix: 188 and 101 MB)`);
+    // 4. the hit-direction ring on play.html: a soldier's bullet (enemy_ai enemyBulletHit, the real hit test and
+    // handler) from 100 u to Vincent's +X -> playerHandler -> opts.hudHit -> hud.js -> drawn in the frame
+    const shot = async () => pg2.screenshot({ clip: { x: 240, y: 170, width: 480, height: 260 } });
+    const ring = await pg2.evaluate(async () => {
+      const P = window.__play, wait = n => new Promise(r => { const t0 = P.stats.ticks; const f = () => P.stats.ticks >= t0 + n ? r() : setTimeout(f, 20); f(); });
+      if (!P.gameHud || !P.enemyAI) return { skip: !P.gameHud ? 'no game HUD' : 'no enemy AI' };
+      const st = P.gameHud.state, before = st.prims().filter(p => p.ring).length;
+      const p = P.php.pos, hits = [];
+      for (const h of [8, 10, 12, 6]) for (const d of [0.5, 1, -1, 2]) {
+        if (hits.length) break;
+        const b = { start: [p[0] + 100, p[1] - h, p[2] + d], prev: [p[0] + 40, p[1] - h, p[2] + d], pos: [p[0] - 40, p[1] - h, p[2] + d],
+                    f120: 0x2000, shooter: 0x2c, from: {}, damage: 1, kind: 0, dir: [-1, 0, 0], f148: 0, hit: 0 };
+        if (P.enemyAI.t.enemyBulletHit(b) === 1) hits.push([h, d]);
+      }
+      // a second shot from +Z (Vincent's +Z side: a = 1024 -> sector 0)
+      if (hits.length) {
+        const [h, d] = hits[0];
+        const b = { start: [p[0], p[1] - h, p[2] + 100], prev: [p[0] + d, p[1] - h, p[2] + 40], pos: [p[0] + d, p[1] - h, p[2] - 40],
+                    f120: 0x2000, shooter: 0x2c, from: {}, damage: 1, kind: 0, dir: [0, 0, -1], f148: 0, hit: 0 };
+        if (P.enemyAI.t.enemyBulletHit(b) === 1) hits.push(['+Z', d]);
+      }
+      await wait(8);
+      return { before, hits, after: st.prims().filter(p => p.ring).length, timers: st.ring.timers.map(t => t ? t - st.now : 0), phase: st.ring.phase };
+    });
+    if (ring.skip) console.log('SKIP ring on play.html: ' + ring.skip);
+    else {
+      ok(ring.before === 0 && ring.hits.length === 2 && ring.after === 14 && ring.phase === 2 && ring.timers.filter(t => t > 0).length === 2 && ring.timers[2] > 1500 && ring.timers[0] === ring.timers[2],
+        `play.html: bullet hits from +X and +Z light segments 2 and 0 for 2 s and the ring is drawn (6 grey segments x 2 halves + 2 arrows = 14 strips) (${JSON.stringify(ring)})`);
+      const a = await shot();
+      await pg2.evaluate(() => new Promise(r => { const P = window.__play, t0 = P.stats.ticks; const f = () => P.stats.ticks >= t0 + 120 ? r() : setTimeout(f, 20); f(); }));
+      const b = await shot();
+      const orange = await pg2.evaluate(async ([a64, b64]) => {
+        const px = async s => { const im = new Image(); im.src = 'data:image/png;base64,' + s; await im.decode();
+          const c = document.createElement('canvas'); c.width = im.width; c.height = im.height; const x = c.getContext('2d'); x.drawImage(im, 0, 0); return x.getImageData(0, 0, c.width, c.height).data; };
+        const A = await px(a64), B = await px(b64);
+        let n = 0;
+        for (let i = 0; i < A.length; i += 4) if (A[i] - B[i] > 25 && A[i] - A[i + 2] > 25) n++;
+        return n;
+      }, [a.toString('base64'), b.toString('base64')]);
+      ok(orange > 50, `the arrow shows on screen while lit and is gone 2.4 s later (${orange} pixels redder before)`);
+    }
     await pg2.close();
   }
 } finally {

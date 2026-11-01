@@ -4,7 +4,7 @@
 // GS state of the pause draws (dump pause.gs, every draw checked by test_pause.mjs):
 //   TEX0 TFX 0 (modulate: Cv = Cf Ct >> 7, Av = Af At >> 7), TCC 1; ABE (Cs - Cd) As + Cd,
 //   As = Av / 128; pages 2 / 3 = 'menu3' / 'menu4' PSMT8 (TBP 10828 / 10960), the font PSMT4HH
-//   TBP 0 with CLUT 3 / 4; CLAMP REPEAT, or REGION_REPEAT on the stretched pieces (FUN_003c94e0);
+//   TBP 0 with CLUT 3 / 4 ('$&' glyphs) or CLUT 1 / 2 (FUN_003cd7e8 text); CLAMP REPEAT, or REGION_REPEAT on the stretched pieces (FUN_003c94e0);
 //   TEX1 0 (nearest), but 0x60 (bilinear) for the type-12 buttons and their text
 //   (FUN_003d75a0 -> FUN_003d3830(1), script flag 0x1e).
 // Scale: the primitives are in the GS drawable (432 x 512, 1/16 px); output.js's hud() mapping puts
@@ -17,7 +17,7 @@ import * as THREE from 'three';
 import { loadPauseData, PauseFlow } from './pause.js';
 import { CROSS_KEY } from './player.js';
 
-const MAXV = 2048;
+const MAXV = 8192;                                // the pause + an open box: ~2.5k vertices
 
 function idxTexture(w, h, hex, perTexel) {
   const a = new Uint8Array(w * h);
@@ -62,7 +62,7 @@ export class PauseLayer {
         idx2: { value: idxTexture(T2.w, T2.h, T2.idx, 2) }, clut2: { value: clutTexture([T2.clut]) },
         idx3: { value: idxTexture(T3.w, T3.h, T3.idx, 2) }, clut3: { value: clutTexture([T3.clut]) },
         idxF: { value: idxTexture(F.w, F.h, F.idx, 1) }, clutF: { value: clutTexture(F.cluts) },
-        fontV0: { value: F.v0 }, targetH: { value: 1 },
+        fontV0: { value: F.v0 }, fontH: { value: F.h }, targetH: { value: 1 },
       },
       vertexShader: `precision highp float;
         uniform mat4 projectionMatrix, modelViewMatrix;
@@ -71,7 +71,7 @@ export class PauseLayer {
         void main() { vUv = uv; vCol = color; vMode = mode; vCl = cl; vCl2 = cl2; vSc = sc;
           gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
       fragmentShader: `precision highp float;
-        uniform sampler2D idx2, clut2, idx3, clut3, idxF, clutF; uniform int fontV0; uniform float targetH;
+        uniform sampler2D idx2, clut2, idx3, clut3, idxF, clutF; uniform int fontV0, fontH; uniform float targetH;
         in vec2 vUv; in vec4 vCol; flat in vec4 vMode; flat in vec4 vCl; flat in vec4 vCl2; flat in vec4 vSc;
         out vec4 o;
         // CLAMP: REPEAT on the texture size, REGION_REPEAT (3): (t & msk) | fix
@@ -85,7 +85,7 @@ export class PauseLayer {
           if (tex == 2) return texelFetch(clut2, ivec2(int(texelFetch(idx2, ivec2(u, v), 0).r * 255.0 + 0.5), 0), 0);
           if (tex == 3) return texelFetch(clut3, ivec2(int(texelFetch(idx3, ivec2(u, v), 0).r * 255.0 + 0.5), 0), 0);
           int fv = v - fontV0;
-          if (fv < 0 || fv >= 64) return vec4(0.0);
+          if (fv < 0 || fv >= fontH) return vec4(0.0);
           return texelFetch(clutF, ivec2(int(texelFetch(idxF, ivec2(u, fv), 0).r * 255.0 + 0.5), int(vMode.y) - 1), 0);
         }
         void main() {
@@ -164,7 +164,9 @@ export const PAUSE_KEYS = { start: ['Escape', 'Enter'], cross: [CROSS_KEY], circ
 
 // setupPause({ output, blocked, onPause, onRequest }): loads data/pause.json, chains output.hud,
 // listens for keys. blocked(): true while the page must not take keys (the report).
-// onPause(active): the world freezes / resumes. onRequest(name): 'restart' | 'tempsave' | 'quit'.
+// onPause(active): the world freezes / resumes. onRequest(name): 'restart' | 'tempsave' | 'quit', sent
+// when the confirm box is answered OK (pause.js PauseFlow). Tempsave / Quit only warn here: the page has
+// no memory card save and no title screen (fidelity-audit "Menus").
 export async function setupPause({ output, url = 'data/pause.json', blocked = () => false,
                                    onPause = () => {}, onRequest = () => {}, now = () => performance.now() }) {
   let json;
@@ -208,7 +210,11 @@ export async function setupPause({ output, url = 'data/pause.json', blocked = ()
       : has('down', e.code) ? 3 : has('left', e.code) ? 4 : has('right', e.code) ? 5 : -1;
     if (a < 0) return;
     const r = flow.input(a, clock(), 0);           // kind 0: the pad (no wrap at the list ends)
-    if (r && r.request) onRequest(r.request);
+    if (r && r.request) {
+      if (r.request !== 'restart') console.warn('pause: ' + r.request + ' confirmed; the page has no ' +
+        (r.request === 'quit' ? 'title screen' : 'memory card save') + ' (box closed, nothing done)');
+      onRequest(r.request);
+    }
     sync();
   }, { capture: true });
   const prev = output ? output.hud : null;

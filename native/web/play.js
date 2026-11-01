@@ -690,12 +690,15 @@ async function main() {
     window.__fx = { fx, layer: fxLayer, ids };   // for the page tests
   } catch (e) { console.warn(`effects: off (${e.message}; run export_web_effects.py)`); fx = null; }
   let enemyAI = null;
+  let gameHud = null;                                // the game's HUD (hud.js), set up below; enemyAI's hudHit reads it
   try {
     if (enemies) enemies.mpHead = vin.body;            // newer actors draw before older ones (enemies.js add)
     enemyAI = ENEMY_AI && aiData && enemies ? createEnemyAI({ data: aiData, player: php, log: m => console.log(m), damage: ENEMY_DMG,
       sound: snd,
       // FUN_00335f40 / FUN_003361b8: the impact and hit effects (effects.js)
       effect: fx ? { wall: (mat, n, p) => { const id = wallImpactId(fxIds, mat, n, fx.warn); if (id >= 0) fx.spawn(id, p); }, hit: (k, p) => fx.spawn(fxIds.hit[k], p) } : null,
+      // FUN_00567c08: a bullet's hit on Vincent -> the HUD's hit-direction ring (hud.js; gameHud is set up below)
+      hudHit: (p, from) => { if (gameHud) gameHud.hit(p, from); },
       // the walk mesh for soldiers' physics bodies (mover 3, move mode 0xc; body flags 0x36: not a block80 body)
       walkMesh: col,
       // the save's dead records (41-43): FUN_00559748 refuses to activate them
@@ -791,7 +794,7 @@ async function main() {
   if (weapon && enemyAI) weapon.targets = () => enemyAI.lockTargets();
   // the game's HUD in the frame (hud.js, after the reticle in output.hud); follows php.hp each game frame
   // fetched only when scene.json declares it (export_web_hud.py writes "hud"): no 404 without the data
-  const gameHud = GAMEHUD && scene.hud ? await setupHud({ output, player: php, url: 'data/' + scene.hud }) : null;
+  gameHud = GAMEHUD && scene.hud ? await setupHud({ output, player: php, url: 'data/' + scene.hud, camYaw: () => follow.yaw }) : null;
   if (GAMEHUD && !scene.hud) console.warn('hud: not exported (run native/assets/models/export_web_hud.py)');
 
   // detached debug camera (?cam=), same format as main.js
@@ -990,14 +993,16 @@ async function main() {
   const pause = await (await import('./pause_layer.js')).setupPause({
     output, blocked: () => frozen,
     onPause(on) { paused = on; pressed.clear(); mouse.dx = mouse.dy = 0; drag = null; if (!on) { clock.getDelta(); acc = 0; } },
-    // GUESS: Restart reloads the page (its save start) at once. The game first asks in a confirm box
-    // (layout 0x472ad8, not translated) and then restores the last checkpoint (FUN_003c0a20, not
-    // translated); see fidelity-audit "Menus". Tempsave / Quit: inert (no memory card / title on the page)
+    // Sent when the confirm box (pause.js openBox, layout 0x472ad8) is answered OK. GUESS: Restart reloads
+    // the page (its save start, the page's only checkpoint); the game sets the checkpoint flag
+    // (FUN_003c0a20 -> FUN_00380b00) and hands menu result 0xf to its caller (FUN_003dee40), whose
+    // checkpoint restore is not translated; see fidelity-audit "Menus". Tempsave / Quit: warn only
+    // (pause_layer.js; no memory card / title on the page)
     onRequest(r) { if (r === 'restart') location.reload(); },
   });
   actionHelp.push('Enter pause (Esc too, but with the pointer locked the browser takes Esc to unlock it)');
   window.__play = { ctrl, anim, follow, aim: weapon, col, stats, camera, renderer, output, root, vin, light, spawnY: gy,
-                    playerState, camView, report, keys, pressed, motions, packsReady, actionHelp, cape, enemies, enemyAI, php, pause };
+                    playerState, camView, report, keys, pressed, motions, packsReady, actionHelp, cape, enemies, enemyAI, php, pause, gameHud };
   requestAnimationFrame(frame);
 }
 

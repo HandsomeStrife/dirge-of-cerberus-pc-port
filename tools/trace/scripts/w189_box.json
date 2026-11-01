@@ -1,0 +1,1 @@
+{"name": "w189_box", "frames": 420, "doc": "worker 0189: Start at f60 (pause), cross on Restart at f130 (confirm box, CANCEL focused), left at f260 (OK focused); hold to f420. Grabs at ~f220 (CANCEL lit) and ~f340 (OK lit).", "events": [{"from": 60, "to": 64, "buttons": ["start"]}, {"from": 130, "to": 134, "buttons": ["cross"]}, {"from": 260, "to": 264, "buttons": ["left"]}]}
