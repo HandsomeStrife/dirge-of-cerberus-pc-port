@@ -55,6 +55,14 @@ export function inPlayerSet(inf) {
   return false;
 }
 
+// FUN_0026a320(a, b, flags) -> FUN_002714d0 -> FUN_00270088: the map ray walks only sub-tree +0x58
+// (info bits 0-1 = 1) and tests a packet when (packet flags & ~(flags | 0x100)) != 0 (FUN_00271408 sets
+// DAT_004e8898 = flags | 0x100; FUN_0026f8a0, machine code 0x26f934; same order as inPlayerSet). probeSet(flags) is that test for col.segment's accept argument; flags =
+// a FUN_0054fc38 probe word (index 0 = 0x18d: the bullets' room probe FUN_00553808).
+export function probeSet(flags) {
+  return inf => (inf & 3) === 1 && ((inf >>> 16) & ~(flags | 0x100) & 0xffff) !== 0;
+}
+
 const K = 12;                  // per triangle: a, b, c (9), unit normal (3)
 
 export async function loadCollision(src, options) {
@@ -545,16 +553,21 @@ export class Collision {
     return [x, z, hit];
   }
 
+  // the accept test for segment() of a FUN_0054fc38 probe word (probeSet)
+  probeFlags(flags) { return probeSet(flags); }
+
   // ------------------------------------------------------------- segment
   // First triangle hit by segment a->b (double-sided Moller-Trumbore).
   // Uses the XZ cells under the segment's bbox: fine for short probes (camera).
-  segment(a, b) {
-    const T = this.T, list = this._list;
+  // accept(info) (optional): test only the triangles whose info word it accepts (e.g. probeSet).
+  segment(a, b, accept = null) {
+    const T = this.T, list = this._list, info = this.info;
     const dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z;
     const m = this._cells(Math.min(a.x, b.x), Math.min(a.z, b.z), Math.max(a.x, b.x), Math.max(a.z, b.z));
     let bt = null, bi = -1;
     for (let q = 0; q < m; q++) {
       const i = list[q], p = i * K;
+      if (accept && !accept(info[i])) continue;
       const e1x = T[p + 3] - T[p], e1y = T[p + 4] - T[p + 1], e1z = T[p + 5] - T[p + 2];
       const e2x = T[p + 6] - T[p], e2y = T[p + 7] - T[p + 1], e2z = T[p + 8] - T[p + 2];
       const px = dy * e2z - dz * e2y;

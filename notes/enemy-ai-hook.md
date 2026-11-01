@@ -28,7 +28,8 @@ and fire, the drawn soldiers switch to r_st_a / r_st_f); the 0125 changes were c
   GUESS: they are active from the start, as in the save (their activation by cmd 0x108 is not on the page).
 - Each game frame: the player's position before and after `ctrl.step`, then `enemyAI.tick(STEP, old, new)`,
   then `enemies.tick(enemyAI)` (the clip each AI body asked for).
-- **Player damage is off by default**: bullets fly (decoded countdown + flight) but don't test Vincent.
+- **Player damage** (worker 0168: on by default, decoded hit test; `?enemydmg=0` keeps the hits, drops the damage;
+  the text below is the old state): bullets fly (decoded countdown + flight) but don't test Vincent.
   `?enemydmg=1` turns on the GUESS hit test (BULLET_R) and the decoded damage: `php.hp` (780 from the
   save state, P status +0x20) on the HUD, logged on change. No hit reaction or death for Vincent; at
   HP 0 nothing happens.
@@ -54,6 +55,8 @@ and fire, the drawn soldiers switch to r_st_a / r_st_f); the 0125 changes were c
 - Manager cmd 0x2f(n, v): manager short n = v (FUN_00545b20; 0x30 reads it).
 
 ## Not decoded (two attempts): the bullet hit test against Vincent
+
+**Superseded (worker 0168): decoded and translated; see 'Bullets vs Vincent' at the end. The text below is the old state.**
 
 FUN_005442d8 walks the objects along the bullet's segment, filters them (vt+0x1ac), and asks each
 one's part test (vt+0x17c: for e027 FUN_0055bda8 -> FUN_005ad118, the model's per-part volumes against
@@ -910,3 +913,38 @@ that never swings. **The game doesn't swing there either; no code change.**
   effect from it by f1679.
 - Trace: `TRACE_POKE=9540a4=6e,10a2140=6e TRACE_FIELDSET=path TRACE_ERECS=46,47 TRACE_ENEMIES=2
   TRACE_LOG_AT=A0D80`, script tools/trace/scripts/w167_timer.json (1680 frames; the log start bounds the script length).
+
+## Bullets vs Vincent: decoded, damage on by default (worker 0168, 2026-11-01)
+
+**Decoded and translated** (enemy_ai.js `spreadAim`, `bulletFlags`, `roomProbe`, `enemyBulletHit`, `playerFilter`,
+`playerPartTest`, `deflects`, `playerHandler`, `targetPoint`; audit rows 'Soldiers' bullets vs Vincent', 'Soldier
+shot cone', 'Bullet room probe', 'C update order', 'Deflect window'). Replaces BULLET_R. Research: enemy-research.md
+§11 (worker 0127) had most of the path; what was missing was Vincent's part boxes, his pose, and the cone.
+- **The f875 miss** was never a hit-test question: the shot's cone (FUN_005405b0 -> FUN_0025a058, 24.39 deg for e027)
+  tilts #67's bullet 9.8 deg (draws 0.0966 / 0.7922), 19 u wide of Vincent's capsule. The page had no cone on the
+  soldiers' shots. `spreadAim` is now shared with Vincent's pellets; ai.json weapons carry `spread` (W+0x1c..0x24).
+- **Aim point** vt+0x5c = FUN_00563720: bone C+0x765 (3) of Vincent's skeleton. Pose = *(MP+0x3f8) (model space;
+  row 3's w slot is not 1), model -> world = C+0x00 with rows 1 and 2 negated. Bones are last frame's (rebuilt at the
+  draw); the matrix is the start-of-frame one until his C update in FUN_00348fe8, whose list order (save RAM: #66,
+  #88, Vincent, ..., #67-#71) decides what a soldier's bit-30 aim (FUN_00342650) sees. T: #66's f786 aim = record
+  785 bones and matrix; #67's k_bullet1 f875 aim = record 874 bones with record 875's matrix (1e-4 u; 0.11 u the
+  other way).
+- **Room probe** (once, at the countdown end; bullet bit 0x2000 = no homing, so every bullet incl. Vincent's):
+  FUN_00553808 -> FUN_0026a320(start, end + 0.1 dir, 0x18d), sub-tree +0x58 packets with (0x18d & ~(flags | 0x100))
+  != 0. collision.js `probeSet(flags)` filters `segment()` by the info word. T: k_bullet2 f875 stops at 362.31 u.
+- **Per frame** (FUN_00556870 -> FUN_005442d8): filter FUN_0055d100 (soldiers fail: same side; Vincent passes unless
+  dead / bullet 0x4000 / 0x8000 / his own), capsule at his start-of-frame position (5, 18), then FUN_005ad118 on his
+  13 'mkd' boxes (07703201 = 07700001; ai.json `hitboxes.p000`), FUN_005720c8 -> FUN_0055db50. The deflect window
+  (vt+0x18c) only opens with his own melee: not on the page (warns if it ever opens).
+- **Page**: play.js `playerBoneWorld(after)` = the drawn joints (j00..j92) placed with boneRows at his start-of-frame
+  position / heading (after = the controller after ctrl.step), `roomRay` = col.segment with probeFlags(0x18d).
+  `?enemydmg=0` keeps the test (bullets hit and stop, AI counts the hit) but not the damage; HUD says so.
+- **Traces** (new, all gitignored output; scripts in tools/trace/scripts): w168_b1_a / _b (k_bullet1 inputs) and
+  w168_e8_a / _b, w168_e8_pose760..980 (engage8 inputs), TRACE_FIELDSET=pose; w168_e8_spread / w168_e8_bullet
+  (engage8 to f1015, TRACE_FIELDSET=enemy TRACE_LOG_AT=9E000 TRACE_CALLLOG=spread / bullet, frames 1000:1015).
+- **Tests**: `node native/web/test_bullet_hit.mjs` (31 checks: aim, cone, room probe, every logged hit test with part,
+  guards); test_enemy_ai's engage8 replay now feeds the traced pose (trace_pose.mjs) and cone draws: HP drops f789 /
+  f1011 only (the old f879 extra hit is gone; HEAD's enemy_ai.js fails this check). Synthetic shots use h_st.
+- Not done: Vincent's hit reaction (vt+0x324), the hit effects, P.motionClass (FUN_0055d100 immunity), friendly fire
+  (bullet bit 0x200: warns), homing bullets (W+4 0x2000: warns), the order of later-activated soldiers in the C list.
+

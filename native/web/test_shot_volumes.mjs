@@ -7,6 +7,7 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { modelPose, boneRows } from './enemy_hit.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const AI = await import(pathToFileURL(path.resolve(process.argv[2] ?? path.join(here, 'enemy_ai.js'))).href);
@@ -16,6 +17,9 @@ const ok = (c, m) => { console.log((c ? 'ok   ' : 'FAIL ') + m); if (!c) fail++;
 const done = () => { console.log(fail ? `${fail} FAILED` : 'all ok'); process.exit(fail ? 1 : 0); };
 if (!existsSync(dataPath)) { console.log('SKIP: data/enemies/ai.json missing'); done(); }
 const data = JSON.parse(readFileSync(dataPath, 'utf8'));
+// Vincent standing (h_st frame 0) for the soldier-bullet case: his part test needs a pose
+const vlpFile = path.join(here, 'data/vincent/vincent.json'), vldFile = path.join(here, 'data/vincent/vincent_local.bin');
+const VP = existsSync(vlpFile) && existsSync(vldFile) ? modelPose(JSON.parse(readFileSync(vlpFile, 'utf8')).local_pose, (b => new Float32Array(b.buffer, b.byteOffset, b.length / 4))(readFileSync(vldFile)), 'h_st', 0) : null;
 
 const SAVE = [44, 45, 46, 47, 48, 49, 66];
 // one bullet that covers a..b in its first moving frame (delay 0, speed |b - a| / step)
@@ -83,8 +87,10 @@ const woke = ev => [68, 69, 70, 71].filter(id => ev.some(e => e.startsWith(`even
   const a0 = [T77[0] - 60, Y, T77[2]], b0 = [T77[0] + 60, Y, T77[2]];
   for (const [px, want] of [[T77[0] - 40, 0], [T77[0] + 40, 1]]) {
     const { W, player } = world({ damage: true });
-    // his aim point (feet - PLAYER_AIM_H = 12.4 up) within BULLET_R of the line
+    // the line passes 12 above his feet, through his chest (h_st frame 0 part boxes: enemy_ai playerPartTest)
     player.pos = [px, Y + 12, T77[2]];
+    if (!VP) { console.log('skip: data/vincent local pose missing'); break; }
+    W.playerBoneWorld = () => b => boneRows(VP.R[b], VP.S[b], VP.P[b], player.pos, [0, 0, 1]);
     const s = shooter(W);
     fire(W, s, a0, b0, { target: player });
     const ev = run(W, 1);

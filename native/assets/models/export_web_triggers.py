@@ -341,16 +341,18 @@ def weapons(d):
         out.append(dict(idx=k, flags=SE.u32(d, o + 4), pellets=struct.unpack_from('b', d, o + 0x16)[0],
                         range=f(0x18), speed=f(0x2c), damage=h(0x40), first=h(0x42), interval=h(0x44),
                         reload=h(0x46), mag=h(0x48), hit=d[o + 0x4a], w56=h(0x56),   # W+0x56: melee damage % (FUN_00569dc0)
+                        spread=[f(0x1c), f(0x20), f(0x24)],   # W+0x1c / +0x20 / +0x24: cone angle by distance (FUN_005405b0)
                         cls=d[o + 0x14] >> 2 & 7))          # W+0x14 bits 2-4: weapon class (FUN_00564228)
     return out
 
 
-def hitboxes(model='e027'):
+def hitboxes(model='e027', cont=None):
     """The model's part boxes for the bullet part test FUN_005ad118 -> FUN_0030baa0: the 'mkd'
     chunk (header 'mk2', +6 u16 box count, +0xc box array; FUN_0030b9e0 relocates +8 / +0xc), 32 B
-    per box: +0 offset xyz (f32), +0xc bone (s32), +0x10 scale xyz (f32). Box k = part k."""
+    per box: +0 offset xyz (f32), +0xc bone (s32), +0x10 scale xyz (f32). Box k = part k.
+    cont: the model container (default: the enemy model's, export_web_enemy.paths)."""
     import export_web_enemy as E, export_cerberus as EC
-    buf = open(E.paths(model)['cont'], 'rb').read()
+    buf = open(cont or E.paths(model)['cont'], 'rb').read()
     for o in EC.entries(buf):
         if buf[o + 8:o + 11] == b'mkd':
             p = o + 0x10
@@ -477,6 +479,7 @@ def model_clips(recs, st, atk):
 # exported for every z128 enemy type
 AI_TYPES = ('e027', 'e048', 'e030')
 BOX_TYPES = ('e027', 'e048', 'e030', 'e036', 'e023', 'e024', 'e001')
+PLAYER_MODEL = '07703201.bin'   # Vincent's model container in z128 (part boxes for the enemy bullets)
 
 
 def main():
@@ -492,6 +495,9 @@ def main():
     want = {t['script'] for t in trig} | {r['script'] for r in recs} | {0}
     scr = {str(s): script(d, s) for s in sorted(want) if 0 <= s < nscr}
     boxes = {m: hitboxes(m) for m in BOX_TYPES if any(r['model'] == m for r in recs)}
+    # Vincent's part boxes (player vt+0x17c = FUN_0055bda8 too: the enemy bullets' part test): z128 draws
+    # his model from 07703201 (notes/HANDOFF.md, worker 0106); its mkd equals 07700001's
+    pbox = hitboxes('p000', os.path.join(os.path.dirname(os.path.abspath(stage)), PLAYER_MODEL))
     st = stances(os.path.join(os.path.dirname(os.path.abspath(stage)), STANCE_FILE),
                  {r['stance'] for r in recs if r['stance'] is not None})
     atk = {str(r['zones']): attacks(d, r['zones']) for r in recs if r['zones'] >= 0 and r['model'] in AI_TYPES}
@@ -502,6 +508,7 @@ def main():
                sizes={str(r['zones']): zone_size(d, r['zones']) for r in recs if r['zones'] >= 0},
                lock_bones={str(r['zones']): lock_bone(d, r['zones']) for r in recs if r['zones'] >= 0},
                paths=paths(d), nav=nav_graph(d), markers={m: markers(m) for m in boxes})
+    res['hitboxes']['p000'] = pbox
     path = os.path.join(out, 'ai.json')
     with open(path, 'w') as fh:
         json.dump(res, fh, separators=(',', ':'))

@@ -62,7 +62,8 @@ try {
   pg.on('console', m => { if (m.type() === 'error') errs.push(m.text()); });
   pg.on('pageerror', e => errs.push(e.message));
   for (let i = 0; ; i++) {                                 // the server needs a moment
-    try { await pg.goto(`http://127.0.0.1:${port}/play.html`, { waitUntil: 'load' }); break; }
+    // ?enemydmg=0: the soldiers' bullets hit but do no damage, so steps 8 / 10 see the melee damage alone
+    try { await pg.goto(`http://127.0.0.1:${port}/play.html?enemydmg=0`, { waitUntil: 'load' }); break; }
     catch (e) { if (i > 20) throw e; await new Promise(r => setTimeout(r, 250)); }
   }
   await pg.waitForFunction(() => window.__play && window.__play.stats.ticks > 30, null, { timeout: 120000 });
@@ -226,6 +227,18 @@ try {
     const c = P.ctrl;
     c.pos = { x: -1070.0, y: -146.1, z: -1105.6 }; c.prev = { ...c.pos }; c.locate(); if (c.onTeleport) c.onTeleport();
     await wait(400);
+    // Vincent's skeleton for the soldiers' bullets (play.js playerBoneWorld: the drawn joints at his position /
+    // heading) vs his drawn joints' world matrices, standing still (before / after his C update agree then)
+    let vinErr = 0;
+    for (const after of [false, true]) {
+      const rw = ai.playerBoneWorld(after);
+      for (const b of [3, 5, 19, 53, 86]) {
+        let j = null; P.vin.mixRoot.traverse(n => { if (!j && n.name === 'j' + String(b).padStart(2, '0')) j = n; });
+        j.updateWorldMatrix(true, false);
+        const e = j.matrixWorld.elements, r = rw(b)[3];
+        vinErr = Math.max(vinErr, Math.hypot(e[12] - r[0], e[13] - r[1], e[14] - r[2]));
+      }
+    }
     P.aim.press('r1'); await wait(800);                                     // draw
     const tgt = [a.pos[0], a.pos[1] - 12, a.pos[2]];
     const dirTo = (from, to) => { const v = [0, 1, 2].map(k => to[k] - from[k]); const l = Math.hypot(...v); return v.map(x => x / l); };
@@ -301,9 +314,10 @@ try {
     const fire = again[again.length - 1] || { id: null, side: 0 };
     P.aim.press('r1'); await wait(1500);                                    // fire, the reticle off him
 
-    return { poseErr, aimErr, lockId, lockErr, heldId, heldErr, offErr, dropAt: (steps.find(x => x.id !== 66) || {}).i, fireId: fire.id, fireSide: fire.side, fireI, upDrop, shotsNoLock, hpNoLock, stateNoLock, hp0, hp: a.hp, astate: a.astate, mode: a.ai.mode, clip: a.C.clip, drawn: body.clip, hold: a.C.hold, drawnLoop: body.head ? body.head.loop : null, drawnFrame: body.frame, drawnN: body.side.clips[body.clip]?.frames };
+    return { poseErr, vinErr, aimErr, lockId, lockErr, heldId, heldErr, offErr, dropAt: (steps.find(x => x.id !== 66) || {}).i, fireId: fire.id, fireSide: fire.side, fireI, upDrop, shotsNoLock, hpNoLock, stateNoLock, hp0, hp: a.hp, astate: a.astate, mode: a.ai.mode, clip: a.C.clip, drawn: body.clip, hold: a.C.hold, drawnLoop: body.head ? body.head.loop : null, drawnFrame: body.frame, drawnN: body.side.clips[body.clip]?.frames };
   });
   ok(sh.poseErr < 1e-3, `part-test pose = the drawn joints (max ${sh.poseErr.toExponential(1)})`);
+  ok(sh.vinErr < 1e-3, `Vincent's skeleton for the soldiers' bullets (play.js playerBoneWorld) = his drawn joints (max ${sh.vinErr.toExponential(1)})`);
   ok(sh.aimErr < 0.01, `reticle ray on #66's chest (angle error ${sh.aimErr.toFixed(4)} rad)`);
   ok(sh.lockId === 66 && sh.lockErr < 1e-3, `lock-on: #${sh.lockId} locked, aim point on his bone 3 (${sh.lockErr.toExponential(1)})`);
   ok(sh.heldId === 66 && sh.heldErr < 1e-3 && sh.offErr > 2.5, `lock held with the ray ${sh.offErr.toFixed(2)} u beside his axis: aim still on bone 3 (${sh.heldErr.toFixed(4)}); ${sh.dropAt ? 'dropped after ' + sh.dropAt + ' x 0.01 rad' : 'held over the 25-step sweep'}`);
@@ -442,9 +456,12 @@ try {
   // same correction loop as step 5), then R1: aim.js onShot -> playerShot -> the bullet update.
   // Script 126 (48 / 49) sets AI mode 1; scripts 127 / 128 (46 / 47) set mode 0 and run a sub-routine
   // the page's VM stops at (op 37: notes/fidelity-audit.md).
-  // KNOWN GAP (notes/fidelity-audit.md, trigger volumes row): this wake is page-only. In the game the aim ray from
-  // the ladder top hits a wall ~95 u out (four PCSX2 runs), so no bullet reaches 77 from here; the page's aim /
-  // bullet miss that wall. The walk itself is traced by another route (w159_walk95, trigger 89's script).
+  // In the game the aim ray from the ladder top hits a wall ~95 u out (four PCSX2 runs), so no bullet reaches 77
+  // from here. Since worker 0168 the page's bullets take the decoded room probe (FUN_00553808, flags 0x18d): the
+  // R1 shot stops at that wall and 77 stays quiet, as in the game. The wake is then made by a test-aid bullet
+  // fired from the volume's middle straight up (enemy_ai queueShot, no spread), which leaves the box: event 0x12.
+  // The walk itself is traced by another route (w159_walk95, trigger 89's script). This page is the default
+  // one (no ?enemydmg): bullet damage on, the HUD does not say 'off'.
   // A fresh page: earlier in this run #51's bullets (he stands inside trigger 76, script 99: wake n1 ->
   // 46-49) and then 46-49's own bullets (inside 77) have already woken them.
   await pg.goto(`http://127.0.0.1:${port}/play.html`, { waitUntil: 'load' });
@@ -454,6 +471,7 @@ try {
     const recs = [46, 47, 48, 49], act = k => ai.actors.find(a => a.rec === k);
     const before = recs.map(k => act(k)?.ai?.mode);
     const seen = [], t0 = ai.tick;
+    let walls = 0;
     const walk = [];                                                       // the walkers' clips and path events, by tick
     const drawn = [];                                                      // #46's drawn head layer (enemies.js) before each game frame
     ai.tick = (...x) => {
@@ -461,6 +479,7 @@ try {
       if (d && d.head) drawn.push([d.head.clip, d.head.frame]);
       const ev = t0(...x);
       for (const e of ev) if (/^shot volume t77|^event t77 |^event (68|69|70|71) /.test(e)) seen.push(e);
+      for (const e of ev) if (e === 'bullet wall') walls++;
       for (const e of ev) if (/^path |^clip (68|69) /.test(e)) walk.push(e);
       return ev;
     };
@@ -482,14 +501,20 @@ try {
     const quiet = seen.length;                                             // nothing fired before R1
     const start = [46, 47].map(k => act(k).pos.slice());
     P.aim.press('r1'); await wait(1000);
+    const r1 = { volume: seen.length, walls, hud: document.body.innerText.includes('bullet damage off') };
+    const Wp = await fetch('data/aim/weapon.json').then(r => r.json());
+    ai.queueShot([m[3][0], m[3][1] - 14, m[3][2]], [m[3][0], m[3][1] - 74, m[3][2]], { ...Wp, spread: null, pellets: 1 });
+    await wait(1000);
     const after = recs.map(k => act(k)?.ai?.mode);                           // mid-walk (46 / 47 need 2.3 / 3 s)
     for (let i = 0; i < 100 && walk.filter(e => e.startsWith('path end')).length < 2; i++) await wait(100);
     ai.tick = t0;
     const d46 = P.enemies.actors.find(e => e.rec === 46);
     const model = d46 ? { lp: !!d46.lp.clips.r_grn, side: !!d46.side.clips.r_grn } : null;
-    return { before, after, seen, quiet, var0: ai.triggers[77].vars[0], walk, start, drawn, model,
+    return { before, after, seen, quiet, r1, var0: ai.triggers[77].vars[0], walk, start, drawn, model,
              end: [46, 47].map(k => act(k).pos.slice()), endModes: [46, 47].map(k => act(k)?.ai?.mode) };
   });
+  ok(pf && pf.r1.volume === 0 && pf.r1.walls >= 1 && !pf.r1.hud,
+     `R1 from the ladder top toward trigger 77: the room probe stops the bullets at the wall (${pf?.r1.walls} 'bullet wall'), 77 quiet (${pf?.r1.volume} events), as in the game; default page: bullet damage on (HUD 'off': ${pf?.r1.hud})`);
   ok(pf && pf.quiet === 0 && pf.seen.includes('shot volume t77') && pf.seen.some(e => e.startsWith('event t77 script 100 ev 18')) && pf.var0 === 1,
      `a shot over the platform crosses trigger 77: event 0x12 ran (script 100; once-var ${pf?.var0}); ${pf?.seen.slice(0, 3).join(' | ')}`);
   ok(pf && [68, 69, 70, 71].every(id => pf.seen.some(e => e.startsWith(`event ${id} script `) && / ev 2 r 1,/.test(e))) &&
@@ -521,7 +546,7 @@ try {
   // fired from 40 u in front of him). The game's chain: event 8 -> mode 5 -> action layer 2 -> mover 0xd along
   // the graph while Vincent is out of view (w161_chase: mover 0xd within ~10 frames of mode 5), then state 7 /
   // 8 -> layer 3 -> mover 3 in view -> d34 < 22 -> the attack pick (actor state 0x80+, the e027 melee).
-  await pg.goto(`http://127.0.0.1:${port}/play.html`, { waitUntil: 'load' });
+  await pg.goto(`http://127.0.0.1:${port}/play.html?enemydmg=0`, { waitUntil: 'load' });
   await pg.waitForFunction(() => window.__play && window.__play.stats.ticks > 30, null, { timeout: 120000 });
   const ch = await pg.evaluate(async () => {
     const P = window.__play, ai = P.enemyAI, c = P.ctrl, obj = k => ai.objects.get(k + 22);
@@ -576,7 +601,7 @@ try {
   // node toward Vincent's node that keeps the distance (cost | |goal - n| - c | x 0.1, c = d34): he repositions at
   // range, layer 5 (mode 3) backs off after a failed attack pick; he closes in only through states 7 / 8 (layer 3,
   // mover 3) and melees inside 22 u. Node sim (same LOS): melee at frame ~550-560, 145-148 shots.
-  await pg.goto(`http://127.0.0.1:${port}/play.html`, { waitUntil: 'load' });
+  await pg.goto(`http://127.0.0.1:${port}/play.html?enemydmg=0`, { waitUntil: 'load' });
   await pg.waitForFunction(() => window.__play && window.__play.stats.ticks > 30, null, { timeout: 120000 });
   const cv = await pg.evaluate(async () => {
     const P = window.__play, ai = P.enemyAI, c = P.ctrl, obj = k => ai.objects.get(k + 22);

@@ -25,6 +25,7 @@ import { createOutputStage } from './output.js';
 import { setupAim } from './aim.js';
 import { setupEnemies } from './enemies.js';
 import { createEnemyAI } from './enemy_ai.js';
+import { boneRows } from './enemy_hit.js';
 
 const params = new URLSearchParams(location.search);
 const hud = document.getElementById('hud');
@@ -38,7 +39,7 @@ const ENEMY_AI = params.get('enemyai') !== '0';      // enemy_ai.js: wake trigge
 // (review board 2026-10-30); ?mouselook=game gives the game's USB-mouse path (FUN_00254ac8)
 const MOUSE_DIRECT = params.get('mouselook') !== 'game';
 const MOUSE_SENS = params.has('mousesens') && +params.get('mousesens') > 0 ? +params.get('mousesens') : MOUSE_SENS_DEFAULT;   // degrees per pixel
-const ENEMY_DMG = params.get('enemydmg') === '1';    // enemy bullets hit Vincent (off by default: the hit test is a GUESS); melee hits always do (decoded)
+const ENEMY_DMG = params.get('enemydmg') !== '0';    // enemy bullets damage Vincent (decoded hit test, on by default; ?enemydmg=0: they hit, no damage); melee always does
 const AIM = params.get('aim') !== '0';               // aim.js (aim_core.js): the weapon, its camera views, the reticle
 const PACKS = params.has('packs') ? params.get('packs').split(',').filter(Boolean) : (AIM ? ['ladder', 'jump', 'shoot'] : ['ladder', 'jump']);
 // Placement: the game draws the model with the motion player's matrix MP+0x10 (FUN_005ab8f0
@@ -632,6 +633,9 @@ async function main() {
     .catch(e => { console.warn('enemies off:', e.message); return null; }) : null;
   // Vincent's status for the enemy AI: HP 780 = P status +0x20 in the save state (k_enemy_engage8 p_hp)
   const php = { pos: [ctrl.pos.x, ctrl.pos.y, ctrl.pos.z], hp: 780, id: 0x16, f118: 0, s64: 0 };
+  // Vincent's joints j00..j92 (flat under the glb root: model-space TRS) and his start-of-frame placement (tick)
+  const vinJoints = [], vinStart = { pos: null, h: 0 };
+  vin.mixRoot.traverse(n => { const m = /^j(\d\d)$/.exec(n.name); if (m && !vinJoints[+m[1]]) vinJoints[+m[1]] = n; });
   let enemyAI = null;
   try {
     if (enemies) enemies.mpHead = vin.body;            // newer actors draw before older ones (enemies.js add)
@@ -648,7 +652,25 @@ async function main() {
       // the attack clips' root bone track (the lunge: FUN_00343160 root sample, mover 8; enemies.js rootTrack)
       rootTrack: (model, clip) => enemies.rootTrack(model, clip),
       // GUESS: FUN_005449f0 probe 3 = the page's collision triangle set (probe sets not decoded)
-      los: (a, b) => !!(col.segment && col.segment({ x: a[0], y: a[1], z: a[2] }, { x: b[0], y: b[1], z: b[2] })) }) : null;
+      los: (a, b) => !!(col.segment && col.segment({ x: a[0], y: a[1], z: a[2] }, { x: b[0], y: b[1], z: b[2] })),
+      // the bullets' room probe FUN_00553808 -> FUN_0026a320(a, b, 0x18d): sub-tree 1 packets of probe set 0x18d
+      roomRay: col.segment && col.probeFlags ? (a, b) => {
+        const h = col.segment({ x: a[0], y: a[1], z: a[2] }, { x: b[0], y: b[1], z: b[2] }, col.probeFlags(0x18d));
+        return h ? [h.point.x, h.point.y, h.point.z] : null;
+      } : null,
+      // Vincent's skeleton for the bullets (vt+0x5c bone 3, the part boxes): the drawn joints (the last drawn pose,
+      // as the game's MP buffer when the bullets update) placed at his start-of-frame position and facing
+      // (after: his C after this frame's update = the controller now, the tick runs after ctrl.step)
+      playerBoneWorld: after => {
+        const pos = after ? [ctrl.pos.x, ctrl.pos.y, ctrl.pos.z] : vinStart.pos, h = after ? ctrl.heading : vinStart.h;
+        if (!pos) return null;
+        return b => {
+          const j = vinJoints[b];
+          if (!j) return null;
+          const q = j.quaternion, sc = j.scale, t = j.position;
+          return boneRows([q.x, q.y, q.z, q.w], [sc.x, sc.y, sc.z], [t.x, t.y, t.z], pos, [Math.sin(h), 0, Math.cos(h)]);
+        };
+      } }) : null;
     // The save's soldiers, as stored in sea-of-flames.p2s (object table *(DAT_0046e880+0x1164)[rec + 22]):
     // actor state +0x104 (also T: k_enemy_engage8 f760) and +0x118. Their script vars +0xa0 are all 0
     // there (the page's default), and +0x28 = 0x208403 (bit 0x100000 clear: their activation's script
@@ -835,6 +857,7 @@ async function main() {
                     stick: moving ? (inp.run ? KEY_RUN : KEY_WALK) : 0, pad: null });
       const b = follow.basis();                    // re-aim the keys with this frame's matrix
       const pOld = [ctrl.pos.x, ctrl.pos.y, ctrl.pos.z];
+      vinStart.pos = pOld; vinStart.h = ctrl.heading;
       // FUN_0053b500 -> FUN_00542ab8 (actor push-out) runs before the actors move (T: k_push16, the push of
       // frame f comes from the positions it starts with and moves Vincent in the same frame)
       ctrl.push = enemyAI ? enemyAI.pushOut(pOld) : null;
@@ -872,7 +895,7 @@ async function main() {
       `clip ${anim.override ? 'action' : anim.current} (${anim.clipName()}) x${anim.rate.toFixed(2)}` +
       `${ctrl.active ? '   action ' + ctrl.active.name : ''}` +
       `   speed ${(ctrl.speed * 60).toFixed(1)} u/s\n` +
-      `onGround ${ctrl.onGround}${ctrl.hitWall ? '  WALL' : ''}` + (enemyAI ? `   HP ${php.hp}${ENEMY_DMG ? '' : ' (bullet damage off)'}` : '') +
+      `onGround ${ctrl.onGround}${ctrl.hitWall ? '  WALL' : ''}` + (enemyAI ? `   HP ${php.hp}${ENEMY_DMG ? '' : ' (bullet damage off: ?enemydmg=0)'}` : '') +
       (weapon ? `   weapon ${weapon.core.P.drawn ? 'out' : 'away'} st ${weapon.core.P.st} T ${weapon.core.P.T}  cam 0x${weapon.core.cam.type.toString(16)}` : '') + '\n' +
       `click: mouse look (drag works too)   WASD move (walk)   Shift run   ${actionHelp.join('   ')}   H respawn   R report`;
   }

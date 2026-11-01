@@ -93,7 +93,11 @@ export function locoRate(speed, root, cur, f564) {
 // FUN_00345448 -> FUN_005a8fd0: a table switch starts the new clip at the old head's frame:
 // min(max(2 frame, 0), 2 n - 1) / 2 (n = the new clip's frame count). enemies.js (C.reqCarry).
 export const carryFrame = (frame, n) => Math.min(Math.max(frame * 2, 0), n * 2 - 1) * 0.5;
-export const PLAYER_AIM_H = 12.4; // GUESS: player vt+0x5c aim point = feet - 12.4 up (trace AI+0x40 at f784; vt+0x5c not decoded)
+// Vincent's vt+0x5c = FUN_00563720: C+0x765 != -1 -> the world position of bone C+0x765 (FUN_0054a768, row 3);
+// C+0x765 = 3 for Vincent (save RAM; T: the k_bullet1 f786 aim = bone 3 of the traced pose, 0.000 u). Needs his
+// skeleton (world.playerBoneWorld, set by the page). PLAYER_AIM_H is the fallback without one (headless tests):
+export const PLAYER_AIM_BONE = 3;
+export const PLAYER_AIM_H = 12.4; // GUESS (fallback only): feet - 12.4 up when no pose is given (trace AI+0x40 at f784)
 // Vincent's status fields read by FUN_00318120 (defence), and the game globals it reads. GUESS:
 // values read from the sea-of-flames save state's RAM (P status = P+0x17c); their source on the
 // disc / in the save file is not decoded. lvl +0x11 4, +0xc0 armour record 0, +0x60 0x8233,
@@ -113,7 +117,16 @@ export const GAME = { progress: 20, lvlK: [0.33, 0.4], lvlK0: [0, 50], cut: { aa
                       spreadD: [120, 380], spreadK: [0.15, 2.5] };
 export const MANAGER_SHORT_18 = 1; // GUESS: manager short 18 (cmd 0x30); trace: script 108 event 2 took the mode-2 branch, so != 0
 export const JITTER_ON = GAME.d46b2fc !== 0;   // FUN_00326500 = FUN_002424a0 = DAT_0046b2fc != 0 (notes §9.6)
-const BULLET_R = 5.0;             // GUESS: hit radius around the player's aim point (part test vt+0x17c not decoded; = R_ACTOR)
+// FUN_00573720 (player vt+0x18c, the deflect window): DAT_0046ee30 = 8 ticks, DAT_0046ee34 = 1.309 rad (ELF)
+const DEFLECT_TICKS = 8;
+// P+0x27c, the deflect window's start: FUN_00571ee8 (player constructor) sets -40; only Vincent's own melee
+// (FUN_00569dc0 -> FUN_00573360, combo FUN_0056de80 / FUN_0056ec08) moves it, and the page has no melee for him.
+const P27C_INIT = -40;
+// FUN_00348fe8 (FUN_00323128, after the object update) runs FUN_00343160 on each C object in the list *(DAT_0046f0e0
+// + 8) -> C+0x550. The save's list (RAM): #66 (record 44), #88 (record 66), Vincent, 0x919d80, #67..#71 (records
+// 45-49). Records listed here update before Vincent. GUESS: a record activated after the save joins after him (the
+// list insertion is not read).
+const C_BEFORE_PLAYER = new Set([44, 66]);
 // Motion ids -> clip names: the actor's stance rows (C+0x7fc, ai.json stances; stance 0x1f: 0x40 = r_st_a,
 // 0x57 = r_st_f as traced, notes §9.7). MOTION = stance 0x1f's two rows, the fallback for an old ai.json.
 // Actor state -> body motion: setActorState / stateMotion (old state's class vt+0x24, ELF vtables; workers 0149 / 0150).
@@ -134,7 +147,8 @@ export const SAVE_EVENT_FLAGS = Object.freeze({ 2: 7, 46: 1 });
 // Enemy status fields FUN_00318120 reads (§10.2, RAM of #67): armour +0xc0 none, +0x60 0, +0x27 0,
 // +0x64 0, element 0; level +0x11 comes from ai.json (FUN_00314ea8). The save state has the same
 // +0x60 (less the activation bits 0x41) / +0xc0 / +0x27 / +0x64 on every e027, e048 and e030 status.
-export const ENEMY_STATUS = { lvl: 0, armour: null, f60: 0, f27: 0, f64: 0, u20top: 0, w68: null, b317630: 0, elem9c: 0 };
+// +0x10 = 0 (FUN_005405b0's level term: T, the e027 cone angle 24.390244 = 25 / 1.025 in every k_bullet call log).
+export const ENEMY_STATUS = { lvl: 0, armour: null, f60: 0, f27: 0, f64: 0, u20top: 0, w68: null, b317630: 0, elem9c: 0, b10: 0 };
 // GUESS: C+0x1c0 of a standing soldier (trace k_enemy_engage12 #67: 0x10301; bit 0x200 = on the
 // ground, read by FUN_00565480). The page has no enemy physics, so it stays.
 const C1C0_STAND = 0x10301;
@@ -262,12 +276,6 @@ export function turnBody(face, pos, t2b0, step) {
   v = unit3([v[0], 0, v[2]]);                                                 // FUN_0034a5a8 with up = (0,-1,0)
   return v;
 }
-// distance from point c to segment a-b (for the BULLET_R stand-in)
-function segPointDist(a, b, c) {
-  const ab = sub3(b, a), ac = sub3(c, a), l2 = ab[0] * ab[0] + ab[1] * ab[1] + ab[2] * ab[2];
-  const t = l2 > 0 ? Math.max(0, Math.min(1, (ac[0] * ab[0] + ac[1] * ab[1] + ac[2] * ab[2]) / l2)) : 0;
-  return len3([ac[0] - ab[0] * t, ac[1] - ab[1] * t, ac[2] - ab[2] * t]);
-}
 // row-vector transform (PS2 / VU convention: p' = [x y z 1] . M, row 3 = translation)
 const xform = (m, p) => [0, 1, 2].map(c => p[0] * m[0][c] + p[1] * m[1][c] + p[2] * m[2][c] + m[3][c]);
 
@@ -328,8 +336,14 @@ function inBoxBut(p, lo, hi, axis) {
 //   rand    () => [0,1): FUN_0040b5c0 (default: GameRandom(0))
 //   los     (a, b) => true when the probe-3 ray a->b is blocked (FUN_005449f0). Default: never
 //           blocked (GUESS until the page passes its room collision ray).
-//   damage  true: bullets test and damage the player (default false: the hit test is a GUESS,
-//           see BULLET_R; the page turns it on with ?enemydmg=1). Melee hits (decoded) always damage.
+//   damage  false: the soldiers' bullets still hit Vincent (and stop) but do no damage (an option, the
+//           page's ?enemydmg=0; default true = the game). Melee hits always damage.
+//   roomRay (a, b) => hit point | null: the stage ray FUN_0026a320(a, b, 0x18d) (the page: collision.js
+//           segment with probeSet(0x18d)). Without it bullets pass walls (warned once).
+//   spreadRand  () => [0,1): the cone's two draws (FUN_0025a058); default the shared rand. Tests feed
+//           the traced draws (the k_bullet call logs log only the cone's own draws).
+//   playerBoneWorld () => (bone) => rows | null: Vincent's posed skeleton as the game has it when the
+//           bullets update (the last drawn pose, his start-of-frame matrix). Also settable on the world.
 //   log     (msg) => void
 //   difficulty  FUN_00242c28() (default SAVE_DIFFICULTY = 1: manager 0xa6 / 0xa7 are false)
 //   eventFlags  {N: value} event flags (FUN_003ff738, manager cmd 0xc); default SAVE_EVENT_FLAGS
@@ -348,7 +362,10 @@ export function createEnemyAI(opts) {
   const log = opts.log || (() => {});
   const warned = new Set();
   const warnOnce = m => { if (warned.has(m)) return; warned.add(m); log(m); if (typeof console !== 'undefined' && !opts.quiet) console.warn(m); };
-  const DAMAGE = !!opts.damage;
+  const DAMAGE = opts.damage !== false;
+  const spreadRand = opts.spreadRand || rng;
+  let pStart = null;                                                          // Vincent's start-of-frame position (tick)
+  if (P) P.t27c ??= P27C_INIT;                                                // P+0x27c (FUN_00571ee8)
   const PST = opts.playerStatus || PLAYER_STATUS;
   const scripts = data.scripts;
   // manager shorts (+0x28, cmd 0x2f writes, 0x30 reads). GUESS: their values at stage start are not
@@ -746,7 +763,17 @@ export function createEnemyAI(opts) {
   function eye(o) {                                                           // FUN_005634e0(o, 3): (0, h-2, 0) in o's frame, up = -y
     return [o.pos[0], o.pos[1] - ((o.size ? o.size.h : EYE_H) - 2.0), o.pos[2]];
   }
-  const targetPoint = t => [t.pos[0], t.pos[1] - PLAYER_AIM_H, t.pos[2]];   // player vt+0x5c (GUESS, see PLAYER_AIM_H)
+  // vt+0x5c of the target (the player): FUN_00563720 -> bone PLAYER_AIM_BONE's world row 3; no pose -> the GUESS
+  // fallback. after: read after Vincent's C update of this frame (FUN_00348fe8, see C_BEFORE_PLAYER), else before.
+  const targetPoint = (t, after = false) => {
+    const bw = t === P ? playerBones(after) : null;
+    const r = bw && bw(PLAYER_AIM_BONE);
+    return r ? r[3].slice() : [t.pos[0], t.pos[1] - PLAYER_AIM_H, t.pos[2]];
+  };
+  // Vincent's skeleton: his last drawn pose (MP+0x3f8 is rebuilt at the draw) x his C matrix, the start-of-frame one
+  // until his C update in FUN_00348fe8 (FUN_00343160 -> FUN_0034c388), this frame's after it (T: k_bullet1 f875,
+  // #67's aim = bone 3 of record 874's pose with record 875's matrix, 0.0001 u; #66's f786 aim: 785 with 785)
+  const playerBones = (after = false) => world.playerBoneWorld ? world.playerBoneWorld(after) : null;
   function aimPoint(a) {                                                      // FUN_00360558 -> FUN_00563438 / FUN_00562ff8
     const t = target(a.ai);
     if (t) a.aim120 = targetPoint(t);                                         // target vt+0x5c
@@ -2485,8 +2512,8 @@ export function createEnemyAI(opts) {
   // FUN_0055eac8(P, attack, point): no damage with status +0x64 bits 0 / 1 unless type 3; dmg = defence
   // FUN_00318120(status, +0xc2, FUN_0057a218 = 1) (cap 9999); alive: +0x118 bits 5 / 6 -> 0, then vt+0x1ec
   // FUN_0055c7f8 (as damagePlayer). The soldier's vt+0x314 / +0x31c (0x55e0c8 / 0x55e0d0) and Vincent's
-  // +0x184 (no AI) do nothing. Not behind opts.damage: that switch covers the bullets' GUESS hit test
-  // (BULLET_R); this test is decoded, so a melee hit always damages Vincent.
+  // +0x184 (no AI) do nothing. Not behind opts.damage: that option (the page's ?enemydmg=0) only covers the
+  // soldiers' bullets; a melee hit always damages Vincent.
   // MISSING: Vincent's reaction FUN_00565480(P, +0xec = 4, dir, point, alive) (the flags-4 branch: his state
   // 0x18 in k_melee18, pushed back ~0.8 u per frame) and vt+0x324 FUN_00576ac8, FUN_0055d678, the voice
   // FUN_0055ea50 ('h_dmg_N') and HUD FUN_00567fe8; script event 0x1d (vt+0x2f4): Vincent has no script here.
@@ -2504,11 +2531,41 @@ export function createEnemyAI(opts) {
     warnOnce('enemy_ai: Vincent\'s melee hit reaction (FUN_00565480 flags 4, state 0x18) not translated');
   }
 
+  // FUN_005405b0(.., muzzle, aim, W, status) (W+4 without 0x100000 / 0x200000): s = W+0x1c / +0x20 / +0x24
+  // by |aim - muzzle| < T+0xd0 (120) / < T+0xd4 (380) / beyond, / FUN_0031cf08(1.0, status +0x10),
+  // FUN_00318518 (no armour record: unchanged), x 0.5 for FUN_00317b68; FUN_0025a058 tilts the direction
+  // (two draws, spreadRand); aim' = muzzle + dir x W+0x18 x 10. Shared by Vincent's pellets and the soldiers'
+  // shots (notes/enemy-research.md §11.2 / §13). GUESS: FUN_003251f8 (with FUN_00326500 and status +0x60
+  // bit 1: the x {1, 0.33, 0.75, 0.1} factor) taken as false: not read; the call logs show no factor.
+  function spreadAim(W, range10, start, aim, PS) {
+    if (!W.spread || (W.flags & 0x300000)) return aim.slice();
+    const v0 = sub3(aim, start), d0 = len3(v0);
+    let s = d0 < GAME.spreadD[0] ? W.spread[0] : d0 < GAME.spreadD[1] ? W.spread[1] : W.spread[2];
+    const kk = GAME.progress < 7 ? GAME.lvlK0 : GAME.spreadK;                 // FUN_0031cf08 (G+0x60 >= 7)
+    s = f(s * f(1.0 / f(f(f(f(kk[0] * PS.b10) + kk[1]) * f(0.01)) + 1.0)));
+    if ((PS.f64 & 0x20) && PS.u20top === 2) s = f(s * 0.5);                  // FUN_00317b68
+    const d2 = cone(s, unit3(v0), spreadRand);
+    return start.map((x, k) => f(x + f(d2[k] * f(range10 * 10.0))));
+  }
+  // FUN_00552dd8's bullet flags +0x120 that the page reads: W+4 bit 0x2000 clear -> 0x2000 (the room probe at
+  // the countdown end, FUN_00554970); W+5 bit 0 clear -> 0x8000 (FUN_0055d100: no hit on a hostile); W+4
+  // bit 0x200 -> 0x200 (friendly fire). e027 and Vincent (W+4 0x100): 0x2000 (T: e027 bullets 0x402001).
+  function bulletFlags(W) {
+    let fl = 0;
+    if (W.flags & 0x200) fl |= 0x200;
+    if (!(W.flags & 0x100)) fl |= 0x8000;
+    if (!(W.flags & 0x2000)) fl |= 0x2000;
+    else warnOnce('enemy_ai: homing bullet (W+4 bit 0x2000, FUN_00552dd8 +0x150 / +0x154) not translated');
+    return fl;
+  }
   // FUN_00569340 -> FUN_005694f8 -> FUN_005409a8(mgr, muzzle, aim, W, status, 0, 0) -> FUN_00554568
   // -> FUN_00552dd8(bullet, 0, ...): one bullet from the muzzle along (aim - muzzle).
-  function spawnShot(a, aim, muzzle) {
+  function spawnShot(a, aim0, muzzle) {
     const W = a.ai.W;
     const start = (muzzle || eye(a)).slice();                                 // +0xc0, +0xe0
+    // FUN_005409a8 -> FUN_005405b0: the cone (s = 24.39 deg for e027; T: k_bullet1 / k_bullet2 / w168 call logs)
+    if (!W.spread) warnOnce('enemy_ai: ai.json weapons have no spread (W+0x1c..0x24): rebuild data/enemies; enemy shots fly straight');
+    const aim = spreadAim(W, W.range, start, aim0, ENEMY_STATUS);
     const v = sub3(aim, start), d = len3(v);
     const dir = d > 0 ? v.map(x => f(x / d)) : [0, 0, 0];                     // +0x80 (vrsqrt; d = 0 not handled by the game)
     // +0x15c range = W+0x18 x 10 + DAT_0046ed6c (15). GUESS: FUN_00321e20(W) (then +20) taken as false.
@@ -2518,7 +2575,7 @@ export function createEnemyAI(opts) {
     const b = {
       from: a, start, dir, end, endDist: f(len3(sub3(start, end))), range,
       speed: f(W.speed * f(0.16666667)),                                      // +0x12c (bullet flag 2 clear)
-      age: 0, pos: start.slice(), prev: start.slice(), f120: 0,
+      age: 0, pos: start.slice(), prev: start.slice(), f120: bulletFlags(W),
       delay: 0 + 2,                                                           // +0x142 = (FUN_005409a8 arg 7 = 0) + 2
       damage: W.damage,                                                       // +0x134 = (short)W+0x40
       kind: (W.flags & 0x80000) && JITTER_ON ? 2 : 0,                        // FUN_00554738 (flag 2 clear; FUN_00326500)
@@ -2533,7 +2590,10 @@ export function createEnemyAI(opts) {
     if (b.delay > 0) {                                                        // +0x142 countdown
       const was = b.delay;
       b.delay--;
-      if (was === 1) events.push('bullet start');                             // FUN_00554970: script event 0x4e, FUN_00553aa8 (no state here)
+      if (was === 1) {                                                        // FUN_00554970: script event 0x4e, then
+        events.push('bullet start');
+        if (b.f120 & 0x2000) roomProbe(b);                                    // FUN_00553808, then FUN_00553aa8 (no state here)
+      }
       return 0;
     }
     b.age = f(b.age + step);                                                  // +0x124 += DAT_004eeb24 (the frame step)
@@ -2547,34 +2607,110 @@ export function createEnemyAI(opts) {
     else if (b.range < dist) { b.f120 |= 0x800000; done = 1; }                // +0x90 not moved in this branch
     else b.pos = p;
     if (!done && !(b.f120 & 0x2000000) && !(b.speed > 0 && b.age <= 1800.0 && dist <= 3000.0)) { b.f120 |= 0x800000; done = 1; }
-    // FUN_00556870 -> FUN_005442d8: objects along prev -> pos (closest hit, vt+0x1b4), then the
-    // room (probe 0). GUESS: only the player is tested: hit when the segment passes within
-    // BULLET_R of his aim point (his part test vt+0x17c, the other actors' filter vt+0x1ac and the
-    // room probe are not decoded; #66 shows no hit or near miss from #67's f875 bullet, so the
-    // filter skips soldiers: L). Off unless opts.damage.
+    // FUN_00556870 -> FUN_005442d8: objects along prev -> pos (closest hit, vt+0x1b4). With bullet bit
+    // 0x2000 (every bullet here) no hit returns 0: the room was probed once at the countdown end.
     if (b.from === P) return playerBulletHit(b) || done;                      // Vincent's bullet: the soldiers
-    const hitP = DAMAGE && b.target === P && segPointDist(b.prev, b.pos, playerAim()) <= BULLET_R;
-    // GUESS: the soldier bullet's player hit point = his aim point (BULLET_R stand-in above)
-    shotVolumes(b, hitP ? len3(sub3(b.prev, playerAim())) : FLT_MAX);
-    if (hitP) {
-      damagePlayer(b);
+    if (enemyBulletHit(b)) {
       bulletEnd(b, 1);
       return 1;
     }
     if (done) bulletEnd(b, 0);
     return done;
   }
+  // FUN_00553808 (bullet +0x120 bit 0x20 clear): one ray from the muzzle +0xc0 to +0xd0 + unit(+0xd0 - +0xc0)
+  // x 0.1 against the stage object (FUN_0053bb58 -> vt+0x17c FUN_0054fc38, probe 0 = flags 0x18d ->
+  // FUN_0026a320). A hit becomes the end: +0xd0 = +0xf0 = +0x110 = hit, +0x130 = |hit - +0xc0| (the move then
+  // stops there, FUN_00556068). T: k_bullet2 #67 f875 stops at (-1302.142, -142.204, -1210.419) = 362.3 u.
+  function roomProbe(b) {
+    if (b.f120 & 0x20) return;
+    if (!opts.roomRay) { warnOnce('enemy_ai: no roomRay (FUN_0026a320): bullets pass walls'); return; }
+    const u = unit3(sub3(b.end, b.start));
+    const h = opts.roomRay(b.start, b.end.map((x, k) => f(x + f(u[k] * f(0.1)))));
+    if (!h) return;
+    b.end = h.map(f);
+    b.endDist = f(len3(sub3(b.start, b.end)));
+    events.push('bullet wall');
+  }
+  // FUN_005442d8 for a soldier's bullet (thin: +0x120 bit 0x800 clear). Each active object along the segment
+  // with +0x38 bit 0 passes the filter vt+0x1ac = FUN_0055d100 or is skipped; the soldiers fail it (their
+  // faction and the shooter's are the same side, FUN_0031d1a8, and the bullet has no bit 0x200; T: filter 0
+  // for #66 / #67 and 1 for Vincent on every k_bullet frame). Vincent: mgr+0x1294 = the bullet, then
+  // vt+0x17c = FUN_0055bda8(P, 0, ...) (playerPartTest); a hit gets vt+0x1b4 = FUN_005720c8, whose result
+  // ends the bullet. The trigger volumes nearer than the hit take event 0x12 first (shotVolumes).
+  // L: the grid walk FUN_0036d400 only picks the candidates; Vincent is the only object that can pass.
+  function enemyBulletHit(b) {
+    if (b.f120 & 0x200) warnOnce('enemy_ai: friendly-fire bullet (+0x120 bit 0x200) vs soldiers not translated');
+    const hit = playerFilter(b) ? playerPartTest(b) : null;
+    shotVolumes(b, hit ? hit.dist : FLT_MAX);
+    return hit ? playerHandler(b, hit) : 0;
+  }
+  // FUN_0055d100(P, bullet): false with bullet bit 0x4000; P+0x28 bit 4 (set: 0x20901f) with FUN_00326500 and a
+  // body: motion class FUN_003419c0 0x3c / 0x3d / 0x3e -> false; +0x28 bit 0x100000 (clear); dead (FUN_00316cf8;
+  // +0x28 bit 0x20 clear) -> false; +0x188 bit 39 (clear: 0x00cccf20c00c0605) and FUN_00552ad0(bullet) (0: L,
+  // the filter returned 1 on every traced frame); shooter id == his id -> false; mgr+0x2b0 >= 0: the shooter's
+  // side is hostile to his (FUN_0031d1a8) -> true unless bullet bit 0x8000. MISSING as for the melee filter:
+  // P.motionClass is never set on the page.
+  function playerFilter(b) {
+    if (b.f120 & 0x4000) return false;
+    if (JITTER_ON && P.motionClass != null && P.motionClass >= 0x3c && P.motionClass <= 0x3e) return false;
+    if (dead(P)) return false;
+    if (b.shooter === (P.id ?? 0x16)) return false;
+    return !(b.f120 & 0x8000);
+  }
+  // FUN_0055bda8(P, 0, hit, nrm, A = prev, B = pos): the capsule FUN_0055bc90 -> FUN_0054b2b0 (P+0x118 bit 24
+  // clear): feet .. feet + up (0,-1,0) x P+0x30 (18), radius P+0x2c (5), at his start-of-frame position
+  // (T: the k_bullet / w168 call logs' capsule = the record before the call, to 0.000 u); FUN_0025c0f8, else
+  // FUN_0025c770 (cylinderHit). Then (model +0x180 set) with P+0x28 bit 4 and mgr+0x1294 set: vt+0x18c
+  // FUN_00573720 true -> a hit without the part test; else FUN_005ad118(model, A, B) on his 'mkd' part boxes
+  // (ai.json hitboxes.p000, 07703201) against his posed skeleton. -1 (or a C+0x77c masked part: 0 on the page,
+  // L) -> FUN_0055df90 (no AI on Vincent: nothing) and no hit; else P+0x142 = part, P+0x19c = status +0xa8's
+  // zone record (L: none for Vincent; 44 per hit on parts 6, 0 and 1). T: parts 6 (f789 twice), 0 (k_bullet1
+  // f879), 1 (w168 f1011) from the traced pose. The hit distance is |A - capsule point| (FUN_005442d8).
+  function playerPartTest(b) {
+    const A = (pStart || P.pos).slice(), B = [A[0], f(A[1] - H_PLAYER), A[2]];
+    const cyl = cylinderHit(R_PLAYER, b.prev, b.pos, A, B);
+    if (!cyl) return null;
+    const dist = len3(sub3(b.prev, cyl.point));
+    if (deflects(b)) return { point: cyl.point, dist, deflect: true };
+    const boxes = data.hitboxes && data.hitboxes.p000;
+    if (!boxes) { warnOnce('enemy_ai: no part boxes for Vincent (ai.json hitboxes.p000: rebuild data/enemies); not hit'); return null; }
+    const bw = playerBones();
+    if (!bw) { warnOnce('enemy_ai: no pose for Vincent\'s part test (playerBoneWorld unset); not hit'); return null; }
+    const part = partTest(boxes, bw, b.prev, b.pos);
+    if (part < 0) { events.push('near miss player'); return null; }
+    P.part = part;                                                            // P+0x142
+    return { point: cyl.point, dist, part };
+  }
+  // FUN_00573720 (player vt+0x18c): status +0x61 bit 0 clear, now - P+0x27c < 8 ticks, bullet bit 0x800 clear and
+  // the bullet's origin within +-1.309 rad of his facing (FUN_0054a720 / FUN_0054ac18 / FUN_00260f00). The window
+  // opens only with his own melee (P+0x27c), which the page does not have; the angle test is not translated.
+  function deflects(b) {
+    if (PST.f61 & 1) return false;
+    if (!(S.frame - P.t27c < DEFLECT_TICKS)) return false;                     // DAT_0046e938 +0x20 (S.frame)
+    if (b.f120 & 0x800) return false;
+    warnOnce('enemy_ai: deflect window open (P+0x27c): its angle test FUN_00573720 is not translated; no deflect');
+    return false;
+  }
+  // FUN_005720c8 (player vt+0x1b4): vt+0x18c true -> the deflect (FUN_005694a0 effect; no damage). Else P+0x118
+  // bit 0x20 (with +0x28 bit 0x20 clear) -> return 0: no hit, the bullet flies on; else (+0x28 bit 0x20 clear)
+  // FUN_0055db50 = damagePlayer. Then the hit effect FUN_00567c08 and FUN_00336508 (not on the page). Returns 1.
+  function playerHandler(b, hit) {
+    if (hit.deflect) { events.push('deflect player'); return 1; }
+    if (P.f118 & 0x20) return 0;
+    if (DAMAGE) damagePlayer(b);
+    else events.push('hit player (damage off)');
+    return 1;
+  }
   // FUN_00554ea8 (the bullet's end), bullet +0x120 bit 0x80 clear (never set here): the shooter (+0x128,
   // FUN_0053b978) with an AI counts it: nothing hit (+0x14c == -1) -> FUN_00568e20 -> FUN_00360920 (AI
   // +0x74 += 1, +0x54 = now), else FUN_00568df8 -> FUN_00360900 (+0x78 += 1, +0x5c = now). With
-  // enemy damage off the soldiers' bullets test nothing, so every one counts as +0x74.
+  // enemy damage off a bullet still hits (and counts as +0x78); only Vincent's HP is kept.
   function bulletEnd(b, hit) {
     const ai = b.from && b.from.ai;
     if (!ai) return;
     if (hit) { ai.f78 = short(ai.f78 + 1); ai.f5c = S.now; }
     else { ai.f74 = short(ai.f74 + 1); ai.f54 = S.now; }
   }
-  const playerAim = () => [P.pos[0], P.pos[1] - PLAYER_AIM_H, P.pos[2]];       // vt+0x5c (GUESS, see PLAYER_AIM_H)
 
   // FUN_0055db50 -> FUN_0055d2c0 -> vt+0x1ec FUN_0055c7f8 on the player
   function damagePlayer(b) {
@@ -2625,23 +2761,14 @@ export function createEnemyAI(opts) {
     const range = f(f(W.range10 * 10.0) + 15.0);                              // +0x15c (FUN_00321e20 false, as above)
     for (let i = 0; i < W.pellets; i++) {
       const start = m0.slice();
-      let aimP = aim.slice();
-      if (W.spread && !(W.flags & 0x300000)) {                                // FUN_005405b0
-        const v0 = sub3(aim, start), d0 = len3(v0);
-        let s = d0 < GAME.spreadD[0] ? W.spread[0] : d0 < GAME.spreadD[1] ? W.spread[1] : W.spread[2];
-        const kk = GAME.progress < 7 ? GAME.lvlK0 : GAME.spreadK;             // FUN_0031cf08 (G+0x60 >= 7)
-        s = f(s * f(1.0 / f(f(f(f(kk[0] * PS.b10) + kk[1]) * f(0.01)) + 1.0)));
-        if ((PS.f64 & 0x20) && PS.u20top === 2) s = f(s * 0.5);              // FUN_00317b68
-        const d2 = cone(s, unit3(v0), rng);
-        aimP = start.map((x, k) => f(x + f(d2[k] * f(W.range10 * 10.0))));
-      }
+      const aimP = spreadAim(W, W.range10, start, aim, PS);                   // FUN_005405b0
       const v = sub3(aimP, start), d = len3(v);
       const dir = d > 0 ? v.map(x => f(x / d)) : [0, 0, 0];
       const end = (W.flags & 0x400000) ? aimP.slice() : start.map((x, k) => f(x + f(dir[k] * range)));
       bullets.push({
         from: P, start, dir, end, endDist: f(len3(sub3(start, end))), range,
         speed: f(W.speed10 * f(0.16666667)),                                  // +0x12c = W+0x2c / 6
-        age: 0, pos: start.slice(), prev: start.slice(), f120: 0, f148: 0,
+        age: 0, pos: start.slice(), prev: start.slice(), f120: bulletFlags(W), f148: 0,
         delay: i + 2,                                                         // +0x142 = pellet index + 2
         damage: W.damage, hit: W.hit ?? 0,                                    // +0x134 (short)W+0x40, +0x153 W+0x4a
         kind: (W.flags & 0x80000) && JITTER_ON ? 2 : 0,                      // FUN_00554738
@@ -3141,7 +3268,9 @@ export function createEnemyAI(opts) {
     // -> FUN_005786e8 -> FUN_00579570 -> FUN_00577480: the cone draws) before its object lists
     // (FUN_005810e8: bullets, so the flinch draw). The shared RNG is drawn in that order.
     for (const sh of pendingShots.splice(0)) playerShot(...sh);
-    // 2. bullets (oldest first)
+    // 2. bullets (oldest first). Vincent as they see him: C+0x00 is rewritten in the body update (FUN_0034c388,
+    // after the object lists), so his capsule is at his start-of-frame position (T: w168 / k_bullet call logs)
+    pStart = playerOld ? playerOld.slice() : null;
     for (const b of bullets.slice()) if (bulletUpdate(b, step)) bullets.splice(bullets.indexOf(b), 1);
     // 2b. melee attack objects (FUN_0057a330), oldest first; one made in step 3 first updates next frame
     // (T k_melee18: made f1460, first update f1461). L: their place among the manager's object lists.
@@ -3158,8 +3287,12 @@ export function createEnemyAI(opts) {
       // point -> FUN_003424c0 (no parent-frame transform: vt+0x34 = no parent on the static room, L)
       // T: the point is where Vincent was before this frame's move (record f's position fits the
       // game's turn, f+1's does not: k_enemy_engage7 #66 open loop median 0.9 vs 1.0 deg, max 5.5 vs 11)
-      if ((a.C.f564 & 0x40000000) && a.target)
-        setAim(a, targetPoint(a.target === P && playerOld ? { pos: playerOld } : a.target));
+      // With Vincent's pose: his C as this soldier's update sees it (C_BEFORE_PLAYER); without one the fallback
+      // keeps the start-of-frame position as before.
+      if ((a.C.f564 & 0x40000000) && a.target) {
+        const bw = a.target === P ? playerBones(!C_BEFORE_PLAYER.has(a.rec)) : null;
+        setAim(a, (bw && bw(PLAYER_AIM_BONE)) ? bw(PLAYER_AIM_BONE)[3].slice() : targetPoint(a.target === P && playerOld ? { pos: playerOld } : a.target));
+      }
       if (a.C.s214 === 6) a.face = turnBody(a.face, a.pos, a.C.t2b0, step);
       bodyUpdate(a, step);
       trackMoved(a);
@@ -3209,9 +3342,11 @@ export function createEnemyAI(opts) {
   // fired, now; queueShot: the same at this frame's player slot inside the next tick (the page).
   const world = { S, actors, triggers, bullets, attackObjs, objects, addActor, tick, runEvent, recById, events, activated, setActive,
                   playerShot, queueShot, lockTargets, pushOut, boneWorld: opts.boneWorld || null,
+                  playerBoneWorld: opts.playerBoneWorld || null,
                   attackPick: a => attackPick(a.ai),     // FUN_0035ff98 on an actor's AI (tests)
                   // single translated functions, for the tests' direct state checks
                   t: { brain5, brain6, stateMotion, setActorState, bulletEnd, target, send, setMode, setTarget, setActionLayer, action2, action3, action56, flinch, die, navOf,
-                       makeAttack, attackObjUpdate, attackCentre, sphereCapsule, offence } };
+                       makeAttack, attackObjUpdate, attackCentre, sphereCapsule, offence,
+                       spreadAim, roomProbe, enemyBulletHit, playerPartTest, targetPoint } };
   return world;
 }

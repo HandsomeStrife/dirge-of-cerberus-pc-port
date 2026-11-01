@@ -16,15 +16,20 @@
 // the values implied by the traced next-fire times (#66 2360 -> 2626: 0.978..0.983; #67 2375 ->
 // 2467: 0.006..0.011; #67 after 2467 does not fire again before the end: > 0.47). GameRandom's
 // output sequence is NOT checked (seed and call history at stage start not decoded); only its
-// twist step, against the save state's MT words (below).
+// twist step, against the save state's MT words (below). The soldiers' cone draws (FUN_0025a058) are fed
+// from the spread call logs (spread/k_bullet1, spread/k_bullet2, w168_e8_spread), and Vincent's skeleton
+// from the pose traces (trace_pose.mjs: engage8 every frame, engage7 = k_bullet1's two windows), so the
+// bullets run the decoded hit test (worker 0168): engage8's HP drops f789 / f1011 only, each shot's aim =
+// his bone 3 as the call logs have it.
 //
 // Known gaps (GUESS parts of enemy_ai.js, printed as 'gap', counted as failures only with STRICT=1):
-// #67's f875 shot, which misses Vincent in the game but hits in the sim (the bullet hit test,
-// BULLET_R, is a GUESS), and in k_enemy_engage7 the body flag C+0x564 (not in that trace's
-// fields), which decides #67's f799 'round used, no shot' branch.
+// in k_enemy_engage7 the body flag C+0x564 (not in that trace's fields), which decides #67's f799
+// 'round used, no shot' branch; #66's facing there while Vincent walks past within ~5 u.
 import { readFileSync, existsSync } from 'node:fs';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { loadPoses, boneWorldAt } from './trace_pose.mjs';
+import { modelPose, boneRows } from './enemy_hit.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '../..');
@@ -82,6 +87,30 @@ const pos = r => r.matrix[3].slice(0, 3);
 }
 
 // fixed-input checks above run without the traces / ai.json; then SKIP keeps the exit code
+// the e027 shots' pre-cone aim (FUN_005694f8's spawn call: a2), by frame
+function aimLog(files) {
+  const out = new Map();
+  for (const f of files) {
+    const file = path.join(OUT, f);
+    if (!existsSync(file)) continue;
+    for (const l of readFileSync(file, 'utf8').trim().split('\n').slice(1)) {
+      const c = JSON.parse(l.replace(/\bNaN\b/g, 'null'));
+      if (c.hook === 'spawn') out.set(c.frame, c['a2+0x0'].f.slice(0, 3));
+    }
+  }
+  return out;
+}
+// the e027 shots' two cone draws (FUN_0025a058's rand calls before each cone with s > 20), in call order
+function coneLog(files) {
+  const out = [];
+  for (const f of files) {
+    const file = path.join(OUT, f);
+    if (!existsSync(file)) { console.log(`note: ${f} missing (cone draws 0.5)`); continue; }
+    const L = readFileSync(file, 'utf8').trim().split('\n').slice(1).map(l => JSON.parse(l.replace(/\bNaN\b/g, 'null')));
+    L.forEach((c, i) => { if (c.hook === 'cone' && c.f12 > 20) out.push(L[i - 2].f0, L[i - 1].f0); });
+  }
+  return out;
+}
 const summary = () => { console.log((fail ? `${fail} FAILED` : 'all ok') + (gaps ? ` (${gaps} known gaps)` : '')); process.exit(fail ? 1 : 0); };
 if (!TRACES.some(n => existsSync(path.join(OUT, n + '.jsonl')))) { console.log(`SKIP: no enemy traces in ${OUT}`); summary(); }
 if (!existsSync(dataPath)) { console.log('SKIP: data/enemies/ai.json missing (run export_web_triggers.py)'); summary(); }
@@ -128,12 +157,18 @@ function run(name) {
   // runs: those are theirs; likely the stage-load soldiers 41-43, L). Their think times are not
   // traced, so fit them: count and start due that reproduce the seven AIs' think times (+0x18)
   // over the first 60 frames.
+  // Vincent's traced skeleton (trace_pose.mjs; engage8's whole log, engage7 = k_bullet1's two windows) and the
+  // soldiers' cone draws (FUN_0025a058) from the spread call logs; an untraced shot gets 0.5 / 0.5 (no tilt)
+  const poses = loadPoses(OUT, name === 'k_enemy_engage8'
+    ? ['w168_e8_pose760', 'w168_e8_pose815', 'w168_e8_pose870', 'w168_e8_pose925', 'w168_e8_pose980'] : ['w168_b1_a', 'w168_b1_b']);
+  const logAims = aimLog(name === 'k_enemy_engage8' ? ['spread/k_bullet2.calls.jsonl', 'w168_e8_spread.calls.jsonl'] : ['spread/k_bullet1.calls.jsonl']);
+  const coneDraws = coneLog(name === 'k_enemy_engage8' ? ['spread/k_bullet2.calls.jsonl', 'w168_e8_spread.calls.jsonl'] : ['spread/k_bullet1.calls.jsonl']);
   function build(hidden) {
-    const draws = [0.98, 0.008, 0.75, 0.75, 0.75, 0.75];
+    const draws = [0.98, 0.008, 0.75, 0.75, 0.75, 0.75], cone = coneDraws.slice();
     const player = { pos: pos(R[0]), hp: hasHp ? R[0].p_hp : 780, id: 0x16, f118: 0, s64: 0 };
     const logs = [];
     const W = AI.createEnemyAI({ data, player, now: R[0].ai_now, acc: Math.fround(acc0), rand: () => draws.shift() ?? 0.5,
-      log: m => logs.push(m), damage: true, quiet: true });
+      log: m => logs.push(m), damage: true, quiet: true, spreadRand: () => cone.shift() ?? 0.5 });
     const acts = ids.map((id, k) => {
       const s = aiOf(R[0], k);
       return W.addActor({ id, rec: id - 22, pos: s.pos, face: s.face, hp: s.hp, mode: s.mode, due: s.due, last: s.last,
@@ -148,7 +183,8 @@ function run(name) {
     // body flags (input), except bit 30 (look at the target), which the sim sets (FUN_00342608)
     for (let k = 0; k < 7; k++) { const C = B.acts[k].C; C.f564 = (aiOf(r0, k).cflags & ~0x40000000) | (C.f564 & 0x40000000); }
     B.player.pos = pos(r);
-    B.W.tick(r0.step, pos(r0), pos(r));
+    B.W.playerBoneWorld = boneWorldAt(poses, r.frame);
+    return B.W.tick(r0.step, pos(r0), pos(r));
   }
   function dueErr(hidden, n) {
     const B = build(hidden);
@@ -174,6 +210,7 @@ function run(name) {
   const B = build(hidden), { W, acts, player, logs } = B;
   // trigger 95's own var0 ('once') starts clear: the stage file state
 
+  const aimChecks = [];
   const fields = ['mode', 'bstate', 'interval', 'target', 'astate', 'clip', 'rounds', 'timer'];
   const mism = {}, first = {};
   const fire = { sim: [], game: [] }, hp = { sim: [], game: [] }, wake = { sim: null, game: null };
@@ -187,7 +224,11 @@ function run(name) {
   for (let i = 1; i < R.length; i++) {
     const r0 = R[i - 1], r = R[i], f = r.frame;
     const hpBefore = player.hp;
-    stepTo(B, i);
+    const ev = stepTo(B, i);
+    // each soldier shot's aim (C+0x2b0 from the bit-30 aim, FUN_00342650, before the cone) vs the call log: #66 runs its
+    // C update before Vincent's (his start-of-frame matrix), #67 after (this frame's): enemy_ai C_BEFORE_PLAYER
+    for (let k = 0; k < 2; k++) if (ev.includes(`shot ${ids[k]}`) && logAims.has(f) && poses.has(f - 1))
+      aimChecks.push([ids[k], f, Math.hypot(...acts[k].C.aim.map((x, j) => x - logAims.get(f)[j]))]);
     if (W.S.now !== r.ai_now) clockBad++;
     if (hasHp) {
       if (player.hp !== hpBefore) hp.sim.push(`${f}:${player.hp}`);
@@ -240,7 +281,7 @@ function run(name) {
     // open loop, a fixed (0.4, -0.1) offset of Vincent's point in his frame takes #66's engage7 median
     // 0.93 -> 0.06 deg: the residual is the vt+0x5c GUESS (PLAYER_AIM_H), large when he is within ~5 u
     // (k_enemy_engage7 #66 only: there Vincent walks past it; elsewhere he stays >= 30 u away)
-    if (name === 'k_enemy_engage7' && k === 0) gap(max < 2, `${name}: #${ids[k]} facing max ${max.toFixed(2)} deg (f${at}) < 2 [aim point vt+0x5c GUESS]`);
+    if (name === 'k_enemy_engage7' && k === 0) gap(max < 2, `${name}: #${ids[k]} facing max ${max.toFixed(2)} deg (f${at}) < 2 [aim point: no pose recorded at this frame (PLAYER_AIM_H fallback)]`);
     else ok(max < 2, `${name}: #${ids[k]} facing max ${max.toFixed(2)} deg (f${at}) < 2`);
   }
   const noFlags = R[0].e0_cflags == null;                 // engage7: C+0x564 not traced
@@ -260,9 +301,11 @@ function run(name) {
     ok(missing.length === 0, `${name}: game HP drop frames [${hp.game.map(x => x.split(':')[0])}] all hit in the sim (missing: [${missing}])`);
     const gameF = new Set(hp.game.map(x => x.split(':')[0]));
     const extra = hp.sim.filter(x => !gameF.has(x.split(':')[0]));
-    gap(extra.length === 0, `${name}: sim hits the game does not have: [${extra}] (#67's f875 shot misses in the game; hit test BULLET_R GUESS)`);
+    ok(extra.length === 0, `${name}: sim hits the game does not have: [${extra}] (none: #67's f875 shot misses as in the game, its cone tilts it 9.8 deg)`);
   }
   console.log(`${name}: game fire frames (r_st_f starts) ${fire.game.join(' ')}`);
+  for (const [id, f, e] of aimChecks) ok(e < 2e-3, `${name}: #${id}'s f${f} shot aims at Vincent's bone 3 ${id === ids[0] ? 'before' : 'after'} his C update: off ${e.toFixed(5)} (call log)`);
+  if (poses.size) ok(aimChecks.length >= 2, `${name}: soldier shot aims checked: ${aimChecks.length}`);
   // k_fire_emp15 replays this script's inputs to f830 with #66 / #67's motion-player layers
   // (TRACE_EMP=1): every head-layer push (MP+0x448 changes) with its clip and loop flag (+0x1e bit 0)
   if (logs.length) console.log(`${name}: log ${[...new Set(logs)].slice(0, 8).join(' | ')}`);
@@ -293,12 +336,19 @@ for (const n of TRACES) run(n);
 
 // Synthetic: the bullet hit test uses where Vincent is when the bullet flies (not where he was
 // aimed at). #66 (record 44) awake and targeting him 30 u away; he either stands still or steps
-// 40 u sideways on the frame the shot goes out. GUESS stand-in (BULLET_R), so only the
-// clear-miss / clear-hit cases are checked.
-for (const [side, damage, dist, flight] of [[0, true, 30, 3], [40, true, 30], [0, undefined, 30], [0, true, 100, 4]]) {
+// 40 u sideways on the frame the shot goes out. Vincent stands in h_st frame 0 (data/vincent local
+// pose) facing #66; cone draws 0.5 (no tilt), so the bullet flies at his bone 3. damage false: the
+// bullet still hits (and ends) but his HP is kept (the page's ?enemydmg=0).
+const vlpFile = path.join(here, 'data/vincent/vincent.json'), vldFile = path.join(here, 'data/vincent/vincent_local.bin');
+const vlp = existsSync(vlpFile) ? JSON.parse(readFileSync(vlpFile, 'utf8')).local_pose : null;
+const vld = vlp && existsSync(vldFile) ? (b => new Float32Array(b.buffer, b.byteOffset, b.length / 4))(readFileSync(vldFile)) : null;
+const VP = vld ? modelPose(vlp, vld, 'h_st', 0) : null;
+if (!VP) console.log('skip synthetic shots: data/vincent local pose missing');
+for (const [side, damage, dist, flight] of VP ? [[0, true, 30, 3], [40, true, 30], [0, undefined, 30, 3], [0, false, 30, 3], [0, true, 100, 4]] : []) {
   const rec = data.records[44];
   const player = { pos: [rec.pos[0] - dist, rec.pos[1], rec.pos[2]], hp: 780, id: 0x16, f118: 0, s64: 0 };
-  const W = AI.createEnemyAI({ data, player, rand: () => 0.5, damage, quiet: true });
+  const W = AI.createEnemyAI({ data, player, rand: () => 0.5, damage, quiet: true,
+    playerBoneWorld: () => b => boneRows(VP.R[b], VP.S[b], VP.P[b], player.pos, [1, 0, 0]) });
   // #66's save-state actor state 1 (play.js AWAKE_STATE): 1 -> 3 = motion 6, the first shot spawns its bullet
   // (from the activation state 2, motion 5 holds C+0x564 0x4000 and the first shot has none)
   const a = W.addActor({ rec: 44, mode: 2, hp: 1, astate: 1 });
@@ -306,10 +356,11 @@ for (const [side, damage, dist, flight] of [[0, true, 30, 3], [40, true, 30], [0
   for (let i = 0; i < 40; i++) {
     const ev = W.tick(1.2, player.pos, player.pos);
     if (shotAt == null && ev.some(e => e === `shot ${a.id}`)) { shotAt = i; player.pos = [player.pos[0], player.pos[1], player.pos[2] + side]; }
-    if (hitAt == null && player.hp !== 780) hitAt = i;
+    if (hitAt == null && ev.some(e => e.startsWith('hit player'))) hitAt = i;
   }
-  const hit = player.hp !== 780;
-  ok(shotAt != null && hit === (side === 0 && !!damage), `synthetic: Vincent ${dist} u away ${side ? 'steps ' + side + ' u aside' : 'stands'} after the shot${damage ? '' : ' (damage option not given: off)'} -> ${hit ? 'hit' : 'no hit'}`);
+  const hit = hitAt != null, lost = 780 - player.hp;
+  ok(shotAt != null && hit === (side === 0) && lost === (hit && damage !== false ? 44 : 0) && (side !== 0 || player.part >= 0),
+    `synthetic: Vincent ${dist} u away ${side ? 'steps ' + side + ' u aside' : 'stands'} after the shot (damage ${damage}) -> ${hit ? 'hit part ' + player.part : 'no hit'}, HP -${lost}`);
   // 2 frames of countdown (+0x142), then 1.2 x 50 = 60 u per frame along the path
   if (flight) ok(hitAt - shotAt === flight, `synthetic: ${dist} u: hit ${hitAt - shotAt} frames after the shot (expected ${flight})`);
 }

@@ -766,6 +766,7 @@ stops at 362 u (x −1302), short of its 515 u range. The mesh ray is the one th
 (notes/actions-research.md §2); FUN_0026a320 itself isn't read here.
 
 ### 11.5 Translation order for the page (replaces BULLET_R)
+**Done (worker 0168):** all of it, incl. the part volumes (Vincent's 'mkd', his traced pose) and FUN_0026a320 (the page's segment filtered to probe set 0x18d); notes/enemy-ai-hook.md 'Bullets vs Vincent'.
 1. Spawn (11.2): muzzle, aim = Vincent's bone 3, spread with the shared GameRandom (2 draws), +0xd0
    end, countdown 2.
 2. Countdown end: stage ray mask 0x18d → shorten +0xd0 / +0x130.
