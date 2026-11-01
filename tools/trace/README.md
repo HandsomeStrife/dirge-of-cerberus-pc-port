@@ -221,6 +221,13 @@ to every record; with `log_from` near the end the log still fits (w173_rng: 42 r
 `FUN_0054ff50`, `decal_rand` `FUN_002e0160`, `mat6_rand` `FUN_00550098`, each logged just after its `draw`). Script
 w173_rng; notes/audio-research.md "Wall impact draws". The added hook cycles change the run (compare it only with itself).
 
+### Hits on Vincent (TRACE_CALLLOG=pain; worker 0174)
+Call-log set `pain`: `play_name`, every RNG `draw`, the cues (`cue` = FUN_0055c978's FUN_00341330, `cue_gated` = inside
+FUN_003412d0 with C+0x810 before the stamp), `script_rand` (VM op 41's FUN_0040b5c0: f0), `p_damage` (vt+0x1ec, a1 = damage),
+`hit_dir` (FUN_003af6b8: a1 = angle, HUD +0x230..), `fx_new` (FUN_003366b8 from FUN_003361b8: a0 = effect id), `hit_fx`
+(FUN_003361b8 from FUN_0055db50), `fx_1000` (FUN_00336508). Scripts w174_pain_a (engage8 inputs) / w174_pain_m (k_melee18
+route and pokes): the hooks move both runs (hits at f952 / f1525; no melee hit). notes/audio-research.md "Vincent's hit voice".
+
 ### Enemy motion-player fields (TRACE_EMP=1, worker 0149)
 With `TRACE_FIELDSET=enemy`, `TRACE_EMP=1` adds per soldier `mp_head` (MP+0x440..0x44f: +0x448 head layer,
 +0x449 count, +0x44a blend-out layer) and `mp_layers` (8 x 0x30 at MP+0x200, decoded as for the player),

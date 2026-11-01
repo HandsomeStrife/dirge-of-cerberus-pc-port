@@ -164,7 +164,10 @@ function run(name) {
   const logAims = aimLog(name === 'k_enemy_engage8' ? ['spread/k_bullet2.calls.jsonl', 'w168_e8_spread.calls.jsonl'] : ['spread/k_bullet1.calls.jsonl']);
   const coneDraws = coneLog(name === 'k_enemy_engage8' ? ['spread/k_bullet2.calls.jsonl', 'w168_e8_spread.calls.jsonl'] : ['spread/k_bullet1.calls.jsonl']);
   function build(hidden) {
-    const draws = [0.98, 0.008, 0.75, 0.75, 0.75, 0.75], cone = coneDraws.slice();
+    // + Vincent's hit voice (script 297's rand_i at the f789 hit, worker 0174) between #66's and #67's jitter draws:
+    // engage8 = w172_sound3's inputs, where the game played bt_v002 (r in [2/7, 3/7)); engage7 not traced (it
+    // only picks the voice). Later hits take the 0.5 fallback (3: no voice; engage8 f1011 played none).
+    const draws = [0.98, 0.3, 0.008, 0.75, 0.75, 0.75, 0.75], cone = coneDraws.slice();
     const player = { pos: pos(R[0]), hp: hasHp ? R[0].p_hp : 780, id: 0x16, f118: 0, s64: 0 };
     const logs = [];
     const W = AI.createEnemyAI({ data, player, now: R[0].ai_now, acc: Math.fround(acc0), rand: () => draws.shift() ?? 0.5,

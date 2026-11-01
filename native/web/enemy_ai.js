@@ -386,6 +386,21 @@ export function createEnemyAI(opts) {
   };
   const PST = opts.playerStatus || PLAYER_STATUS;
   const scripts = data.scripts;
+  // Vincent as a script object (worker 0174). His own script P+0x34 (save RAM 246) and, when it has no such
+  // event, his parameter set's (status +0x9c = section-0 record, save RAM 55) script at +0x7c (= 297): the actor
+  // dispatch FUN_00568f98 (vt+0x2f4). ai.json player / pset_script (export_web_triggers.py).
+  // MISSING: the same fallback for the soldiers (their parameter sets name scripts 291-296; runEvent skips it).
+  // GUESS: script 246 / parameter set 55 are save-RAM values (not decoded how the game picks them; see
+  // notes/audio-research.md "Vincent's hit voice", fidelity-audit "Vincent's script / cue table / C+0x810").
+  const PLAYER_OBJ = P && data.player ? { kind: 'player', id: -1, script: data.player.script,
+    fallback: (data.pset_script || [])[data.player.pset] ?? -1, get pos() { return P.pos; } } : null;
+  // his cue table C+0x7ec = stage section 0x1a record C+0x766 (FUN_003405f8 -> FUN_003116d0).
+  // GUESS: record 9 is the save-RAM value of C+0x766 (not decoded where it is set; same notes)
+  const PLAYER_CUES = data.cues && data.player ? data.cues[data.player.cues] : null;
+  // C+0x810: the frame of the last gated cue (FUN_003412d0). GUESS: save RAM 359 with the frame counter at 1575
+  // (DAT_0046e880+0x20 = DAT_0046e938+0x20 = S.frame here, which starts at 0); not decoded: FUN_003412d0 has
+  // other callers that stamp it (fidelity-audit "C+0x810 stampers"), so its stage-start value is unknown.
+  if (P) P.c810 ??= 359 - 1575;
   // manager shorts (+0x28, cmd 0x2f writes, 0x30 reads). GUESS: their values at stage start are not
   // decoded; short 18 = MANAGER_SHORT_18, the rest 0.
   const mshort = new Int16Array(0x100);
@@ -540,7 +555,9 @@ export function createEnemyAI(opts) {
   // Runs event `ev` of object o's script (vtable +0x2f4, FUN_003715e0) with args r0..r3.
   function runEvent(o, ev, args = []) {
     const sc = scripts[String(o.script)];
-    const fn = sc && sc[String(ev)];
+    let fn = sc && sc[String(ev)];
+    // FUN_00568f98: no script (-1) or no such event -> the parameter set's script (Vincent only here)
+    if (!fn && o.fallback >= 0) fn = (scripts[String(o.fallback)] || {})[String(ev)];
     if (!fn) return;
     const code = fn.code, st = [], loc = new Array(fn.locals + 8).fill(0);
     let r = [args[0] ?? 0, args[1] ?? 0, args[2] ?? 0, args[3] ?? 0];
@@ -572,7 +589,27 @@ export function createEnemyAI(opts) {
         // op 37 FUN_00370af0: push a pointer into the function's data block (data + imm x 8, type 3).
         // ai.json has no data blocks, so the page pushes the reference itself (only cmd 0x141, not
         // translated, takes one as an argument).
-        case 37: st.push({ ref: imm }); break;
+        // worker 0174: ai.json now has the data blocks (fn.data, hex); cmd 0x125 reads a name through one.
+        case 37: st.push({ ref: imm, data: fnData(fn) }); break;
+        // op 41 FUN_00370d00: the top cell's word v -> (int)((float)(v + 1) x FUN_0040b5c0()), type int (EE
+        // cvt.w.s chops). One draw of the shared RNG.
+        case 41: {
+          if (!st.length) { warnOnce(`enemy_ai: script ${o.script} ev ${ev}: rand_i on an empty stack; event stopped`); return; }
+          const v = st[st.length - 1] | 0;
+          st[st.length - 1] = Math.trunc(Math.fround(Math.fround(v + 1) * rng()));
+          break;
+        }
+        // op 45 FUN_00370f58: pop v (a float is chopped); table at data + imm x 8: +0 count, +4 default,
+        // +8 + 4v targets; 0 <= v < count -> pc = targets[v], else pc = default (instruction indices)
+        case 45: {
+          const v = Math.trunc(pop()), dv = fnData(fn);
+          if (!dv) { warnOnce(`enemy_ai: script ${o.script} ev ${ev}: switch without a data block (rebuild data/enemies); event stopped`); return; }
+          // (count < 0: every v takes the default, as in the game; a table past the data block stops the event)
+          const t0 = imm * 8, cnt = t0 + 8 <= dv.byteLength ? dv.getInt32(t0, true) : null;
+          if (cnt === null || t0 + 8 + 4 * Math.max(0, cnt) > dv.byteLength) { warnOnce(`enemy_ai: script ${o.script} ev ${ev}: switch table ${imm} outside the data block; event stopped`); return; }
+          pc = (v >= 0 && v < cnt) ? dv.getInt32(t0 + 8 + 4 * v, true) : dv.getInt32(t0 + 4, true);
+          break;
+        }
         case 38: { const tgt = pop(); st.push(send(o, tgt, imm, r)); break; }   // FUN_00370b40
         // op 39 FUN_00370cb8: pop (FUN_0036fe98), then FUN_00326298(7) = DAT_0046e298 bit 7, result
         // unused: a debug print compiled out. op 40 FUN_00370ce0: FUN_00326298(7) only. No effect.
@@ -587,6 +624,45 @@ export function createEnemyAI(opts) {
     }
   }
 
+  // a script function's data block (ai.json fn.data, hex) as a DataView, once per function
+  const fnDV = new WeakMap();                                                 // (not on the shared data: tests clone it)
+  function fnData(fn) {
+    if (fnDV.has(fn)) return fnDV.get(fn);
+    let dv = null;
+    if (typeof fn.data === 'string') {
+      const b = new Uint8Array(fn.data.length >> 1);
+      for (let i = 0; i < b.length; i++) b[i] = parseInt(fn.data.substr(2 * i, 2), 16);
+      dv = new DataView(b.buffer);
+    }
+    fnDV.set(fn, dv);
+    return dv;
+  }
+  // an op-37 reference's 8-byte name (sdb names are char[8], NUL-padded)
+  function refName(v) {
+    if (!v || !v.data) return null;
+    let n = '';
+    for (let k = 0; k < 8 && v.ref * 8 + k < v.data.byteLength; k++) {
+      const c = v.data.getUint8(v.ref * 8 + k);
+      if (!c) break;
+      n += String.fromCharCode(c);
+    }
+    return n || null;
+  }
+  // FUN_0054a720(obj): obj+0x90 (the +8 != 0 branch FUN_0054a5e8 is not translated). Actors / Vincent: their
+  // position. Triggers: FUN_005503e8 -> FUN_0054b7c8 copies the section-8 matrix to +0x60..+0x9c, so +0x90 = row 3
+  // (ai.json m[3]). Section-1 records not yet active: the placement position (ai.json pos; L: the copy to +0x90
+  // at stage load is not traced); a deactivated actor keeps its last position (L: FUN_00588330 only detaches the
+  // body). Anything else: null (the caller skips; never the listener).
+  function objPos90(t) {
+    if (t.pos) return Array.from(t.pos).slice(0, 3);
+    if (t.kind === 'trigger' && t.t && t.t.m) return t.t.m[3].slice(0, 3);
+    if (t.kind === 'record') {
+      if (t.p90) return t.p90.slice(0, 3);
+      const rec = data.records[t.rec];
+      if (rec && rec.pos) return rec.pos.slice(0, 3);
+    }
+    return null;
+  }
   // FUN_00370b40: command imm to target (-2 = own object); < 0x100 -> object manager FUN_00545b20,
   // else the object's +0xc handler (generic FUN_0054cd70, e027 FUN_005661e8).
   function send(o, tgt, cmd, r) {
@@ -605,6 +681,21 @@ export function createEnemyAI(opts) {
     const t = tgt === -2 ? o : objects.get(tgt);
     if (!t) return 0;
     switch (cmd) {
+      // FUN_0054cd70 case 0x125 (worker 0174): FUN_0033cc48(r0 name, FUN_0054a720(object) = its +0x90 position, 1),
+      // a released one-shot. r1 != 0: FUN_0033cc48(.., 0) keeps the slot, FUN_003e8ec8(r1, DAT_0047d728, slot)
+      // writes the range (slot +0x10, opened at 400.0 by FUN_003e8bc8) when 0.1 < r1, FUN_0033cf50 releases it.
+      // r1 is a float cell in every 0x125 call (op 5: 800 / 1000 / 7000 / 10000 / 15000).
+      case 0x125: {
+        const nm = refName(r[0]);
+        if (!nm) { warnOnce(`enemy_ai: cmd 0x125 without a name (rebuild data/enemies)`); return 0; }
+        const r1 = Math.fround(+r[1] || 0);
+        const range = r[1] !== 0 && Math.fround(0.1) < r1 ? r1 : 400.0;          // FUN_003e8ec8 (0.1f, c.lt.s)
+        const p = objPos90(t);
+        if (!p) { warnOnce(`enemy_ai: cmd 0x125 '${nm}' on ${t.kind} ${t.id}: no +0x90 position on the page; not played`); return 0; }
+        events.push(`sound ${nm} range ${range} at ${p.map(v => +v.toFixed(2)).join(',')}`);
+        sound(nm, p, range);
+        return 0;
+      }
       case 0x101:                                              // FUN_0054cd70: queue message r1 to object r0
         if (r[1] >= 0 && objects.get(r[0]) && !(objects.get(r[0]).flags28 & 0x80000))
           mailbox.push({ to: r[0], n: r[1], from: t.id });
@@ -640,13 +731,16 @@ export function createEnemyAI(opts) {
       // on stage path r0 (section 9) and start mover 1; path_mover.js pathStart. The turn mode: with an AI,
       // 6 when FUN_0035eda0 (FUN_00563200: the AI's target) and C+0x590 bit 24 (gun out), else 5.
       // Path +8 bit 3 (mover 0xe) is not translated (warned; no soldier record uses one on z128).
-      case 0x131:
-        if (t.kind === 'actor' && !(gone(t) && r[1] === 0)) {
+      // case 0x13a (worker 0178): the same FUN_0055a6d8(a, r0, r1, r2) with node range r1 / r2, skipped when
+      // FUN_00566198 and r3 == 0 (script 104 events 1 / 0x13 / 0x21: path 12-18 from a mid node).
+      case 0x131: case 0x13a:
+        if (t.kind === 'actor' && !(gone(t) && r[cmd === 0x131 ? 1 : 3] === 0)) {
           if (!data.paths) { warnOnce('enemy_ai: cmd 0x131: ai.json has no stage paths (re-export): the soldier stands'); return 0; }
           if (!t.C.spd) warnOnce('enemy_ai: cmd 0x131: no move speed in ai.json (re-export): the soldier stands');
           else {
             const turn = t.ai ? (t.target && t.C.gun ? 6 : 5) : 5;               // FUN_0055a6d8 (no AI: +0xe4 bit 0 not modelled)
-            if (PM.pathStart(t, data.paths, r[0], turn, warnOnce)) events.push(`path ${t.id} ${r[0]}`);
+            const [n0, n1] = cmd === 0x131 ? [0, -1] : [r[1] | 0, r[2] | 0];
+            if (PM.pathStart(t, data.paths, r[0], turn, warnOnce, n0, n1)) events.push(`path ${t.id} ${r[0]}${cmd === 0x131 ? '' : ` nodes ${n0}-${n1}`}`);
           }
         }
         return 0;
@@ -711,7 +805,8 @@ export function createEnemyAI(opts) {
         const j = S.q.indexOf(t.ai); if (j >= 0) S.q.splice(j, 1);           // FUN_003659d8 unlink
         stopFire(t.ai);                                                     // FUN_0035e6f8 -> FUN_00360820
       }
-      objects.set(t.id, { kind: 'record', id: t.id, rec: t.rec, script: t.script, vars: t.vars, flags28: 0, f118: t.f118 | 0, ai: null, hp: t.hp });
+      objects.set(t.id, { kind: 'record', id: t.id, rec: t.rec, script: t.script, vars: t.vars, flags28: 0, f118: t.f118 | 0, ai: null, hp: t.hp,
+        p90: t.pos ? Array.from(t.pos) : null });   // +0x90 kept (objPos90, L)
     }
     events.push(`deactivate rec ${t.rec}`);
     onDeactivate(rec);
@@ -2520,7 +2615,7 @@ export function createEnemyAI(opts) {
   }
   // FUN_0057a830: target vt+0x1e4 (Vincent: FUN_005725d8 -> FUN_0055eac8), +0xc1 |= 0x20, the owner's hit
   // count FUN_00568e48 -> FUN_00360990 (AI +0x7a += 1, +0x60 = now). Effects FUN_00541b08 / +0x130 / +0x134
-  // and the pad rumble FUN_00336508 are not on the page.
+  // and FUN_00336508 (= FUN_003366b8(0x1000), an effect: the effect system is not decoded) are not on the page.
   function attackApply(o, c, A, B) {
     if (!((P.f118 | 0) & 0x20)) attackDamagePlayer(o, c, A, B);                 // FUN_005725d8: P+0x118 bit 5
     o.c1 |= 0x20;
@@ -2529,12 +2624,43 @@ export function createEnemyAI(opts) {
   }
   // FUN_0055eac8(P, attack, point): no damage with status +0x64 bits 0 / 1 unless type 3; dmg = defence
   // FUN_00318120(status, +0xc2, FUN_0057a218 = 1) (cap 9999); alive: +0x118 bits 5 / 6 -> 0, then vt+0x1ec
+  // vt+0x324 FUN_00576ac8(P, dmg, deadNow) from vt+0x1ec FUN_0055c7f8 (worker 0174): FUN_0055c978(P, dmg, deadNow):
+  // alive -> cue 0x44 (FUN_00341330), cue 0x4c through the 15-frame gate FUN_003412d0 (C+0x810), then script event 8
+  // (r0 = dmg; Vincent's scripts have none). Vincent's z128 cues: 0x44 '' (nothing), 0x4c '?' -> event 0x25 of his
+  // script = script 297: rand_i(6) -> bt_v000 / bt_v001 / bt_v002 for 0 / 1 / 2, nothing for 3-6 (cmd 0x125).
+  // Then vt+0x344 FUN_00576c28 (dmg > 0, and again in FUN_00576ac8): DAT_0046e54c |= 4 when DAT_00470290+0x30 != 0,
+  // no reader on the page; FUN_003b4ea8(DAT_00471380) acts only when FUN_00242c28() > 1 (save: DAT_0046b328 = 1).
+  // T: w172_sound3 f789 bt_v002 at Vincent; w174_pain_a f952 cue 0x44, rand 0.757431 -> 5, no sound, C+0x810 359.
+  function playerHitCues(dmg, deadNow) {
+    if (!PLAYER_OBJ || deadNow) return;
+    playerCue(0x44);                                                          // FUN_00341330(C, 0x44)
+    gatedCue(0x4c, 0);                                                        // FUN_003412d0(C, 0x4c, 0)
+    runEvent(PLAYER_OBJ, 8, [dmg, 0]);                                        // vt+0x2f4 event 8
+  }
+  // FUN_003412d0(C, cue, force): force or more than 14 frames since C+0x810 -> FUN_00341330, C+0x810 = now
+  function gatedCue(c, force) {
+    if (!force && !(0xe < S.frame - P.c810)) return;
+    playerCue(c);
+    P.c810 = S.frame;
+  }
+  // FUN_00341330(C, cue): C+0x7ec table; '' -> nothing; '?' -> event 0x25 (r0 = cue) to the owner C+0x7dc = P;
+  // else FUN_00341268 -> FUN_0054b158(P, name, 1). L: FUN_0054b158 taken as "play the name at P" (notes/audio-
+  // research.md 'Cue sounds'; no named cue is reached on the hit path in z128).
+  function playerCue(c) {
+    if (!PLAYER_CUES) { warnOnce('enemy_ai: ai.json has no cue tables: rebuild data/enemies; no hit voice'); return; }
+    if (!(c < PLAYER_CUES.length)) return;
+    const nm = PLAYER_CUES[c];
+    if (!nm) return;
+    if (nm === '?') { runEvent(PLAYER_OBJ, 0x25, [c, 0]); return; }
+    sound(nm, Array.from(P.pos));
+  }
+
   // FUN_0055c7f8 (as damagePlayer). The soldier's vt+0x314 / +0x31c (0x55e0c8 / 0x55e0d0) and Vincent's
   // +0x184 (no AI) do nothing. Not behind opts.damage: that option (the page's ?enemydmg=0) only covers the
   // soldiers' bullets; a melee hit always damages Vincent.
-  // MISSING: Vincent's reaction FUN_00565480(P, +0xec = 4, dir, point, alive) (the flags-4 branch: his state
-  // 0x18 in k_melee18, pushed back ~0.8 u per frame) and vt+0x324 FUN_00576ac8, FUN_0055d678, the voice
-  // FUN_0055ea50 ('h_dmg_N') and HUD FUN_00567fe8; script event 0x1d (vt+0x2f4): Vincent has no script here.
+  // Then vt+0x324 FUN_00576ac8 (playerHitCues: his hit voice), the reaction FUN_00565480 (play.js react).
+  // FUN_0055ea50 ('h_dmg_N': a pad vibration pattern) and HUD FUN_00567fe8 (FUN_00567d00 returns for Vincent):
+  // nothing to draw; script event 0x1d (vt+0x2f4): none in his scripts.
   function attackDamagePlayer(o, c, A, B) {
     events.push(`melee hit player ${o.owner.id}`);
     if ((PST.f64 & 3) && o.type !== 3) return;                                // +0xc0 & 3 (FUN_00579ef0's clamped type)
@@ -2551,16 +2677,17 @@ export function createEnemyAI(opts) {
     P.hp = Math.max(0, P.hp - dmg);                                           // FUN_003168c8
     events.push(`hit player ${before}->${P.hp}`);
     log(`enemy_ai: Vincent HP ${before} -> ${P.hp} (melee #${o.owner.id})`);
-    // vt+0x324 FUN_00576ac8 (alive): FUN_0055c978(P, dmg, 0) = C cues 0x44 / 0x4c (FUN_00341330 / FUN_003412d0,
-    // sounds) and script event 8 (no script), vt+0x344 FUN_00576c28 (twice: in FUN_0055c978 for dmg > 0 and
-    // after it), FUN_003b4ea8(DAT_00471380): not on the page (sound / effects). FUN_0055d678 (C+0x590 hit side)
-    // has no reader in the reaction below: left out.
+    playerHitCues(dmg, dead(P));                                              // vt+0x324 FUN_00576ac8
+    // FUN_0055eac8's own cue 0x44 / gate 0x4c (0x55ec70-0x55ecf4) is the P+0x28 bit 0x20 branch, which skips
+    // vt+0x1ec (no damage; with FUN_00bec508 and FUN_003b5c88 for attack +0xc1 bit 6). MISSING: P+0x28 bit 0x20 is
+    // not on the page, so this function always takes the damage branch (b 0x55ecf8 after vt+0x1ec).
+    // FUN_0055d678 (C+0x590 hit side) has no reader in the reaction below: left out.
     // FUN_00565480(P, +0xec | (P+0x28 bit 2 and +0xec bit 1 -> the owner's +0x60 bit 0x4000: 4), dir, point,
     // alive before), unless P+0x118 bit 0x10000. Type 1 -> +0xec = 4 (bit 1 clear).
     let fl = o.ec;
     if ((o.ec & 2) && ENEMY_OFFENCE.f60 & 0x4000) fl |= 4;
     if (playerReact && !((P.f118 | 0) & 0x10000)) events.push(`react player ${playerReact({ flags: fl, dir, point: c, aliveBefore: true, deadNow: dead(P), f118: P.f118 ?? 0x20209 })}`);
-    // the voice FUN_0055ea50 (P+0x28 bit 2: 'h_dmg_N') and the HUD FUN_00567fe8: not on the page
+    // FUN_0055ea50 'h_dmg_N' = a pad vibration pattern (FUN_002573c8, table DAT_0046bd98): no pad on the page.
   }
 
   // FUN_005405b0(.., muzzle, aim, W, status) (W+4 without 0x100000 / 0x200000): s = W+0x1c / +0x20 / +0x24
@@ -2816,11 +2943,14 @@ export function createEnemyAI(opts) {
     P.hp = Math.max(0, P.hp - dmg);                                           // FUN_003168c8 (clamp at 0: L)
     events.push(`hit player ${before}->${P.hp}`);
     log(`enemy_ai: Vincent HP ${before} -> ${P.hp} (shot by #${b.from.id})`);
+    playerHitCues(dmg, dead(P));                                              // vt+0x324 FUN_00576ac8
     // vt+0x324 FUN_00576ac8: sounds / effects, as for the melee (attackDamagePlayer); at HP 0 the death vt+0x334
     // FUN_00576b48 is not translated (out of scope: HP stays at 0).
     // FUN_00565480(P, bullet +0x148 | stagger, dir, point, alive before), unless P+0x118 bit 0x10000
     if (playerReact && !((P.f118 | 0) & 0x10000)) events.push(`react player ${playerReact({ flags: (b.f148 | 0) | fl, dir, point: b.pos, aliveBefore: true, deadNow: dead(P), f118: P.f118 ?? 0x20209 })}`);
-    // P+0x28 bit 2: the voice FUN_0055ea50 (-1 < dmg); the hit effect FUN_003361b8 / FUN_00567f10: not on the page
+    // P+0x28 bit 2: FUN_0055ea50 (-1 < dmg) = pad vibration 'h_dmg_N' (no pad). FUN_003361b8 = the hit effect
+    // (MISSING: the effect system FUN_002e6290 / FUN_002e7660 is not decoded). FUN_00567f10 -> FUN_00567d00 returns
+    // for Vincent (FUN_0053bb08's object): no damage number on him.
   }
 
   // ------------------------------------------------ Vincent's bullets (notes/enemy-research.md §13)
@@ -3449,6 +3579,6 @@ export function createEnemyAI(opts) {
                   // single translated functions, for the tests' direct state checks
                   t: { brain5, brain6, stateMotion, setActorState, bulletEnd, target, send, setMode, setTarget, setActionLayer, action2, action3, action56, flinch, die, navOf,
                        makeAttack, attackObjUpdate, attackCentre, sphereCapsule, offence,
-                       spreadAim, roomProbe, enemyBulletHit, playerPartTest, targetPoint, damagePlayer } };
+                       spreadAim, roomProbe, enemyBulletHit, playerPartTest, targetPoint, damagePlayer, attackDamagePlayer } };
   return world;
 }

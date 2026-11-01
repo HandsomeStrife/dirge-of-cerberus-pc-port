@@ -258,6 +258,26 @@ SETS["rng"] = [SETS["sound3"][0],
 ]
 
 
+# worker 0174: what a hit on Vincent shows and plays. Damage vt+0x1ec FUN_0055c7f8 -> vt+0x324 FUN_00576ac8 ->
+# FUN_0055c978: cue 0x44 (FUN_00341330) and cue 0x4c through the 15-frame gate FUN_003412d0 ('?' -> event 0x25 of
+# the owner's script: stage script 297 draws rand_i (VM op 41, FUN_0040b5c0 at 0x370d30) and sends cmd 0x125 with a
+# name). The hit effect FUN_003361b8 (FUN_003366b8 -> effect id), the hit-direction HUD FUN_003af6b8 (HUD +0x230..).
+SETS["pain"] = [SETS["sound3"][0],
+    dict(id=90, kind="site", where=(0x40B5C0, 0x40B5F0, 0x40B500), name="draw", copy=[]),          # v0
+    dict(id=101, kind="site", where=(0x3412D0, 0x341330, 0x341330), name="cue_gated",
+         copy=[cp("a0", 0x810, 1)]),                                                                # a1 = cue
+    dict(id=102, kind="site", where=(0x55C978, 0x55CA20, 0x341330), name="cue", copy=[]),
+    dict(id=103, kind="site", where=(0x370D00, 0x370D68, 0x40B5C0), name="script_rand", copy=[]),   # f0
+    dict(id=104, kind="vt", where=(0x58F128, 0x1EC), name="p_damage", copy=[]),                     # a1 = damage
+    dict(id=105, kind="site", where=(0x567C08, 0x567D00, 0x3AF6B8), name="hit_dir",
+         copy=[cp("a0", 0x230, 10)]),                                                               # a1 = angle
+    dict(id=106, kind="site", where=(0x3361B8, 0x336280, 0x3366B8), name="fx_new", copy=[]),        # a0 id, v0
+    dict(id=107, kind="site", where=(0x55DB50, 0x55DF90, 0x3361B8), name="hit_fx",
+         copy=[cp("a0", 0, 4)]),                                                                    # a2 = kind
+    dict(id=108, kind="site", where=(0x5720C8, 0x572418, 0x336508), name="fx_1000", copy=[]),
+]
+
+
 def patch(mem, setname, frame_lo, frame_hi, log_end):
     """Install the hooks of SETS[setname]. Returns (clog_start, clog_end, hooks)."""
     hooks = SETS[setname]

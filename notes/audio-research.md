@@ -133,7 +133,7 @@ Vincent at f789). The last column was first read as the volume; it is the **pan*
 | Soldier's shot, second sound | `FUN_00554850` -> `FUN_0033d788(part)`: the name at part +0x94 | `bsj_063` | 1060 | 0x81 |
 | **Bullet hits the room** | `FUN_0033d528` -> `FUN_0033d4e8(mat, variant)`: table 0x46e5f8[mat * 3 + variant] (`bsj_021`..`bsj_038`, `bsj_102`..`bsj_107`); callers `FUN_0054ff50`, `FUN_00585000` | `bsj_021` / `bsj_022` (`bsj_024` once) | 1019 / 1020 / 1022 | 0x3f-0x41 (0xb0) |
 | Bullet hits a character | `FUN_00556870` (hit test) -> `FUN_0033d5c8(bullet+0x138 & 0xf)` (table `bsj_476 bsj_476 bsj_475 bsj_477 ...`), or name 0x58d108 `bsj_491` when the hit type is 6 | - | - | not seen in the trace (Vincent's hit at f789 did not take this branch). `bsj_491` is not in z128's sdb |
-| **Vincent hurt** | not pinned (played at the hit, f789) | `bt_v002` | 37003 | 0x3f |
+| **Vincent hurt** | cue 0x4c -> his script 297 event 0x25 -> cmd 0x125 (worker 0174: "Vincent's hit voice" below) | `bt_v000` / `bt_v001` / `bt_v002` (3 of 7 draws) | 37003 (bt_v002) | 0x3f |
 | Melee hit | `FUN_0057a830` -> `FUN_0033cc48(attack object +0x134)`: the name comes from the attack data (`FUN_00541310` record) | ? | ? | not traced yet |
 | Melee swing | not found yet | | | |
 | Other gun names | `FUN_0033d008(gunDef)`: index table 0x4a10f8 by gunDef+0x14 bits -> 0x46e5b8 (`bsj_000`..`bsj_011`, `bsj_051`..`bsj_054`); used by `FUN_005694f8`, `FUN_00571dd8`, `FUN_00577480` (with gun flag 0x20) | | | |
@@ -212,7 +212,7 @@ w172_melee (k_melee18's swing and hit): **44 / 44 new SEs exact** (`node native/
 | soldier's shot | `FUN_00554850` (bullet init) -> `FUN_0033d788`: W+0x94 at the sound camera; end of `FUN_005694f8` -> `FUN_0033d6d8`: W+0x8c at the muzzle, range 400 (W+0x74 if > 0 and stage version > 0x20) | enemy_ai.js `spawnShot` (ai.json weapons `se_bullet` / `se_fire` / `se_range`) | bsj_063, bsj_004 |
 | bullet ends on a wall | `FUN_005549f0` -> `FUN_00554ea8` -> stage vt+0x1b4 `FUN_0054fee0` -> `FUN_0054ff50`: r = `FUN_0040b5c0`, `FUN_0033d528(mat, (int)(r x 2) != 0, end)` -> kind table 0x4a1310 -> names 0x46e5f8[kind x 3 + variant]. mat = bullet +0x138 & 0xf = (hit surface word >> 16) & 0xf (`FUN_00553660`, `FUN_0026f1e8`) | enemy_ai.js `roomProbe` (`b.mat`), `wallSound`; play.js roomRay `.surface` | mat 2: bsj_021 / 022, mat 1: bsj_024 / 025 (checked at the traced impact points) |
 | bullet hits a character | `FUN_00556870`'s `FUN_0033d5c8` is only reached by bullets without +0x120 bit 0x2000 (none here). In the trace the kill plays cue sounds at the soldier: bt_v036, asj_523 (cue tables, below) | not on the page | — |
-| Vincent hurt | bt_v002 at f789 (his position). Not cue 0x44 (empty in all z128 cue tables); probably cue 0x4c '?' (`FUN_00341330`: event 0x25 to the object's script) | not on the page | — |
+| Vincent hurt | cue 0x4c '?' -> script 297 event 0x25 -> cmd 0x125 (worker 0174, below) | enemy_ai.js `playerHitCues` / `playerCue` / `gatedCue`, VM ops 37 / 41 / 45, cmd 0x125 | bt_v000 / 001 / 002 |
 | melee swing / hit | none: no SE between f1455 and f1463 in w172_melee (only footsteps fsj_057 and the later shots) | nothing to do | — |
 
 Cue sounds: `FUN_00341330(C, cue)` reads C+0x7ec = stage section 0x1a record (`FUN_003116d0`, set by `FUN_003405f8`
@@ -247,3 +247,47 @@ compare a run only with its own call log.
 
 Browser rule: an AudioContext starts only after a user gesture. play.js makes it on the first key / click (the
 page's click-to-look already asks for one); requests before that are dropped. Sound is on by default; `?sound=0` off.
+
+## Vincent's hit voice (worker 0174, decoded and verified)
+
+Bullet (FUN_005720c8 -> FUN_0055db50) and melee (FUN_0055eac8) hits both reach the damage vt+0x1ec `FUN_0055c7f8`,
+which calls vt+0x324 `FUN_00576ac8(P, dmg, dead)` (dead = HP 0 after the hit; the decomp lost the arguments, the
+disassembly passes a0-a2 through) -> `FUN_0055c978(P, dmg, dead)`:
+
+1. alive only: `FUN_00341330(C, 0x44)` (cue 0x44 = '' in Vincent's table: nothing), then `FUN_003412d0(C, 0x4c, 0)`:
+   runs the cue only when more than 14 frames passed since C+0x810 (manager frame DAT_0046e880+0x20; it stamps
+   C+0x810 whatever the cue does). Then script event 8 (r0 = dmg): none in his scripts.
+2. vt+0x344 `FUN_00576c28` when dmg > 0 (and again in FUN_00576ac8): `DAT_0046e54c |= 4` when DAT_00470290+0x30 != 0.
+   No reader on the page. Then `FUN_003b4ea8(DAT_00471380)`: only when `FUN_00242c28() > 1` (DAT_0046b328 = 1 in the save).
+3. melee: FUN_0055eac8's own cue 0x44 / 0x4c gate (0x55ec70-0x55ecf4) is NOT on the damage path: it is the
+   P+0x28 bit 0x20 branch, which skips vt+0x1ec; the damage branch jumps over it (`b 0x55ecf8`). (Worker 0178 review:
+   0174 had it repeating after the damage.)
+
+Cue table: C+0x7ec = stage section 0x1a record C+0x766 (= 9, save RAM), 126 cues; 0x4c / 0x4d = '?'. `FUN_00341330`'s
+'?' sends event 0x25 (r0 = cue, r1 = 0) to C+0x7dc = P. The actor dispatch `FUN_00568f98` (vt+0x2f4) runs the object's
+own script (P+0x34 = 246: events 0x3a, 0x18 only) and, when it has no such event, the parameter set's script
+(status +0x9c -> section-0 record 55, +0x7c = **297**). Script 297, event 0x25 (its only one):
+`switch (r0 - 76)`: 0 (cue 0x4c) -> `rand_i(6)`: 0 / 1 / 2 -> bt_v000 / bt_v001 / bt_v002, 3-6 -> nothing;
+1 (cue 0x4d, not on the hit path) -> `rand_i(3)`: bt_v004 / bt_v005 / bt_v006, 3 -> nothing. Each name: `send 0x125` to
+itself = `FUN_0054cd70` case 0x125: `FUN_0033cc48(r0, FUN_0054a720(obj), 1)` (+0x90 position).
+
+**cmd 0x125 in general** (worker 0178): r1 != 0 -> `FUN_0033cc48(.., 0)` keeps the slot, `FUN_003e8ec8(r1, DAT_0047d728,
+slot)` sets its range (slot +0x10; FUN_003e8bc8 opens it at 400.0) when 0.1f < r1, `FUN_0033cf50` releases it. r1 is a
+float cell (op 5) in all z128 calls: 800 / 1000 / 7000 / 10000 / 15000 (stage trigger scripts and soldier death / mail
+scripts; Vincent's 297 passes none). Position = obj+0x90: a trigger's is its section-8 matrix row 3 (`FUN_005503e8` ->
+`FUN_0054b7c8` copies the matrix to +0x60..+0x9c); an inactive record's is taken as its placement position (L). The page
+plays nothing (warned) for an object with no such position. `FUN_003412d0` (the gate) has 8 other callers that stamp
+C+0x810 (death, cues 0x4d-0x52: fidelity-audit 'C+0x810 stampers'), likely the 3035 below.
+
+VM ops decoded here (handler table 0x4a2f60: 8-byte entries, the handler at +4): **41** rand_i `0x370d00`: top word v
+-> `(int)((float)(v + 1) x FUN_0040b5c0())` (one draw of the shared RNG; cvt.w.s chops); **45** switch `0x370f58`: pop v,
+table at data + imm x 8 = (count, default, targets...), 0 <= v < count -> targets[v] else default (instruction index);
+**37** `0x370af0`: push (data + imm x 8, type 3). Data block = function + [+4], [+0xc] bytes (ai.json `fn.data`).
+
+**Verification.** w172_sound3 (k_enemy_engage8 inputs): bt_v002 at f789 at Vincent's position, no voice at the f1011
+hit. New call-log set `pain` (calllog.py: draws, cues, script rand_i, damage, hit direction, effect spawns), traces
+w174_pain_a / w174_pain_m (the hooks move the run: the soldier hits at f952 / f1525 instead; no melee hit in either):
+order cue 0x44 -> gate (C+0x810 = 359 = the save) -> rand_i inside it; f952 r = 0.757431 (word 0x49e0f382, the page's
+FUN_0040b5c0 conversion matches) -> 5 -> no voice, as the game. f1525: r 0.795133 -> 5 -> none. Open: in w174_pain_m
+C+0x810 was 3035 before the f1525 hit with no gated cue logged from f1440; some earlier write (before f1440, or
+another writer) is not found.

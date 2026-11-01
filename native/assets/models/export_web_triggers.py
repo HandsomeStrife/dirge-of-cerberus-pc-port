@@ -151,13 +151,38 @@ def nav_graph(d):
     return dict(nodes=nodes, links=links)
 
 
+# Vincent's object script P+0x34 and parameter set (status +0x9c -> section-0 record): save RAM (P = 0x1339e0:
+# +0x34 = 246; *(P+0x17c)+0x9c = stage base + 0x260 + 55 x 0x20c).
+# GUESS: save-RAM values; how the game picks them is not decoded (notes/fidelity-audit.md "Vincent's script /
+# cue table / C+0x810").
+PLAYER_SCRIPT, PLAYER_PSET = 246, 55
+# Vincent's cue table C+0x766 (FUN_003405f8 -> FUN_003116d0 -> C+0x7ec).
+# GUESS: save RAM 9; where C+0x766 is set is not decoded (same audit row).
+PLAYER_CUES = 9
+
+
+def cue_tables(d):
+    """Stage section 0x1a (FUN_003116d0: record i at base + i x size): s16 count, then 8-byte names at
+    +8 + cue x 8 (FUN_00341330; '?' = event 0x25 to the owner's script, '' = nothing)."""
+    base, n, size = SE.sections(d)[0x1a]
+    out = []
+    for i in range(n):
+        o = base + i * size
+        cnt = struct.unpack_from('<h', d, o)[0]
+        out.append([d[o + 8 + k * 8: o + 16 + k * 8].split(b'\0')[0].decode('latin-1') for k in range(cnt)])
+    return out
+
+
 def script(d, si):
     """{event id: {locals, code: [[op, imm], ...]}} for script si (op 5 imm as float)."""
     b = SE.scripts(d)[si]
     ev = {}
     for e, f, code, end in SE.functions(d, b):
         ins = SE.disasm(d, code, end)
-        ev[str(e)] = dict(locals=SE.u32(d, f + 8), code=[[op, imm] for _i, op, imm in ins])
+        # the function's data block (fn + [+4], [+0xc] bytes up to the code; FUN_0036fdc8): op 37's
+        # references (data + imm x 8) and op 45's switch tables (worker 0174)
+        data = d[f + SE.u32(d, f + 4): f + SE.u32(d, f + 4) + SE.u32(d, f + 0xc)]
+        ev[str(e)] = dict(locals=SE.u32(d, f + 8), code=[[op, imm] for _i, op, imm in ins], data=data.hex())
     return ev
 
 
@@ -516,6 +541,11 @@ def main():
     # + script 0 = the stage controller (events 0x22 / 0x23 stage start / restart, L; it arms the
     # bit-0x20000 triggers by difficulty and event flag: notes/enemy-activation.md §1)
     want = {t['script'] for t in trig} | {r['script'] for r in recs} | {0}
+    # worker 0174: Vincent's own script (P+0x34) and the parameter-set fallback scripts (section 0 +0x7c,
+    # FUN_00568f98: run when the object's own script has no such event): his pain cue event 0x25.
+    sec0, n0, sz0 = SE.sections(d)[0]
+    pset_script = [struct.unpack_from('<i', d, sec0 + i * sz0 + 0x7c)[0] for i in range(n0)]
+    want |= {PLAYER_SCRIPT} | {s for s in pset_script if s >= 0}
     scr = {str(s): script(d, s) for s in sorted(want) if 0 <= s < nscr}
     boxes = {m: hitboxes(m) for m in BOX_TYPES if any(r['model'] == m for r in recs)}
     # Vincent's part boxes (player vt+0x17c = FUN_0055bda8 too: the enemy bullets' part test): z128 draws
@@ -530,7 +560,8 @@ def main():
                zones=zone_sets(d, recs, boxes), stances=st, model_clips=model_clips(recs, st, atk), attacks=atk,
                sizes={str(r['zones']): zone_size(d, r['zones']) for r in recs if r['zones'] >= 0},
                lock_bones={str(r['zones']): lock_bone(d, r['zones']) for r in recs if r['zones'] >= 0},
-               paths=paths(d), nav=nav_graph(d), markers={m: markers(m) for m in boxes}, se=se_tables(elf))
+               paths=paths(d), nav=nav_graph(d), markers={m: markers(m) for m in boxes}, se=se_tables(elf),
+               pset_script=pset_script, player=dict(script=PLAYER_SCRIPT, pset=PLAYER_PSET, cues=PLAYER_CUES), cues=cue_tables(d))
     res['hitboxes']['p000'] = pbox
     path = os.path.join(out, 'ai.json')
     with open(path, 'w') as fh:

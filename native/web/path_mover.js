@@ -100,7 +100,8 @@ export function setTurn(a, mode) {
 // FUN_0055a6d8(a, path, 0, -1) after its body check; turnMode = 5 / 6 as the caller found it (FUN_0035eda0
 // target and C+0x590 bit 24), or null for 'unchanged' (no AI and actor +0xe4 bit 0). Returns false when
 // nothing started (no path, or the path's mover 0xe branch).
-export function pathStart(a, paths, idx, turnMode, warn = () => {}) {
+// first / last: FUN_0055a6d8's node range (cmd 0x131 passes 0, -1; cmd 0x13a its r1 / r2).
+export function pathStart(a, paths, idx, turnMode, warn = () => {}, first = 0, last = -1) {
   const C = a.C, p = pathOf(paths, idx);
   if (!p) return false;
   if ((p.flags >> 3) & 1) {
@@ -108,10 +109,11 @@ export function pathStart(a, paths, idx, turnMode, warn = () => {}) {
     warn(`path_mover: path ${idx} flags bit 3 (mover 0xe, FUN_00352d70) not translated: the soldier stands`);
     return false;
   }
-  // FUN_00352cb8(C, idx, 0, -1)
+  // FUN_00352cb8(C, idx, first, last): C+0x314 = first < n ? first : n - 1; C+0x318 = last when last != -1 and
+  // last < n, else path +8 bit 0 ? -1 : n - 1 (signed compares)
   C.path = idx;
-  C.node = 0 < p.n ? 0 : p.n - 1;
-  C.last = (p.flags & 1) ? -1 : p.n - 1;
+  C.node = first < p.n ? first : p.n - 1;
+  C.last = (last !== -1 && last < p.n) ? last : ((p.flags & 1) ? -1 : p.n - 1);
   if (turnMode != null) setTurn(a, turnMode);
   return moverStart(a, paths, warn);
 }
