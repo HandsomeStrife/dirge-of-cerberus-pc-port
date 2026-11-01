@@ -30,7 +30,7 @@ import * as PM from './path_mover.js';
 import * as NG from './nav_graph.js';
 // PS2 FPU rounding toward zero for a stored f32 (player.js chop; not imported: player.js needs three.js)
 const _cb = new DataView(new ArrayBuffer(4));
-function chop(x) {
+export function chop(x) {
   const r = Math.fround(x);
   if (!(Math.abs(r) > Math.abs(x))) return r;
   _cb.setFloat32(0, r); _cb.setInt32(0, _cb.getInt32(0) - 1);
@@ -450,6 +450,9 @@ export function createEnemyAI(opts) {
       C: { f564: init.f564 ?? 0, speed: 0, s214: 0, aim: null, t2b0: null, motion: null, clip: null,
            f1c0: C1C0_STAND, mover: 0, slide: null, hold: false, gun: 0, req: 0, loop: true,
            b591: 10, b6c0: 10, blendLen: 10,         // C+0x591 / C+0x6c0 = 10 (FUN_0033ff18); blendLen: C+0x591 at the last request
+           // root motion (rootSample): C+0x568 flags, C+0x6d0 last root sample (identity: FUN_0033ff18), C+0x310 / +0x370
+           // (mover 8), mp = the MP head layer as enemies.js plays it (clip, frame; null before the first request)
+           f568: 0, r6d0: PM.IDENT4(), m310: PM.IDENT4(), r370: 0, mp: null,
            ...stanceOf(rec) },
       model: rec.model,
       size: sizeOf(rec),                         // actor +0x2c / +0x30 (FUN_00563fc0)
@@ -921,6 +924,12 @@ export function createEnemyAI(opts) {
     C.blendLen = C.f564 & 2 ? 0 : C.b591;
     C.reqCarry = carry;
     // C.flags: FUN_005a91c8 (enemies.js) drops a request with bit 0x80 whose clip already plays on the top layer
+    // the MP head layer the root sample reads (MP+0x448 head, +0x218 frame), kept as enemies.js's tick applies the
+    // request: dropped by FUN_005a91c8, else a new head at 0 or at the carried frame (FUN_005a8fd0)
+    if (!(C.mp && mpDrops(flags, C.mp, name, partner))) {
+      const n = clipFrames(a, name);
+      C.mp = { clip: name, frame: carry ? (C.mp && n != null ? carryFrame(C.mp.frame, n) : null) : 0, loop: !!(flags & 1), partner };
+    }
     C.clip = name; C.loop = !!(flags & 1); C.flags = flags; C.partner = partner; C.req = (C.req | 0) + 1;
     events.push(`clip ${a.id} ${name}`);
   }
@@ -974,6 +983,7 @@ export function createEnemyAI(opts) {
     if (old.cls === 8 || old.cls === 3) { C.loco = null; C.f564 &= ~(8 | 0x10 | 0x40000); }
     // GUESS (see attackUpdate, 'Attack end'): an attack motion replaced before its end (a flinch) also ends
     // the attack state; the new motion is kept (no state motion)
+    if (old.cls >= 0x1000 && !old.left) rootLeave(a);                         // FUN_0059e938 (the attack motion's leave)
     if (old.cls >= 0x1000 && attacking(a)) setActorState(a, attackReturn(a), 0, true);
   }
   // FUN_00343160: a motion update (vt+0x24) returns the next class; FUN_00341780 switches to it only after
@@ -991,7 +1001,16 @@ export function createEnemyAI(opts) {
     // 0x200 / 0x400; the walking soldiers stay level (FUN_0034a5a8).
     if (cls === 3) C.f564 &= ~0x4000;
     C.motion = { cls, phase: 0, timer: 0, done: 0, t: 0, next74: NEXT74[cls] || 0 };
-    if (cls >= 0x1000) { C.motion.entry = cls - 0x1000; C.motion.kf = 0; C.speed = 0; }   // FUN_0059e830
+    if (cls >= 0x1000) {
+      // FUN_0059e830 (attack enter): +0x10 entry, C+0x568 bit 15 clear, FUN_0034b110(0, C), FUN_00356278(0, body),
+      // C+0x45c bit 18 set / bit 8 clear (T: k_lunge166 body+0xac 0x400b6 through the swing), timer +0xc 0 (+-4
+      // only with the C+0x7dc object's +0x28 bit 5: clear for z128's soldiers)
+      C.motion.entry = cls - 0x1000; C.motion.kf = 0; C.speed = 0;
+      C.f568 &= ~0x8000;
+      C.want = a.face.slice(); C.wk = 0;
+      PM.bodyRootY(a, 0);
+      C.f45c = (((C.f45c | 0) | 0x40000) & ~0x100) >>> 0;
+    }
     if (BIT4000(cls)) C.f564 |= 0x4000;
     if (cls === 0x1e) C.f564 |= FLINCH_BITS;                                  // 0x5988b8
     // the death motion 0x36 (vtable 0x5a4ef0): enter FUN_0059ce58 sets C+0x564 0x4000 | 0x8000 (T: k_hits12
@@ -1985,6 +2004,7 @@ export function createEnemyAI(opts) {
     const C = a.C, m = C.motion;
     C.nextMotion = 0;
     if (m) { C.inUpdate = true; try { motionUpdate(a, m, step); } finally { C.inUpdate = false; } }
+    rootSample(a);                                                            // FUN_00343160 after vt+0x24: C+0x310
     moverUpdate(a, step);                                                     // FUN_0034ea18 (path walk, C+0x300 slides)
     if (C.nextMotion) setMotion(a, C.nextMotion);
     else locoFrame(a);
@@ -2108,7 +2128,9 @@ export function createEnemyAI(opts) {
   // (C+0x7a0, set only by command 0xf) is never set on the page.
   function attackUpdate(a, m, step) {
     const T = attackTable(a), e = T && T.entries[m.entry];
-    m.timer = f(m.timer + step);
+    // timer += step, rounded toward zero (PS2 FPU): T k_lunge166 #66 ends r_atk_0 (dur 66) on its 56th step, f1510;
+    // round to nearest reaches 66.000004 a step early
+    m.timer = chop(m.timer + step);
     const fr = Math.trunc(m.timer);
     if (m.phase === 0) {
       if (!e) { m.phase = 2; m.done |= 1; }
@@ -2138,6 +2160,10 @@ export function createEnemyAI(opts) {
     // (bit 44): 0 -> gun ? 3 : 2, 1 -> gun ? 5 : 4. Stand-in: once the attack motion is done the actor
     // takes that state (notes/fidelity-audit.md 'Attack end').
     if ((m.done & 1) && attacking(a)) {
+      // GUESS (part of 'Attack end'): the leave's root part (FUN_0059e938) runs now, before this step's body move,
+      // not after it with the motion switch: T k_lunge166 f1510 (state 2): no root move, body+0xac already 0x200036
+      // and the velocity x 0.92 (turn limit toward 0) in that step's move
+      if (!m.left) { rootLeave(a); m.left = true; }
       events.push(`attack end ${a.id}`);
       setActorState(a, attackReturn(a));
     }
@@ -2158,7 +2184,7 @@ export function createEnemyAI(opts) {
       const op = c[0];
       if (op === 0) {
         const b6 = c[3] & 0xff, b7 = (c[3] >> 8) & 0xff;
-        if ((b6 & 7) && a.C.mover !== 0xe) warnOnce('enemy_ai: attack clip root motion (op 0 byte 6 bits 0-2, mover 8) not translated');
+        if ((b6 & 7) && a.C.mover !== 0xe) rootOn(a, b6);                       // root motion: mover 8 (rootSample)
         const name = T.names[String(c[2])] || null;
         if (b7 === 0) blendSet(a, 0, 0); else blendSet(a, 1, b7);
         if (name) playClip(a, name, (b6 & 8) ? 7 : 6);
@@ -2173,6 +2199,119 @@ export function createEnemyAI(opts) {
     return -1;
   }
 
+  // ------------------------------------------------ the attack clip's root motion (the lunge; worker 0166)
+  // FUN_003481e0 case 0 (op 0 byte 6 bits 0-2, body mover not 0xe): FUN_00340b28(C, 1) (C+0x568 |= 0x20), bit 0 ->
+  // C+0x568 0x40, bit 1 -> 0x100 and FUN_00356248(body, 1) (else (body, 0)), bit 2 -> 0x80; FUN_0034edf0(C, 8)
+  // (C+0x564 bit 11: C+0x45c bit 27 around it, not modelled); bit 2 -> FUN_0034e960(C, 8) (turn mode 8: not
+  // translated); C+0x568 |= 0x1000. T: k_melee18 (#66 r_atk_0, byte 6 = 3).
+  function rootOn(a, b6) {
+    const C = a.C;
+    C.f568 |= 0x20;
+    if (b6 & 1) C.f568 |= 0x40;
+    if (b6 & 2) { C.f568 |= 0x100; bodyOf(a); PM.bodyRootOn(a, 1); } else { bodyOf(a); PM.bodyRootOn(a, 0); }
+    if (b6 & 4) C.f568 |= 0x80;
+    if (C.f564 & 0x800) warnOnce('enemy_ai: mover 8 start with C+0x564 bit 11 (C+0x45c bit 27 placement) not translated');
+    PM.rootStart(a, placeBody, warnOnce);
+    if (b6 & 4) warnOnce('enemy_ai: root motion byte 6 bit 2 (FUN_0034e960(C, 8), turn mode 8) not translated');
+    C.f568 |= 0x1000;
+  }
+  // The clip's frame count (FUN_005ad6e8 = clip +0x1c x 2; +0x1c taken as the frame count, as model_clips)
+  function clipFrames(a, name) {
+    const mc = data.model_clips && data.model_clips[a.model];
+    return mc ? mc[name] ?? null : (data.clips ? data.clips[name] ?? null : null);
+  }
+  // 4 x 4 rows (p' = p M). FUN_0026125c(out, A, B) = B x A (out row i = sum_k B[i][k] A[k]).
+  const mmul = (A, B) => B.map(r => [0, 1, 2, 3].map(c => f(f(f(f(r[0] * A[0][c]) + f(r[1] * A[1][c])) + f(r[2] * A[2][c])) + f(r[3] * A[3][c]))));
+  // FUN_00261144: the affine inverse (rows 0-2 by the cross products over the determinant, row 3 = -t x inverse)
+  function minv(M) {
+    const [a, b, c] = M, t = M[3];
+    const cr = (u, v) => [f(f(u[1] * v[2]) - f(u[2] * v[1])), f(f(u[2] * v[0]) - f(u[0] * v[2])), f(f(u[0] * v[1]) - f(u[1] * v[0]))];
+    const c0 = cr(b, c), c1 = cr(c, a), c2 = cr(a, b);
+    const q = f(1.0 / f(f(f(c0[0] * a[0]) + f(c0[1] * a[1])) + f(c0[2] * a[2])));
+    const k = [c0, c1, c2].map(v => v.map(x => f(x * q)));                 // the inverse's columns
+    const R = [0, 1, 2].map(i => [k[0][i], k[1][i], k[2][i], 0]);
+    const T = k.map(v => f(-f(f(f(t[0] * v[0]) + f(t[1] * v[1])) + f(t[2] * v[2]))));
+    return [...R, [T[0], T[1], T[2], 1]];
+  }
+  // FUN_005ad730(MP, .., (int)(2 x head frame), out): the root bone's sample at that / 2 (FUN_005af980: q, t x 1/256)
+  // as a matrix (FUN_00262de0 rows = q applied to the axes, FUN_00444c88 translation). opts.rootTrack(model, clip)
+  // = { n, t: [[x, y, z]...], q: [[x, y, z, w]...] } per clip frame, model space (enemies.js / enemy_hit.js rootTrack);
+  // between frames t lerps and q nlerps as the page's pose (enemy_hit.js modelPose).
+  function rootMatrix(tr, s) {
+    const n = tr.t.length, i0 = Math.max(0, Math.min(Math.floor(s), n - 2)), u = s - i0, i1 = Math.min(i0 + 1, n - 1);
+    const t = [0, 1, 2].map(c => f(tr.t[i0][c] * (1 - u) + tr.t[i1][c] * u));
+    const q0 = tr.q[i0], q1 = tr.q[i1], sg = q0[0] * q1[0] + q0[1] * q1[1] + q0[2] * q1[2] + q0[3] * q1[3] < 0 ? -1 : 1;
+    let q = [0, 1, 2, 3].map(c => q0[c] * (1 - u) + sg * q1[c] * u);
+    const m = Math.hypot(...q) || 1; q = q.map(x => x / m);
+    const rot = v => {                                                        // q v q*
+      const [x, y, z, w] = q, ix = w * v[0] + y * v[2] - z * v[1], iy = w * v[1] + z * v[0] - x * v[2];
+      const iz = w * v[2] + x * v[1] - y * v[0], iw = -x * v[0] - y * v[1] - z * v[2];
+      return [ix * w + iw * -x + iy * -z - iz * -y, iy * w + iw * -y + iz * -x - ix * -z, iz * w + iw * -z + ix * -y - iy * -x];
+    };
+    const rows = [[1, 0, 0], [0, 1, 0], [0, 0, 1]].map(e => [...rot(e).map(f), 0]);
+    return [...rows, [t[0], t[1], t[2], 1]];
+  }
+  // FUN_00343160 l.138-216, after the motion update: with the MP (C+0x7c8) and C+0x568 bit 5, the head layer's
+  // root at (int)(2 x frame) (FUN_005a9120: MP+0x218 + 0x30 x head, x 2) while that is under 2 x n (FUN_005ad6e8);
+  // delta = the sample x inverse(C+0x6d0) (FUN_0026125c(D, M, inv) = inv x M), C+0x6d0 = the sample, C+0x370 = its
+  // y with C+0x568 bit 8, else 0 (FUN_00351400: only with C+0x1c4 bit 7). Past the end: delta identity, C+0x370 0.
+  // Movers 8 / 0xb: bit 6 -> the translation mirrored along the delta's row 0 (FUN_00260e28(-1, t, t, row 0):
+  // t - 2 (t . u) u, u = unit row 0), else its x / z 0; bit 7 clear -> rows 0-2 zeroed; bit 8 clear -> its y 0;
+  // C+0x54c vt+0x34 (a parent frame): none for the stage's soldiers (path_mover FUN_0034af98); FUN_003513c8 ->
+  // C+0x310 (C+0x1c4 bit 7). T: k_melee18 #66, one sample per frame at 0, 0.5, 1, 1.5, 2, 2.5, 3.5, 4 ...
+  // (the head frame gains 0.59999996 a frame; 5 x that is 2.9999998, so 3.0 is skipped).
+  function rootSample(a) {
+    const C = a.C;
+    if (!(C.f568 & 0x20)) return;
+    const h = C.mp, tr = h && opts.rootTrack ? opts.rootTrack(a.model, h.clip) : null;
+    if (!h || h.frame == null || !tr) { warnOnce('enemy_ai: root motion without the head layer\'s frame or root track (opts.rootTrack): no lunge'); return; }
+    const fr = Math.trunc(f(h.frame + h.frame)), n = clipFrames(a, h.clip) ?? tr.t.length;
+    let D;
+    if (fr < 2 * n) {
+      const M = rootMatrix(tr, f(fr * 0.5));
+      D = mmul(M, minv(C.r6d0));
+      C.r6d0 = M;
+      if (C.f1c4 & 0x80) C.r370 = (C.f568 & 0x100) ? M[3][1] : 0;
+      if (M[3][1] !== 0 && (C.f568 & 0x100)) warnOnce('enemy_ai: vertical root motion (body+0xa0 under +0xac bit 7) not translated');
+    } else {
+      D = PM.IDENT4();
+      if (C.f1c4 & 0x80) C.r370 = 0;
+    }
+    if (C.mover !== 8 && C.mover !== 0xb) return;
+    const t = D[3].slice();
+    if (C.f568 & 0x40) {
+      const u = D[0], l = f(Math.sqrt(f(f(f(u[0] * u[0]) + f(u[1] * u[1])) + f(u[2] * u[2]))));
+      const nu = [0, 1, 2].map(c => f(u[c] / l)), d = f(f(f(t[0] * nu[0]) + f(t[1] * nu[1])) + f(t[2] * nu[2]));
+      for (let c = 0; c < 3; c++) t[c] = f(f(t[c] - f(nu[c] * d)) + f(f(nu[c] * d) * -1.0));
+    } else { t[0] = 0; t[2] = 0; }
+    if (!(C.f568 & 0x80)) { D[0] = [0, 0, 0, 0]; D[1] = [0, 0, 0, 0]; D[2] = [0, 0, 0, 0]; }
+    if (!(C.f568 & 0x100)) t[1] = 0;
+    D[3] = t;
+    if (C.f1c4 & 0x80) C.m310 = D;
+  }
+  // The attack motion's leave FUN_0059e938, its root-motion part: FUN_00340b28(C, 0) (C+0x568 bit 5 clear,
+  // C+0x310 identity, C+0x370 0), FUN_00356248(body, 0), FUN_00356278(0, body), C+0x45c &= ~0x40100; with
+  // C+0x568 bit 12: C+0x564 bit 11 clear -> FUN_003533e0 (every mover stops), then FUN_0034b110(0, C) and move
+  // mode 0xc (FUN_0034db80) unless 0xc / 0x10-0x12; bit 12 cleared; C+0x1c0 bit 26 -> C+0x45c |= 0x200000.
+  // Not translated here: its FUN_00341988(C, 5, 0) and FUN_00348998(C). C+0x568 bits 6-8 stay set (no clear found
+  // apart from FUN_003472c0).
+  function rootLeave(a) {
+    const C = a.C;
+    C.f568 &= ~0x20;
+    if (C.f1c4 & 0x80) { C.m310 = PM.IDENT4(); C.r370 = 0; }
+    PM.bodyRootOn(a, 0);
+    PM.bodyRootY(a, 0);
+    C.f45c = ((C.f45c | 0) & ~0x40100) >>> 0;
+    if (C.f568 & 0x1000) {
+      if (!(C.f564 & 0x800)) PM.stopAll(a, warnOnce);
+      else warnOnce('enemy_ai: attack leave with C+0x564 bit 11 (FUN_00342308 branch) not translated');
+      C.want = a.face.slice(); C.wk = 0;                                      // FUN_0034b110(0, C)
+      if (C.mm !== 0xc && !(C.mm >= 0x10 && C.mm <= 0x12)) warnOnce('enemy_ai: attack leave outside move mode 0xc (FUN_0034db80) not translated');
+    }
+    C.f568 &= ~0x1000;
+    if (C.f1c0 & 0x4000000) C.f45c = ((C.f45c | 0) | 0x200000) >>> 0;
+  }
+
   // ------------------------------------------------ melee hit volume: the attack object (class 0xd)
   // op 2 -> FUN_003481e0 case 2: record = table +0x24 + arg 2 x 64 (ai.json attacks[set].volumes,
   // export_web_triggers.hit_volume) -> owner event 4 (0x56a214) -> FUN_00569dc0(owner, record).
@@ -2183,13 +2322,20 @@ export function createEnemyAI(opts) {
   // Soldier status fields the attack damage reads (save RAM, all seven awake e027s): +0x60 0 (so
   // FUN_00317630 = 0 and FUN_00317ef0's difficulty / FUN_003212a8 terms are skipped), +0x64 0
   // (FUN_00317b68 false: no x2), +0xc0 0 (no armour), +0x12 / +0x13 levels 0.
+  // GUESS: these fields are read from the save RAM of the seven awake e027s and used for every soldier type
+  // (notes/fidelity-audit.md 'Melee hit volume')
   const ENEMY_OFFENCE = { f60: 0, f64: 0, armour: null, l12: 0, l13: 0 };
   function makeAttack(a, T, idx) {
     const v = T.volumes && T.volumes[idx];
     if (!v) { warnOnce(`enemy_ai: attack table has no hit volume ${idx} (old ai.json: rebuild data/enemies)`); return; }
-    // FUN_00541310: FUN_00541278 = FUN_0053db98(mgr, 0xd) (constructor FUN_00579d00) + activate
-    const o = { owner: a, v, shape: v.shape > 3 ? 0 : v.shape, ec: REACT_EC[v.type > 3 ? 0 : v.type],
-                c1: v.c1, life: f(v.life), every: v.every, r: 5.0, grow: 0, dmg: Math.min(v.dmg, 9999), kind: 1,
+    // FUN_00569dc0 first returns with no object while FUN_00325b40 (AI paused) is set. GUESS: not paused on this
+    // page (as the scheduler's gate, see scheduler).
+    // FUN_00541310: FUN_00541278 = FUN_0053db98(mgr, 0xd) (constructor FUN_00579d00) + activate.
+    // FUN_00579ef0: type > 3 -> 0, kept in +0xc0 bits 0-1 (FUN_0055eac8 reads it there), +0xec by type.
+    // +0x13c (the repeat interval, record +7) is a signed char (FUN_0057a428 compares it as one).
+    const type = v.type > 3 ? 0 : v.type;
+    const o = { owner: a, v, type, shape: v.shape > 3 ? 0 : v.shape, ec: REACT_EC[type],
+                c1: v.c1, life: f(v.life), every: (v.every << 24) >> 24, r: 5.0, grow: 0, dmg: Math.min(v.dmg, 9999), kind: 1,
                 cand: [], local: v.off.slice(), fixed: null };
     if (o.shape === 1 || o.shape === 3) o.r = f(v.p[0]);                       // +0xd0 = record +0x30
     // shape 2 (+0xd8 / +0xd4 / +0xd0 / +0xdc) and 0 / 3 tests: not translated (e030's sets)
@@ -2346,7 +2492,7 @@ export function createEnemyAI(opts) {
   // FUN_0055ea50 ('h_dmg_N') and HUD FUN_00567fe8; script event 0x1d (vt+0x2f4): Vincent has no script here.
   function attackDamagePlayer(o, c, A, B) {
     events.push(`melee hit player ${o.owner.id}`);
-    if ((PST.f64 & 3) && (o.v.type & 3) !== 3) return;
+    if ((PST.f64 & 3) && o.type !== 3) return;                                // +0xc0 & 3 (FUN_00579ef0's clamped type)
     let dmg = Math.min(defence(PST, o.dmg, o.kind), 9999);
     if (dead(P)) return;
     if ((P.f118 & 0x20) || (P.f118 & 0x40)) dmg = 0;
@@ -3026,6 +3172,16 @@ export function createEnemyAI(opts) {
     // 6. manager events, FUN_0053fde8 (the last call of FUN_0053b500). L: the page's steps 1-5 are not
     // in the game's exact order, but they all run before this.
     drainManager();
+    // the MP head layers advance as enemies.js's tick does after the AI (FUN_005aa2a8: frame += MP+0x40c x step,
+    // the sum rounded toward zero; a looped layer wraps to 0 at n, any other holds n - 1); rootSample reads them
+    // next frame. T: k_lunge166 #66 MP+0x218 (r_atk_0): 23.999971 after 40 frames (round to nearest: 24.00001)
+    for (const a of actors) {
+      const h = a.C.mp, n = h && clipFrames(a, h.clip);
+      if (!h || h.frame == null || n == null) continue;
+      h.frame = chop(h.frame + chop(chop((a.C.rate != null ? a.C.rate : 0.5) * 1.0) * step));
+      if (h.loop) { if (n <= h.frame) h.frame = 0; }
+      else if (n - 1 <= h.frame) h.frame = n - 1;
+    }
     return events.slice();
   }
 

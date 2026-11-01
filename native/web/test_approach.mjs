@@ -151,27 +151,47 @@ if (!existsSync(dataPath)) { skip('data/enemies/ai.json missing (build_web.sh)')
   W.t.setMode(a.ai, 5);
   a.ai.bstate = 7;
   const log = [];
-  let moved = null, stop = null;
+  let moved = null, stop = null, prevMover = 0;
   for (let i = 0; i < 600; i++) {
     const ev = W.tick(1.2, player.pos, player.pos);
     const d = Math.hypot(player.pos[0] - a.pos[0], player.pos[2] - a.pos[2]);
     if (moved == null && a.C.mover === 3) moved = i;
-    if (ev.some(e => e === `approach end ${a.id}`)) stop = [i, d];
+    // the walk-in ends with mover 3's own end inside 20 u, or earlier with the swing: the attack pick inside 22 u
+    // (d34) while mover 3 still runs, whose op 0 (FUN_003481e0 case 0 -> FUN_0034edf0(C, 8)) replaces mover 3
+    // with mover 8 (the game: k_inview17d #66, mover 0xd -> 8 at f1803). rand 0.5: the swing, at 21.4 u.
+    if (!stop && (ev.some(e => e === `approach end ${a.id}`) || (a.astate >= 0x80 && a.astate < 0xc0 && prevMover === 3 && a.C.mover === 8)))
+      stop = [i, d, a.C.mover];
+    prevMover = a.C.mover;
     log.push([a.ai.bstate, a.ai.amode, a.ai.astate28, a.C.mover, d, a.pos[1]]);
   }
   const d = Math.hypot(player.pos[0] - a.pos[0], player.pos[2] - a.pos[2]);
   ok(moved != null, `mode 5 state 7 -> action layer 3 -> mover 3 with Vincent 40 u away and in view (frame ${moved})`);
-  ok(stop && stop[1] < 20.0 && stop[1] > 19.0, `walks in and the mover ends just inside 20 u (frame ${stop && stop[0]}, ${stop && stop[1].toFixed(2)} u)`);
-  // after the stop he stays inside 20 u until brain 5 hands him to layer 5 (away from the target, mode 3) or 6
+  ok(stop && (stop[2] === 8 ? stop[1] < 22.0 && stop[1] > 20.0 : stop[1] < 20.0 && stop[1] > 19.0),
+     `walks in; mover 3 ends ${stop && stop[2] === 8 ? 'with the swing (mover 8) inside 22 u' : 'just inside 20 u'} (frame ${stop && stop[0]}, ${stop && stop[1].toFixed(2)} u)`);
+  // after the stop he stays where he stopped (inside 22 u) until brain 5 hands him to layer 5 (away from the target, mode 3) or 6
   // (reposition, mode 2): any later walk is mover 0xd under one of those, never mover 3 again from outside
   // (until his own bullets cross trigger 77, whose script 127 puts him on stage path 5: mover 1, the path's heights)
   const after0 = stop ? log.slice(stop[0] + 1) : [];
   const wake = after0.findIndex(x => x[3] === 1);
   const after = wake < 0 ? after0 : after0.slice(0, wake);
-  const out = after.findIndex(x => x[4] > 20.5);
+  const out = after.findIndex(x => x[4] > 22.5);
   ok(stop && (out < 0 || after.slice(0, out + 1).some(x => (x[1] === 5 || x[1] === 6) && x[3] === 0xd)) && after.every(x => Math.abs(x[5] - rec.pos[1]) < 1e-4),
-     `after the stop: inside 20 u until layer 5 / 6 move him (mover 0xd; layers seen ${[...new Set(after.map(x => x[1]))]} over ${after.length} frames${wake < 0 ? '' : ', then trigger 77 wakes him onto path 5'}; the walk mesh keeps his height)`);
-  // case 3 sees the mover end (C+0x300 = 0) -> state 0 -> 1 -> 4 (inside 20 u)
+     `after the stop: inside 22 u until layer 5 / 6 move him (mover 0xd; layers seen ${[...new Set(after.map(x => x[1]))]} over ${after.length} frames${wake < 0 ? '' : ', then trigger 77 wakes him onto path 5'}; the walk mesh keeps his height)`);
+  // with the attack table: the pick inside 22 u during the walk-in; the swing's mover 8 takes over mover 3
+  {
+    const pl = { pos: player.pos.slice(), hp: 780, id: 0x16, f118: 0, s64: 0 };
+    const Wa = AI.createEnemyAI({ data, player: pl, rand: () => 0.5, quiet: true, log: () => {}, walkMesh: mesh });
+    const b = Wa.addActor({ rec: 46, astate: 3, f118: 0, face: [1, 0, 0] });
+    Wa.t.setTarget(b.ai, pl); Wa.t.setMode(b.ai, 5); b.ai.bstate = 7;
+    let swap = null, prev = 0;
+    for (let i = 0; i < 200 && !swap; i++) {
+      Wa.tick(1.2, pl.pos, pl.pos);
+      if (b.astate >= 0x80 && b.astate < 0xc0) swap = { before: prev, now: b.C.mover, d: Math.hypot(pl.pos[0] - b.pos[0], pl.pos[2] - b.pos[2]) };
+      prev = b.C.mover;
+    }
+    ok(swap && swap.before === 3 && swap.now === 8 && swap.d < 22, `with the attack table: the swing starts at ${swap?.d?.toFixed(1)} u (< 22) during mover ${swap?.before} (3) and replaces it with mover ${swap?.now} (8: the root motion)`);
+  }
+  // case 3 sees the mover end (C+0x300 = 0) -> state 0 -> 1 -> 4 (inside 22 u)
   ok(stop && log.slice(stop[0]).some(x => x[1] === 3 && (x[2] === 0 || x[2] === 4)), `after the stop: case 3 -> state 0 (mover ended) -> 4 (states ${[...new Set(log.slice(stop ? stop[0] : 0).filter(x => x[1] === 3).map(x => x[2]))]})`);
   ok(log.some(x => x[0] === 10 || x[0] === 0xb || x[0] === 0xe), `brain 5 leaves state 8 once d34 < 25 (states seen ${[...new Set(log.map(x => x[0]))].join(',')})`);
   // hits during / after mover 3, with and without a spline left over from a path walk (records 46 / 47
@@ -287,8 +307,10 @@ if (!existsSync(dataPath)) { skip('data/enemies/ai.json missing (build_web.sh)')
     W2.t.setTarget(b.ai, pl); W2.t.setMode(b.ai, 5); b.ai.bstate = 7;
     const seen = new Set();
     let mv = false;
-    for (let i = 0; i < 40; i++) { W2.tick(1.2, pl.pos, pl.pos); if (b.ai.amode === 3) seen.add(b.ai.astate28); mv ||= b.C.mover !== 0; }
-    if (want === 4) ok(!mv && seen.has(want) && b.pos[0] === rec.pos[0], `${dist} u: action layer 3 state 4, no mover (states ${[...seen]})`);
+    // an approach mover (3 / 0xd); his swing at 15 u runs mover 8, which has no root track here (no lunge)
+    for (let i = 0; i < 40; i++) { W2.tick(1.2, pl.pos, pl.pos); if (b.ai.amode === 3) seen.add(b.ai.astate28); mv ||= b.C.mover === 3 || b.C.mover === 0xd; }
+    // (the swing's move mode 0xc stores his position as the game's f32, rounded toward zero: compare within 1e-3)
+    if (want === 4) ok(!mv && seen.has(want) && Math.abs(b.pos[0] - rec.pos[0]) < 1e-3, `${dist} u: action layer 3 state 4, no approach mover (states ${[...seen]})`);
     else ok(seen.has(want) && b.C.mover === 0xd, `${dist} u, out of view: action layer 3 state 2 on mover 0xd (states ${[...seen]}, mover ${b.C.mover})`);
   }
 }

@@ -48,9 +48,9 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
 import { SpeedAnimator, STEP } from './player.js';
-import { boneRows } from './enemy_hit.js';
+import { boneRows, rootTrack as rootTrackOf } from './enemy_hit.js';
 import { rootSpeed as clipRootSpeed } from './aim.js';
-import { mpDrops, carryFrame } from './enemy_ai.js';
+import { mpDrops, carryFrame, chop } from './enemy_ai.js';
 
 const DIR = 'data/enemies/';
 const CLIP = 'r_gst';            // GUESS: the idle the brain requests at activation (FUN_0055b8e0 from the brain; not decoded). Save state: idle soldiers play r_gst / r_gst_lk
@@ -188,6 +188,7 @@ export async function setupEnemies({ root, litPatch, light, extra = [] }) {
   const s = SCALE_BYTE / 128;
   const Y = new THREE.Vector3(0, 1, 0);
   const actors = [];
+  const roots = new Map();                                     // rootTrack cache (model/clip)
   const pending = new Set();                                   // records whose body is loading
   async function spawn(pl) {
     const M = await loadModel(pl.model);
@@ -220,7 +221,7 @@ export async function setupEnemies({ root, litPatch, light, extra = [] }) {
     // FUN_005a9db0 through SpeedAnimator's own code (setLocalPose / poseLocal use only this.lp)
     const pose = Object.create(SpeedAnimator.prototype);
     pose.setLocalPose(lp, lpBuf, scn);
-    const a = { rec: pl.rec, tag: pl.tag, model: pl.model, side, lp, body, prims, pose, frame: 0, clip };   // GUESS: frame 0 at activation, all in phase
+    const a = { rec: pl.rec, tag: pl.tag, model: pl.model, side, lp, lpData: M.lpData ??= new Float32Array(lpBuf), body, prims, pose, frame: 0, clip };   // GUESS: frame 0 at activation, all in phase
     if (light && litPatch) {
       const p = new THREE.Vector3(...ACTOR_CENTRE).applyAxisAngle(Y, body.rotation.y).add(body.position);
       const dir = new THREE.Vector3(), col = new THREE.Vector3();
@@ -295,10 +296,11 @@ export async function setupEnemies({ root, litPatch, light, extra = [] }) {
     return b => boneRows([R[b].x, R[b].y, R[b].z, R[b].w], [S[3 * b], S[3 * b + 1], S[3 * b + 2]],
                          [P[3 * b], P[3 * b + 1], P[3 * b + 2]], pos, face);
   }
-  // FUN_005aa2a8 on one layer: frame += rate x weight/128 x step (weight byte 128); a looped layer
-  // resets to 0 at n, any other holds n - 1 (player.js advLayer)
+  // FUN_005aa2a8 on one layer: frame += rate x weight/128 x step (weight byte 128), rounded toward zero as the
+  // PS2 FPU does (T: k_lunge166 #66 r_atk_0 23.999971 after 40 frames); a looped layer resets to 0 at n, any
+  // other holds n - 1 (player.js advLayer, which still rounds to nearest)
   function advance(a, L, rate = RATE) {
-    L.frame = Math.fround(L.frame + Math.fround(Math.fround(rate * 1.0) * STEP));
+    L.frame = chop(L.frame + chop(chop(rate * 1.0) * STEP));
     const n = a.side.clips[L.clip].frames;
     if (L.loop) { if (n <= L.frame) L.frame = 0; }
     else if (n - 1 <= L.frame) L.frame = n - 1;
@@ -310,6 +312,16 @@ export async function setupEnemies({ root, litPatch, light, extra = [] }) {
     rootSpeed(model, clip) {
       const a = actors.find(x => x.model === model && x.side.clips[clip]);
       return a ? clipRootSpeed(a.side.clips, clip) : null;
+    },
+    // the root bone's track of a model's clip (enemy_hit.js rootTrack) for enemy_ai's root motion (FUN_005ad730)
+    rootTrack(model, clip) {
+      const key = model + '/' + clip;
+      if (roots.has(key)) return roots.get(key);
+      const a = actors.find(x => x.model === model && x.side.clips[clip]);
+      if (!a) return null;
+      const tr = rootTrackOf(a.lp, a.lpData, a.side.clips[clip], clip);
+      roots.set(key, tr);
+      return tr;
     },
     // the drawn actor that draws first (FUN_005a7978 list head side); play.js sets Vincent's body
     set mpHead(o) { base = o; },

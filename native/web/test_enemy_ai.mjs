@@ -708,9 +708,12 @@ else {
      `mode 5 at 100 u: brain states {${[...states].map(x => x.toString(16)).join(',')}} (6, 7, 8), 6 -> 7 at f${to7?.i} with +0x74 ${to7?.f74} (>= 3), ${shots} shots in 900 frames (>= 10), actor state ${a.astate} (3), combat layer ${a.ai.cmode}, action layers {${[...al].join(',')}} (2, 3; not translated)`);
   // close: melee
   const C2 = mk(15);
-  let atk = null, hitw = null, endf = null;
+  let atk = null, hitw = null, endf = null, made = null, gone = null, hitP = false;
   for (let i = 0; i < 200; i++) {
     const ev = C2.W.tick(1.0, C2.player.pos, C2.player.pos);
+    if (made == null && ev.some(x => x.startsWith(`attack object ${C2.a.id} `))) made = i;
+    if (made != null && gone == null && ev.some(x => x.startsWith(`attack object end ${C2.a.id}`))) gone = i;
+    if (ev.some(x => x.startsWith('melee hit player'))) hitP = true;
     if (!atk) { const e = ev.find(x => x.startsWith(`attack ${C2.a.id} `)); if (e) atk = { f: i, clip: C2.a.C.clip, st: C2.a.astate, comb: C2.a.ai.cmode }; }
     if (atk && hitw == null && ev.some(x => x.startsWith(`melee ${C2.a.id} hit`))) hitw = i - atk.f;
     if (atk && endf == null && ev.includes(`attack end ${C2.a.id}`)) endf = { f: i - atk.f, bst: C2.a.ai.bstate, st: C2.a.astate };
@@ -720,8 +723,12 @@ else {
      `mode 5 at 15 u (d34 < 22): attack at f${atk?.f} (the second brain run: state 6 -> 10, then 10 picks), actor state 0x${atk?.st?.toString(16)} (0x80), clip ${atk?.clip} (${T.names['0']}), combat layer ${atk?.comb} (0), hit window +${hitw}`);
   ok(endf && endf.f === T.entries[0].dur - 1 && endf.st === 3,
      `mode 5 attack ends +${endf?.f} (entry length ${T.entries[0].dur}), actor state ${endf?.st} (3: gun bit set by state 3's enter)`);
-  // no boneWorld here: the hit volume has no marker pose (warned), so no hit (test_melee.mjs covers the hit)
-  ok(C2.player.hp === 780 && C2.W.attackObjs.length === 0, `melee without a pose (boneWorld unset): no hit volume, HP ${C2.player.hp}`);
+  // no boneWorld here: the hit volume IS made (follow bit +0xc1 bit 3: no centre needed at the make), but each
+  // update finds no marker pose (warned), so it tests nothing and runs out its life: life L at step 1.0 -> < 0
+  // on update L + 1 (test_melee.mjs covers the hit)
+  const vol = T.volumes[T.entries[0].kf.flatMap(k => k.cmds).find(c => c[0] === 2)[2]];
+  ok(made != null && (vol.c1 & 8) && gone - made === vol.life + 1 && !hitP && C2.player.hp === 780 && C2.W.attackObjs.length === 0,
+     `melee without a pose (boneWorld unset): volume made at f${made} (+0xc1 0x${vol.c1.toString(16)}: follow), gone ${gone - made} updates later (life ${vol.life} + 1), no hit (HP ${C2.player.hp})`);
 }
 
 // Brain mode 6 (FUN_00364558): state 0 -> 2 (actor state 3, combat 2, action layer 5); close, the attack

@@ -370,6 +370,62 @@ export function approachStop(a) {
   C.f1c4 = ((C.f1c4 & ~0x20) | 0x100) >>> 0;
   if (C.mm === 0xc) wantFace(a, 0); else C.mm = 0;
 }
+// ------------------------------------------------ mover 8: the attack clip's root motion (worker 0166)
+// Started by op 0 of an attack keyframe (enemy_ai attackCommands, FUN_003481e0 case 0); FUN_00343160 writes
+// the root delta into C+0x310 each frame (enemy_ai rootSample), FUN_00351418 turns it into the body's wanted
+// move. C.m310 = C+0x310 (4 rows, a union with the other movers' fields, kept apart here), C.r370 = C+0x370.
+export const IDENT4 = () => [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]];
+// FUN_0034edf0(C, 8) and FUN_0034f178 case 8. place = FUN_00356d98(C+0x3b0, C+0x30, 0, 0, 0) (placeBody)
+export function rootStart(a, place, warn = () => {}) {
+  const C = a.C;
+  if (C.mover !== 0) moverStop(a, warn);                                    // FUN_00352a60
+  C.f1c4 = (C.f1c4 & ~0x80) >>> 0;
+  C.f1c0 = (C.f1c0 & ~0x4000) >>> 0;                                        // case 8
+  C.f1c4 = (C.f1c4 | 0x80) >>> 0;
+  C.mover = 8;
+  C.f1c4 = ((C.f1c4 & ~0x100) | 0x20) >>> 0;
+  if (C.mm !== 0xc) { wantFace(a, 0); place(a); setMode0xc(a); }            // FUN_0034f178 case 8
+  C.m310 = IDENT4();                                                        // FUN_002613b8(C+0x310)
+  C.r370 = 0;
+}
+// FUN_00351418 (mover 8, every frame; FUN_0034f8c0 case 8, never ends by itself): the delta's translation
+// row through C's rotation (FUN_0026125c(out, C rows 0-2 with row 3 = vf0, C+0x310) = C+0x310 x C), times
+// -1 / DAT_004eeb24 (the frame step), y 0; FUN_00356278(C+0x370, body); a horizontal length over 0.01 ->
+// FUN_0034af98(len, C, unit) and C+0x370 = 0, else FUN_0034b110(0, C). C's rows: FUN_0055a168's
+// (up x face, up, face) with up (0, -1, 0) (enemies.js; T: k_melee18 e0_cmat).
+export function rootTick(a, step) {
+  const C = a.C, D = C.m310 || IDENT4(), fc = a.face;
+  const R = [[f(-fc[2]), 0, fc[0]], [0, -1, 0], [fc[0], fc[1], fc[2]]];
+  const t = D[3];
+  const w = [0, 1, 2].map(c => f(f(f(t[0] * R[0][c]) + f(t[1] * R[1][c])) + f(t[2] * R[2][c])));
+  const k = f(-1.0 / step);
+  const v = [f(w[0] * k), 0, f(w[2] * k)];
+  const s = f(Math.sqrt(f(f(v[0] * v[0]) + f(v[2] * v[2]))));
+  bodyRootY(a, C.r370);                                                     // FUN_00356278(C+0x370, C+0x3b0)
+  if (0.01 < s) {
+    C.want = [f(v[0] / s), 0, f(v[2] / s)];                                 // FUN_0034af98(s, C, v / |v|)
+    C.wk = s;
+    C.r370 = 0;
+  } else wantFace(a, 0);
+}
+// FUN_00356248(B, n): n -> body+0xac |= 0x80; else +0xa0 = 0, +0xc0 = +4 (not modelled), bit 7 clear.
+// FUN_00356278(y, B): +0xa0 = y, except with +0xac bits 18 and 8 both set, where only a y above +0xa4 is
+// taken. body+0xac is C+0x45c (C.f45c); B.a0 = body+0xa0 (the vertical root offset). Its reader (the body's
+// height under bit 7) is not translated: enemy_ai warns when a clip's root y is not 0 (z128's e027
+// r_atk_0: 0 on every frame).
+export function bodyRootOn(a, n) {
+  const C = a.C, B = a.B;
+  if (n) { C.f45c = ((C.f45c | 0) | 0x80) >>> 0; return; }
+  if (B) B.a0 = 0;
+  C.f45c = ((C.f45c | 0) & ~0x80) >>> 0;
+}
+export function bodyRootY(a, y) {
+  const C = a.C, B = a.B, ac = C.f45c | 0;
+  if (!B) return;
+  if (!((ac >> 18) & 1) || !((ac >> 8) & 1)) B.a0 = y;
+  else if (B.a4 != null && B.a4 < y) B.a0 = y;     // +0xa4 is not modelled (bits 18 / 8: clear on z128's soldiers)
+}
+
 // FUN_003504b0 (mover 3, every frame). tpos = FUN_0054a720(target) (its position C+0x30); the body's
 // own point = C+0x54c vt+0x1c = C+0x30. Horizontal distance d to the target; speed scale 1 beyond lo + 25,
 // 0.3 + (x - 20) 0.14 between lo + 20 and lo + 25, else 0.3 (x = d - lo); FUN_0034b200(scale, C, dir).
@@ -396,7 +452,11 @@ function angle(a, b) {
   const aa = f(f(f(a[0] * a[0]) + f(a[1] * a[1])) + f(a[2] * a[2]));
   const bb = f(f(f(b[0] * b[0]) + f(b[1] * b[1])) + f(b[2] * b[2]));
   const ab = f(f(f(a[0] * b[0]) + f(a[1] * b[1])) + f(a[2] * b[2]));
-  const c = f(ab / f(Math.sqrt(f(aa * bb))));
+  // VRSQRT: Q = ab / sqrt(aa bb); by zero the VU gives +-max float with the numerator's sign (no NaN), so a zero
+  // vector with a -0 dot product is pi apart (T: k_lunge166 #66 f1510-1512, the velocity x (1 - 0.2513 / pi)
+  // toward the wanted -0 vector after the attack under body bit 21)
+  const den = f(Math.sqrt(f(aa * bb)));
+  const c = den === 0 ? ((ab < 0 || Object.is(ab, -0)) ? -3.4028235e38 : 3.4028235e38) : f(ab / den);
   if (!(c < 1.0)) return 0;
   if (!(-1.0 < c)) return f(Math.PI);
   return f(Math.acos(c));
@@ -521,7 +581,7 @@ export function approachFrame(a, tpos, step, walk, warn = () => {}, sliding = fa
       if (nav.event) nav.event(4, n >= 0 && n < C.list.length ? C.list[n] : -1);
       ev = 'nav end';
     }
-  }
+  } else if (C.mover === 8) rootTick(a, step);                              // FUN_0034f8c0 case 8: FUN_00351418
   if (C.mm === 0xc && !sliding) mode0xc(a, step, walk, warn);
   if (C.s214 === 5) turnMode5(a, step, warn);
   return ev;

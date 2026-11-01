@@ -26,7 +26,8 @@
 //      (cmd 0x131, path_mover.js: running clip r_grn, stop where the game stops them, trace w159_walk95,
 //      then script event 0x13: AI mode 1);
 //   10. a shot soldier (record 70, mode 5) with Vincent ~250 u away walks to him on the nav graph (action layer 2,
-//      mover 0xd), hands over to the approach (layer 3, mover 3) and starts his melee attack; 10b. the same
+//      mover 0xd), hands over to the approach (layer 3, mover 3) and swings from ~20 u (mover 8; his m_atk has no root
+//      travel, so he reaches by the volume alone) and the hit takes 49 HP off Vincent; 10b. the same
 //      soldier with Vincent in view at 177 u keeps firing, repositions with layer 6 (mode-2 path on mover 0xd)
 //      and later closes in and swings; no console errors or page errors.
 //   node native/web/test_enemies_page.mjs          (needs data/enemies + playwright; else SKIP, exit 0)
@@ -431,8 +432,8 @@ try {
   });
   ok(g69 && g69.mode === 5 && g69.after.fired && g69.after.cmode === 2 && g69.after.astate === 3,
      `record 69 hit (event 8): AI mode ${g69?.mode} (5), keeps firing: m_st_f drawn ${g69?.after.fired}, brain states ${JSON.stringify(g69?.after.states)}, combat layer ${g69?.after.cmode}, actor state ${g69?.after.astate}`);
-  ok(g69 && g69.atk.melee && g69.atk.hp === g69.atk.hp0 - 49,
-     `record 69 with Vincent 12 u in front: melee, body draws m_atk (${g69?.atk.melee}), Vincent HP ${g69?.atk.hp0} -> ${g69?.atk.hp} (-49: one hit, enemy bullet damage off)`);
+  ok(g69 && g69.atk.melee && g69.atk.hp === g69.atk.hp0 - 49 && g69.atk.hud,
+     `record 69 with Vincent 12 u in front: melee, body draws m_atk (${g69?.atk.melee}), Vincent HP ${g69?.atk.hp0} -> ${g69?.atk.hp} (-49: one hit, enemy bullet damage off; HUD says 'bullet damage off': ${g69?.atk.hud})`);
   // 9. The platform soldiers (records 46-49, Dan's report "they can't react"). Trigger 77 (script 100) is a
   // flag-0x20 volume over their raised floor: FUN_005503e8 makes it see-through to bullets, and a bullet
   // crossing it runs event 0x12 (FUN_005442d8 -> vt+0x1b4 FUN_005511e8): wake n1 -> 46-49. Walking into it
@@ -537,24 +538,38 @@ try {
     const d0 = dist(), p0 = a.pos.slice();
     const chest = [a.pos[0], a.pos[1] - 14, a.pos[2]], fw = [a.face[0], 0, a.face[2]];
     const muzzle = [chest[0] + fw[0] * 40, chest[1], chest[2] + fw[2] * 40];
-    const hp0 = a.hp, mode0 = a.ai.mode;
+    const hp0 = a.hp, mode0 = a.ai.mode, vhp0 = P.php.hp;                       // bullets don't hurt Vincent (?enemydmg off)
     ai.queueShot(muzzle, chest, { ...Wp, spread: null, pellets: 1 });
     const layers = new Set(), movers = new Set(), t0 = ai.tick;
     let dmin = d0, firstNav = null, n = 0, free = null;
     const busy = () => a.C.mover === 9 || (a.C.f564 & 0x8000) || a.astate !== 3;     // the flinch (mover 9 slide, busy bit)
+    let dStart = null, dLunge = null, lunge8 = false, clip = null;
     ai.tick = (...x) => { const ev = t0(...x); n++; layers.add(a.ai.amode); movers.add(a.C.mover);
+                          if (a.astate >= 0x80 && a.astate < 0xc0) { if (dStart == null) { dStart = dist(); dLunge = dStart; clip = a.C.mp && a.C.mp.clip; } dLunge = Math.min(dLunge, dist()); }
+                          if (a.C.mover === 8) lunge8 = true;
                           if (free == null && n > 1 && !busy()) free = n;
                           if (a.C.mover === 0xd && firstNav == null) firstNav = n; dmin = Math.min(dmin, dist()); return ev; };
     const swung = await wait(() => a.astate >= 0x80 && a.astate < 0xc0, 90000);
-    const out = { free, d0, hit: mode0 !== 5 && a.ai.mode === 5, hp: [hp0, a.hp], mode: a.ai.mode, layers: [...layers], movers: [...movers], firstNav, frames: n,
-                  dmin, dEnd: dist(), astate: a.astate, swung, walked: Math.hypot(a.pos[0] - p0[0], a.pos[2] - p0[2]), vhp: P.php.hp };
+    const astate = a.astate, frames = n;
+    // the swing: mover 8 runs the clip's root (m_atk: none, so no lunge here), then the hit volume takes 49 HP
+    const hitV = await wait(() => P.php.hp < vhp0, 15000);
+    const dSwing = dStart;
+    const out = { free, d0, hit: mode0 !== 5 && a.ai.mode === 5, hp: [hp0, a.hp], mode: a.ai.mode, layers: [...layers], movers: [...movers], firstNav, frames,
+                  dmin, dEnd: dSwing, astate, swung, walked: Math.hypot(a.pos[0] - p0[0], a.pos[2] - p0[2]), vhp0, vhp: P.php.hp, hitV, dLunge, lunge8, clip,
+                  // the clip's root travel (enemies.js rootTrack: bone 1 with the root motion), x / z
+                  root: (tr => tr ? Math.max(...tr.t.map(t => Math.hypot(t[0] - tr.t[0][0], t[2] - tr.t[0][2]))) : null)(clip && P.enemies.rootTrack('e027', clip)) };
     ai.tick = t0;
     return out;
   });
   ok(ch && ch.hit && ch.movers.includes(0xd) && ch.firstNav != null && ch.free != null && ch.firstNav - ch.free <= 20,
      `record 70 shot ${ch?.d0?.toFixed(0)} u from Vincent (HP ${ch?.hp}; the hit runs event 8 -> mode 5; damage and flinch are random): AI mode ${ch?.mode}, layers ${ch?.layers}, movers ${ch?.movers}; the flinch ends at frame ${ch?.free}, mover 0xd from frame ${ch?.firstNav} (the game: within ~10 frames of mode 5, w161_chase)`);
   ok(ch && ch.swung && ch.dEnd < 25 && ch.walked > 100,
-     `walks ${ch?.walked?.toFixed(0)} u along the graph and swings (actor state 0x${ch?.astate?.toString(16)}) at ${ch?.dEnd?.toFixed(1)} u after ${ch?.frames} frames; Vincent HP ${ch?.vhp} (from 20 u the swing misses: the attack clip lunge, root motion mover 8, is not ported)`);
+     `walks ${ch?.walked?.toFixed(0)} u along the graph and swings (actor state 0x${ch?.astate?.toString(16)}) at ${ch?.dEnd?.toFixed(1)} u after ${ch?.frames} frames`);
+  // the swing runs mover 8 (op 0 byte 6 = 3); how far it carries him is the clip's root travel: record 70's stance
+  // swings m_atk, whose bone-1 track is still (no lunge in the game either; its volume, marker 8 / bone 13, reaches
+  // Vincent from 20 u); r_atk_0's ~7 u lunge is checked against k_melee18 in test_melee.mjs
+  ok(ch && ch.lunge8 && ch.root != null && (ch.root < 0.01 ? Math.abs(ch.dLunge - ch.dEnd) < 0.05 : ch.dLunge < ch.dEnd - 0.5 * ch.root) && ch.hitV && ch.vhp === ch.vhp0 - 49,
+     `the swing (${ch?.clip}, root travel ${ch?.root?.toFixed(2)} u) runs mover 8 (${ch?.lunge8}): ${ch?.dEnd?.toFixed(1)} -> ${ch?.dLunge?.toFixed(1)} u, and hits: Vincent HP ${ch?.vhp0} -> ${ch?.vhp} (-49)`);
   // 10b. The in-view case (Dan: he shoots a soldier who can see him). Record 70 again, Vincent on nav node 37
   // (177 u, in his view by the page's LOS, collision.js segment). The decode (FUN_003639d0 states 6 / 12 / 13,
   // FUN_003672d8): he keeps firing; every ~0x79 ticks state 13 runs action layer 6, a mode-2 path from his

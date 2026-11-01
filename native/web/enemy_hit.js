@@ -133,6 +133,21 @@ export function modelPose(lp, data, clip, frame) {
   return { R, S, P };
 }
 
+// The root bone's (bone 1, FUN_005ad730's track) local translation and rotation per clip frame, model space, with
+// the root motion the in-place pose leaves out: local_pose bone 1 t + the sidecar's root_motion_per_frame_glb
+// (glb (x, -y, -z) back to the model's axes). For enemy_ai opts.rootTrack. side = MODEL.json's clips[clip].
+export function rootTrack(lp, data, side, clip) {
+  const c = lp.clips[clip], n = lp.bones;
+  if (!c || !side || !side.root_motion_per_frame_glb) return null;
+  const r = side.root_motion_per_frame_glb, t = [], q = [];
+  for (let i = 0; i < c.frames; i++) {
+    const o = (c.offset + i * n + 1) * 10, g = r[Math.min(i, r.length - 1)];
+    t.push([data[o] + g[0], data[o + 1] - g[1], data[o + 2] - g[2]]);
+    q.push([data[o + 6], data[o + 7], data[o + 8], data[o + 9]]);
+  }
+  return { n: c.frames, t, q };
+}
+
 // A bone's world rows from its model-space TRS (the flat joint node: T(P) R S) and the body
 // placement as enemies.js draws it: world = pos + Ry(atan2(face.x, face.z) + pi) x (play.js
 // bodyYaw; the glb root's Rx 180 and enemies.js's flip cancel). rq = [x, y, z, w].

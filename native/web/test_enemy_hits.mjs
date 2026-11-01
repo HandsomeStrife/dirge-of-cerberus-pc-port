@@ -255,6 +255,7 @@ for (const [k, model, stand, size, deathClip] of [[28, 'e048', 'r_st_a', [5, 18]
 // A hit during his melee attack: record 69 in mode 5 with Vincent 15 u in front attacks (actor state
 // 0x80, motion 0x1000); Vincent's bullet flinches him (motion 0x1e replaces the attack motion), which
 // (GUESS 'Attack end') ends the attack state with the flinch kept; once the flinch ends the brain runs on.
+// The attack motion's leave stops his movers, so the flinch has no push-back slide here.
 {
   const php = { pos: [0, 0, -15], hp: 780, id: 0x16, f118: 0, s64: 0 };
   const ai = createEnemyAI({ data, player: php, quiet: true, log: () => {} });
@@ -263,14 +264,21 @@ for (const [k, model, stand, size, deathClip] of [[28, 'e048', 'r_st_a', [5, 18]
   let atk = false;
   for (let i = 0; i < 10 && !atk; i++) { ai.tick(1.0, php.pos, php.pos); atk = a.astate === 0x80; }
   ai.playerShot([2, -9, -60], [2, -9, 60], { ...straight, damage: 1 });
-  let fl = null, after = null;
+  let fl = null, after = null, endSt = null, slid = false;
+  const bAfter = new Set();
   for (let i = 0; i < 200; i++) {
     ai.tick(1.0, php.pos, php.pos);
-    if (fl == null && a.C.motion && a.C.motion.cls === 0x1e) fl = { st: a.astate };
-    if (fl && after == null && !(a.C.motion && a.C.motion.cls === 0x1e)) after = i;
+    if (fl == null && a.C.motion && a.C.motion.cls === 0x1e) fl = { st: a.astate, mover: a.C.mover, pos: a.pos.slice() };
+    if (fl && after == null && a.C.motion?.cls === 0x1e && Math.hypot(a.pos[0] - fl.pos[0], a.pos[2] - fl.pos[2]) > 0.01) slid = true;
+    if (fl && after == null && !(a.C.motion && a.C.motion.cls === 0x1e)) { after = i; endSt = a.astate; }
+    if (after != null) bAfter.add(a.ai.bstate);
   }
-  ok(atk && fl && fl.st !== 0x80 && after != null && a.astate !== 0x80 && a.ai.bstate !== 0xb,
-     `record 69 shot mid-attack: attacking ${atk}, flinch with actor state ${fl?.st} (not 0x80), flinch over at +${after}, brain state ${a.ai.bstate.toString(16)} (not stuck in 0xb), actor state ${a.astate.toString(16)}`);
+  // He was swinging with root motion (op 0 byte 6 = 3: C+0x568 bit 12), so the motion switch's leave of the
+  // attack motion (FUN_00341780 -> vt+0x1c FUN_0059e938 -> FUN_003533e0) stops every mover, the flinch's
+  // push-back slide (mover 9, started first in FUN_00561570) included: no slide. Not traced (decoded order).
+  // Still 15 u from Vincent, the brain may pick the next swing after the flinch.
+  ok(atk && fl && fl.st !== 0x80 && fl.mover === 0 && !slid && after != null && endSt !== 0x80 && [...bAfter].some(b => b !== 0xb),
+     `record 69 shot mid-attack: attacking ${atk}, flinch with actor state ${fl?.st} (not 0x80), mover ${fl?.mover} (0: the leave stops the push-back), slid ${slid}; flinch over at +${after} with actor state ${endSt} (not 0x80), brain states after {${[...bAfter].map(b => b.toString(16))}} (not stuck in 0xb)`);
 }
 // e030 is shorter (height 12): a pellet 15 u up crosses the e027 / e048 cylinder (18) but not the e030's
 {

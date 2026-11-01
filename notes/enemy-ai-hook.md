@@ -831,3 +831,55 @@ Part 3 of soldier walking: the nav-graph path follower, wired to action layers 2
 - Tests: `node native/web/test_melee.mjs` (hand cases, data, trace replay; 23/25 mutants killed, the two survivors
   equivalent on z128: test-before-decrement with no growth, P+0x118 bit 5 zeroes the damage either way);
   test_enemies_page 8 (a swing lowers Vincent's HP by 49); test_enemy_ai's mode-5 check without a pose.
+
+## The lunge: attack clip root motion, mover 8 (worker 0166, 2026-11-01)
+
+**Decoded and translated** (enemy_ai.js `rootOn` / `rootSample` / `rootLeave`, path_mover.js `rootStart` / `rootTick`;
+audit 'Attack clip root motion').
+- Op 0 (FUN_003481e0 case 0), byte 6 bits 0-2 and body mover != 0xe: C+0x568 |= 0x20 (FUN_00340b28(C, 1)); bit 0 ->
+  0x40, bit 1 -> 0x100 + FUN_00356248(body, 1) (body+0xac bit 7), bit 2 -> 0x80 (+ FUN_0034e960(C, 8), not translated);
+  FUN_0034edf0(C, 8) (stops any mover, C+0x1c4 bit 7) -> FUN_0034f178 case 8 (move mode 0xc, C+0x310 identity,
+  C+0x370 0); C+0x568 |= 0x1000. e027 r_atk_0 and m_atk: byte 6 = 3.
+- Each frame, FUN_00343160 after the motion update: head layer frame h (MP+0x218 + 0x30 x head), s = (int)(2h) x 0.5
+  while (int)(2h) < 2n; root sample M = bone 1's q / t at s (FUN_005ad730 -> FUN_005af980, t / 256); delta D =
+  inverse(C+0x6d0) x M (FUN_0026125c(out, A, B) = B x A; FUN_00261144 = affine inverse), C+0x6d0 = M (identity
+  from the constructor FUN_0033ff18). Movers 8 / 0xb: bit 6 -> D's translation mirrored along D's row 0
+  (FUN_00260e28(-1, t, t, row 0): t - 2 (t.u) u), else x / z 0; bit 7 clear -> rows 0-2 zeroed; bit 8 clear -> y 0;
+  FUN_003513c8 -> C+0x310.
+- Mover 8 (FUN_00351418, VU from the ELF): w = t x C's rotation (rows (up x face, up, face)), v = w x -1 / DAT_004eeb24,
+  y 0; FUN_00356278(C+0x370, body); |v| > 0.01 -> FUN_0034af98(|v|, C, v / |v|) (C+0xc0 / +0xcc) and C+0x370 = 0,
+  else FUN_0034b110(0, C). The mode-0xc walk then moves him |v| x step = the world delta.
+- Attack motion enter FUN_0059e830: C+0x45c bit 18 set, bit 8 clear, FUN_0034b110(0), FUN_00356278(0). Leave
+  FUN_0059e938: C+0x568 bit 5 clear, C+0x310 identity, body bit 7 / +0xa0 cleared, C+0x45c &= ~0x40100; with bit 12:
+  FUN_003533e0 (every mover stops), FUN_0034b110(0); C+0x1c0 bit 26 -> C+0x45c |= 0x200000 (the turn limit that
+  makes the post-swing coast).
+- Rounding: the MP head frame and the attack timer add toward zero (EE FPU). k_lunge166 MP+0x218 = 23.999971 after
+  40 frames (nearest: 24.00001); with nearest the double samples land a frame early from f1495 and the attack ends
+  at f1509 instead of f1510. enemies.js's layer advance now chops too; player.js's (Vincent) still rounds to nearest
+  (audit finding).
+- FUN_00261038 (angle, VRSQRT): a zero vector with a -0 dot product gives cos = -max float -> pi; that is what makes
+  the turn limit shrink the velocity x (1 - 0.2513 / pi) = 0.92 a frame after the swing (path_mover `angle`).
+- The page keeps the MP head as enemies.js plays it in C.mp (set by playClip with the same drop / carry rules,
+  advanced at the end of the AI tick); the root track comes from opts.rootTrack (enemies.js -> enemy_hit.js
+  rootTrack: local_pose bone 1 + the sidecar's root_motion_per_frame_glb).
+
+**Trace k_lunge166** (tools/trace/scripts/k_lunge166.json = k_melee18's run with TRACE_PATH_LAYERS=1 TRACE_PATH_BODY=1,
+f1450-1529). #66 from 20.0 u (record 1454): moves 0.338, 0.409, 0.409, 0.593, 0.593, 1.309, 2.652, 1.345 u (samples 0,
+0.5, 1, 1.5, 2, 2.5, 3.5, 4: 3.0 skipped since 5 x 0.59999996 = 2.9999998), a small step back at 4.5 / 5, still,
+back with clip frames 22-32 (f1491-1509), then the coast. Page closed loop (game facing fed, walk mesh): bit-exact
+x / z, hit f1463, HP 560 -> 511.
+
+**GUESS**: the leave's root part runs at the attack end, before that step's body move (the page's motion switch is
+otherwise after the move): k_lunge166 f1510 needs it (audit row). C1C0_STAND lacks C+0x1c0 bits 24 / 26, so on the
+page the soldier stops dead after a swing (no coast); test_melee feeds the game's 0x5016311.
+**Consequences found:** (1) the swing replaces a running approach mover (3 / 0xd) at the attack pick (< 22 u), as
+in k_inview17d f1803 (0xd -> 8); test_approach 3 now expects that. (2) A soldier hit mid-swing loses the flinch
+push-back (FUN_00561570 starts mover 9, FUN_00561718's motion switch runs the attack leave, which stops it): decoded
+order, not traced. (3) e027 m_atk has no root motion: record 70's swing (test_enemies_page 10) doesn't lunge and hits
+from 19.9 u by its own reach (marker 8, bone 13).
+**Review fixes for fce6d19**: type > 3 -> 0 (FUN_00579ef0) before FUN_0055eac8's type-3 test; +0x13c signed; the
+FUN_00325b40 pause gate cited (GUESS not paused); ENEMY_OFFENCE marked GUESS; tests for dead(P), the P+0x118 bit 31
+clamp, both PST.f64 sites, attackCentre with a marker offset, the HUD text, test_enemy_ai's no-pose volume (made,
+runs out its life); test_melee's world() no longer edits the shared ai.json.
+- Tests: test_melee (lunge replay, k_lunge166 per-frame fields, root hand cases, review cases; 30/30 mutants killed),
+  test_enemies_page 10 (mover 8, distance as the clip's root, HP -49), test_approach 3, test_enemy_hits mid-attack.

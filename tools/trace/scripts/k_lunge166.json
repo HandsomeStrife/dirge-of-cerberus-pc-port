@@ -1,0 +1,47 @@
+{
+ "name": "k_lunge166",
+ "frames": 1530,
+ "log_from": 1450,
+ "doc": "worker 0166: the lunge (r_atk_0 root motion, mover 8). k_melee18's route, pokes and swing; logs f1450-1529 with TRACE_FIELDSET=path TRACE_MELEE=1 TRACE_PATH_LAYERS=1 TRACE_PATH_BODY=1 TRACE_ERECS=44 TRACE_ENEMIES=1 TRACE_LOG_AT=A5000 TRACE_POKE=ffbab0=5,ffbd90=5,ffbea8=5,ffc428=5,ffca08=5,ffcc58=5,ffcd70=5,ffd2b0=5 (MP head layer frames, C+0xc0 / +0xcc wanted move, body velocity)",
+ "events": [
+  {
+   "from": 10,
+   "to": 230,
+   "lx": 0.6,
+   "ly": -1.0
+  },
+  {
+   "from": 240,
+   "to": 244,
+   "buttons": [
+    "cross"
+   ]
+  },
+  {
+   "from": 280,
+   "to": 284,
+   "buttons": [
+    "cross"
+   ]
+  },
+  {
+   "from": 300,
+   "to": 470,
+   "lx": 0.6,
+   "ly": -1.0
+  },
+  {
+   "from": 490,
+   "to": 494,
+   "buttons": [
+    "cross"
+   ]
+  },
+  {
+   "from": 500,
+   "to": 787,
+   "lx": 0.6,
+   "ly": -1.0
+  }
+ ]
+}
