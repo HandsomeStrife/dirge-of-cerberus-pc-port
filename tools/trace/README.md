@@ -206,6 +206,21 @@ are only taken in `TRACE_CALLLOG_FRAMES=lo:hi` and are written to `<name>.calls.
 the top 0x30000 bytes of the frame-log area, and scripts must be ≤ 1000 frames. Used for
 notes/enemy-research.md §11 (scripts k_bullet1 / k_bullet2).
 
+### Sound call log (TRACE_CALLLOG=sound3, worker 0172)
+Set `sound3` logs every new SE: `play_name` (FUN_0033cc90 -> FUN_003e8e18: sdb name, emitter position, slot), `slot_open`
+(FUN_003e8bc8 -> FUN_003e9b80: the sdb name of every new slot, whatever the caller), `se_new` (FUN_003e9220 ->
+FUN_003e7810: SE id, pan, volume), `se_send` (FUN_003e80d8 -> FUN_0041a190), `se_range` (FUN_0033ced0) and once a frame
+`listener` (FUN_00246c98 -> FUN_003e9ed0: mgr +0x3810 / +0x3820 / +0x3850 / +0x3890). New in calllog.py: `cpr(reg)`
+copies the register's own value (descriptor n bit 7) instead of memory at it. Scripts w172_sound3 / w172_hits /
+w172_melee (env in each script's doc); notes/audio-research.md "3D volume / pan".
+
+### Shared RNG (TRACE_RNG=1, TRACE_CALLLOG=rng; worker 0173)
+`TRACE_RNG=1` adds `rng_state` (the Mersenne twister's 624 words at DAT_004fbe00, hex) and `rng_idx` (DAT_004fc7c0)
+to every record; with `log_from` near the end the log still fits (w173_rng: 42 records with the enemy set). Call-log set
+`rng` logs every draw (`draw`: v0 of `FUN_0040b500` inside `FUN_0040b5c0`) and the impact callers (`wall_rand`
+`FUN_0054ff50`, `decal_rand` `FUN_002e0160`, `mat6_rand` `FUN_00550098`, each logged just after its `draw`). Script
+w173_rng; notes/audio-research.md "Wall impact draws". The added hook cycles change the run (compare it only with itself).
+
 ### Enemy motion-player fields (TRACE_EMP=1, worker 0149)
 With `TRACE_FIELDSET=enemy`, `TRACE_EMP=1` adds per soldier `mp_head` (MP+0x440..0x44f: +0x448 head layer,
 +0x449 count, +0x44a blend-out layer) and `mp_layers` (8 x 0x30 at MP+0x200, decoded as for the player),

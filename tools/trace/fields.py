@@ -413,6 +413,12 @@ elif __import__("os").environ.get("TRACE_FIELDSET") == "aim":
 elif __import__("os").environ.get("TRACE_FIELDSET") == "pose":
     FIELDS = POSE_FIELDS
 
+# TRACE_RNG=1 (worker 0173): the shared RNG FUN_0040b5c0 -> FUN_0040b500, a Mersenne twister: 624 words at
+# DAT_004fbe00 and the index DAT_004fc7c0 (enemy_ai.js GameRandom). With call-log set 'rng' it checks the draws.
+if __import__("os").environ.get("TRACE_RNG"):
+    FIELDS = FIELDS + [("rng_state", None, 0x4FBE00, "bytes:2496", "D", "DAT_004fbe00: MT state (624 u32)"),
+                       ("rng_idx", None, 0x4FC7C0, "u32", "D", "DAT_004fc7c0: MT index")]
+
 LAYER_BYTES = 8 * 0x30
 
 

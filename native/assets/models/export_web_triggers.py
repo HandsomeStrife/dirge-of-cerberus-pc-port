@@ -46,7 +46,9 @@ Decoded (D) layout, read here, nothing copied into the repo:
     bit 1 +100, bit 4 vertical). ai.json `nav` = {nodes: [x, y, z, links, first, area], links: [to, cost,
     flags]}; notes/enemy-ai-hook.md 'Nav graph'.
 
-Usage: export_web_triggers.py STAGE.bin OUTDIR
+  - the ELF's sound-name tables (worker 0173; ai.json `se`, see se_tables()): read from elf/SLES_541.85.
+
+Usage: export_web_triggers.py STAGE.bin OUTDIR [ELF]
 (the stance file is read from STAGE's directory: 06800009.bin next to 06800001.bin)
 """
 import json, os, struct, sys
@@ -343,7 +345,12 @@ def weapons(d):
                         reload=h(0x46), mag=h(0x48), hit=d[o + 0x4a], w56=h(0x56),   # W+0x56: melee damage % (FUN_00569dc0)
                         react=SE.u32(d, o + 0xc),          # W+0xc -> bullet +0x148: the hit reaction flags (FUN_00552dd8, FUN_0055db50)
                         spread=[f(0x1c), f(0x20), f(0x24)],   # W+0x1c / +0x20 / +0x24: cone angle by distance (FUN_005405b0)
-                        cls=d[o + 0x14] >> 2 & 7))          # W+0x14 bits 2-4: weapon class (FUN_00564228)
+                        cls=d[o + 0x14] >> 2 & 7,           # W+0x14 bits 2-4: weapon class (FUN_00564228)
+                        # sounds (worker 0172): W+0x8c the shot (FUN_005694f8 -> FUN_0033d6d8, range W+0x74 when > 0
+                        # and the stage version FUN_00310c40 > 0x20, else 400), W+0x94 the bullet's (FUN_00554850 ->
+                        # FUN_0033d788, at the sound camera)
+                        se_fire=d[o + 0x8c:o + 0x94].split(b'\0')[0].decode('latin-1'), se_range=f(0x74),
+                        se_bullet=d[o + 0x94:o + 0x9c].split(b'\0')[0].decode('latin-1')))
     return out
 
 
@@ -477,6 +484,19 @@ def model_clips(recs, st, atk):
 
 
 # the types enemy_ai.js builds an actor for (notes/enemy-ai-hook.md "Other types"); part boxes are
+# Sound-name tables in the ELF (worker 0173; notes/audio-research.md "Combat sounds on the page"). Pointer tables to
+# 8-byte names: 0x46e5b8 (16, FUN_0033d118 / FUN_0033d008: the shots), 0x46e5f8 (24, FUN_0033d4e8: 3 per surface
+# kind; the last 6 are not reached from FUN_0033d528); 0x4a1310: FUN_0033d528's material -> surface kind (14 words).
+ELF_PATH = os.path.join(HERE, '../../../elf/SLES_541.85')
+
+
+def se_tables(elf):
+    name = lambda p: elf.read(p, 8).split(b'\0')[0].decode('latin-1')
+    ptrs = lambda a, n: [name(elf.u32(a + 4 * i)) for i in range(n)]
+    return dict(source='ELF 0x46e5b8 / 0x46e5f8 / 0x4a1310', gun=ptrs(0x46e5b8, 16), wall=ptrs(0x46e5f8, 24),
+                mat_kind=[elf.u32(0x4a1310 + 4 * i) for i in range(14)])
+
+
 # exported for every z128 enemy type
 AI_TYPES = ('e027', 'e048', 'e030')
 BOX_TYPES = ('e027', 'e048', 'e030', 'e036', 'e023', 'e024', 'e001')
@@ -484,9 +504,11 @@ PLAYER_MODEL = '07703201.bin'   # Vincent's model container in z128 (part boxes 
 
 
 def main():
-    if len(sys.argv) != 3:
+    if len(sys.argv) not in (3, 4):
         sys.exit(__doc__)
     stage, out = sys.argv[1], sys.argv[2]
+    from export_web_aim import Elf     # noqa: E402  (the ELF segment reader)
+    elf = Elf(open(sys.argv[3] if len(sys.argv) == 4 else ELF_PATH, 'rb').read())
     d = open(stage, 'rb').read()
     trig = triggers(d)
     recs = records(d)
@@ -508,7 +530,7 @@ def main():
                zones=zone_sets(d, recs, boxes), stances=st, model_clips=model_clips(recs, st, atk), attacks=atk,
                sizes={str(r['zones']): zone_size(d, r['zones']) for r in recs if r['zones'] >= 0},
                lock_bones={str(r['zones']): lock_bone(d, r['zones']) for r in recs if r['zones'] >= 0},
-               paths=paths(d), nav=nav_graph(d), markers={m: markers(m) for m in boxes})
+               paths=paths(d), nav=nav_graph(d), markers={m: markers(m) for m in boxes}, se=se_tables(elf))
     res['hitboxes']['p000'] = pbox
     path = os.path.join(out, 'ai.json')
     with open(path, 'w') as fh:

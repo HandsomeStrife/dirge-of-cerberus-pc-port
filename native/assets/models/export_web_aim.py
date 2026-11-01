@@ -380,7 +380,13 @@ def main():
     sel += [None] * (6 - len(sel))
     w = compose([allp[i] if i is not None else None for i in sel[:6]])
     wj = weapon_json(w, a.parts)
-    rj = reticle_json(load_elf(a))
+    elf = load_elf(a)
+    rj = reticle_json(elf)
+    # worker 0173: the draw / holster sound names by weapon class (aim_core.js WeaponSystem.draw / holster):
+    # FUN_005766c0 -> FUN_0033d348 / FUN_0033d3c8 copy the 4-pointer tables at 0x4a11f0 / 0x4a1218 to their stacks
+    nm = lambda p: elf.read(p, 8).split(b'\0')[0].decode('latin-1')
+    wj['se_draw'] = [nm(elf.u32(0x4a11f0 + 4 * i)) for i in range(4)]
+    wj['se_holster'] = [nm(elf.u32(0x4a1218 + 4 * i)) for i in range(4)]
     md = open(a.menudata, 'rb').read()
     rj['textures'] = {n: menu_texture(md, n) for n in sorted({kd['texture'] for kd in rj['kinds'].values()})}
     # write only once both are built, so a failure leaves neither file half-updated

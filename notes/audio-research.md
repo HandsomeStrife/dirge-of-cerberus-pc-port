@@ -15,12 +15,13 @@ and are not covered here.
    the **SE id = row +0x10** (or row +8 when row +0xc bit 1 is set: an ATRAC stream). It then opens
    an emitter slot (`FUN_003e8bc8`: 128 slots x 0x70; v0 = the slot).
 2. **Emitters -> request.** Each frame `FUN_003e9220` turns the slots into volume / pan from the 3D
-   position (NOT decoded yet) and queues `FUN_003e7810(_, id, vol, pan)` = `FUN_003e85a8(2, id, vol, pan)`.
+   position (decoded: "3D volume / pan" below) and queues `FUN_003e7810(_, id, pan, vol)` = `FUN_003e85a8(2, id, pan, vol)`.
    That is a 512-entry ring of 0x18-byte requests at 0x1fdcfc0. Other request codes come from
    `FUN_003e7718` and its neighbours (0x11 / 0x18 / 0x1b ...).
 3. **Sound thread.** `FUN_003e7150` (thread made by `FUN_003e7448`) drains the ring into
    `FUN_003e80d8`. Case 2 / 0x16 / 0x17 looks the id up in each of the 6 loaded SE blocks
-   (`FUN_003e7ed8`, binary search) and sends the program with `FUN_0041a190(entry, vol, pan)`.
+   (`FUN_003e7ed8`, binary search) and sends the program with `FUN_0041a190(entry, pan, vol & 0x7f)`
+   (IOP cmd 0x29 packet +0x10 pan, +0x14 vol -> `FUN_0000885c` -> `FUN_000082d0`: track pan = pan << 12, seq volume = vol << 12).
    That checks the `SeSep` magic and queues IOP command 0x29 (`FUN_00418e38`, the EE->IOP queue;
    the command names are in `EESound`'s debug strings at 0x4a8cb0..0x4a8de0).
 4. **IOP.** The async command table is at irx 0x1b8e4 (`FUN_000176dc`); cmd 0x29 -> `FUN_000159ac`.
@@ -122,9 +123,9 @@ Randomisation (op 0x78) adds `v * r >> 7` etc. from a 256-byte random table at i
 
 From two PCSX2 call-log traces (`TRACE_CALLLOG=sound` / `sound2`, scripts w170_sound / w170_sound2:
 k_enemy_engage8 inputs, Vincent fires at f831-951, soldier #66 fires at f786 / 875 / 1008 and hits
-Vincent at f789). "vol" is the volume the sound thread passed to `FUN_0041a190`.
+Vincent at f789). The last column was first read as the volume; it is the **pan** (FUN_0041a190's a1; worker 0172).
 
-| event | EE call path | name | SE id | vol |
+| event | EE call path | name | SE id | pan (a1) |
 |---|---|---|---|---|
 | **Vincent's shot** | `FUN_00577480` -> `FUN_0033d118(gunDef)`: `(gunDef+0x14 >> 2) & 7` = 1 -> index 12 of the name table 0x46e5b8 (gunDef+4 bit 3 would pick `bsj_061`) | `bsj_051` | 1040 | 0x39-0x3a |
 | Vincent: R1 with the gun lowered (gun ready) | `FUN_0033d348` (names `bsj_018` / `bsj_020` by argument; callers `FUN_0056f150`, `FUN_005766c0`) | `bsj_018` | 1016 | 0x3f |
@@ -170,3 +171,79 @@ capture, and the interpolation is linear (GUESS; the SPU2 uses a gaussian).
    attack op data, like the hit volume).
 3. Grade a rendered SE against a PCSX2 audio capture; port the gaussian interpolation and the LFO opcodes.
 4. Footsteps etc. (`fsj_*`, `asj_*`) use the same path: find their callers with the `sound` call-log set.
+
+## 3D volume / pan (worker 0172, decoded and verified)
+
+`FUN_003e9220(mgr, slot, fwd, ringOk)`, read from the disassembly (Ghidra loses the VU0 macro ops). Slot (0x70 B,
+`FUN_003e8bc8`): +0 flags, +4 SE id, +0x10 range (400.0 at open; `FUN_0033ced0` sets it for `FUN_0033ce10` callers),
++0x18 voice handle, +0x30 previous position, +0x50 position. sdb row +0xc (`FUN_003e9b80`): bit 1 -> slot 0x4000
+(stream), bit 3 -> 0x20, bit 5 -> 0x200000 (no Doppler). Listener: +0x3810 position and +0x3820 forward (the sound
+camera: `FUN_003ee468` -> `FUN_003e88f0` from the `DAT_0047d8c0` block, = CAM eye / forward), +0x3850 = Vincent's
+C+0x90 + (0, -7, 0) (`FUN_005734a8` -> `FUN_005635e0` -> `FUN_003e88b0`), +0x3890 = 1 in play (`FUN_003e87f8`,
+`FUN_00245d00`; 0 in `FUN_0037e048`).
+
+- **Volume**: d = (+0x3890 ? +0x3850 : +0x3810) - position; `vol = (int)((range - |d|) / range * (hi - lo) + lo)`,
+  lo / hi = 0 / 117 (stream 112 / 128), then < 1 -> 1, > 0x7f -> 0x7f (beyond the range it stays 1); range < 0 -> 0.
+  Flag 0x40: vol = flags >> 7 & 0x7f; flag 0x10: vol >> 1; flag 0x40000: vol 0x7f (or 0x40's), pan 0x40.
+- **Pan**: d = +0x3810 - position with y = 0, normalised (vrsqrt; a zero vector stays 0); f = forward with y = 0,
+  normalised (`FUN_003e9ed0`); `a = acosf(d . f)`, negated unless (d x f).y < 0; `pan = ((int)(a x 40.743664) - 0x40) & 0xff`
+  (128 / pi): 0x40 ahead, 0x00 / 0x80 the sides, 0xc0 behind. Flag 0x8000 (position at the origin) -> 0x40.
+  All arithmetic rounds toward zero (PS2 FPU / VU0): dead ahead gives 0x41, a zero vector 0x81 (both seen in the traces).
+- **Pitch** (Doppler, only for updates): ((3400 - (dir . listener move)) / (3400 - (dir . emitter move)) - 1) x 3600,
+  clamped to s8; flag 0x200000 -> 0.
+- **When**: `FUN_003e9ed0` runs once a frame; a slot opened on frame f is sent on f + 1 (code 2, or 0x17 with flag
+  0x20000). A slot that keeps a voice handle (+0x18 >= 0, i.e. not released) is re-sent as code 0x11 (`FUN_003e7718`)
+  whenever its vol / pan / pitch byte changes and the request ring has < 0x100 entries. Released one-shots
+  (`FUN_003e8ff8`: all the combat sounds but bsj_063) never update. The listener the game uses on frame g is trace
+  record g - 2's state (camera eye and Vincent's position, both exact).
+- DAT_0047d730 (vol x it >> 7 when >= 0) and `FUN_003e80d8`'s vol >> 3: no effect in the traced play.
+
+**Verification.** Call-log set `sound3` (tools/trace/calllog.py; `cpr()` copies a register's value): play_name
+(name, position, slot), se_new (`FUN_003e7810`'s pan / vol), se_send, se_range, slot_open (every new slot's sdb name),
+listener (once a frame). Traces w172_sound3 (k_enemy_engage8 inputs), w172_hits (k_hits12: lock-on, the kill),
+w172_melee (k_melee18's swing and hit): **44 / 44 new SEs exact** (`node native/web/test_audio3d.mjs`).
+
+## Combat sounds on the page (worker 0172)
+
+| event | game call | page | name(s) |
+|---|---|---|---|
+| Vincent's shot | `FUN_00577480` after the pellets -> `FUN_0033d118(W, muzzle)`: W+4 bit 3 -> bsj_061, else table 0x46e5b8[class 2 -> 14, 3 -> 13, else 12], at the pulled-back muzzle | enemy_ai.js `playerShot` | bsj_051 |
+| draw / holster | `FUN_005766c0` -> `FUN_0033d348` / `FUN_0033d3c8` (tables 0x4a11f0 / 0x4a1218 by W class, gate DAT_004e0ff8 == 1), at C+0x90 | aim_core.js `draw` / `holster` -> play.js | bsj_018 / bsj_048 |
+| soldier's shot | `FUN_00554850` (bullet init) -> `FUN_0033d788`: W+0x94 at the sound camera; end of `FUN_005694f8` -> `FUN_0033d6d8`: W+0x8c at the muzzle, range 400 (W+0x74 if > 0 and stage version > 0x20) | enemy_ai.js `spawnShot` (ai.json weapons `se_bullet` / `se_fire` / `se_range`) | bsj_063, bsj_004 |
+| bullet ends on a wall | `FUN_005549f0` -> `FUN_00554ea8` -> stage vt+0x1b4 `FUN_0054fee0` -> `FUN_0054ff50`: r = `FUN_0040b5c0`, `FUN_0033d528(mat, (int)(r x 2) != 0, end)` -> kind table 0x4a1310 -> names 0x46e5f8[kind x 3 + variant]. mat = bullet +0x138 & 0xf = (hit surface word >> 16) & 0xf (`FUN_00553660`, `FUN_0026f1e8`) | enemy_ai.js `roomProbe` (`b.mat`), `wallSound`; play.js roomRay `.surface` | mat 2: bsj_021 / 022, mat 1: bsj_024 / 025 (checked at the traced impact points) |
+| bullet hits a character | `FUN_00556870`'s `FUN_0033d5c8` is only reached by bullets without +0x120 bit 0x2000 (none here). In the trace the kill plays cue sounds at the soldier: bt_v036, asj_523 (cue tables, below) | not on the page | — |
+| Vincent hurt | bt_v002 at f789 (his position). Not cue 0x44 (empty in all z128 cue tables); probably cue 0x4c '?' (`FUN_00341330`: event 0x25 to the object's script) | not on the page | — |
+| melee swing / hit | none: no SE between f1455 and f1463 in w172_melee (only footsteps fsj_057 and the later shots) | nothing to do | — |
+
+Cue sounds: `FUN_00341330(C, cue)` reads C+0x7ec = stage section 0x1a record (`FUN_003116d0`, set by `FUN_003405f8`
+from C+0x766): s16 count, then 8-byte names at +8 + cue x 8; '?' = event 0x25 to the object's script; otherwise
+`FUN_00341268` -> `FUN_0054b158` plays it at the object's position (`FUN_0054ae78`). Cues 0x00-0x3f are footsteps,
+0x56-0x6d hit sounds by body part (played from the reaction motions `FUN_00595a60` / `FUN_00595ea8`). Not exported yet.
+
+Name tables (worker 0173): the ELF tables 0x46e5b8 / 0x46e5f8 / 0x4a1310 are exported to ai.json `se` (`gun`, `wall`,
+`mat_kind`; export_web_triggers.py `se_tables`, reads elf/SLES_541.85) and 0x4a11f0 / 0x4a1218 to weapon.json `se_draw` /
+`se_holster` (export_web_aim.py). The JS holds only the indices; without the data those sounds are skipped (warned).
+
+### Wall impact draws (worker 0173)
+
+`FUN_0054ff50(b, end, normal, 0)` draws the shared RNG (`FUN_0040b5c0`) in this order:
+1. the variant: `FUN_0033d528(mat, (int)(r x 2) != 0, end)`;
+2. `FUN_00335f40(end, normal, b, 0)` (impact effect `FUN_00336478` / `FUN_003366b8` -> `FUN_002e7660`, no draws) runs when
+   +0x120 bit 2 is clear or `FUN_003354b8()` (`FUN_00242420() == 1 ? DAT_0046e530 : 0`) != 0; with +0x120 bit 0x10000
+   clear and param_4 == 0 it calls `FUN_002e2840(end, normal, mat)`: for mat != 6, when `FUN_00249148` gets a heap node,
+   `FUN_002e0160` (the bullet-hole decal) draws twice: scale 0.2 + 0.2 r, spin r x 2 pi;
+3. mat 6 (and +0x140 bits 7-10 not 6 / 4): `FUN_00550098(.., 0)` -> `FUN_0026a980` -> `FUN_00268f18` -> `FUN_002e28d8`
+   (and `FUN_00305c78`) draw more; its own `FUN_0040b5c0` x 3 runs only with param_5 != 0 (0 here). Not translated.
+
+Trace w173_rng (script w173_rng: engage8 inputs to f870; `TRACE_FIELDSET=enemy TRACE_RNG=1 TRACE_LOG_AT=9E000
+TRACE_CALLLOG=rng TRACE_CALLLOG_FRAMES=800:870`): fields `rng_state` (624 words at DAT_004fbe00) / `rng_idx`
+(DAT_004fc7c0) per record, call-log set `rng` (every `FUN_0040b500` result inside `FUN_0040b5c0`, and which of
+`FUN_0054ff50` / `FUN_002e0160` / `FUN_00550098` drew). From f828 to f870 the game draws 30 times: 6 per Vincent shot (f831,
+f861: the cone, 2 per pellet) and 3 per wall impact (f834-836, f864-866), nothing else. enemy_ai.js `GameRandom` loaded
+with record f828's state gives those 30 words bit for bit, and the page (test_combat_sound) draws the same values in
+the same order and picks the game's sounds: 022 021 021 / 022 021 022. Note: this run is not w172_sound3's frame for
+frame (the soldier fires at f800 instead of f875, and f835 picks 021 there vs 022): the hooks cost EE cycles, so
+compare a run only with its own call log.
+
+Browser rule: an AudioContext starts only after a user gesture. play.js makes it on the first key / click (the
+page's click-to-look already asks for one); requests before that are dropped. Sound is on by default; `?sound=0` off.

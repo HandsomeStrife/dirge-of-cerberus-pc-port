@@ -41,6 +41,10 @@ const MOUSE_DIRECT = params.get('mouselook') !== 'game';
 const MOUSE_SENS = params.has('mousesens') && +params.get('mousesens') > 0 ? +params.get('mousesens') : MOUSE_SENS_DEFAULT;   // degrees per pixel
 const ENEMY_DMG = params.get('enemydmg') !== '0';    // enemy bullets damage Vincent (decoded hit test, on by default; ?enemydmg=0: they hit, no damage); melee always does
 const AIM = params.get('aim') !== '0';               // aim.js (aim_core.js): the weapon, its camera views, the reticle
+// game sound effects (audio.js; notes/audio-research.md): on by default, ?sound=0 off. Browsers start audio only after
+// a user gesture: the AudioContext is made on the first key / click (the page's existing click-to-look); sounds
+// requested before that are dropped (no extra UI).
+const SOUND = params.get('sound') !== '0';
 const PACKS = params.has('packs') ? params.get('packs').split(',').filter(Boolean) : (AIM ? ['ladder', 'jump', 'shoot'] : ['ladder', 'jump']);
 // Placement: the game draws the model with the motion player's matrix MP+0x10 (FUN_005ab8f0
 // -> view x MP+0x10), a copy of the character matrix (FUN_00343de8 -> FUN_005a6f40 ->
@@ -636,10 +640,24 @@ async function main() {
   // Vincent's joints j00..j92 (flat under the glb root: model-space TRS) and his start-of-frame placement (tick)
   const vinJoints = [], vinStart = { pos: null, h: 0 };
   vin.mixRoot.traverse(n => { const m = /^j(\d\d)$/.exec(n.name); if (m && !vinJoints[+m[1]]) vinJoints[+m[1]] = n; });
+  // the sound emitters (audio.js SoundEmitters, the EE side: FUN_003e8bc8 slots, FUN_003e9ed0 once a frame); null
+  // until the zone's SE data has loaded. snd(name, pos, range): the game's FUN_0033cc48 / FUN_0033ce10; pos null =
+  // FUN_0033cbd8 (at the sound camera = the listener position when sent).
+  let sfx = null;
+  const snd = (name, pos, range = 400.0) => { if (sfx) sfx.play(name, pos, range); };
+  if (SOUND) import('./audio.js').then(({ GameAudio, SoundEmitters }) => {
+    const au = new GameAudio();
+    au.load(128).then(() => { sfx = new SoundEmitters(au); window.__play && (window.__play.sfx = sfx); })
+      .catch((e) => console.warn('audio: no SE data (tools/audio/extract.py)', e));
+    ['keydown', 'pointerdown'].forEach((e) => addEventListener(e, () => { try { au.resume(); } catch (e2) { /* no AudioContext */ } }));
+  }).catch((e) => console.warn('audio: off', e));
+  // FUN_003e9ed0's listener on frame k is the game state of two pad polls before (audio.js soundListener)
+  const sndHist = [];
   let enemyAI = null;
   try {
     if (enemies) enemies.mpHead = vin.body;            // newer actors draw before older ones (enemies.js add)
     enemyAI = ENEMY_AI && aiData && enemies ? createEnemyAI({ data: aiData, player: php, log: m => console.log(m), damage: ENEMY_DMG,
+      sound: snd,
       // the walk mesh for soldiers' physics bodies (mover 3, move mode 0xc; body flags 0x36: not a block80 body)
       walkMesh: col,
       // the save's dead records (41-43): FUN_00559748 refuses to activate them
@@ -656,7 +674,10 @@ async function main() {
       // the bullets' room probe FUN_00553808 -> FUN_0026a320(a, b, 0x18d): sub-tree 1 packets of probe set 0x18d
       roomRay: col.segment && col.probeFlags ? (a, b) => {
         const h = col.segment({ x: a[0], y: a[1], z: a[2] }, { x: b[0], y: b[1], z: b[2] }, col.probeFlags(0x18d));
-        return h ? [h.point.x, h.point.y, h.point.z] : null;
+        if (!h) return null;
+        const r = [h.point.x, h.point.y, h.point.z];
+        r.surface = h.surface;                     // the hit polygon's surface word (FUN_00553660 material)
+        return r;
       } : null,
       // Vincent's hit reaction FUN_00565480 (player.js hitReact): his C update for this frame runs again
       // with the hit (the game runs it after the object lists); php.pos follows in place
@@ -722,11 +743,8 @@ async function main() {
   // Vincent's bullets vs the soldiers (aim.js onShot -> enemy_ai playerShot, FUN_00577480), fired in
   // enemyAI.tick after the AI scheduler (the game's frame order, FUN_00323128)
   if (weapon && enemyAI) weapon.onShot = (...shot) => enemyAI.queueShot(...shot);
-  // ?sound=1 (off by default; audio.js, notes/audio-research.md): Vincent's shot FUN_00577480 -> FUN_0033d118 -> 'bsj_051'
-  // (SE 1040). GUESS: volume 0x3a (one traced scene, w170_sound) and pan 0x40 (FUN_003e9220's 3D volume / pan not decoded)
-  if (weapon && params.get('sound') === '1') import('./audio.js').then(({ GameAudio }) => { const au = new GameAudio(); au.load(128).catch((e) => console.warn('audio: no bank', e));
-    ['keydown', 'pointerdown'].forEach((e) => addEventListener(e, () => { try { au.resume(); } catch (e2) { /* no AudioContext */ } })); const prev = weapon.onShot; weapon.onShot = (...s) => { if (prev) prev(...s); try { au.playName('bsj_051', 0x3a, 0x40); } catch (e) { console.warn('audio:', e); } }; })
-    .catch((e) => console.warn('audio: off', e));
+  // the draw / holster sounds (weapon.json se_draw / se_holster (aim_core.js): FUN_005766c0 at Vincent's C+0x90)
+  if (weapon) weapon.core.sound = (name) => snd(name, [ctrl.pos.x, ctrl.pos.y, ctrl.pos.z]);
   // the lock-on's soldiers (FUN_00328968 in aim.js aimRay; lock_on.js)
   if (weapon && enemyAI) weapon.targets = () => enemyAI.lockTargets();
 
@@ -856,6 +874,11 @@ async function main() {
     const due = Math.min(Math.floor(acc / TICK), 8);   // game frames this rendered frame runs (MouseFeed)
     while (acc >= TICK && n < 8) {
       mouse.feed(follow, due - n);                 // this game frame's share of the mouse counts
+      // FUN_003e9ed0: last frame's sound requests go out with the listener of two frames back (sndHist)
+      if (sfx && follow.eye && follow.M) {
+        sfx.setListener(sfx.listenerOf(sndHist, follow.eye, follow.M[2], ctrl.pos));
+        sfx.update();
+      }
       // the camera runs first in the game frame: it follows the player as the last frame
       // left him, and this frame's stick-to-world uses its new matrix (player.js camera notes)
       const inp = readInput();

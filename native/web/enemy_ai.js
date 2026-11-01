@@ -162,6 +162,11 @@ const deathMotion = part => part === 0 ? 0x2b : 0x2c;
 const FALLBACK_CLIPS = { 0x28: 'r_stlld0', 0x2b: 'r_stbf0', 0x2c: 'r_stlaf0', 0x00: 'r_gst', 0x01: 'r_gst' };   // old ai.json: stance 0x1f rows
 const ID_BASE = 22;               // GUESS: manager +0x3b2 table (cmd 0x3a): object id = record + 22 (trace meta EI0..6: rec 44 -> 66, 66 -> 88)
 
+// ---------------------------------------------------------------- sound names (worker 0172)
+// The ELF's name tables are game data: ai.json `se` (export_web_triggers.py se_tables): se.gun = 0x46e5b8 (FUN_0033d118 /
+// FUN_0033d008), se.wall = 0x46e5f8 (FUN_0033d4e8, 3 per surface kind; the last 6 'on_v00n' rows are not reached from
+// FUN_0033d528), se.mat_kind = FUN_0033d528's material -> kind table 0x4a1310 (14 words). Missing: no such sounds.
+
 // ---------------------------------------------------------------- RNG FUN_0040b398 / 0040b500 / 0040b5c0
 // The game's Mersenne twister (624 words at DAT_004fbe00, index DAT_004fc7c0). It returns the
 // tempered *current* word, then twists that word in place.
@@ -371,6 +376,14 @@ export function createEnemyAI(opts) {
   if (P) { P.s148 ??= -120; P.s150 ??= 0; P.s152 ??= 0; P.sphase ??= 0; }
   // FUN_00565480 on Vincent (player.js hitReact via play.js): (h) => branch name; none = no reaction
   const playerReact = opts.react || null;
+  // sounds (worker 0172; audio.js SoundEmitters.play): sound(name, pos, range) at the game's call sites; pos null =
+  // at the sound camera (FUN_0033cbd8). Names come from the weapon data (ai.json se_*) and the ELF tables below.
+  const sound = opts.sound || (() => {});
+  const SE_T = data.se || null;
+  const seName = (tab, i) => {
+    if (!SE_T) { warnOnce('enemy_ai: ai.json has no se tables (ELF sound names): rebuild data/enemies; no gun / wall sounds'); return null; }
+    return (SE_T[tab] && SE_T[tab][i]) ?? null;
+  };
   const PST = opts.playerStatus || PLAYER_STATUS;
   const scripts = data.scripts;
   // manager shorts (+0x28, cmd 0x2f writes, 0x30 reads). GUESS: their values at stage start are not
@@ -2604,6 +2617,16 @@ export function createEnemyAI(opts) {
       shooter: a.id,                                                          // +0x128 owner id
     };
     bullets.push(b);
+    // FUN_00554568 -> FUN_00554850 (bullet init with W = +0x194): FUN_0033d788 plays W+0x94 at the sound camera
+    // (FUN_0033cbd8) and keeps the slot in bullet +0x18c (moved by FUN_00557c68, stopped by FUN_005529a8 /
+    // FUN_00558210: the updates are not ported, audio.js SoundEmitters)
+    if (W.se_bullet) sound(W.se_bullet, null);
+    // the end of FUN_005694f8 (status +0xac = W): FUN_0033d6d8 plays W+0x8c at the muzzle with range W+0x74 when
+    // FUN_00310c40() > 0x20 and W+0x74 > 0, else 400 (FUN_0033ce10 -> FUN_0033ced0)
+    if (W.se_fire) {
+      if (W.se_range > 0) warnOnce('enemy_ai: weapon W+0x74 range set: the stage version test FUN_00310c40 > 0x20 is not exported; 400 used');
+      sound(W.se_fire, start, 400.0);
+    } else if (W.se_fire == null) warnOnce('enemy_ai: ai.json weapons have no se_fire (W+0x8c): rebuild data/enemies; no shot sound');
     events.push(`shot ${a.id}`);
   }
   // FUN_005549f0: one frame of a bullet. Returns 1 when it ends this frame (hit or out of range).
@@ -2630,13 +2653,49 @@ export function createEnemyAI(opts) {
     if (!done && !(b.f120 & 0x2000000) && !(b.speed > 0 && b.age <= 1800.0 && dist <= 3000.0)) { b.f120 |= 0x800000; done = 1; }
     // FUN_00556870 -> FUN_005442d8: objects along prev -> pos (closest hit, vt+0x1b4). With bullet bit
     // 0x2000 (every bullet here) no hit returns 0: the room was probed once at the countdown end.
-    if (b.from === P) return playerBulletHit(b) || done;                      // Vincent's bullet: the soldiers
+    if (b.from === P) {                                                       // Vincent's bullet: the soldiers
+      const hit = playerBulletHit(b);
+      if (!hit && done) wallSound(b);
+      return hit || done;
+    }
     if (enemyBulletHit(b)) {
       bulletEnd(b, 1);
       return 1;
     }
-    if (done) bulletEnd(b, 0);
+    if (done) { wallSound(b); bulletEnd(b, 0); }
     return done;
+  }
+  // The bullet's end, FUN_005549f0 -> FUN_00554ea8: with +0x120 bit 1 (the room probe hit) the stage object's
+  // vt+0x1b4 = FUN_0054fee0(stage, b, +0xd0 end, +0x100 normal) -> FUN_0054ff50(b, end, normal, 0) (FUN_00552ba0 = 0:
+  // no W+4 0x300000; +0x120 bit 0x1000 clear). It draws the shared RNG (FUN_0040b5c0) in this order:
+  //   1. r = FUN_0040b5c0, FUN_0033d528(mat, (int)(r x 2) != 0, end) -> FUN_0033d4e8: se.wall[se.mat_kind[mat] x 3 +
+  //      variant] at the end point (FUN_0033cc48, range 400);
+  //   2. FUN_00335f40(end, normal, b, 0), the impact effect (not on the page), when +0x120 bit 2 is clear or
+  //      FUN_003354b8() != 0: with +0x120 bit 0x10000 clear and param_4 (0 from FUN_0054fee0) == 0 it calls
+  //      FUN_002e2840(end, normal, mat): for mat != 6, when FUN_00249148 allocates a decal node, FUN_002e0160 (the
+  //      bullet-hole decal, not on the page) draws twice: scale 0.2 + 0.2 r, then the spin r x 2pi;
+  //   3. mat 6 (with +0x140 bits 7-10 not 6 / 4): FUN_00550098(.., 0) -> FUN_0026a980 -> FUN_00268f18 -> FUN_002e28d8
+  //      draws more (not translated: warned, the page's draws then fall out of step with the game's).
+  // T: w173_rng, every impact draws 3 (wall_rand, decal_rand x 2) and nothing else draws between them.
+  // GUESS: no wall sound when the bullet ended on a character (T: w172_sound3 f789, #66 hits Vincent: none; the
+  // flag that skips FUN_00554ea8's vt+0x1b4 then is not found).
+  function wallSound(b) {
+    if (!(b.f120 & 1)) return;
+    const mat = b.mat & 0xf;                                                  // +0x138 & 0xf
+    const r = rng();
+    const variant = Math.trunc(f(r * 2.0)) !== 0 ? 1 : 0;
+    const kind = seName('mat_kind', mat);                                     // FUN_0033d528: 0x4a1310[mat]
+    const name = kind == null ? null : seName('wall', kind * 3 + variant);    // FUN_0033d4e8: 0x46e5f8[kind x 3 + variant]
+    if (name) sound(name, b.end);
+    // FUN_00335f40: the gate on +0x120 bit 2 (FUN_003354b8 = FUN_00242420() == 1 ? DAT_0046e530 : 0) is not
+    // translated; no page bullet sets bit 2.
+    if (b.f120 & 2) warnOnce('enemy_ai: bullet +0x120 bit 2 (FUN_00335f40 gate FUN_003354b8) not translated: decal draws taken');
+    if (!(b.f120 & 0x10000) && mat !== 6) {                                   // FUN_00335f40 -> FUN_002e2840 (param_4 = 0)
+      // GUESS: FUN_00249148 (FUN_003056b0 -> FUN_00251e70(0x10, 0, 0xe), the heap) always allocates (not decoded:
+      // the heap's state; notes/fidelity-audit.md)
+      rng(); rng();                                                           // FUN_002e0160: scale, spin (the decal itself is not on the page)
+    }
+    if (mat === 6) warnOnce('enemy_ai: wall material 6 (FUN_00550098 -> FUN_0026a980 effect draws) not translated');
   }
   // FUN_00553808 (bullet +0x120 bit 0x20 clear): one ray from the muzzle +0xc0 to +0xd0 + unit(+0xd0 - +0xc0)
   // x 0.1 against the stage object (FUN_0053bb58 -> vt+0x17c FUN_0054fc38, probe 0 = flags 0x18d ->
@@ -2650,6 +2709,11 @@ export function createEnemyAI(opts) {
     if (!h) return;
     b.end = h.map(f);
     b.endDist = f(len3(sub3(b.start, b.end)));
+    // FUN_00553660: +0x120 |= 1 (room hit), +0x138 low 4 bits = (FUN_0026f1e8() >> 16) & 0xf: the hit polygon's
+    // surface word (DAT_004e8824; collision.js keeps it per triangle, roomRay's .surface). Material 6 (and the
+    // pass-through bits 0x20 / 2 of FUN_0026f1e8's word) are not translated.
+    b.f120 |= 1;
+    b.mat = ((h.surface | 0) >> 16) & 0xf;
     events.push('bullet wall');
   }
   // FUN_005442d8 for a soldier's bullet (thin: +0x120 bit 0x800 clear). Each active object along the segment
@@ -2809,6 +2873,11 @@ export function createEnemyAI(opts) {
       });
     }
     if (W.hit == null) warnOnce('enemy_ai: weapon.json has no hit value (W+0x4a): rebuild data/aim; stagger uses 0');
+    // after the pellets FUN_00577480 plays FUN_0033d118(W, muzzle) (P+0x28 bit 0x20 clear: T: w170_sound2 v_fire_118;
+    // the other branch FUN_0033d008 is not translated): W+4 bit 3 -> 'bsj_061', else table 0x46e5b8[class 2 -> 14,
+    // 3 -> 13, else 12] at the pulled-back muzzle (T: w172_sound3 bsj_051)
+    const gun = W.flags & 8 ? 'bsj_061' : seName('gun', W.class === 2 ? 14 : W.class === 3 ? 13 : 12);
+    if (gun) sound(gun, m0);
     events.push(`player shot ${W.pellets}`);
   }
 

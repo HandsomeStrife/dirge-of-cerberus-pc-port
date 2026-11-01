@@ -479,7 +479,126 @@ export class SeRenderer {
 const s15 = (x) => ((x << 17) >> 17);
 
 // ---------------------------------------------------------------------------------------------
+// EE 3D sound (worker 0172; notes/audio-research.md "3D volume / pan"). The manager (DAT_0047d728)
+// holds 128 emitter slots of 0x70 bytes (FUN_003e8bc8 opens one: +4 SE id, +0x10 range 400.0, +0x50
+// position, flag 2 = not sent yet). Once a frame FUN_003e9ed0 runs FUN_003e9220 on every slot; a slot
+// with flag 2 gets its volume / pan and is sent as request 2 (FUN_003e7810(_, id, pan, vol)); the
+// sound thread passes them to FUN_0041a190(entry, pan, vol & 0x7f) (FUN_003e80d8 case 2).
+// Listener (mgr +0x3810 position / +0x3820 forward: the sound camera, FUN_003ee468 -> FUN_003e88f0;
+// +0x3850: Vincent's position + (0, -7, 0), FUN_005734a8 -> FUN_005635e0 -> FUN_003e88b0; +0x3890 = 1
+// in play, FUN_003e87f8 / FUN_00245d00): the volume is taken from +0x3850 when +0x3890 is set, the pan
+// always from +0x3810 / +0x3820.
+// PS2 FPU / VU0 arithmetic rounds toward zero (chop, as player.js).
+const _c32 = new DataView(new ArrayBuffer(4));
+function chop(x) {
+  const r = Math.fround(x);
+  if (!(Math.abs(r) > Math.abs(x))) return r;
+  _c32.setFloat32(0, r); _c32.setInt32(0, _c32.getInt32(0) - 1);
+  return _c32.getFloat32(0);
+}
+// VU0 vrsqrt then vmulq.xyz on (x, 0, z): the unit vector in the xz plane. 1 / sqrt(0) is the VU's
+// largest float, and 0 x that is 0, so a zero vector stays zero.
+function unitXZ(x, z) {
+  const s = chop(chop(chop(x * x) + 0) + chop(z * z));
+  if (s === 0) return [0, 0];
+  const q = chop(1 / Math.sqrt(s));
+  return [chop(x * q), chop(z * q)];
+}
+export const SLOT_FLAGS = {
+  HALF: 0x10,        // volume >> 1
+  FIXED: 0x40,       // volume = flags >> 7 & 0x7f (FUN_003e8bc8 arg 5)
+  STREAM: 0x4000,    // sdb row +0xc bit 1 (FUN_003e9b80): volume 112..128, sent through FUN_003eb088 (not ported)
+  NOPOS: 0x8000,     // |position| == 0 at open (FUN_003e8bc8): pan 0x40
+  NO3D: 0x40000,     // volume 0x7f (or FIXED), pan 0x40
+};
+// FUN_003e9220 for a new slot (flag 2): { vol, pan } as sent to FUN_003e7810. e = { pos, range = 400,
+// flags = 0 }; L = { pos (+0x3810), fwd (+0x3820), alt (+0x3850), useAlt (+0x3890) }.
+// The pitch byte (Doppler: ((3400 - v_listener) / (3400 - v_emitter) - 1) x 3600, clamped to s8) only
+// goes to the update request FUN_003e7718 (code 0x11) for slots that keep playing: not ported.
+export function emitterVolPan(e, L) {
+  const flags = e.flags | 0, range = Math.fround(e.range ?? 400.0);
+  const lo = flags & SLOT_FLAGS.STREAM ? 112.0 : 0.0, hi = flags & SLOT_FLAGS.STREAM ? 128.0 : 117.0;
+  let vol, pan = 0x40;
+  if (flags & SLOT_FLAGS.NO3D) return { vol: flags & SLOT_FLAGS.FIXED ? (flags >> 7) & 0x7f : 0x7f, pan };
+  if (flags & SLOT_FLAGS.FIXED) vol = (flags >> 7) & 0x7f;
+  else {
+    const A = L.useAlt ? L.alt : L.pos;
+    const dx = chop(A[0] - e.pos[0]), dy = chop(A[1] - e.pos[1]), dz = chop(A[2] - e.pos[2]);
+    const dist = chop(Math.sqrt(chop(chop(chop(dx * dx) + chop(dy * dy)) + chop(dz * dz))));   // sqrt.s
+    vol = 0;
+    if (0.0 <= range) {
+      vol = Math.trunc(chop(chop(chop(chop(range - dist) / range) * chop(hi - lo)) + lo));          // cvt.w.s
+      vol = vol < 1 ? 1 : vol > 0x7f ? 0x7f : vol;
+    }
+  }
+  if (flags & SLOT_FLAGS.HALF) vol >>= 1;
+  if (!(flags & SLOT_FLAGS.NOPOS)) {
+    const [dx, dz] = unitXZ(chop(L.pos[0] - e.pos[0]), chop(L.pos[2] - e.pos[2]));   // listener - emitter, y = 0
+    const [fx, fz] = unitXZ(L.fwd[0], L.fwd[2]);                                     // FUN_003e9ed0: forward, y = 0
+    const cy = chop(chop(dz * fx) - chop(fz * dx));                                   // (d x f).y: vopmula / vopmsub
+    const dot = chop(chop(chop(dx * fx) + 0) + chop(dz * fz));
+    // L: FUN_0045b6a8 (acosf) is taken as Math.acos rounded to f32; its own polynomial / rounding is not translated
+    // (an off-by-one pan byte is possible right at a step; w172: 44 / 44 matched)
+    let a = Math.fround(Math.acos(Math.max(-1, Math.min(1, dot))));
+    if (!(cy < 0.0)) a = -a;
+    pan = (Math.trunc(chop(a * Math.fround(40.743664))) - 0x40) & 0xff;              // 128 / pi: 0x40 ahead
+  }
+  // GUESS: DAT_0047d730, the master scale (vol = vol x it >> 7 when it is >= 0), is not applied: taken as 0x80 or
+  // negative (no change), as in the traced play (w172: every volume matched without it); what sets it is not decoded.
+  return { vol, pan };
+}
+
+// The listener FUN_003e9ed0 uses on game frame k is the game state of two pad polls before (T: w172_sound3: mgr
+// +0x3810 / +0x3820 / +0x3850 on frame k = CAM+0x90 eye / CAM+0x80 forward / C+0x30 position + (0, -7, 0) of trace
+// record k - 2; FUN_003ee468 -> FUN_003e88f0, FUN_005734a8 -> FUN_005635e0 -> FUN_003e88b0). soundListener keeps the
+// start-of-frame states of the last three frames in hist and returns the oldest. eye / fwd: the camera's eye and
+// matrix row 2 (CAM+0x60 row 2 = CAM+0x80, the look direction: player.js FollowCamera M[2]); pos {x, y, z}: C+0x30.
+export function soundListener(hist, eye, fwd, pos) {
+  hist.push({ pos: [eye[0], eye[1], eye[2]], fwd: [fwd[0], fwd[1], fwd[2]], alt: [pos.x, pos.y - 7.0, pos.z], useAlt: true });
+  if (hist.length > 3) hist.shift();
+  return hist[0];
+}
+
+// The page's emitter slots (the EE side of the chain). play() = FUN_0033cc90 -> FUN_003e8e18 ->
+// FUN_003e8bc8 (+ FUN_0033ced0's range for FUN_0033ce10 callers); update() = FUN_003e9ed0, run once a
+// frame: every slot opened since the last run is sent with FUN_003e9220's volume / pan from the listener
+// set by setListener() (so a sound requested on frame f starts on frame f + 1, as in the traces).
+// sdb row +0xc (FUN_003e9b80): bit 1 = ATRAC stream (row +8 id, FUN_003eb088: not ported, not played),
+// bit 3 -> slot 0x20, bit 5 -> slot 0x200000 (no Doppler; the update path is not ported).
+// Not ported: the update requests for slots that keep playing (FUN_003e7718 code 0x11: volume / pan /
+// Doppler pitch of a moving emitter, e.g. the bullet's bsj_063 moved by FUN_00557c68 -> FUN_0033cfc8),
+// slot release FUN_003e8ff8 / stop FUN_0033cf00 (a rendered SE plays to its end).
+export class SoundEmitters {
+  constructor(audio) { this.audio = audio; this.pending = []; this.listener = null; this.log = null; }
+  play(name, pos, range = 400.0) {
+    const row = this.audio.se && this.audio.se.names[name];
+    if (!row || (row.flags & 2)) return -1;
+    // pos null: FUN_0033cbd8, the sound camera's position (DAT_0047d8c0 block +0x30), which is the listener's
+    // +0x3810 when the slot is sent (T: w172 bsj_063, pan 0x81 = a zero vector)
+    const slot = { name, id: row.id, pos: pos ? [pos[0], pos[1], pos[2]] : null, range: Math.fround(range), flags: 0 };
+    if (pos && Math.sqrt(pos[0] * pos[0] + pos[1] * pos[1] + pos[2] * pos[2]) === 0) slot.flags |= SLOT_FLAGS.NOPOS;
+    this.pending.push(slot);
+    return slot;
+  }
+  setListener(L) { this.listener = L; }
+  listenerOf(hist, eye, fwd, pos) { return soundListener(hist, eye, fwd, pos); }   // play.js (no import of its own)
+  update() {
+    const L = this.listener, list = this.pending;
+    this.pending = [];
+    if (!L) return;
+    for (const e of list) {
+      if (!e.pos) e.pos = L.pos.slice(0, 3);
+      const { vol, pan } = emitterVolPan(e, L);
+      if (this.log) this.log.push({ name: e.name, id: e.id, vol, pan });
+      this.audio.playId(e.id, vol, pan);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------------------------
 // Browser front end: load a zone's SE data and bank 0, play by sdb name or SE id.
+const SE_CACHE_MAX = 32;
+
 export class GameAudio {
   constructor(base = 'data/audio/') { this.base = base; this.ctx = null; this.ready = null; }
 
@@ -508,7 +627,9 @@ export class GameAudio {
     if (this.ctx.state === 'suspended') this.ctx.resume();
   }
 
-  // vol / pan: what the game's sound thread passes to FUN_0041a190 (vol 0..0x7f, pan 0..0x7f, 0x40 centre).
+  // vol / pan: what the game's sound thread passes to FUN_0041a190(entry, pan, vol & 0x7f) (FUN_003e80d8
+  // case 2; FUN_003e9220 computes them). pan is FUN_003e9220's angle byte: 0x40 ahead, 0x80 / 0x00 the sides,
+  // 0xc0 behind; the IOP indexes its pan table with it (FUN_00001380).
   playId(id, vol = 0x7f, pan = 0x40) {
     if (!this.se || !this.ctx) return null;
     const hex = this.se.programs[String(id)];
@@ -517,9 +638,23 @@ export class GameAudio {
     const bank = prog[1] | (prog[2] << 8);
     const rd = this.renderers[bank];
     if (!rd) return null;
-    const out = rd.render(prog, vol, pan);
-    const buf = this.ctx.createBuffer(2, out.left.length, SPU_RATE);
-    buf.copyToChannel(out.left, 0); buf.copyToChannel(out.right, 1);
+    // A render depends on (program, vol, pan) and the driver's random-table counter rd.rngIndex (FUN_0000a870,
+    // advanced by op 0x78 and the randomised pitch / volume / pan / ADSR), and costs a few ms on the main thread.
+    // Keep rendered buffers keyed by all four; a hit reuses the buffer and moves the counter to where that render
+    // left it, so the output is the same as rendering again (a page cache, not game logic).
+    const key = `${id}:${vol}:${pan}:${rd.rngIndex}`;
+    this.cache ??= new Map();
+    let ent = this.cache.get(key);
+    if (ent) { this.cache.delete(key); this.cache.set(key, ent); rd.rngIndex = ent.rngEnd; }
+    else {
+      const out = rd.render(prog, vol, pan);
+      const buf = this.ctx.createBuffer(2, out.left.length, SPU_RATE);
+      buf.copyToChannel(out.left, 0); buf.copyToChannel(out.right, 1);
+      ent = { buf, rngEnd: rd.rngIndex };
+      this.cache.set(key, ent);
+      if (this.cache.size > SE_CACHE_MAX) this.cache.delete(this.cache.keys().next().value);
+    }
+    const buf = ent.buf;
     const src = this.ctx.createBufferSource();
     src.buffer = buf; src.connect(this.ctx.destination); src.start();
     return src;

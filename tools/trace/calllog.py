@@ -73,12 +73,16 @@ def _logger(a):
     a.beq("t2", "zero", "lret")
     a.srl("t3", "t2", 24)                # delay: slot
     a.addu("t3", "t3", "t8")
+    a.srl("t6", "t2", 16)
+    a.andi("t6", "t6", 0xFF)             # n words (bit 7: copy the saved register itself, see cpr)
+    a.andi("t5", "t6", 0x80)
+    a.bne("t5", "zero", "rawreg")
+    a.andi("t6", "t6", 0x7F)             # delay
     a.lw("t3", 0, "t3")                  # saved register (low word)
+    a.label("rawreg")
     a.sll("t5", "t2", 16)
     a.sra("t5", "t5", 16)
     a.addu("t3", "t3", "t5")             # src
-    a.srl("t6", "t2", 16)
-    a.andi("t6", "t6", 0xFF)             # n words
     a.label("cw")
     a.lw("t5", 0, "t3")
     a.sw("t5", 0, "t4")
@@ -117,6 +121,11 @@ def _stub(a, target, desc):
 
 def cp(reg, off, n):
     return (SLOT[reg] << 24) | (n << 16) | (off & 0xFFFF)
+
+
+def cpr(reg):
+    """Copy the register's own value (low word) instead of memory at it (worker 0172)."""
+    return (SLOT[reg] << 24) | (0x81 << 16)
 
 
 JAL = lambda t: 0x0C000000 | (t >> 2)
@@ -221,6 +230,33 @@ SETS["sound2"] = [SETS["sound"][0], SETS["sound"][6],
     dict(id=73, kind="site", where=(0x554850, 0x554970, 0x33D788), name="shot_part94", copy=[cp("a0", 0x94, 2)]),
 ]
 
+# worker 0172: the EE 3D sound (notes/audio-research.md "3D volume / pan"). FUN_003e9ed0 (from FUN_00246c98)
+# runs FUN_003e9220 on every emitter slot; a new one-shot is sent with FUN_003e7810(_, id, pan, vol).
+SETS["sound3"] = [
+    dict(id=60, kind="site", where=(0x33CC90, 0x33CD90, 0x3E8E18), name="play_name",
+         copy=[cp("a1", 0, 2), cp("a2", 0, 4)]),          # name, emitter position; v0 = slot
+    dict(id=66, kind="site", where=(0x3E80D8, 0x3E8588, 0x41A190), name="se_send",
+         copy=[cp("a0", 8, 1), cpr("a1"), cpr("a2")]),     # SE id, pan, volume
+    dict(id=80, kind="site", where=(0x3E9220, 0x3E9798, 0x3E7810), name="se_new",
+         copy=[cpr("a2"), cpr("a3")]),                     # a1 = SE id; pan, volume
+    dict(id=81, kind="site", where=(0x33CE58, 0x33CED0, 0x33CED0), name="se_range", copy=[]),  # f12 range, a1 slot
+    dict(id=83, kind="site", where=(0x3E8BC8, 0x3E8E18, 0x3E9B80), name="slot_open",
+         copy=[cp("a2", 0, 2), cp("a1", 4, 1)]),           # every new slot: sdb row name (a2 = row), SE id
+    dict(id=82, kind="site", where=(0x246C98, 0x247000, 0x3E9ED0), name="listener",
+         copy=[cp("a0", 0x3810, 4), cp("a0", 0x3820, 4), cp("a0", 0x3850, 4), cp("a0", 0x3890, 1)]),
+]
+
+# worker 0173: every draw of the shared RNG (FUN_0040b5c0 -> FUN_0040b500: v0 = the tempered word) and who drew it at
+# a wall impact (FUN_0054ff50: the variant; FUN_002e0160: the bullet-hole decal, twice; FUN_00550098: material 6).
+# The 'draw' entry is logged when FUN_0040b500 returns, so it comes just before its caller's entry. 624 consecutive
+# draws give the whole twister state (notes/audio-research.md "Wall impact draws").
+SETS["rng"] = [SETS["sound3"][0],
+    dict(id=90, kind="site", where=(0x40B5C0, 0x40B5F0, 0x40B500), name="draw", copy=[]),       # v0
+    dict(id=91, kind="site", where=(0x54FF50, 0x550098, 0x40B5C0), name="wall_rand", copy=[]),  # f0
+    dict(id=92, kind="site", where=(0x2E0160, 0x2E0348, 0x40B5C0), name="decal_rand", copy=[]),
+    dict(id=93, kind="site", where=(0x550098, 0x550148, 0x40B5C0), name="mat6_rand", copy=[]),
+]
+
 
 def patch(mem, setname, frame_lo, frame_hi, log_end):
     """Install the hooks of SETS[setname]. Returns (clog_start, clog_end, hooks)."""
@@ -235,7 +271,7 @@ def patch(mem, setname, frame_lo, frame_hi, log_end):
     for h in hooks:
         d = desc_at + 4 * len(desc_words)
         desc_words += [h["id"]] + h["copy"] + [0]
-        assert len(h["copy"]) == 0 or sum((c >> 16) & 0xFF for c in h["copy"]) <= 25
+        assert len(h["copy"]) == 0 or sum((c >> 16) & 0x7F for c in h["copy"]) <= 25
         stub_at = a.pc()
         if h["kind"] == "site":
             lo, hi, callee = h["where"]
@@ -277,10 +313,13 @@ def decode(raw, hooks):
                  f0=tof(w[5]), f12=tof(w[6]))
         k = 7
         for c in h["copy"]:
-            n, off, reg = (c >> 16) & 0xFF, c & 0xFFFF, [r for r, s in SLOT.items() if s == c >> 24][0]
+            n, off, reg = (c >> 16) & 0x7F, c & 0xFFFF, [r for r, s in SLOT.items() if s == c >> 24][0]
             ws = w[k:k + n]
             fl = [round(struct.unpack("<f", struct.pack("<I", x))[0], 4) for x in ws]
-            e["%s+%#x" % (reg, off)] = {"u": [hex(x) for x in ws], "f": fl}
+            if (c >> 16) & 0x80:
+                e[reg] = ws[0] if ws[0] < 0x80000000 else ws[0] - (1 << 32)
+            else:
+                e["%s+%#x" % (reg, off)] = {"u": [hex(x) for x in ws], "f": fl}
             k += n
         out.append(e)
     return out

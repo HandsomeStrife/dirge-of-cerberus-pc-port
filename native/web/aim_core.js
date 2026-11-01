@@ -139,10 +139,26 @@ const A220_DN_VIEW = 0.1;                         // DAT_0046e438
 // FUN_00260c98: 0 below 0, 1 above 1, else (1 - cos(pi x)) / 2 (FUN_0045b428 = cosf)
 const ease260c98 = x => (x < 0 ? 0 : x > 1 ? 1 : (1.0 - Math.cos(x * 3.1415927)) * 0.5);
 
+// Draw / holster sounds (worker 0172): FUN_005766c0 (P, 1, 1) plays FUN_0033d348(W+0x14 >> 2 & 7, P's position
+// FUN_0054a720), (P, 0, 1) FUN_0033d3c8(same): name tables by weapon class, copied to their stacks from ELF 0x4a11f0 /
+// 0x4a1218 (4 entries each; weapon.json se_draw / se_holster, export_web_aim.py: game data, not in the repo). Played
+// only while DAT_004e0ff8 (FUN_00253ff8) == 1 (it is 1 in the traced play: w172_sound3 f796 bsj_018; what sets it is
+// not decoded). FUN_005766c0's own gates (both only with param_3 != 0, the (P, x, 1) calls): the draw sound needs
+// FUN_0031a990(*(PS+0x84)) != 0 (PS = FUN_0055a370(P) = P+0x17c, the status; the save's weapon-slot record R), the
+// holster sound FUN_0055a378(P) != 0 (P+0x17c set ? FUN_00317c70(PS) = the weapon W : 0); both hold whenever the page has a weapon (weapon.json is that slot's W), so the page
+// does not test them. this.sound(name) is set by play.js (audio.js SoundEmitters). Classes 4-7 would read past the
+// 4-entry tables (stack): no sound here.
+let seWarned = false;
+const warnSe = () => { if (!seWarned) { seWarned = true; console.warn('aim_core: weapon.json has no se_draw / se_holster: rebuild data/aim (export_web_aim.py); no draw / holster sound'); } };
+function switchSound(table, cls) {
+  return Array.isArray(table) && cls >= 0 && cls < 4 ? table[cls] || null : null;
+}
+
 export class WeaponSystem {
   // W: weapon.json (export_web_aim.py, FUN_0031c3f8); reticle: reticle.json (kinds, lengths)
   constructor(W, reticle = null, { step = 1.1999999284744263, lockOn = true } = {}) {
     this.W = W; this.ret = reticle; this.step = step;
+    this.sound = null;                              // draw / holster sound hook (W.se_draw / W.se_holster)
     this.lockOn = lockOn;   // HUD+0x64 bit 0 / CAM+0x1e8 bit 2 (FUN_00575510 <- FUN_00321e20: the auto-lock option; on in the save)
     this.reset();
   }
@@ -457,6 +473,9 @@ export class WeaponSystem {
   // (FUN_00538b50 doesn't touch the camera; jump_core weaponSwitch). The ladder mount calls the
   // holster too (FUN_00576c88 / FUN_00576de8).
   draw(onGround = true, player = null) {
+    const seD = switchSound(this.W.se_draw, this.W.class);       // FUN_005766c0 -> FUN_0033d348 (see switchSound)
+    if (this.W.se_draw == null) warnSe();
+    if (this.sound && seD) this.sound(seD);
     const P = this.P; P.drawn = true; P.st = 0xc; P.T = Math.max(P.T, 6); P.m29c = 3; P.facePt = this.far;
     if (player) player.P.flags2a8 = (player.P.flags2a8 ?? 0) | 1;   // FUN_00576548: FUN_00574808(P, 0, 1)
     if (!onGround) this.camJump(true, true);                  // FUN_00576548(P, 1): FUN_0032a0f8(CAM, 1, 1)
@@ -475,6 +494,9 @@ export class WeaponSystem {
   // circle (FUN_005766c0(P, 0, 1)): P+0x29c 2 (traced); player state 2 on the ground
   // (FUN_0055b8e0(P, 2): its enter clears the flag), 9 in the air (jump_core weaponSwitch)
   holster(onGround = true, player = null) {
+    const seH = switchSound(this.W.se_holster, this.W.class);    // FUN_005766c0 -> FUN_0033d3c8
+    if (this.W.se_holster == null) warnSe();
+    if (this.sound && seH) this.sound(seH);
     this.holsterCore(onGround, player); this.P.m29c = 2;
     const st = player ? weaponSwitch(player, false) : (onGround ? 2 : 9);
     if (st != null) this.P.state = st;
