@@ -6,6 +6,7 @@ Bring-your-own-disc helper for tools/byo/build_web.sh. Reads the ISO 9660 image 
 
   python3 -I tools/byo/disc.py check   <image.iso>            disc id + file hashes
   python3 -I tools/byo/disc.py extract <image.iso> <workdir>  FILELIST.BIN + KEL.DAT -> workdir
+  python3 -I tools/byo/disc.py elf     <image.iso> <dst>      the ELF (SLES_541.85) -> dst, hash-checked
   python3 -I tools/byo/disc.py verify  <noPath dir>           the unpacked inputs the build reads
   python3 -I tools/byo/disc.py isohash <image.iso>            sha256 of the whole image (slow)
 
@@ -247,6 +248,20 @@ INPUTS = {
     '../data/bgd/bgd.bin': 'cab126367d9fb61865d03323938cc422a450f15e4ab72de5999f6d2a6e21a9a3',
     # outside noPath (data/etc): the HUD 'menu2' texture (reticle) for export_web_aim.py
     '../data/etc/menudata.bin': 'b851a405451880e46a9f95c4be406b958ac81c44a9ac8de7bd7b8e7dccd74eb6',
+    # z128 sound: SE programs sep.bin (06zz0005) and names sdb.bin (06zz0008) for tools/audio/extract.py / bgm.py
+    '06800005.bin': '519b914c16e6ab40592cb59c7a5f1270b772c65dc62778cd5cb08c0e3cc8ce28',
+    '06800008.bin': 'e5854eb93c8e80479cda8935879d40dbdbab5fc5dbb5e81793c8227028bfeb3d',
+    # outside noPath: sound driver + wave bank 0 (tools/audio/extract.py), the zone music (tools/audio/bgm.py)
+    '../data/sound/lib/iopsound.irx': '86164af27e90c49ee8984ae3497d2225165a789a8271bdd019b16e74bfe74aa1',
+    '../data/sound2/wave0000.wd': '2ded3a27599d1adb9d7ddaa564a0aacda1a58195634ab546ae36e7dffc9e308b',
+    '../data/zone/z128/sound/bgm_001.at3': '5c0e50d546d728590f4c974247401624d123df2d32abf2510da27ffd80555138',
+    # outside noPath: resident effect file + effect texture pack (export_web_effects.py)
+    '../data/effect/resident/r0000/r0001/fer/r0001.fed': '5faf7fdfd9f3a8c8f07de02cd4551711c544e531c8f9c602acf05e005fc0726b',
+    '../data/effect/core/core_ef.bin': 'dedce36b3decd8218c77ba28fa02e49dbc61a012f7269cef83653f131ed271a1',
+    # outside noPath: the UK locale's menu textures, font and strings (export_web_hud.py, export_web_pause.py)
+    '../data/etc/locale/uk/menudata.bin': '5a4d8679077abd937d5938417db218dd80e368dd0e5dc8e7734da26c8a3ba740',
+    '../data/etc/locale/uk/fontdata1.bin': 'd9d46539391478cdbb9a8b7d517c2b3fe278c9a2da5c805f7c2105092675cdaf',
+    '../data/etc/locale/uk/kelstr.bin': '26256ce641be079a56c7cee4a5ddd3b1c5702c39f18a946b090db3bbbf5b5305',
 }
 
 
@@ -375,6 +390,20 @@ def extract(iso_path, work):
         print(f'  {name:18s} {h}  {"ok" if want == h else "(no reference)"}')
 
 
+def elf(iso_path, dst):
+    """Copy the game's ELF out of the image for the exporters that read tables (and the BGM / string
+    keys) from it at run time. build_web.sh deletes the copy when it finishes."""
+    iso = check(iso_path, quiet=True)
+    os.makedirs(os.path.dirname(os.path.abspath(dst)), exist_ok=True)
+    ent = iso.find(BOOT_ID)
+    if ent is None:
+        die(f'{iso_path}: {BOOT_ID} is missing; the image is incomplete or damaged')
+    h = iso.copy(ent, dst)
+    if h != KNOWN[BOOT_ID]:
+        os.remove(dst)
+        die(f'{BOOT_ID}: SHA-256 {h} does not match the supported disc')
+
+
 def verify(nopath, quiet=False):
     """Check every input file the build reads. Returns the list of problems."""
     probs = [] if INPUTS else ['no input list in disc.py (INPUTS is empty)']
@@ -397,6 +426,8 @@ def main(argv):
         check(argv[1])
     elif cmd == 'extract' and len(argv) == 3:
         extract(argv[1], argv[2])
+    elif cmd == 'elf' and len(argv) == 3:
+        elf(argv[1], argv[2])
     elif cmd == 'verify' and len(argv) == 2:
         sys.exit(1 if verify(argv[1]) else 0)
     elif cmd == 'isohash' and len(argv) == 2:

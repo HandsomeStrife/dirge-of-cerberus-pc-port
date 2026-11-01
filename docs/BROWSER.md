@@ -4,7 +4,8 @@ The browser prototype shows one scene from *Dirge of Cerberus: Final Fantasy VII
 "sea of flames" walkway in Kalm (room z128), with Vincent. It has two pages:
 
 - **`index.html`**: a free-camera viewer of the room, with a standing Vincent.
-- **`play.html`**: walk Vincent around the room: run, jump, climb ladders, aim and fire.
+- **`play.html`**: walk Vincent around the room: run, jump, climb ladders, aim and fire, with
+  the zone's enemies, sound effects, music, bullet impact effects and the pause menu.
 
 It is a research prototype of a faithful port: the room, the character, the animation clips,
 the collision and the ladders are read from the game's own files by our decoders. Parts that
@@ -53,12 +54,21 @@ match it. To compare: `python3 -I tools/byo/disc.py isohash your.iso`.
   macOS: `xcode-select --install`. No other libraries are needed (no zlib).
 - **git**: you need a git clone of the repository. The exporters use `git check-ignore` to
   make sure they only write into ignored folders.
-- **About 3.5 GB of free disk space** while building (a 1.5 GB archive copy is deleted
-  afterwards, leaving about 1.2 GB unpacked and about 70 MB of built data).
+- **About 4.5 GB of free disk space** while building (a 1.5 GB archive copy and the music
+  streams the build doesn't use are deleted afterwards, leaving about 1.3 GB unpacked and
+  about 160 MB of built data).
 - **A browser with WebGL** and internet access: the pages load three.js from
   `cdn.jsdelivr.net`.
+- Optional, for the **music**: **ffmpeg** and the **libavcodec**, **libavutil** and
+  **libswresample** development packages, found with **pkg-config**. Debian/Ubuntu:
+  `ffmpeg libavcodec-dev libavutil-dev libswresample-dev pkg-config`; macOS (Homebrew):
+  `ffmpeg pkg-config`. Without them the build skips the music and the page plays without it
+  (the sound effects don't need them).
+- Optional, for the **game's HUD** (HP gauge, weapon panel): a PCSX2 save state (`.p2s`) made
+  at the start of the sea-of-flames level, passed with `--state`. See
+  [Optional parts](#optional-parts-music-and-the-hud).
 - Optional: **Docker** with `docker compose`, for the serve option that includes the Report
-  backend. **Node.js** is needed only for the collision tests.
+  backend. **Node.js** is needed only for the tests.
 
 ## Build: one command
 
@@ -70,15 +80,43 @@ tools/byo/build_web.sh /path/to/your.iso
 
 It takes about 5 to 10 minutes. The script:
 
-1. checks the prerequisites,
+1. checks the prerequisites (and says which optional parts it will build),
 2. checks the disc (boot id and file hashes),
 3. copies `FILELIST.BIN` and `KEL.DAT` out of the image and unpacks the game archive into
    `extract/_KEL/` (gitignored), then checks every file the build reads against a list of
    hashes,
 4. builds two small C tools (the texture decoder `dtex` and the collision exporter `cidweb`),
-5. runs the exporters into `native/web/data/` (gitignored).
+5. runs the exporters into `native/web/data/` (gitignored): the room, Vincent and his clip
+   packs, the gun, the enemies and their AI data, the aim tables, the effects, the pause menu,
+   the menu layouts, the sound effects and, when the optional parts are available, the music
+   (`dirge_atdec`, a third C tool, is built for it) and the HUD.
 
-Running it again is safe. A verified `extract/` is reused and outputs are overwritten. Each
+Some exporters read tables from the game's program file (`SLES_541.85`). The script copies it
+out of your image into `extract/.byo-elf/` for the build and deletes it when it ends; nothing
+read from it is stored in the repository.
+
+The options are:
+
+```sh
+tools/byo/build_web.sh [--state sea-of-flames.p2s] [--re-extract] [--no-motions] /path/to/your.iso
+```
+
+### Optional parts: music and the HUD
+
+- **Music** (`data/audio/bgm/`): built when `ffmpeg` and the libavcodec development packages
+  are found (see [Prerequisites](#prerequisites)). The zone's track is decoded from the disc
+  and stored as FLAC. Without it the page has sound effects but no music.
+- **The game's HUD** (`data/hud/`): built only with `--state FILE`. Its textures, font and
+  layout come from the disc, but the state of the HUD's elements (which panels show, where,
+  with which values) is read from a PCSX2 save state at the start of the level, because the
+  game code that sets them up is not decoded yet. Without `--state` the page runs without the
+  game's HUD (as with `?gamehud=0`). The same save also gives the effects' random number
+  state, used by one kind of spark (effect type 137). Without `--state` nothing is read from
+  any save: those sparks are left out and the rest of the effects work.
+
+Running it again is safe. A verified `extract/` is reused and outputs are overwritten. An
+`extract/` from an older version of the script that lacks files this build reads is unpacked
+again (the script says "older extract ... unpacking again"). Each
 step logs to `native/assets/models/out/byo/logs/<step>.log`. On failure the script prints the
 end of that log.
 
@@ -116,6 +154,7 @@ requests. Use one of the servers.
 | Space | jump |
 | E | grab a ladder in front of you; then W/S climb, Space jumps off |
 | left mouse button | fire |
+| Esc or Enter | pause menu (then arrows or W/S to choose, Space to confirm, Backspace to go back) |
 | right mouse button or Q (hold) | aim |
 | Z or middle button | zoom |
 | F | reload |
@@ -134,7 +173,8 @@ requests. Use one of the servers.
 | R | report (Docker option only) |
 
 Useful URL parameters: `?hud=0` hides the text overlay; on play.html, `?gamehud=0` hides the
-game's HUD (HP gauge, weapon panel); `?cam=x,y,z,yaw,pitch` sets the view
+game's HUD (HP gauge, weapon panel), `?sound=0` turns the sound and music off, `?fx=0` turns the
+effects off, `?enemies=0` leaves the enemies out; `?cam=x,y,z,yaw,pitch` sets the view
 (the HUD shows the current values); on play.html, `?ladder=0` starts at the ladder next to the
 start deck; `?packs=` skips the extra animation packs; `?actions=0` turns off jump, ladder and
 shoot.
@@ -142,7 +182,8 @@ shoot.
 ## Known limitations
 
 This is a prototype, not a game. What exists: one room, Vincent, walking, running, jumping,
-ladders and shooting. No enemies, no story, no sound, no menus.
+ladders and shooting, the room's enemies, sound effects, the zone music, bullet impact effects,
+the HUD and the pause menu. No story, no other rooms, no title or other menus.
 
 **GUESS stand-ins.** Many gameplay values are not decoded from the game's code yet: the
 acceleration, the turn rate, the follow camera, the aim mode, the gravity while falling, the
@@ -176,10 +217,13 @@ See `notes/HANDOFF.md` for the research state.
 | `... differ from the supported disc` / `does not match` | The image is damaged or another revision. Re-rip it and compare with the hashes above. |
 | `python3 -I sees no numpy` / `no Pillow` | The OS packages, or `pip install numpy Pillow` inside an active venv (a `--user` install is not seen). |
 | `missing: a C compiler` | Install `build-essential` (Debian/Ubuntu) or the Xcode command line tools (macOS). |
-| `need about 3.5 GB free` | Free some disk space. |
+| `need about 4.5 GB free` | Free some disk space. |
 | `extract/_KEL exists and was not made by this script` | Move `extract/_KEL` away and run the build again. |
 | `... is not gitignored: refusing` | `.gitignore` was changed. Restore it with `git checkout .gitignore`. |
 | page stuck on "loading", or a 404 on `data/...` | Build first. Serve the `native/web` folder (use `serve.sh`), not the repository root. |
+| `zone music: skipped` | Optional. Install ffmpeg and the libavcodec / libavutil / libswresample dev packages and pkg-config, then build again. |
+| `the game's HUD: skipped (no --state)` | Optional. Build again with `--state your-save.p2s` to include the HUD. |
+| no sound | Click the page first: browsers start audio only after a click or key press. Check that `?sound=0` is not in the address. |
 | black page, three.js errors | The browser needs WebGL and access to `cdn.jsdelivr.net`. |
 | Report button fails | Expected with the python option. Use `serve.sh docker` if you want reports. |
 

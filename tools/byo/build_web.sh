@@ -12,7 +12,9 @@
 # Prerequisites: python3 (3.8+) with numpy and Pillow (OS packages or a venv: the build runs
 # python3 -I, which ignores pip --user installs), a C compiler (cc/gcc/clang), make, git.
 # Node.js is only needed for the optional tests. No zlib, no Docker, no PCSX2.
-# Disk: about 3.5 GB free (1.5 GB archive copy, deleted after unpacking; ~1.2 GB unpacked).
+# Optional: ffmpeg plus the libavcodec / libavutil / libswresample dev packages (found with pkg-config)
+# for the zone music; without them the music step is skipped and the page plays without music.
+# Disk: about 4.5 GB free (1.5 GB archive copy, deleted after unpacking; ~1.3 GB unpacked).
 #
 # Re-running is safe: a verified extract is reused, outputs are overwritten in place.
 #
@@ -20,6 +22,10 @@
 #   --re-extract   unpack again even if extract/ verifies (only replaces an extract this
 #                  script made; it never deletes an extract/_KEL it did not create)
 #   --no-motions   skip the motion catalogue (data/vincent/motions.json, reference only)
+#   --state FILE   a PCSX2 save state (.p2s) of the sea-of-flames start, for the game's HUD
+#                  (data/hud): the HUD's element tree is read from the save, it is not decoded
+#                  from the disc yet. Without it the HUD step is skipped and play.html runs
+#                  without the game's HUD (and without the effects' type 137 sparks).
 #   -h, --help
 set -euo pipefail
 
@@ -49,12 +55,13 @@ PACK_SHOOT=h_wk_a,h_rn_a,h_sq_a,h_st_a,h_sq_f,h_st_f,h_wk_ad,h_rn_ad,h_sq_ad,h_s
 STATIC_CLIP=h_st
 STATIC_FRAME=91
 
-ISO=""; REEXTRACT=0; MOTIONS=1
-usage() { sed -n '2,23p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+ISO=""; REEXTRACT=0; MOTIONS=1; STATE=""
+usage() { sed -n '2,29p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 while [ $# -gt 0 ]; do
   case "$1" in
     --re-extract) REEXTRACT=1 ;;
     --no-motions) MOTIONS=0 ;;
+    --state) [ $# -ge 2 ] || { echo "--state needs a file" >&2; exit 2; }; STATE=$2; shift ;;
     -h|--help) usage; exit 0 ;;
     -*) echo "unknown option $1" >&2; usage >&2; exit 2 ;;
     *) [ -z "$ISO" ] || { echo "one image only" >&2; exit 2; }; ISO=$1 ;;
@@ -62,6 +69,17 @@ while [ $# -gt 0 ]; do
   shift
 done
 [ -n "$ISO" ] || { usage >&2; exit 2; }
+# absolute, since the export steps run from native/assets/models
+abspath() { case "$1" in /*) printf '%s\n' "$1" ;; *) printf '%s/%s\n' "$(pwd)" "$1" ;; esac; }
+ISO=$(abspath "$ISO")
+[ -z "$STATE" ] || STATE=$(abspath "$STATE")
+
+# Some exporters read tables (the sound names, the BGM / string scramble keys, ...) from the ELF at
+# run time. A hash-checked copy lives in extract/.byo-elf (gitignored) only while the build runs.
+ELFDIR=$EXT/.byo-elf
+ELF=$ELFDIR/SLES_541.85
+rm -rf "$ELFDIR"                     # a leftover from an interrupted run
+trap 'rm -rf "$ELFDIR"' EXIT
 
 # Don't silently replace a web build that this script didn't make (e.g. a capture-based
 # developer build, which has the sky and the capture placement). BYO_FORCE=1 overrides.
@@ -104,15 +122,22 @@ $PY -c 'import PIL' 2>/dev/null || fail "python3 -I sees no Pillow (OS package p
 git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1 || fail "$REPO is not a git checkout (clone the repo; the exporters use git check-ignore)"
 # probe.md: .md is on the allow-list, so it is only ignored by the directory rule itself;
 # the other names are the kinds of file the build writes there
-for d in extract extract/_KEL/noPath native/web/data native/web/data/vincent native/assets/models/out/byo; do
-  for f in probe.md probe.bin probe.json probe.glb probe.rgba probe.png probe.log; do
+for d in extract extract/_KEL/noPath extract/.byo-elf native/web/data native/web/data/vincent native/web/data/audio native/web/data/audio/bgm native/assets/models/out/byo; do
+  for f in probe.md probe.bin probe.json probe.glb probe.rgba probe.png probe.log probe.flac probe.fed probe.85; do
     git -C "$REPO" check-ignore -q "$d/$f" ||
       fail "$d/$f would not be gitignored: refusing to write game data there. Restore .gitignore (git checkout .gitignore)."
   done
 done
 [ -f "$ISO" ] || fail "no such file: $ISO"
+[ -z "$STATE" ] || [ -f "$STATE" ] || fail "no such save state: $STATE"
 echo "python3 $($PY -c 'import sys,numpy,PIL; print(sys.version.split()[0], "numpy", numpy.__version__, "Pillow", PIL.__version__)'), cc=$CC_FOUND, make, git: ok"
 command -v node >/dev/null && echo "node $(node -v): ok (optional, for tests)" || echo "node: not found (optional, only for tests)"
+MUSIC=0
+if command -v ffmpeg >/dev/null && command -v pkg-config >/dev/null && pkg-config --exists libavcodec libavutil libswresample; then
+  MUSIC=1; echo "ffmpeg + libavcodec: ok (optional, for the zone music)"
+else
+  echo "ffmpeg / libavcodec dev packages: not found (optional; the build skips the zone music)"
+fi
 mkdir -p "$LOGS"
 
 # ------------------------------------------------------------------ 1. the disc
@@ -135,15 +160,31 @@ if [ $have_extract -eq 0 ]; then
   if [ -d "$KEL" ] && [ ! -f "$STAMP" ]; then
     fail "extract/_KEL exists and was not made by this script; move it away first (not deleted automatically)"
   fi
+  if [ -d "$KEL" ]; then
+    # this script's own extract: --re-extract, or an older one without the files this build reads
+    [ $REEXTRACT -eq 1 ] && echo "--re-extract: unpacking again" ||
+      echo "older extract (made by this script, but missing or different inputs): unpacking again"
+  fi
+  # free space, counting what this script will delete first (its old extract and leftovers of an
+  # interrupted run); nothing is deleted unless the check passes
+  NEED_KB=4500000
   df_kb=$(df -Pk "$REPO" | awk 'NR==2 {print $4}')
-  [ "${df_kb:-0}" -ge 3500000 ] || fail "need about 3.5 GB free on $(df -P "$REPO" | awk 'NR==2 {print $6}'), have $((df_kb / 1024)) MB"
-  rm -rf "$WORK" "$KEL.tmp"
+  old_kb=0
+  for d in "$KEL" "$KEL.tmp" "$WORK"; do
+    if [ -e "$d" ]; then old_kb=$((old_kb + $(du -sk "$d" | cut -f1))); fi
+  done
+  [ $(( ${df_kb:-0} + old_kb )) -ge $NEED_KB ] ||
+    fail "need about 4.5 GB free on $(df -P "$REPO" | awk 'NR==2 {print $6}'), have $((df_kb / 1024)) MB (+ $((old_kb / 1024)) MB of old extract this script would replace). Nothing was deleted."
+  rm -rf "$KEL" "$WORK" "$KEL.tmp"
   run disc_extract $PY "$BYO/disc.py" extract "$ISO" "$WORK"
   grep 'KEL.DAT  ' "$LOGS/disc_extract.log" | sed 's/^/  /'
   echo "  unpacking KEL.DAT (a few minutes)"
-  run kel_unpack $PY "$REPO/tools/kel_unpack.py" "$WORK/FILELIST.BIN" "$WORK/KEL.DAT" "$KEL.tmp" bin
+  # .bin: models, stages, textures, menus; .fed: effects; .irx + .wd: the sound driver and wave
+  # banks; .at3: the music (only the zone's track is kept, the other ~380 streams are deleted)
+  run kel_unpack $PY "$REPO/tools/kel_unpack.py" "$WORK/FILELIST.BIN" "$WORK/KEL.DAT" "$KEL.tmp" bin,fed,irx,wd,at3
   tail -n 1 "$LOGS/kel_unpack.log" | sed 's/^/  /'
   grep -q ' fail=0$' "$LOGS/kel_unpack.log" || fail "kel_unpack reported failures (see $LOGS/kel_unpack.log)"
+  (cd "$KEL.tmp" && find . -name '*.at3' ! -path ./data/zone/z128/sound/bgm_001.at3 -delete)
   $PY "$BYO/disc.py" verify "$KEL.tmp/noPath" || fail "the unpacked files do not match the supported disc"
   date -u +%Y-%m-%dT%H:%M:%SZ > "$KEL.tmp/.byo-extract"
   rm -rf "$KEL"
@@ -164,6 +205,7 @@ mkdir -p "$DATA" "$OUT"
 # mark the data as this script's before the first write, so a re-run after a failed
 # step passes the guard at the top
 touch "$DATA/.byo-build"
+run elf $PY "$BYO/disc.py" elf "$ISO" "$ELF"
 step "room z128: 13 geometry chunks, textures from the files, fog from the BMD env block"
 run room $PY export_z128_room.py -o "$OUT/z128_room/room"
 echo "ok ($(grep -c . "$OUT/z128_room/room.list") lines in room.list; no sky dome: it only exists in a GS capture)"
@@ -256,7 +298,8 @@ step "enemy placements (stage file sections 0/1: stage-load e027s -> data/enemie
 run enemy_placements $PY export_web_placements.py "$NOPATH/06800001.bin" "$DATA/enemies"
 [ -s "$DATA/enemies/placements.json" ] || fail "data/enemies/placements.json missing (log: $LOGS/enemy_placements.log)"
 head -n 1 "$LOGS/enemy_placements.log" | cut -c1-160
-run enemy_ai $PY export_web_triggers.py "$NOPATH/06800001.bin" "$DATA/enemies"   # trigger volumes + scripts -> data/enemies/ai.json (enemy_ai.js)
+# trigger volumes + scripts -> data/enemies/ai.json (enemy_ai.js); the sound-name tables come from the ELF
+run enemy_ai $PY export_web_triggers.py "$NOPATH/06800001.bin" "$DATA/enemies" "$ELF"
 [ -s "$DATA/enemies/ai.json" ] || fail "data/enemies/ai.json missing (log: $LOGS/enemy_ai.log)"
 grep '^wrote' "$LOGS/enemy_ai.log" | sed "s#$REPO/##" | cut -c1-160
 echo "ok"
@@ -264,6 +307,62 @@ echo "ok"
 step "weapon stats + reticle tables and texture (bgd.bin parts, menudata.bin menu2, ELF from the disc) -> data/aim"
 run aim $PY export_web_aim.py --iso "$ISO" -o "$DATA/aim"
 tail -n 1 "$LOGS/aim.log"
+
+
+step "effects: resident effect file r0001.fed + texture pack core_ef.bin, id tables from the ELF -> data/effects"
+# export_web_effects.py also declares "effects" in scene.json (play.js loads the effects only then).
+# It takes the effect random generator's state from --state (the type 137 sparks); an empty
+# --state (none given) leaves it out, so the sparks are off.
+run effects $PY export_web_effects.py --extract "$KEL" --elf "$ELF" -o "$DATA/effects" --state "$STATE"
+for f in r0001.fed core_ef.bin ids.json; do
+  [ -s "$DATA/effects/$f" ] || fail "data/effects/$f missing after the effects export (log: $LOGS/effects.log)"
+done
+tail -n 1 "$LOGS/effects.log" | cut -c1-160
+
+step "pause menu: layouts, images, font and messages (ELF + locale uk menudata/fontdata1/kelstr) -> data/pause.json"
+run pause $PY export_web_pause.py --elf "$ELF" --disc "$KEL" -o "$DATA/pause.json"
+[ -s "$DATA/pause.json" ] || fail "data/pause.json missing (log: $LOGS/pause.log)"
+tail -n 1 "$LOGS/pause.log" | cut -c1-160
+
+step "menu layout scripts (ELF) -> data/menu.json (read by the menu layout tests)"
+run menu $PY export_web_menu.py --elf "$ELF" -o "$DATA/menu.json"
+[ -s "$DATA/menu.json" ] || fail "data/menu.json missing (log: $LOGS/menu.log)"
+echo "ok"
+
+if [ -n "$STATE" ]; then
+  step "the game's HUD (ELF + locale uk menudata/fontdata1, element tree from the save state) -> data/hud"
+  # export_web_hud.py also declares "hud" in scene.json (play.js draws the HUD only then)
+  run hud $PY export_web_hud.py --iso "$ISO" --locale "$KEL/data/etc/locale/uk" --state "$STATE" -o "$DATA/hud"
+  [ -s "$DATA/hud/hud.json" ] || fail "data/hud/hud.json missing (log: $LOGS/hud.log)"
+  tail -n 1 "$LOGS/hud.log" | cut -c1-160
+else
+  step "the game's HUD: skipped (no --state)"
+  echo "The HUD's element tree is read from a save state; it is not decoded from the disc yet."
+  echo "play.html runs without the game's HUD. Pass --state sea-of-flames.p2s to include it."
+fi
+
+step "sound effects: driver tables (iopsound.irx), z128 SE programs (sep.bin, sdb.bin), wave banks -> data/audio"
+run audio $PY "$REPO/tools/audio/extract.py" --kel "$KEL" --zone 128 --out "$DATA/audio"
+[ -s "$DATA/audio/se_z128.json" ] || fail "data/audio/se_z128.json missing (log: $LOGS/audio.log)"
+head -n 1 "$LOGS/audio.log" | cut -c1-160
+
+if [ $MUSIC -eq 1 ]; then
+  step "zone music bgm_001 (ATRAC3 descrambled with the ELF's keys, decoded, FLAC) -> data/audio/bgm"
+  if ! make -C "$REPO/native/assets/audio" CC="$CC_FOUND" dirge_atdec > "$LOGS/make_atdec.log" 2>&1; then
+    tail -n 10 "$LOGS/make_atdec.log" >&2
+    echo "warning: dirge_atdec did not compile (log: $LOGS/make_atdec.log): the zone music is skipped." >&2
+    MUSIC=0
+  fi
+fi
+if [ $MUSIC -eq 1 ]; then
+  # bgm.py also adds "bgm" to se_z128.json (music.js fetches bgm.json only then), so it runs after extract.py
+  run music $PY "$REPO/tools/audio/bgm.py" --kel "$KEL" --elf "$ELF" --zone 128 --out "$DATA/audio/bgm" --names bgm_001
+  [ -s "$DATA/audio/bgm/bgm_001.flac" ] || fail "data/audio/bgm/bgm_001.flac missing (log: $LOGS/music.log)"
+  echo "ok"
+else
+  step "zone music: skipped (needs ffmpeg, the libavcodec / libavutil / libswresample dev packages and a dirge_atdec that compiles)"
+  echo "play.html runs without music (sound effects still play)."
+fi
 
 if [ $MOTIONS -eq 1 ]; then
   step "motion catalogue (data/vincent/motions.json, reference only)"
