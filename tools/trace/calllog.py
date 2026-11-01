@@ -196,6 +196,32 @@ SETS["melee"] = [
 ]
 
 
+# worker 0170: sound requests (notes/audio-research.md). Game code plays a sound by sdb.bin name through
+# FUN_0033cc48 / FUN_0033cbd8 -> FUN_0033cc90 -> FUN_003e8e18(mgr, name, pos, ...) (v0 = emitter slot);
+# the sound thread later sends the SE program with FUN_0041a190(entry, vol, pan) from FUN_003e80d8.
+SETS["sound"] = [
+    dict(id=60, kind="site", where=(0x33CC90, 0x33CD90, 0x3E8E18), name="play_name",
+         copy=[cp("a1", 0, 2)]),                           # a1 = sdb name (8 bytes); v0 = slot
+    dict(id=61, kind="site", where=(0x5694F8, 0x569870, 0x33D008), name="fire_snd",
+         copy=[cp("a0", 0, 8)]),                           # a0 = gun def (+4 flags, +0x14 index bits)
+    dict(id=62, kind="site", where=(0x5694F8, 0x569870, 0x33D6D8), name="fire_part",
+         copy=[cp("a0", 0x8C, 2)]),                        # a0 = weapon part, +0x8c custom name
+    dict(id=63, kind="site", where=(0x556870, 0x557400, 0x33D5C8), name="impact_mat", copy=[]),  # a0 = material
+    dict(id=64, kind="site", where=(0x556870, 0x557400, 0x33CC48), name="impact_chr", copy=[cp("a0", 0, 2)]),
+    dict(id=65, kind="site", where=(0x57A830, 0x57A9B8, 0x33CC48), name="melee_hit", copy=[cp("a0", 0, 2)]),
+    dict(id=66, kind="site", where=(0x3E80D8, 0x3E8588, 0x41A190), name="se_send",
+         copy=[cp("a0", 8, 1)]),                           # a0 = SeSep entry (+8 SE id); a1 = volume
+]
+# Who asks: Vincent's fire FUN_00577480 -> FUN_0033d008 / FUN_0033d118 (gun def), FUN_00571dd8 -> FUN_0033d008,
+# the shot FUN_00554850 -> FUN_0033d788 (weapon part +0x94).
+SETS["sound2"] = [SETS["sound"][0], SETS["sound"][6],
+    dict(id=70, kind="site", where=(0x577480, 0x577D40, 0x33D008), name="v_fire", copy=[cp("a0", 0, 8)]),
+    dict(id=71, kind="site", where=(0x577480, 0x577D40, 0x33D118), name="v_fire_118", copy=[cp("a0", 0, 8)]),
+    dict(id=72, kind="site", where=(0x571DD8, 0x571EE8, 0x33D008), name="auto_fire", copy=[cp("a0", 0, 8)]),
+    dict(id=73, kind="site", where=(0x554850, 0x554970, 0x33D788), name="shot_part94", copy=[cp("a0", 0x94, 2)]),
+]
+
+
 def patch(mem, setname, frame_lo, frame_hi, log_end):
     """Install the hooks of SETS[setname]. Returns (clog_start, clog_end, hooks)."""
     hooks = SETS[setname]

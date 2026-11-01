@@ -18,6 +18,14 @@
 //   ctrl.stickInput(input), ctrl.intent(), ctrl.moveTick(), ctrl.rotate().
 
 const f32 = Math.fround;
+// PS2 FPU rounding toward zero (player.js / enemy_ai.js chop)
+const _cb = new DataView(new ArrayBuffer(4));
+function chop(x) {
+  const r = f32(x);
+  if (!(Math.abs(r) > Math.abs(x))) return r;
+  _cb.setFloat32(0, r); _cb.setInt32(0, _cb.getInt32(0) - 1);
+  return _cb.getFloat32(0);
+}
 
 // ---------------------------------------------------------------- game data
 // Runtime values from the sea-of-flames save state (EE RAM), checked against the traces.
@@ -45,6 +53,7 @@ export const SLOT = {
   0xda: 'c_bj0', 0xdb: 'c_bj1', 0xdc: 'c_bj2', 0xdd: 'c_bj0', 0xde: 'c_bj1', 0xdf: 'c_bj2',
   0xe0: 'c_bwj0', 0xe1: 'c_bwj1', 0xe2: 'c_bwj2',
   0xbc: 'h_jp0_a', 0xbd: 'h_jp1_a', 0xbe: 'h_jp2_a', 0xbf: 'h_jp3_a', 0xc0: 'h_jp4_a', 0xc1: 'h_jp_f',
+  0x3e: 'c_std',                                          // the standing hit (motion class 0x3f, FUN_0059df28)
 };
 // slots that are empty in z128's slot table (C+0x7fc in the save state): FUN_003455e8 says no.
 // 0xc1 (h_jp_f, the air-shot clip) is empty, so FUN_00596830 plays the h_jp3_a set (aim_g f49).
@@ -54,10 +63,12 @@ export const UNLOADED = new Set([0xc1]);
 // data/vincent/vincent_jump.json; the c_ lengths equal the traces' hold frame n - 1)
 export const CLIP_FRAMES = { h_jp0: 3, h_jp1: 10, h_jp2: 10, h_jp3: 16, h_jp4: 15,
   h_jp0_a: 3, h_jp1_a: 10, h_jp2_a: 10, h_jp3_a: 16, h_jp4_a: 15,
-  c_wjp0: 3, c_wjp1: 10, c_wjp2: 9, c_bj0: 2, c_bj1: 11, c_bj2: 10, c_bwj0: 2, c_bwj1: 11, c_bwj2: 10 };
+  c_wjp0: 3, c_wjp1: 10, c_wjp2: 9, c_bj0: 2, c_bj1: 11, c_bj2: 10, c_bwj0: 2, c_bwj1: 11, c_bwj2: 10,
+  c_std: 16 };                                            // 07703200 (export_web_vincent.py catalogue)
 
 // player states (P+0x104) this file deals with
 export const ST = { FOOT: 2, JUMP: 8, FALL: 9, JUMP2: 0x1f, BACK: 0x20, BACK2: 0x21 };
+export const HIT_STATE = 0x18;                            // the big hit (FUN_00562898 -> FUN_00562b30)
 const onFoot = s => s >= 2 && s <= 5;
 const inAir = s => s === 8 || s === 9 || s === 0x20;
 
@@ -70,7 +81,7 @@ export const airState = s => s === 8 || s === 9 || s === 0xf || s === 0x10 || (s
 // landing or a ladder clears them and a walk-off or ladder drop (no take-off) leaves them 0. The
 // other clearers, the +0x14 slots of state 1 / 0x80 (FUN_00537ce8 / FUN_00539dd8, vtables 0x58ae90 /
 // 0x58a860), and the script setters (FUN_005660b0, FUN_005661e8 case 0x145) are in states the page
-// doesn't have. Readers: FUN_005766c0 (weaponSwitch below); FUN_00565480 isn't on the page.
+// doesn't have. Readers: FUN_005766c0 (weaponSwitch below); FUN_00565480 (player.js hitReact).
 // enterState: P+0x104 = st as FUN_0055b8e0 writes it, with that tail.
 export function enterState(P, st) {
   P.state = st;
@@ -94,8 +105,12 @@ export function enterState(P, st) {
 //  states 8 / 9 / 0x1f / 0x20 / 0x21 (vtables 0x58ad10 / 0x58ace0 / 0x58acb0 / 0x58ac80 / 0x58ac50):
 //   FUN_00538aa0. P+0x17c's +0x20 = 0x30c in the save (FUN_00316cf8 false: no state 7),
 //   so: events 0x55 / 0x4e while airborne -> 0, else 2 (3 with b44).
+//  state 0x18 (the hit, vtable 0x58a9e0): FUN_00539b88, any event: dead (FUN_00316cf8; P+0x28 bit 0x20
+//   clear) -> 7 (not on the page: HP 0 is out of scope, the caller never asks while dead); ground bit
+//   clear -> 0x10; else C+0x45c bit 17 (clear: body flags 0x236) -> 2, or 3 with b44.
 // Other states: null (handler not on the page).
 export function stateEvent(st, ev, ground, b44) {
+  if (st === HIT_STATE) return ground ? (b44 ? 3 : 2) : 0x10;
   if (st === 2 || st === 3) {
     if (ground) return (ev === 0x1c || ev === 0x1e || ev === 0x3f) ? (b44 ? 3 : 2) : 0;
     return (ev === 0x1e || ev === 0x3f) ? 0x10 : 9;
@@ -111,8 +126,12 @@ export function stateEvent(st, ev, ground, b44) {
 // (FUN_00538a30) and 0x20 / 0x21 (FUN_0053a478 / FUN_0053a528, which differ only for new state
 // 0x21): 2 / 3 -> 0x21 (landing). From 2 (FUN_00537d58): 3 -> 5 (armed stand), 9 (armed walk) when
 // moving; 9 -> 0x22 (fall). From 3 (FUN_00538120): 2 -> 3 (stand), 8 (walk) when moving; 9 -> 0x22.
-// moving: C+0x1d8 != 0 (the ground speed). Others: null (not on the page).
+// moving: C+0x1d8 != 0 (the ground speed). From 2 / 3 to the hit 0x18: their default -> FUN_00537aa0,
+// jumptable 0x589e70[0x18] = 0x537b9c (li v0, 0x3f): the hit class 0x3f. From 0x18 (FUN_00539b48):
+// 3 -> 5, 7 -> 0xb, else FUN_00537aa0: 2 -> 3 (0x537acc), 9 -> 0x22 (0x537b34). Others: null (not on the page).
 export function stateMotion(old, st, moving = false) {
+  if ((old === 2 || old === 3) && st === HIT_STATE) return 0x3f;
+  if (old === HIT_STATE) return st === 3 ? 5 : st === 2 ? 3 : st === ST.FALL ? 0x22 : null;
   if ((old === ST.JUMP || old === ST.FALL || old === ST.JUMP2 || old === ST.BACK || old === ST.BACK2)
       && (st === 2 || st === 3)) return 0x21;
   if (old === 2 && st === 3) return moving ? 9 : 5;
@@ -538,6 +557,28 @@ export class FallMotion {
   }
 }
 
+// FUN_0059df28: the hit motion state (class 0x3f; factory 0x592918 case 0x3f -> 0x593680: FUN_005a37b8,
+// vtable 0x5a4b70, update vt+0x24). Phase 0: FUN_00340bb8(C, 1, 2) (blend 2), FUN_003456c0(1.0, C, 0x3e,
+// 2, 0) = row 0x3e c_std now, not looped, FUN_00340bb8(C, 1, -1) (C+0x591 back), timer 0. Phase 1: done
+// when the clip is done (FUN_003460d8) or the timer > 120 (then FUN_00341b20's next motion: unused, the
+// done event changes the state); off the ground (C+0x1c0 bit 0x200 clear) the done bit only. The timer
+// (+0xc) += DAT_004eeb24 on every frame that doesn't end.
+export class HitMotion {
+  constructor() { this.id = 0x3f; this.phase = 0; this.t = 0; this.done = false; this.freeze = false; }
+  update(io) {
+    const out = [];
+    if (this.phase === 0) {
+      out.push(req(0x3e, { now: true, loop: false, blend: 2 }));
+      this.t = 0; this.phase = 1;
+    } else {
+      if (io.clipEnded || 120.0 < this.t) { this.done = true; return out; }
+      if (!io.ground) this.done = true;
+    }
+    this.t = f32(this.t + JUMP.STEP);
+    return out;
+  }
+}
+
 // ---------------------------------------------------------------- head-layer clock
 // The motion player's head layer for the jump clips, enough to answer FUN_003460d8:
 // frame += rate x weight/128 x step (FUN_005aa2a8); a loop resets to 0 at the clip length;
@@ -569,7 +610,9 @@ export class ClipClock {
     if (this.blendLen > 0) { this.blendLen = f32(this.blendLen - step); if (this.blendLen <= 0) this.blendLen = 0; }   // FUN_005aa5b8
     const n = this.frames[this.clip];
     if (n === undefined) return;
-    const f = f32(this.frame + f32(f32(JUMP.clipRate * step)));
+    // FUN_005aa2a8: frame += rate x step, on the EE FPU (rounds toward zero: chop). T: c_std in k_lunge166 ends
+    // on the 26th advance (state 0x18 -> 2 at record 1489); rounded to nearest it would end on the 25th.
+    const f = chop(this.frame + chop(chop(JUMP.clipRate) * step));
     if (this.loop) { this.frame = f >= n ? 0 : f; return; }
     if (f > n - 1 && this.queue.length) {               // passes the last frame: the queued clip
       const r = this.queue.shift(); this.clip = r.clip; this.frame = 0; this.loop = r.loop;
@@ -606,6 +649,9 @@ export class Jump {
     } else if (m === 0x22) {
       this.motion = new FallMotion(prev);                 // runs from the next frame
       this.events.push({ frame: ctrl.frames, ev: 'fall' });
+    } else if (m === 0x3f) {
+      this.motion = new HitMotion();                      // phase 0 runs in this frame's motion update
+      this.events.push({ frame: ctrl.frames, ev: 'hit', state: st });
     } else if (m === 3 || m === 5 || m === 8 || m === 9) {
       if (this.motion) this.events.push({ frame: ctrl.frames, ev: 'loco', next: m });
       this.motion = null;
@@ -634,7 +680,14 @@ export class Jump {
   event(ctrl, ev) {
     const P = ctrl.P, old = P.state;
     const b44 = !!(ctrl.weapon && ctrl.weapon.drawn && ctrl.weapon.drawn());   // P+0x100 bit 44
-    const st = stateEvent(old, ev, ctrl.onGround, b44);
+    let st = stateEvent(old, ev, ctrl.onGround, b44);
+    if (st === 0x10) {
+      // GUESS: state 0x10 (the hit ending off the ground, FUN_00539b88) has no class on the page; it
+      // goes to the fall state 9, whose motion from 0x18 is decoded (0x22, FUN_00539b48 -> jumptable)
+      // (not decoded: state 0x10's class; see notes/fidelity-audit.md "Vincent's hit reaction")
+      if (!this.warned10) { this.warned10 = true; console.warn('jump_core: state 0x10 (hit ended in the air) not ported: state 9'); }
+      st = ST.FALL;
+    }
     if (!st || !this.enter(ctrl, st)) return 0;
     if (st === 2 || st === 3) {
       // the enter slot (+0xc) of state 2 / 3, FUN_00537e70 / FUN_005380a0: FUN_0032a0f8(CAM, 0, 0)

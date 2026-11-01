@@ -948,3 +948,56 @@ shot cone', 'Bullet room probe', 'C update order', 'Deflect window'). Replaces B
 - Not done: Vincent's hit reaction (vt+0x324), the hit effects, P.motionClass (FUN_0055d100 immunity), friendly fire
   (bullet bit 0x200: warns), homing bullets (W+4 0x2000: warns), the order of later-activated soldiers in the C list.
 
+
+## Vincent's hit reaction (worker 0169, 2026-11-01)
+
+**Decoded and translated** (player.js `hitReact` / `hitBranch` / `bigHit` / `slideTick` / `runC` / `saveC` / `loadC`, jump_core.js `HitMotion`; audit
+'Vincent's hit reaction').
+- Callers: FUN_0055eac8 (melee) -> FUN_00565480(P, attack +0xec (type 1: 4), dir, point, alive-before); dir =
+  FUN_0057b1b0 case 4 (+0xc0 bits 4-7 = 0xc in k_melee18): P's position less the owner's, flattened along the
+  owner's row 1 (k_melee18 call: flags 4, dir (-0.887, 0, -0.4618) = from #66 to him). FUN_0055db50 (bullets):
+  flags = bullet +0x148 (W+0xc: 0 on every weapon z128's records carry) | FUN_0055d950(P, +0x153 = W+0x4a).
+- FUN_00565480 for Vincent (P+0x28 0x20901f, P+0x118 0x20209, C+0x1c8 0xc, C+0x4c0 set, P+0x110 nibbles 0): air
+  states (or > 2 u above the ground with take-off bits) -> FUN_005618d0 / FUN_00561270 for flags 4 / 8 (not
+  translated); ladder states -> nothing; flags 8 -> knock-down (not translated); flags 4 on the ground ->
+  FUN_00562898; flags 2 -> nothing (P+0x118 bit 3). Every bullet hit in k_bullet1 / k_bullet2 / engage8 keeps
+  state 2 / 3, as this says.
+- FUN_00562898: FUN_0034b638(0.25, C, -dir); C+0x1c0 |= 0x200; DAT_0046e298 bit 13 (0x2000) -> FUN_003531e0(5 (P+0x28
+  bit 4), 12, C, dir) + FUN_0034edf0(C, 9) (C+0x7e4 record +0x10 = 0x180: no override), FUN_0034e960(C, 4);
+  FUN_00562b30 -> FUN_0055b8e0(P, 0x18, 0, 0) -> motion jumptable 0x589e70[0x18] = 0x3f; camera view 4 (scope) ->
+  FUN_0032a420(CAM, 2).
+- Class 0x3f (factory 0x592918 case 0x3f -> FUN_005a37b8, vtable 0x5a4b70, update FUN_0059df28): c_std (row 0x3e
+  of C+0x7fc, save RAM), blend 2, done at its end or after 120 ticks. State 0x18 (class 0x58a9e0): enter FUN_00539b20
+  (stance 0), done FUN_00539b88 (dead 7, air 0x10, else 2 / 3 by the gun), motion FUN_00539b48 (3 -> 5, else the
+  jumptable: 2 -> 3).
+- Mover 9 (FUN_00351550): speed v = 2d / T, then v -= v0 / T x step: 10 moving frames, 5.5 u on open floor. In
+  k_lunge166 the walk mesh slides him along the railing (0.9 of each step): 4.97 u; the page's walker gives the
+  same to 0.0007 u.
+- Order: FUN_00343160 runs the class update, FUN_0034ea18 (mover, move, turn), then the clip advance, after the
+  object lists (and after his input / intent: the hit frame's 0.25 turn survives in k_lunge166). The page's
+  enemyAI.tick runs after ctrl.step, so `hitReact` puts the whole frame back to the start of its C update
+  (`saveC` / `loadC`: controller, P, C, body, the jump's motion and clip clock (same object), the animator's
+  layers), decides there, and on a big hit folds the hit into that start and runs the C update again (`runC`,
+  without the draw). A hit with no reaction leaves the frame as it was. So two hits in one frame (melee + a
+  bullet's stagger, two soldiers) act in order before one C update, as in the game. (Worker 0171; before, the
+  redo restored only position / body / facing and ran the motion update and clip advance a second time.)
+- Re-hit in state 0x18 (worker 0171, decoded): FUN_00565480 takes the same branch (0x18 is not an air state
+  (FUN_0055aa88) nor in FUN_0055a410's list), so FUN_00562898 runs again: turn, C+0x1c0 |= 0x200, a new slide
+  FUN_003531e0 + mover 9, FUN_0034e960(C, 4). FUN_00562b30 -> FUN_0055b8e0(P, 0x18, 0, 0): the state is already
+  0x18 and param_3 = 0, so it returns 0 with no state write and no FUN_005641c0 (the hit motion is not restarted:
+  c_std runs on and 0x18 ends when it would have); its tail FUN_00565df8(P, 0) still runs. A hit on the frame
+  the motion ends is such a re-hit (the game sees 0x18 before the C update): the C update then ends 0x18 (-> 2 / 3)
+  and the new slide runs in state 2. Not traced (no trace has two hits in one 0x18).
+- The hit frame's draw: the game draws c_std at blend weight 0 (the old head alone) and then advances; the page's
+  draw ran before the hit (the old head, same pose) and is not run again, so the cloth sees the c_std start
+  (play.js clipStarted) one frame late, and a locomotion blend in progress on the hit frame is drawn blended
+  (the game drops it). aim.js's clip classes (gun drawn) ran once on the hit frame before the hit: their layer
+  writes are undone, their own counters (stand-fire timer, move flag, quadrant) are not (L: the game runs no
+  such class in 0x18).
+- Clip clock: c_std ends on the 26th chopped advance (EE FPU); rounded to nearest it ended a frame early
+  (f1488). jump_core ClipClock now chops; jump / camera / aim traces unchanged.
+- Sounds / effects (not on the page; for the audio work): FUN_0055c978 C cues 0x44 / 0x4c (FUN_00341330 /
+  FUN_003412d0) and script event 8; vt+0x324 FUN_00576ac8 -> vt+0x344 FUN_00576c28 and FUN_003b4ea8(DAT_00471380);
+  voice FUN_0055ea50 ('h_dmg_N', P+0x28 bit 2); HUD FUN_00567fe8 (melee) / FUN_00567f10 (bullets); hit effect
+  FUN_003361b8 (bullets, zone nibble), FUN_00567c08 / pad FUN_00336508 (FUN_005720c8); FUN_00562898's script event
+  0x29.

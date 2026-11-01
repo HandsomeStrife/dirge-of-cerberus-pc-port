@@ -431,15 +431,19 @@ try {
     ai.runEvent(a, 8, [10, 0, 0, 0]);
     const mode = a.ai.mode;
     const seen = new Set(), clips = new Set(), log = [], tick = P.enemies.tick;
-    P.enemies.tick = x => { tick(x); seen.add(a.ai.bstate); if (body.head) clips.add(body.head.clip); };
+    // Vincent's state in the frame the swing hits (play.js react -> player.js hitReact: FUN_00562898 -> state 0x18)
+    let hpWatch = null, hitState = null;
+    P.enemies.tick = x => { tick(x); seen.add(a.ai.bstate); if (body.head) clips.add(body.head.clip);
+                            if (hpWatch != null && hitState == null && P.php.hp < hpWatch) hitState = c.P.state; };
     const fired = await wait(() => clips.has('m_st_f') && seen.size >= 2, 20000);
     const after = { fired, states: [...seen], cmode: a.ai.cmode, astate: a.astate };
     clips.clear();
     const hp0 = P.php.hp;
+    hpWatch = hp0;
     put(12);
     const melee = await wait(() => clips.has('m_atk'), 20000);
     await wait(() => P.php.hp < hp0, 5000);
-    const atk = { melee, astate: a.astate, hp0, hp: P.php.hp, hud: document.body.innerText.includes('bullet damage off') };
+    const atk = { melee, astate: a.astate, hp0, hp: P.php.hp, hud: document.body.innerText.includes('bullet damage off'), hitState };
     P.enemies.tick = tick;
     ai.setActive(obj(69), 0);
     return { mode, after, atk };
@@ -448,6 +452,8 @@ try {
      `record 69 hit (event 8): AI mode ${g69?.mode} (5), keeps firing: m_st_f drawn ${g69?.after.fired}, brain states ${JSON.stringify(g69?.after.states)}, combat layer ${g69?.after.cmode}, actor state ${g69?.after.astate}`);
   ok(g69 && g69.atk.melee && g69.atk.hp === g69.atk.hp0 - 49 && g69.atk.hud,
      `record 69 with Vincent 12 u in front: melee, body draws m_atk (${g69?.atk.melee}), Vincent HP ${g69?.atk.hp0} -> ${g69?.atk.hp} (-49: one hit, enemy bullet damage off; HUD says 'bullet damage off': ${g69?.atk.hud})`);
+  ok(g69 && g69.atk.hitState === 0x18,
+     `the swing's hit puts Vincent in state 0x18 in that frame (play.js react -> hitReact -> FUN_00562898): ${g69?.atk.hitState?.toString(16)}`);
   // 9. The platform soldiers (records 46-49, Dan's report "they can't react"). Trigger 77 (script 100) is a
   // flag-0x20 volume over their raised floor: FUN_005503e8 makes it see-through to bullets, and a bullet
   // crossing it runs event 0x12 (FUN_005442d8 -> vt+0x1b4 FUN_005511e8): wake n1 -> 46-49. Walking into it

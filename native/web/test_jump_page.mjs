@@ -533,7 +533,9 @@ for (const drawn of [false, true]) {
   const seq = [];
   let loop3 = null, shotAt = null, after = null;
   for (let i = 0; i < 70; i++) {
-    if (c.jump.clock && c.jump.clock.clip === 'h_jp3_a' && c.jump.clock.frame >= 3 && shotAt === null && !c.onGround) {
+    // (frame >= 1.2: with the clip clock chopped (EE rounding), h_jp1_a / h_jp2_a each hand over a frame later, so
+    // h_jp3_a reaches only 2.4 before the landing; it was 3 with the clock rounded to nearest)
+    if (c.jump.clock && c.jump.clock.clip === 'h_jp3_a' && c.jump.clock.frame >= 1.2 && shotAt === null && !c.onGround) {
       fire = true; shotAt = c.jump.clock.frame;
     }
     c.step({ x: 0, z: 0, keys: new Set(), pressed: new Set(), cross: i === 0 });

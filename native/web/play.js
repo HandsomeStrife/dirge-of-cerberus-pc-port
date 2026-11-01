@@ -632,7 +632,7 @@ async function main() {
   const enemies = ENEMIES ? await setupEnemies({ root, litPatch, light, extra: aiData ? AWAKE.map(k => aiData.records[k]) : [] })
     .catch(e => { console.warn('enemies off:', e.message); return null; }) : null;
   // Vincent's status for the enemy AI: HP 780 = P status +0x20 in the save state (k_enemy_engage8 p_hp)
-  const php = { pos: [ctrl.pos.x, ctrl.pos.y, ctrl.pos.z], hp: 780, id: 0x16, f118: 0, s64: 0 };
+  const php = { pos: [ctrl.pos.x, ctrl.pos.y, ctrl.pos.z], hp: 780, id: 0x16, f118: 0x20209, s64: 0 };   // f118 = P+0x118 from the save's RAM (0x20209; player.js hitBranch)
   // Vincent's joints j00..j92 (flat under the glb root: model-space TRS) and his start-of-frame placement (tick)
   const vinJoints = [], vinStart = { pos: null, h: 0 };
   vin.mixRoot.traverse(n => { const m = /^j(\d\d)$/.exec(n.name); if (m && !vinJoints[+m[1]]) vinJoints[+m[1]] = n; });
@@ -658,6 +658,9 @@ async function main() {
         const h = col.segment({ x: a[0], y: a[1], z: a[2] }, { x: b[0], y: b[1], z: b[2] }, col.probeFlags(0x18d));
         return h ? [h.point.x, h.point.y, h.point.z] : null;
       } : null,
+      // Vincent's hit reaction FUN_00565480 (player.js hitReact): his C update for this frame runs again
+      // with the hit (the game runs it after the object lists); php.pos follows in place
+      react: h => { const r = ctrl.hitReact(h); php.pos[0] = ctrl.pos.x; php.pos[1] = ctrl.pos.y; php.pos[2] = ctrl.pos.z; return r; },
       // Vincent's skeleton for the bullets (vt+0x5c bone 3, the part boxes): the drawn joints (the last drawn pose,
       // as the game's MP buffer when the bullets update) placed at his start-of-frame position and facing
       // (after: his C after this frame's update = the controller now, the tick runs after ctrl.step)
@@ -719,6 +722,11 @@ async function main() {
   // Vincent's bullets vs the soldiers (aim.js onShot -> enemy_ai playerShot, FUN_00577480), fired in
   // enemyAI.tick after the AI scheduler (the game's frame order, FUN_00323128)
   if (weapon && enemyAI) weapon.onShot = (...shot) => enemyAI.queueShot(...shot);
+  // ?sound=1 (off by default; audio.js, notes/audio-research.md): Vincent's shot FUN_00577480 -> FUN_0033d118 -> 'bsj_051'
+  // (SE 1040). GUESS: volume 0x3a (one traced scene, w170_sound) and pan 0x40 (FUN_003e9220's 3D volume / pan not decoded)
+  if (weapon && params.get('sound') === '1') import('./audio.js').then(({ GameAudio }) => { const au = new GameAudio(); au.load(128).catch((e) => console.warn('audio: no bank', e));
+    ['keydown', 'pointerdown'].forEach((e) => addEventListener(e, () => { try { au.resume(); } catch (e2) { /* no AudioContext */ } })); const prev = weapon.onShot; weapon.onShot = (...s) => { if (prev) prev(...s); try { au.playName('bsj_051', 0x3a, 0x40); } catch (e) { console.warn('audio:', e); } }; })
+    .catch((e) => console.warn('audio: off', e));
   // the lock-on's soldiers (FUN_00328968 in aim.js aimRay; lock_on.js)
   if (weapon && enemyAI) weapon.targets = () => enemyAI.lockTargets();
 

@@ -341,6 +341,7 @@ def weapons(d):
         out.append(dict(idx=k, flags=SE.u32(d, o + 4), pellets=struct.unpack_from('b', d, o + 0x16)[0],
                         range=f(0x18), speed=f(0x2c), damage=h(0x40), first=h(0x42), interval=h(0x44),
                         reload=h(0x46), mag=h(0x48), hit=d[o + 0x4a], w56=h(0x56),   # W+0x56: melee damage % (FUN_00569dc0)
+                        react=SE.u32(d, o + 0xc),          # W+0xc -> bullet +0x148: the hit reaction flags (FUN_00552dd8, FUN_0055db50)
                         spread=[f(0x1c), f(0x20), f(0x24)],   # W+0x1c / +0x20 / +0x24: cone angle by distance (FUN_005405b0)
                         cls=d[o + 0x14] >> 2 & 7))          # W+0x14 bits 2-4: weapon class (FUN_00564228)
     return out

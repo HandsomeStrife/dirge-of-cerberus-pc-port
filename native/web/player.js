@@ -55,7 +55,7 @@
 // With no actions registered every code path is the game's locomotion.
 // ================================================================
 import * as THREE from 'three';
-import { Jump, stickMode, enterState } from './jump_core.js';
+import { Jump, stickMode, enterState, airState, HIT_STATE } from './jump_core.js';
 
 // ---------------------------------------------------------------- timing
 export const TICK = 1 / 50;                       // one PAL game frame (s): play.js's loop step
@@ -221,6 +221,7 @@ export class PlayerController {
     this.stickW = { x: 0, z: 0, mag: 0 };         // this frame's stick (world, magnitude), stickInput
     this.jump = new Jump();                       // the jump (jump_core.js): FUN_00575768 + motion states 0x20 / 0x21
     this.jumpStepped = false;
+    this.cSnap = null;                            // no C update of this life to redo (hitReact)
     this.locate();
   }
 
@@ -255,7 +256,7 @@ export class PlayerController {
   // optional stick: magnitude 0..1 (overrides the keyboard mapping; the trace replay
   // feeds the pad's processed magnitude here), keys / pressed Sets for actions.
   // One call = one game frame.
-  step(input) {
+  step(input, preC = null) {
     this.prev = { ...this.pos };
     this.prevHeading = this.heading;
     const ctx = this.ctx;
@@ -320,15 +321,65 @@ export class PlayerController {
     // FUN_00599820), before FUN_0034ea18. armed: C+0x590 bit 24 (gun out) and slot 0xbc loaded (it
     // is in z128: aim_g plays h_jp0_a); FUN_00598f50 / FUN_00599aa0 / FUN_00599820 then play the
     // h_jp*_a sets.
+    // the character's C update starts here (motion state, FUN_0034ea18, FUN_00343160). The game runs it
+    // after the object lists (a soldier's melee volume, the bullets); the page runs those after this step
+    // (play.js enemyAI.tick), so a hit that lands this frame rewinds to this point (hitReact)
+    // preC: hits at the game's place in the frame (the object lists, before the C update; tests use it as the
+    // reference for hitReact's redo)
+    if (preC) { this.cSnap = null; preC(this); }
+    this.cSnap = { frame: this.frames, loco, input, state: this.saveC() };
+    this.runC(loco, input);
+    this.frames++;
+  }
+
+  // the character's C update: motion state, FUN_0034ea18 (mover, turn), the state classes' clips,
+  // FUN_00343160 / FUN_005aa5b8 (draw, clip advance). draw = false: the frame's draw already ran (hitReact)
+  runC(loco, input, draw = true) {
+    const ctx = this.ctx;
     this.jump.motionUpdate(this, { armed: !!(this.weapon && this.weapon.drawn()), action: !!this.active });
     const frozen = this.jump.frozen;              // C+0x1c0 bit 0x20: FUN_0034ea18 returns at once
     if (loco && !frozen) this.moveTick();         // FUN_0034ea18 -> FUN_0034c388 case 0xc
     if (loco && !frozen) this.rotate();           // FUN_0034ea18 -> FUN_0034de50 mode 4 (6 with the weapon out)
     if (this.weapon && this.weaponHook) this.weaponHook.post(input, !!this.active);   // the state classes' clips
     this.jumpStepped = false;
-    if (ctx.anim && ctx.anim.gameFrame) ctx.anim.gameFrame(this, STEP);   // FUN_00343160 / FUN_005aa5b8
+    const A = ctx.anim;
+    if (A && A.gameFrame) {
+      const hook = A.drawHook;
+      if (!draw) A.drawHook = null;
+      try { A.gameFrame(this, STEP); } finally { A.drawHook = hook; }   // FUN_00343160 / FUN_005aa5b8
+    }
     if (!this.jumpStepped) this.jumpAdvance();    // no animator (tests): the jump clips' clock still runs
-    this.frames++;
+  }
+
+  // everything the C update reads or writes (controller, P, C, body, the jump's motion and clock, the
+  // animator's layers), so hitReact can put the frame back to the start of its C update
+  saveC() {
+    const J = this.jump, K = J.clock, A = this.ctx.anim, m = J.motion;
+    return {
+      pos: { ...this.pos }, heading: this.heading, P: structuredClone(this.P), C: structuredClone(this.C),
+      body: structuredClone(this.body), vel: { ...this.vel }, speed: this.speed, onGround: this.onGround,
+      hitWall: this.hitWall, stuck: this.stuck, vy: this.vy, jumpStepped: this.jumpStepped,
+      motion: m && Object.assign(Object.create(Object.getPrototypeOf(m)), m),   // motions hold numbers / flags
+      clock: K, clockState: K && { ...K, queue: K.queue.map(r => ({ ...r })) },
+      events: J.events.length, head: J.head,
+      anim: A && A.saveFrame ? A.saveFrame() : null,
+    };
+  }
+
+  loadC(s) {
+    const J = this.jump, A = this.ctx.anim;
+    this.pos = { ...s.pos }; this.heading = s.heading;
+    const fill = (o, v) => { for (const k of Object.keys(o)) delete o[k]; return Object.assign(o, structuredClone(v)); };
+    fill(this.P, s.P); fill(this.C, s.C); fill(this.body, s.body);   // in place: callers may hold P / C / body
+    this.vel = { ...s.vel }; this.speed = s.speed; this.onGround = s.onGround;
+    this.hitWall = s.hitWall; this.stuck = s.stuck; this.vy = s.vy; this.jumpStepped = s.jumpStepped;
+    J.motion = s.motion && Object.assign(Object.create(Object.getPrototypeOf(s.motion)), s.motion);
+    // the clock keeps its identity (the animator's jumpClock compares it)
+    J.clock = s.clock;
+    if (s.clock) Object.assign(s.clock, s.clockState, { queue: s.clockState.queue.map(r => ({ ...r })) });
+    const cut = J.events.splice(s.events); J.head = s.head;
+    if (A && A.loadFrame && s.anim) A.loadFrame(s.anim);
+    return cut;                                   // the events logged after that point
   }
 
   // FUN_005aa5b8 on the jump's head-layer clock (the animator calls it between its draw and its advance)
@@ -521,6 +572,7 @@ export class PlayerController {
   // C+0x1c0 flags in z128: 0x400000, 0x2000 and 0x4000 clear.
   moveTick() {
     const C = this.C, B = this.body;
+    if (C.slide) this.slideTick();                // FUN_0034ea18 -> FUN_0034f8c0: the mover before FUN_0034c388
     // velocity = C+0xc0 x C+0xcc -> FUN_00358fb8: body+0x30 (y = 0 while airborne)
     const v = { x: C.dir.x * C.spd, y: airborne(B) ? 0 : C.dir.y * C.spd, z: C.dir.z * C.spd };
     const prev = { ...this.pos };
@@ -684,6 +736,113 @@ export class PlayerController {
 
   // FUN_0034de50, rotation mode 4 (C+0x214): turn the facing (matrix row 2) toward
   // C+0x2c0 by FUN_00323318(C+0x2cc). C+0x45c bit 21 clear (no angular limit).
+  // ------------------------------------------------------------ hit reaction
+  // FUN_00565480(P, flags, hitdir, hitpos, aliveBefore), the branches Vincent can take on the page. Callers:
+  // FUN_0055eac8 (a soldier's melee volume; flags = attack +0xec) and FUN_0055db50 (a soldier's bullet;
+  // flags = bullet +0x148 | the stagger FUN_0055d950), both in enemy_ai.js, which pass HP-0 as deadNow.
+  // Save-state values (fixed on the page): P+0x28 0x20901f (bit 0x20 clear: no flag 8 -> 4 swap; bit 4 set),
+  // C+0x1c8 0xc with C+0x4c0 set (FUN_00356740 skipped), C+0x45c bit 17 clear, P+0x110 nibbles 0
+  // (FUN_00562670 / FUN_00562778 skipped), P+8 0. f118 = P+0x118 (0x20209: bit 3 set, so a small hit
+  // (flag 2) gets no reaction: traced, every bullet hit in k_bullet1 / k_bullet2 / engage8 keeps state 2 / 3).
+  // Returns the branch taken ('big', 'none', 'missing'); 'missing' = a reaction the page has not translated.
+  // HP 0 (FUN_00560fc8 / FUN_00561138 / FUN_00561270 / FUN_005612a0, death) is out of scope: warned, no reaction.
+  //
+  // Frame order: the game calls this from the object lists, before his C update; the page's soldiers run after
+  // ctrl.step. So a hit after this frame's step puts the frame back to the start of its C update (cSnap),
+  // decides there (state, ground bit, height as the game sees them), and on a reaction runs the C update again
+  // from there. The reaction is folded into cSnap, so a second hit in the same frame starts from the first one's
+  // result, as in the game, and the C update still runs once per frame.
+  hitReact(h) {
+    const s = this.cSnap, redo = !!s && s.frame === this.frames - 1;
+    if (!redo) return this.hitBranch(h);
+    const after = this.saveC();
+    const cut = this.loadC(s.state);
+    this.frames = s.frame;                        // inside that frame again (event frame numbers)
+    const r = this.hitBranch(h);
+    if (r === 'big') {
+      s.state = this.saveC();                     // the frame's start now includes this hit
+      this.runC(s.loco, s.input, false);          // the draw already ran (a big hit draws the old pose, blend 0)
+    } else {
+      this.loadC(after);
+      this.jump.events.push(...cut);              // no reaction: the frame as it was, its events too
+    }
+    this.frames = s.frame + 1;
+    return r;
+  }
+
+  hitBranch({ flags, dir, aliveBefore = true, deadNow = false, f118 = 0x20209, f28 = 0x20901f }) {
+    const P = this.P, warn = m => { this.hitWarn = this.hitWarn || new Set(); if (!this.hitWarn.has(m)) { this.hitWarn.add(m); console.warn('player: ' + m); } };
+    if (f118 & 0x10000) return 'none';
+    if (!aliveBefore) return 'none';              // FUN_003419c0 != 0x36: the death motion is not on the page
+    // bVar1 (P+8 == 0): the body point (C+0x54c vt+0x1c) less C+0x3c0 (body+0x10, the walker's ground point)
+    // has y < -2: more than 2 u above the ground. L: vt+0x1c taken as his feet.
+    const above = f32(this.pos.y - this.body.gy) < -2;
+    const st = P.state;
+    // FUN_0055aa88 (air states), or bVar1 with P+0x100 bits 46-47 (FUN_0055bb40 / FUN_0055bb68: states
+    // 0x80-0xbf / 1 are not on the page)
+    if (airState(st) || (above && P.jumpBits)) {
+      if (f118 & 4) return 'none';
+      if (flags & 0xc) { warn('air hit reaction (FUN_005618d0 / FUN_00561270) not translated'); return 'missing'; }
+      if (deadNow) warn('death in the air (FUN_00561270) not translated (HP 0 is out of scope)');
+      return 'none';
+    }
+    // FUN_0055a410: states 10-14 / 0x15 / 0x17 -> nothing unless state 10. The page's ladder action stands
+    // for the ladder states 0xb / 0xc (player.js ladder GUESS), so a hit on the ladder has no reaction.
+    if (this.active) return 'none';
+    if ((flags & 8) && !(f118 & 4)) { warn('knock-down hit reaction (flags 8: FUN_005618d0 / FUN_00561270) not translated'); return 'missing'; }
+    if ((flags & 4) && !(f118 & 0x10)) {
+      if (st === 0xf) return 'none';
+      if (!this.onGround) { warn('big hit off the ground (FUN_005618d0(P, dir, 0, 2)) not translated'); return 'missing'; }
+      if (deadNow) { warn('big hit at HP 0 (FUN_00561138) not translated (HP 0 is out of scope)'); return 'missing'; }
+      this.bigHit(dir, f118, f28);
+      return 'big';
+    }
+    if ((flags & 2) && !(f118 & 8)) { warn('small hit flinch (FUN_00561570) for the player not translated'); return 'missing'; }
+    if (deadNow) warn('death (FUN_00560fc8) not translated (HP 0 is out of scope)');
+    return 'none';
+  }
+
+  // FUN_00562898(P, dir, 0): the big hit. Script event 0x29 (vt+0x2f4): Vincent has no script here.
+  // C+0x4c0 set, P+0x118 bit 0x2000000 clear: FUN_0034b638(0.25, C, -dir) (turn toward the hitter), C+0x1c0
+  // |= 0x200; FUN_00326298(0xd) (DAT_0046e298 bit 13: 0x2000 in z128): with P+0x118 bits 11-12 clear the
+  // push FUN_003531e0(d, T, C, dir) + FUN_0034edf0(C, 9) (P+0x28 bit 0x20 clear), d = 5 (P+0x28 bit 4; else 8),
+  // T = 12 (C+0x7e4's record +0x10 = 0x180: bit 0x10000 clear, so not its +0x48 / +0x4c), then FUN_0034e960(C, 4);
+  // FUN_00562b30 (P+0x28 bit 4): FUN_0055b8e0(P, 0x18, 0, 0) unless P+0x100 bits 40-41 == 1 or state 0x1d
+  // (-> 0x1c; bits 40-41 are 0 on the page); then with P+0x28 bit 4 the camera: view 4 (FUN_0032a0f0, the
+  // scope) -> FUN_0032a420(CAM, 2, 0, 0). T: k_melee18 / k_lunge166 f1463-1489.
+  bigHit(dir, f118, f28) {
+    const C = this.C;
+    if ((f118 & 0x10) || (f118 & 0x10000)) return;
+    const u = norm3({ x: dir[0], y: dir[1], z: dir[2] });
+    this.setTurn(0.25, { x: -u.x, y: -u.y, z: -u.z });
+    this.onGround = true;                         // C+0x1c0 |= 0x200 (already set: hitBranch's ground test)
+    const d = (f28 & 4) ? 5.0 : 8.0, T = 12.0;
+    if (!(f118 & 0x1800)) {
+      // FUN_003531e0: C+0x310 = unit(dir), C+0x320 = 2d / T, C+0x324 = C+0x320 / T, end C+0x32c = 0
+      const v = f32(f32(d + d) / T);
+      C.slide = { dir: u, v, dv: f32(v / T), end: 0 };
+    }
+    C.rotMode = 4;                                // FUN_0034e960(C, 4) (the page's rotate is mode 4)
+    // FUN_00562b30 -> FUN_0055b8e0(P, 0x18, 0, 0). Already in 0x18 (a re-hit): FUN_0055b8e0 finds the same
+    // state and changes nothing (no state write, no FUN_005641c0: the hit motion runs on, not restarted); its
+    // tail FUN_00565df8(P, 0) still runs (0x18 is not an air state). The turn, the ground bit and the slide
+    // above restart either way.
+    if (!this.jump.enter(this, HIT_STATE)) this.P.jumpBits = 0;
+    // state 0x18's enter (FUN_005738d0 -> class 0x58a9e0 +0xc FUN_00539b20): FUN_00565bd0(P, 0), stance 0
+    // (already 0 on the page)
+    const W = this.weapon;
+    if (W && W.cam && W.cam.view === 4 && W.setView) W.setView(2);
+  }
+
+  // FUN_0034f8c0 mover 9 = FUN_00351550: FUN_0034af98(C+0x320, C, C+0x310), then C+0x320 -= C+0x324 x step;
+  // past C+0x32c (0) -> C+0x32c and the mover ends (FUN_00352a60). The speed set this frame is the old one.
+  slideTick() {
+    const S = this.C.slide;
+    this.setMove(S.v, S.dir);
+    S.v = f32(S.v - f32(S.dv * STEP));
+    if (0 <= S.dv ? S.v < S.end : S.end < S.v) { S.v = S.end; this.C.slide = null; }
+  }
+
   rotate() {
     const C = this.C;
     let tgt = C.turn;
@@ -793,6 +952,16 @@ export class SpeedAnimator {
   }
 
   bind(ctrl) { this.ctrl = ctrl; }
+
+  // the layer state gameFrame (and aim.js's clip classes) change in a game frame (PlayerController.saveC / loadC)
+  saveFrame() {
+    const c = o => o && { ...o };
+    return { table: this.table, request: c(this.request), current: this.current, rate: this.rate, head: c(this.head),
+             out: c(this.out), blend: c(this.blend), installed: this.installed, cur: this.cur,
+             locoInstalled: this.locoInstalled, override: this.override, jumpHeld: this.jumpHeld,
+             jumpSerial: this.jumpSerial, jumpClock: this.jumpClock };
+  }
+  loadFrame(s) { Object.assign(this, this.saveFrame.call(s)); }
 
   // an action for a clip key (lazily for table / request clips from the packs)
   ensure(key) {

@@ -366,6 +366,11 @@ export function createEnemyAI(opts) {
   const spreadRand = opts.spreadRand || rng;
   let pStart = null;                                                          // Vincent's start-of-frame position (tick)
   if (P) P.t27c ??= P27C_INIT;                                                // P+0x27c (FUN_00571ee8)
+  // P+0x148 / +0x150 / +0x152 / +0x150 bits 40-43: the stagger time and sums (save RAM: -120 / 0 / 0 / phase 0;
+  // the frame counter DAT_0046e938+0x20 is 1575 there, so the first gap is >= 60 either way; as P+0x27c's -40)
+  if (P) { P.s148 ??= -120; P.s150 ??= 0; P.s152 ??= 0; P.sphase ??= 0; }
+  // FUN_00565480 on Vincent (player.js hitReact via play.js): (h) => branch name; none = no reaction
+  const playerReact = opts.react || null;
   const PST = opts.playerStatus || PLAYER_STATUS;
   const scripts = data.scripts;
   // manager shorts (+0x28, cmd 0x2f writes, 0x30 reads). GUESS: their values at stage start are not
@@ -2524,11 +2529,25 @@ export function createEnemyAI(opts) {
     if (dead(P)) return;
     if ((P.f118 & 0x20) || (P.f118 & 0x40)) dmg = 0;
     if ((P.f118 | 0) < 0 && P.hp <= dmg) dmg = P.hp - 1;                      // FUN_0055c7f8
+    // FUN_0057b1b0(attack, out, FUN_0054a720(P)): +0xc0 bits 4-7 = 0xc (k_melee18: 0x3288c5) >= 8, bits 4-6
+    // = case 4: P's position less the parent's (+8 = the owner) matrix row 3, its component along the
+    // owner's row 1 removed (FUN_00260e28(0, ..)), normalised. The soldiers' row 1 is (0, -1, 0).
+    const away = sub3(P.pos, o.owner.pos);
+    const dir = unit3([away[0], 0, away[2]]);
     const before = P.hp;
     P.hp = Math.max(0, P.hp - dmg);                                           // FUN_003168c8
     events.push(`hit player ${before}->${P.hp}`);
     log(`enemy_ai: Vincent HP ${before} -> ${P.hp} (melee #${o.owner.id})`);
-    warnOnce('enemy_ai: Vincent\'s melee hit reaction (FUN_00565480 flags 4, state 0x18) not translated');
+    // vt+0x324 FUN_00576ac8 (alive): FUN_0055c978(P, dmg, 0) = C cues 0x44 / 0x4c (FUN_00341330 / FUN_003412d0,
+    // sounds) and script event 8 (no script), vt+0x344 FUN_00576c28 (twice: in FUN_0055c978 for dmg > 0 and
+    // after it), FUN_003b4ea8(DAT_00471380): not on the page (sound / effects). FUN_0055d678 (C+0x590 hit side)
+    // has no reader in the reaction below: left out.
+    // FUN_00565480(P, +0xec | (P+0x28 bit 2 and +0xec bit 1 -> the owner's +0x60 bit 0x4000: 4), dir, point,
+    // alive before), unless P+0x118 bit 0x10000. Type 1 -> +0xec = 4 (bit 1 clear).
+    let fl = o.ec;
+    if ((o.ec & 2) && ENEMY_OFFENCE.f60 & 0x4000) fl |= 4;
+    if (playerReact && !((P.f118 | 0) & 0x10000)) events.push(`react player ${playerReact({ flags: fl, dir, point: c, aliveBefore: true, deadNow: dead(P), f118: P.f118 ?? 0x20209 })}`);
+    // the voice FUN_0055ea50 (P+0x28 bit 2: 'h_dmg_N') and the HUD FUN_00567fe8: not on the page
   }
 
   // FUN_005405b0(.., muzzle, aim, W, status) (W+4 without 0x100000 / 0x200000): s = W+0x1c / +0x20 / +0x24
@@ -2566,6 +2585,7 @@ export function createEnemyAI(opts) {
     // FUN_005409a8 -> FUN_005405b0: the cone (s = 24.39 deg for e027; T: k_bullet1 / k_bullet2 / w168 call logs)
     if (!W.spread) warnOnce('enemy_ai: ai.json weapons have no spread (W+0x1c..0x24): rebuild data/enemies; enemy shots fly straight');
     const aim = spreadAim(W, W.range, start, aim0, ENEMY_STATUS);
+    if (W.react == null) warnOnce('enemy_ai: ai.json weapons have no react (W+0xc, bullet +0x148): rebuild data/enemies; taken as 0');
     const v = sub3(aim, start), d = len3(v);
     const dir = d > 0 ? v.map(x => f(x / d)) : [0, 0, 0];                     // +0x80 (vrsqrt; d = 0 not handled by the game)
     // +0x15c range = W+0x18 x 10 + DAT_0046ed6c (15). GUESS: FUN_00321e20(W) (then +20) taken as false.
@@ -2578,6 +2598,7 @@ export function createEnemyAI(opts) {
       age: 0, pos: start.slice(), prev: start.slice(), f120: bulletFlags(W),
       delay: 0 + 2,                                                           // +0x142 = (FUN_005409a8 arg 7 = 0) + 2
       damage: W.damage,                                                       // +0x134 = (short)W+0x40
+      hit: W.hit ?? 0, f148: W.react ?? 0,                                    // +0x153 = W+0x4a, +0x148 = W+0xc (FUN_00552dd8)
       kind: (W.flags & 0x80000) && JITTER_ON ? 2 : 0,                        // FUN_00554738 (flag 2 clear; FUN_00326500)
       target: target(a.ai),
       shooter: a.id,                                                          // +0x128 owner id
@@ -2718,12 +2739,24 @@ export function createEnemyAI(opts) {
     dmg = Math.min(dmg, 9999);                                                // (no zone record: +0x19c 0)
     if ((P.f118 & 0x20) || (P.f118 & 0x40)) dmg = 0;                          // FUN_0055db50
     if ((P.f118 | 0) < 0 && P.hp <= dmg) dmg = P.hp - 1;                      // FUN_0055c7f8
+    // FUN_0055d390: the bullet's direction +0x80 with y = 0, normalised (as hitEnemy)
+    const wasDead = dead(P);
+    const dir = wasDead || !playerReact ? [0, 0, 0] : unit3([b.dir[0], 0, b.dir[2]]);   // only the reaction reads it
+    // vt+0x2f4 event 0x12: no script. P+0x19c = 0 (no zone record for Vincent): FUN_0055d950 stagger.
+    const fl = stagger(P, b.hit ?? 0);
+    if (wasDead) {
+      if (playerReact && !((P.f118 | 0) & 0x10000)) events.push(`react player ${playerReact({ flags: b.f148 | 0, dir, point: b.pos, aliveBefore: false, deadNow: true, f118: P.f118 ?? 0x20209 })}`);
+      return;
+    }
     const before = P.hp;
     P.hp = Math.max(0, P.hp - dmg);                                           // FUN_003168c8 (clamp at 0: L)
     events.push(`hit player ${before}->${P.hp}`);
     log(`enemy_ai: Vincent HP ${before} -> ${P.hp} (shot by #${b.from.id})`);
-    // Not translated: the hit reaction vt+0x324 FUN_00576ac8, and at HP 0 the death vt+0x334
-    // FUN_00576b48: HP stays at 0 and nothing else happens (the page does not handle it).
+    // vt+0x324 FUN_00576ac8: sounds / effects, as for the melee (attackDamagePlayer); at HP 0 the death vt+0x334
+    // FUN_00576b48 is not translated (out of scope: HP stays at 0).
+    // FUN_00565480(P, bullet +0x148 | stagger, dir, point, alive before), unless P+0x118 bit 0x10000
+    if (playerReact && !((P.f118 | 0) & 0x10000)) events.push(`react player ${playerReact({ flags: (b.f148 | 0) | fl, dir, point: b.pos, aliveBefore: true, deadNow: dead(P), f118: P.f118 ?? 0x20209 })}`);
+    // P+0x28 bit 2: the voice FUN_0055ea50 (-1 < dmg); the hit effect FUN_003361b8 / FUN_00567f10: not on the page
   }
 
   // ------------------------------------------------ Vincent's bullets (notes/enemy-research.md §13)
@@ -3347,6 +3380,6 @@ export function createEnemyAI(opts) {
                   // single translated functions, for the tests' direct state checks
                   t: { brain5, brain6, stateMotion, setActorState, bulletEnd, target, send, setMode, setTarget, setActionLayer, action2, action3, action56, flinch, die, navOf,
                        makeAttack, attackObjUpdate, attackCentre, sphereCapsule, offence,
-                       spreadAim, roomProbe, enemyBulletHit, playerPartTest, targetPoint } };
+                       spreadAim, roomProbe, enemyBulletHit, playerPartTest, targetPoint, damagePlayer } };
   return world;
 }
