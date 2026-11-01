@@ -55,7 +55,7 @@
 // With no actions registered every code path is the game's locomotion.
 // ================================================================
 import * as THREE from 'three';
-import { Jump, stickMode, enterState, airState, HIT_STATE } from './jump_core.js';
+import { Jump, stickMode, enterState, airState, HIT_STATE, DEAD_STATE } from './jump_core.js';
 
 // ---------------------------------------------------------------- timing
 export const TICK = 1 / 50;                       // one PAL game frame (s): play.js's loop step
@@ -159,6 +159,8 @@ export class PlayerController {
     this.spawn = { ...pos, heading };
     this.actions = [];                            // registry, priority order
     this.active = null;                           // the running action, or null = locomotion
+    // his status HP is 0 (FUN_00316cf8 on P+0x17c): play.js points it at its status record (php.hp); none -> alive
+    this.hpZero = () => false;
     this.ctx = { ctrl: this, col, input: null, anim: null, motions: {},
                  tick: 0, TICK: ACTION_TICK, rootDelta: (n, f0, f1) => this.rootDelta(n, f0, f1) };
     this.reset();
@@ -202,6 +204,7 @@ export class PlayerController {
       turn: { x: 0, y: 0, z: 0 }, turnRate: 0,    // C+0x2c0 xyz, C+0x2cc
       face: { x: Math.sin(s.heading), y: 0, z: Math.cos(s.heading) },   // C+0x20 (matrix row 2)
       groundSpeed: 0,                             // C+0x1d8 (u/s)
+      hitSide: 0,                                 // C+0x590 & 0xf (save RAM 0xa000a00; FUN_0055d678, setHitSide)
       moveDir: { x: 0, y: 0, z: 0 },              // C+0x90
     };
     this.body = {
@@ -310,11 +313,14 @@ export class PlayerController {
     this.jump.takeOff(this, cross, { ladder: owned || ate || !!this.active });
     this.stickInput(input);                       // FUN_00333150: runs in every state
     stickMode(this, this.stickW);                 // FUN_00333150: P+0x29c (the back jump's turn-round bit)
-    this.intent(owned);                           // FUN_00578748: the ramp runs in every state
+    // FUN_005786e8: FUN_00578748 (intent), FUN_00579570 (weapon) and FUN_005799f0 run only while his status HP is not
+    // 0 (FUN_00316cf8). hpZero: the page's status (play.js php.hp), false without one.
+    const alive = !this.hpZero();
+    if (alive) this.intent(owned);                // FUN_00578748: the ramp runs in every state
     // FUN_00579570 (weapon state machine) runs right after FUN_00578748 in FUN_005786e8, before the
     // character's motion update: a shot fired in the air switches the motion to the air-shot class
     // 0x4e now (FUN_00577480 -> FUN_00560b58; jump_core airShot), whose phase 0 runs below.
-    if (this.weapon && this.weaponHook && this.weaponHook.weapon) {
+    if (alive && this.weapon && this.weaponHook && this.weaponHook.weapon) {
       if (this.weaponHook.weapon(input, !!this.active)) this.jump.airShot(this);
     }
     // the jump / landing / air-shot / fall motion state (FUN_00598f50 / FUN_00599aa0 / FUN_00596830 /
@@ -339,7 +345,8 @@ export class PlayerController {
     this.jump.motionUpdate(this, { armed: !!(this.weapon && this.weapon.drawn()), action: !!this.active });
     const frozen = this.jump.frozen;              // C+0x1c0 bit 0x20: FUN_0034ea18 returns at once
     if (loco && !frozen) this.moveTick();         // FUN_0034ea18 -> FUN_0034c388 case 0xc
-    if (loco && !frozen) this.rotate();           // FUN_0034ea18 -> FUN_0034de50 mode 4 (6 with the weapon out)
+    // C+0x214 = 0 (FUN_00353418: the death / corpse classes' phase 0) -> FUN_0034de50 turns nothing
+    if (loco && !frozen && this.C.rotMode !== 0) this.rotate();   // FUN_0034ea18 -> FUN_0034de50 mode 4 (6 with the weapon out)
     if (this.weapon && this.weaponHook) this.weaponHook.post(input, !!this.active);   // the state classes' clips
     this.jumpStepped = false;
     const A = ctx.anim;
@@ -744,8 +751,10 @@ export class PlayerController {
   // C+0x1c8 0xc with C+0x4c0 set (FUN_00356740 skipped), C+0x45c bit 17 clear, P+0x110 nibbles 0
   // (FUN_00562670 / FUN_00562778 skipped), P+8 0. f118 = P+0x118 (0x20209: bit 3 set, so a small hit
   // (flag 2) gets no reaction: traced, every bullet hit in k_bullet1 / k_bullet2 / engage8 keeps state 2 / 3).
-  // Returns the branch taken ('big', 'none', 'missing'); 'missing' = a reaction the page has not translated.
-  // HP 0 (FUN_00560fc8 / FUN_00561138 / FUN_00561270 / FUN_005612a0, death) is out of scope: warned, no reaction.
+  // Returns the branch taken ('big', 'death', 'none', 'missing'); 'missing' = a reaction the page has not translated.
+  // HP 0 on the ground (worker 0181): FUN_00560fc8 (`death`) and FUN_00561138 (`bigDeath`) -> state 7. Not translated
+  // (warned): the deaths off the ground / knocked down (FUN_00561270), FUN_00562d68 (state 10). FUN_005612a0 (a hit on
+  // a body in motion class 0x36) can't happen: Vincent's death class is 0xb.
   //
   // Frame order: the game calls this from the object lists, before his C update; the page's soldiers run after
   // ctrl.step. So a hit after this frame's step puts the frame back to the start of its C update (cSnap),
@@ -759,7 +768,7 @@ export class PlayerController {
     const cut = this.loadC(s.state);
     this.frames = s.frame;                        // inside that frame again (event frame numbers)
     const r = this.hitBranch(h);
-    if (r === 'big') {
+    if (r === 'big' || r === 'death') {
       s.state = this.saveC();                     // the frame's start now includes this hit
       this.runC(s.loco, s.input, false);          // the draw already ran (a big hit draws the old pose, blend 0)
     } else {
@@ -770,10 +779,18 @@ export class PlayerController {
     return r;
   }
 
+  // FUN_0055d678's store C+0x590 & 0xf (the hit side; enemy_ai.js playerHitSide). The game writes it before his C
+  // update, so a redo (hitReact) must start from it: the frame's start snapshot takes it too.
+  setHitSide(side) {
+    this.C.hitSide = side;
+    const s = this.cSnap;
+    if (s && s.frame === this.frames - 1) s.state.C.hitSide = side;
+  }
+
   hitBranch({ flags, dir, aliveBefore = true, deadNow = false, f118 = 0x20209, f28 = 0x20901f }) {
     const P = this.P, warn = m => { this.hitWarn = this.hitWarn || new Set(); if (!this.hitWarn.has(m)) { this.hitWarn.add(m); console.warn('player: ' + m); } };
     if (f118 & 0x10000) return 'none';
-    if (!aliveBefore) return 'none';              // FUN_003419c0 != 0x36: the death motion is not on the page
+    if (!aliveBefore) return 'none';              // FUN_003419c0 != 0x36 (his death class is 0xb): return 0
     // bVar1 (P+8 == 0): the body point (C+0x54c vt+0x1c) less C+0x3c0 (body+0x10, the walker's ground point)
     // has y < -2: more than 2 u above the ground. L: vt+0x1c taken as his feet.
     const above = f32(this.pos.y - this.body.gy) < -2;
@@ -783,23 +800,74 @@ export class PlayerController {
     if (airState(st) || (above && P.jumpBits)) {
       if (f118 & 4) return 'none';
       if (flags & 0xc) { warn('air hit reaction (FUN_005618d0 / FUN_00561270) not translated'); return 'missing'; }
-      if (deadNow) warn('death in the air (FUN_00561270) not translated (HP 0 is out of scope)');
+      if (deadNow) { warn('death in the air (FUN_00561270) not translated'); return 'missing'; }
       return 'none';
     }
-    // FUN_0055a410: states 10-14 / 0x15 / 0x17 -> nothing unless state 10. The page's ladder action stands
-    // for the ladder states 0xb / 0xc (player.js ladder GUESS), so a hit on the ladder has no reaction.
+    // FUN_0055a410: states 10-14 / 0x15 / 0x17 -> nothing unless state 10 (dead: FUN_00562d68). The page's ladder
+    // action stands for the ladder states 0xb / 0xc (player.js ladder GUESS), so a hit on the ladder has no reaction.
     if (this.active) return 'none';
-    if ((flags & 8) && !(f118 & 4)) { warn('knock-down hit reaction (flags 8: FUN_005618d0 / FUN_00561270) not translated'); return 'missing'; }
+    if ((flags & 8) && !(f118 & 4)) {
+      if (deadNow) { warn('knock-down death (flags 8: FUN_00561270) not translated'); return 'missing'; }
+      warn('knock-down hit reaction (flags 8: FUN_005618d0 / FUN_00561270) not translated'); return 'missing';
+    }
     if ((flags & 4) && !(f118 & 0x10)) {
       if (st === 0xf) return 'none';
-      if (!this.onGround) { warn('big hit off the ground (FUN_005618d0(P, dir, 0, 2)) not translated'); return 'missing'; }
-      if (deadNow) { warn('big hit at HP 0 (FUN_00561138) not translated (HP 0 is out of scope)'); return 'missing'; }
+      if (!this.onGround) { warn('big hit off the ground (FUN_005618d0 / FUN_00561270 (P, dir, 0, 2)) not translated'); return 'missing'; }
+      if (deadNow) return this.bigDeath(dir, f118, f28) ? 'death' : 'none';   // FUN_00561138
       this.bigHit(dir, f118, f28);
       return 'big';
     }
-    if ((flags & 2) && !(f118 & 8)) { warn('small hit flinch (FUN_00561570) for the player not translated'); return 'missing'; }
-    if (deadNow) warn('death (FUN_00560fc8) not translated (HP 0 is out of scope)');
+    if ((flags & 2) && !(f118 & 8)) {
+      if (st === 0xf) return 'none';
+      if (!this.onGround) { warn('small hit off the ground (FUN_00561270 / FUN_005618d0 (P, dir, 0, 0)) not translated'); return 'missing'; }
+      if (deadNow) return this.death(dir, f118, f28) ? 'death' : 'none';     // FUN_00560fc8
+      warn('small hit flinch (FUN_00561570) for the player not translated'); return 'missing';
+    }
+    // no flag 2 / 4 / 8 (or masked by P+0x118): FUN_003419c0 != 0x36 and dead -> FUN_00560fc8
+    if (deadNow) return this.death(dir, f118, f28) ? 'death' : 'none';
     return 'none';
+  }
+
+  // FUN_00560fc8(P, dir): the death. C+0xe8 set: FUN_003533e0 (movers off: the page's slide); the slide distance
+  // 12 (0x41400000), or DAT_0046edac (5.0 in the ELF; no writer in the decomp) with P+0x28 bits 4 and 0x20; time
+  // 16; C+0x7e4's record +0x10 = 0x180 (bit 0x10000 clear: not its +0x50 / +0x54); P+0x28 bit 0x20 clear or bit
+  // 0x20000 set -> FUN_00353340(d, 16, C, dir) + FUN_0034edf0(C, 0xb) (the death slide, mover 0xb); FUN_0055f0e0(P,
+  // 6) (status bit 6, FUN_0056b620): clear on the page (php.s64 0). Then FUN_0055b8e0(P, 7, 0, 0) unless P+0x118 has
+  // 0x8000 / 0x10000; returns 1 when it did. Vincent's P+0x28 is 0x20901f (bit 0x20 clear): d = 12.
+  death(dir, f118, f28) {
+    this.C.slide = null;                          // FUN_003533e0
+    const d = ((f28 & 4) && (f28 & 0x20)) ? 5.0 : 12.0;   // DAT_0046edac : 0x41400000
+    if (!(f28 & 0x20) || (f28 & 0x20000)) this.deathSlide(d, 16.0, dir);
+    return this.enterDead(f118);
+  }
+
+  // FUN_00561138(P, dir): the death by a big hit (flags 4). FUN_0034b638(0.25, C, -unit(dir)) (turn toward the
+  // hitter); FUN_00326298(0xd) (DAT_0046e298 bit 13: set in z128) -> with P+0x28 bit 0x20 clear FUN_00353340(
+  // DAT_0046edb0 = 12, DAT_0046edb4 = 16, C, dir) + mover 0xb; FUN_0034e960(C, 4); then state 7 as FUN_00560fc8.
+  bigDeath(dir, f118, f28) {
+    const u = norm3({ x: dir[0], y: dir[1], z: dir[2] });
+    this.setTurn(0.25, { x: -u.x, y: -u.y, z: -u.z });
+    if (!(f28 & 0x20) || (f28 & 0x20000)) this.deathSlide(12.0, 16.0, dir);
+    this.C.rotMode = 4;
+    return this.enterDead(f118);
+  }
+
+  // FUN_00353340(d, T, C, dir): C+0x350 = unit(dir), C+0x360 = 2d / T, C+0x364 = C+0x360 / T, C+0x36c = 0
+  // (FUN_00352a60 first when a mover runs); FUN_0034edf0(C, 0xb): mover 0xb (FUN_003516a0, slideTick).
+  deathSlide(d, T, dir) {
+    const v = f32(f32(d + d) / T);
+    this.C.slide = { dir: norm3({ x: dir[0], y: dir[1], z: dir[2] }), v, dv: f32(v / T), end: 0, mover: 0xb };
+  }
+
+  // FUN_0055b8e0(P, 7, 0, 0) unless P+0x118 bit 0x8000 / 0x10000: the motion from the old state's +0x24 (0xb, the
+  // death class: jump_core DeathMotion) and state 7's enter FUN_005386f0: FUN_00565bd0(P, 2) (P+0x100 bits 40-41 =
+  // 2, the lying stance: P+0x30 = P+0x178, the capsule height; not read on the page), FUN_00565d78(P, 0) (the gun-out
+  // bit P+0x100 bit 44 clear), FUN_0055ba30(P, C+0x590 & 0xf) (hit side bits). The old state's leave is not read.
+  enterDead(f118) {
+    if ((f118 & 0x8000) || (f118 & 0x10000)) return false;
+    if (!this.jump.enter(this, DEAD_STATE)) return false;
+    this.P.stance = 2;
+    return true;
   }
 
   // FUN_00562898(P, dir, 0): the big hit. Script event 0x29 (vt+0x2f4): Vincent has no script here.
@@ -836,8 +904,41 @@ export class PlayerController {
 
   // FUN_0034f8c0 mover 9 = FUN_00351550: FUN_0034af98(C+0x320, C, C+0x310), then C+0x320 -= C+0x324 x step;
   // past C+0x32c (0) -> C+0x32c and the mover ends (FUN_00352a60). The speed set this frame is the old one.
+  // Mover 0xb = FUN_003516a0 (the death slide): wanted velocity = the root delta C+0x310 through C's rotation x -1 /
+  // step (y 0) + C+0x350 x C+0x360; length >= 0.01 -> FUN_0034af98(length, C, unit) else FUN_0034b110(0, C); then
+  // C+0x360 -= C+0x364 x step, held at 0 (the mover never ends by itself).
+  // The root delta (FUN_00343160 after the motion update, while C+0x568 bit 0x20 is set: the death class's phase 0
+  // FUN_00340b28(C, 1), cleared by its leave): the head clip's root at (int)(2 x frame) / 2, before this frame's
+  // advance, less the previous sample (C+0x6d0); past 2 x n none. C+0x568 bits: 0x40 set (the death class) -> the
+  // translation mirrored along the delta's row 0, 0x80 / 0x100 clear -> no rotation, y 0. L: the mirror and the -1
+  // are the game's model axes; rootDelta's glbToGame gives the same world vector (T w181_death_aim_a f882: root
+  // (-0.006, 0.045) -> (0.039, -0.024), the game's step). L: C+0x6d0 taken as the clip's frame-0 root at the death
+  // start (its earlier value is not read; frame 0's root is the origin, so the first delta is 0).
+  // MISSING: FUN_00356278(C+0x370, body) before the length test (body+0xa0 = the root's vertical offset). Its
+  // reader (the body height under C+0x45c bit 7) is not translated anywhere on the page, Vincent's body has no
+  // +0xa0, and C+0x370 is not tracked for him, so it is left out. path_mover.js rootTick / bodyRootY don't
+  // apply: they hold the soldiers' body (a.C.f45c / a.B) and only store the value too (fidelity-audit row
+  // 'Vincent at HP 0').
   slideTick() {
     const S = this.C.slide;
+    if (S.mover === 0xb) {
+      let rx = 0, rz = 0;
+      const m = this.jump.motion, K = this.jump.clock;
+      if (m && m.rootMotion && K && K.clip && K.frames[K.clip] !== undefined) {
+        const s2 = Math.trunc(f32(K.frame + K.frame));
+        if (s2 < 2 * K.frames[K.clip]) {
+          const sm = s2 * 0.5, d = this.rootDelta(K.clip, m.rootPrev ?? 0, sm);
+          m.rootPrev = sm;
+          rx = f32(d.x / STEP); rz = f32(d.z / STEP);
+        }
+      }
+      const vx = f32(rx + f32(S.dir.x * S.v)), vz = f32(rz + f32(S.dir.z * S.v));
+      const len = f32(Math.sqrt(f32(f32(vx * vx) + f32(vz * vz))));
+      if (0.01 <= len) this.setMove(len, { x: vx / len, y: 0, z: vz / len }); else this.setMove(0, S.dir);
+      S.v = f32(S.v - f32(S.dv * STEP));
+      if (S.v < 0) S.v = 0;
+      return;
+    }
     this.setMove(S.v, S.dir);
     S.v = f32(S.v - f32(S.dv * STEP));
     if (0 <= S.dv ? S.v < S.end : S.end < S.v) { S.v = S.end; this.C.slide = null; }

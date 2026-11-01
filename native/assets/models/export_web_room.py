@@ -221,6 +221,8 @@ def main():
                            bbox=dict(min=placed[:, :3].min(0).tolist(), max=placed[:, :3].max(0).tolist())))
     if os.path.isfile(os.path.join(out, "hud", "hud.json")):
         scene["hud"] = "hud/hud.json"      # export_web_hud.py's data: play.js fetches it only when declared
+    if os.path.isfile(os.path.join(out, "effects", "r0001.fed")):
+        scene["effects"] = "effects"       # export_web_effects.py's data: play.js fetches it only when declared
     json.dump(scene, open(os.path.join(out, "scene.json"), "w"), indent=1)
     mb = sum(os.path.getsize(os.path.join(out, f)) for f in os.listdir(out)) / 1e6
     print(f"wrote {out}: {len(meshes)} meshes, {len(textures)} textures, {len(draws)} draws, "

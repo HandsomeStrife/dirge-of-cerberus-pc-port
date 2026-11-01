@@ -376,6 +376,9 @@ export function createEnemyAI(opts) {
   if (P) { P.s148 ??= -120; P.s150 ??= 0; P.s152 ??= 0; P.sphase ??= 0; }
   // FUN_00565480 on Vincent (player.js hitReact via play.js): (h) => branch name; none = no reaction
   const playerReact = opts.react || null;
+  // C+0x590 & 0xf (Vincent's hit side: written by FUN_0055d678, read by the death class FUN_00595a60). play.js
+  // passes { get, set } on his C (player.js setHitSide); without it (tests) the side lives here.
+  const hitSideIO = opts.hitSide || (() => { let v = 0; return { get: () => v, set: x => { v = x; } }; })();
   // sounds (worker 0172; audio.js SoundEmitters.play): sound(name, pos, range) at the game's call sites; pos null =
   // at the sound camera (FUN_0033cbd8). Names come from the weapon data (ai.json se_*) and the ELF tables below.
   const sound = opts.sound || (() => {});
@@ -2637,6 +2640,55 @@ export function createEnemyAI(opts) {
     gatedCue(0x4c, 0);                                                        // FUN_003412d0(C, 0x4c, 0)
     runEvent(PLAYER_OBJ, 8, [dmg, 0]);                                        // vt+0x2f4 event 8
   }
+  // vt+0x334 FUN_00576b48 (Vincent's death, worker 0181) -> FUN_0055cac8: FUN_00341298(C, 0x4e) (his cue 0x4e is '')
+  // -> FUN_003412d0(C, 0x4c, 0) (gated: the hit-voice script 297 event 0x25, one RNG draw); script event 0x17 (none
+  // in 246 / 297); FUN_005435a8 (the manager's lock list), P+0x28 bit 2 branch (FUN_0055f0e0(P, 4): status bit 4
+  // clear), vt+0x374(2, now) (P+0x244 = the death frame), vt+0x344 FUN_00576c28 (DAT_0046e54c |= 4 when G+0x30),
+  // FUN_00573378(P, -1) (his lock target cleared), FUN_00241760(1, 3, 0) (the pause menu blocked, FUN_003de130):
+  // not on the page (no reader there). Returns nothing; the death motion's own cue is deathMotionCue.
+  function playerDeathCues() {
+    if (!PLAYER_OBJ) return;
+    gatedCue(0x4c, 0);
+  }
+  // FUN_00321328 (FUN_0055c7f8 after vt+0x334, P+0x28 bit 2: set for Vincent, 0x20901f): DAT_0046e248+0x18 += 1
+  // when the record exists. FUN_003210f0 zeroes it (and +0x10) from FUN_0031db30 (the stage record's reset). No
+  // reader found in the decomp (only those two touch +0x18 by that name): likely a death count, kept for the game
+  // over (notes/enemy-ai-hook.md 'Game over'). The page's record: W.stageRec (created zeroed with the AI).
+  const stageRec = { f10: 0, f18: 0 };
+  function deathCount() { if (((P.f28 ?? 0x20901f) & 4)) stageRec.f18++; }
+  // FUN_00595a60 phase 0 (the death class 0xb, the frame he enters state 7): FUN_00341330(C, cue) with cue =
+  // DAT_005a39b0[side] (ai.json player.death.cue: 0x56 0x56 0x57 .. 0x5b) when FUN_00340658 is false (C+0x6c1 not in
+  // 10..11), else DAT_005a39d0[side] (cue_alt, 0x62..); side = C+0x590 & 0xf (FUN_0055d678 below: melee kills set
+  // it; the bullet path never calls it, so a shot keeps the side last written, 0 from the save RAM or a live hit).
+  // GUESS: C+0x6c1 = 3 is the save-RAM value (not decoded where it is set): the 39b0 row.
+  // Not taken: FUN_00342308(C) != 0 (side = FUN_00345060(C) % 7); the page's death class takes it as 0 too.
+  function deathMotionCue() {
+    if (!PLAYER_OBJ) return;
+    const t = data.player.death;
+    if (!t) { warnOnce('enemy_ai: ai.json has no player.death cues: rebuild data/enemies; no death cue'); return; }
+    const side = hitSideIO.get() & 0xf;
+    if (side < t.cue.length) playerCue(t.cue[side]);
+  }
+  // FUN_0055d678(P, point): C+0x590 low 4 bits = the hit side. Called by FUN_0055eac8 (melee) after the damage
+  // (vt+0x1ec, which runs vt+0x334 on a kill) when he was alive before, and before FUN_00565480; never on the bullet
+  // path (FUN_0055db50). The point goes into P's frame (FUN_0054aaf8 = FUN_0054a5e8 matrix P+0x60, FUN_00261618:
+  // R^T (point - row 3)): x along row 0 (= up x face, up (0, -1, 0): (-face.z, 0, face.x)), y along row 1 (0, -1,
+  // 0) = height above P+0x90. Dead (FUN_00316cf8): y > P+0x30 x 0.3 -> 3 (x > 0.25), 4 (x < -0.25), else 1; lower
+  // -> 5, or 6 for x < 0. Alive: every path writes 0 (asm 0x55d6cc-0x55d794: the C+0x564 bit 0x10000 / 0.7 / 0.3
+  // / 0.5 tests all reach the store with s1 = 0). P+0x30 = 18 (H_PLAYER, k_push16 p_cyl). No C: nothing.
+  // L: P's matrix = php.pos / php.face as the melee hit test sees them (after this frame's step on the page).
+  function playerHitSide(point) {
+    const face = P.face;
+    if (!face) { warnOnce('enemy_ai: player has no face (C+0x20): FUN_0055d678 hit side not written'); return; }
+    let side = 0;
+    if (dead(P)) {
+      const dx = f(point[0] - P.pos[0]), dy = f(point[1] - P.pos[1]), dz = f(point[2] - P.pos[2]);
+      const x = f(f(-face[2] * dx) + f(face[0] * dz)), y = f(-dy);
+      if (f(H_PLAYER * f(0.3)) < y) side = 0.25 < x ? 3 : x < -0.25 ? 4 : 1;
+      else side = x < 0 ? 6 : 5;
+    }
+    hitSideIO.set(side);
+  }
   // FUN_003412d0(C, cue, force): force or more than 14 frames since C+0x810 -> FUN_00341330, C+0x810 = now
   function gatedCue(c, force) {
     if (!force && !(0xe < S.frame - P.c810)) return;
@@ -2678,15 +2730,20 @@ export function createEnemyAI(opts) {
     events.push(`hit player ${before}->${P.hp}`);
     log(`enemy_ai: Vincent HP ${before} -> ${P.hp} (melee #${o.owner.id})`);
     playerHitCues(dmg, dead(P));                                              // vt+0x324 FUN_00576ac8
+    if (dead(P)) { playerDeathCues(); deathCount(); }                         // vt+0x334 FUN_00576b48, FUN_00321328
     // FUN_0055eac8's own cue 0x44 / gate 0x4c (0x55ec70-0x55ecf4) is the P+0x28 bit 0x20 branch, which skips
     // vt+0x1ec (no damage; with FUN_00bec508 and FUN_003b5c88 for attack +0xc1 bit 6). MISSING: P+0x28 bit 0x20 is
     // not on the page, so this function always takes the damage branch (b 0x55ecf8 after vt+0x1ec).
-    // FUN_0055d678 (C+0x590 hit side) has no reader in the reaction below: left out.
+    playerHitSide(c);                                                         // FUN_0055d678 (alive before: the early return above)
     // FUN_00565480(P, +0xec | (P+0x28 bit 2 and +0xec bit 1 -> the owner's +0x60 bit 0x4000: 4), dir, point,
     // alive before), unless P+0x118 bit 0x10000. Type 1 -> +0xec = 4 (bit 1 clear).
     let fl = o.ec;
     if ((o.ec & 2) && ENEMY_OFFENCE.f60 & 0x4000) fl |= 4;
-    if (playerReact && !((P.f118 | 0) & 0x10000)) events.push(`react player ${playerReact({ flags: fl, dir, point: c, aliveBefore: true, deadNow: dead(P), f118: P.f118 ?? 0x20209 })}`);
+    if (playerReact && !((P.f118 | 0) & 0x10000)) {
+      const r = playerReact({ flags: fl, dir, point: c, aliveBefore: true, deadNow: dead(P), f118: P.f118 ?? 0x20209 });
+      events.push(`react player ${r}`);
+      if (r === 'death') deathMotionCue();                                    // the death class's phase 0 (this frame's C update)
+    }
     // FUN_0055ea50 'h_dmg_N' = a pad vibration pattern (FUN_002573c8, table DAT_0046bd98): no pad on the page.
   }
 
@@ -2817,6 +2874,7 @@ export function createEnemyAI(opts) {
     // FUN_00335f40: the gate on +0x120 bit 2 (FUN_003354b8 = FUN_00242420() == 1 ? DAT_0046e530 : 0) is not
     // translated; no page bullet sets bit 2.
     if (b.f120 & 2) warnOnce('enemy_ai: bullet +0x120 bit 2 (FUN_00335f40 gate FUN_003354b8) not translated: decal draws taken');
+    if (opts.effect) opts.effect.wall(mat, b.normal ?? null, b.end);        // FUN_00335f40 -> FUN_00336478 / FUN_003366b8 (effects.js)
     if (!(b.f120 & 0x10000) && mat !== 6) {                                   // FUN_00335f40 -> FUN_002e2840 (param_4 = 0)
       // GUESS: FUN_00249148 (FUN_003056b0 -> FUN_00251e70(0x10, 0, 0xe), the heap) always allocates (not decoded:
       // the heap's state; notes/fidelity-audit.md)
@@ -2841,6 +2899,7 @@ export function createEnemyAI(opts) {
     // pass-through bits 0x20 / 2 of FUN_0026f1e8's word) are not translated.
     b.f120 |= 1;
     b.mat = ((h.surface | 0) >> 16) & 0xf;
+    b.normal = h.normal ?? null;                                              // +0x100 (FUN_00335f40's floor test)
     events.push('bullet wall');
   }
   // FUN_005442d8 for a soldier's bullet (thin: +0x120 bit 0x800 clear). Each active object along the segment
@@ -2909,6 +2968,7 @@ export function createEnemyAI(opts) {
   function playerHandler(b, hit) {
     if (hit.deflect) { events.push('deflect player'); return 1; }
     if (P.f118 & 0x20) return 0;
+    if (opts.effect) opts.effect.hit((b.from?.ai?.W?.cls ?? 0) & 3, hit.point); // FUN_0055db50 -> FUN_003361b8(param_3 = the hit point): bullet +0x150 = W+0x14 >> 2 & 3
     if (DAMAGE) damagePlayer(b);
     else events.push('hit player (damage off)');
     return 1;
@@ -2944,12 +3004,15 @@ export function createEnemyAI(opts) {
     events.push(`hit player ${before}->${P.hp}`);
     log(`enemy_ai: Vincent HP ${before} -> ${P.hp} (shot by #${b.from.id})`);
     playerHitCues(dmg, dead(P));                                              // vt+0x324 FUN_00576ac8
-    // vt+0x324 FUN_00576ac8: sounds / effects, as for the melee (attackDamagePlayer); at HP 0 the death vt+0x334
-    // FUN_00576b48 is not translated (out of scope: HP stays at 0).
+    if (dead(P)) { playerDeathCues(); deathCount(); }                         // vt+0x334 FUN_00576b48, FUN_00321328
     // FUN_00565480(P, bullet +0x148 | stagger, dir, point, alive before), unless P+0x118 bit 0x10000
-    if (playerReact && !((P.f118 | 0) & 0x10000)) events.push(`react player ${playerReact({ flags: (b.f148 | 0) | fl, dir, point: b.pos, aliveBefore: true, deadNow: dead(P), f118: P.f118 ?? 0x20209 })}`);
+    if (playerReact && !((P.f118 | 0) & 0x10000)) {
+      const r = playerReact({ flags: (b.f148 | 0) | fl, dir, point: b.pos, aliveBefore: true, deadNow: dead(P), f118: P.f118 ?? 0x20209 });
+      events.push(`react player ${r}`);
+      if (r === 'death') deathMotionCue();                                    // the death class's phase 0 (this frame's C update)
+    }
     // P+0x28 bit 2: FUN_0055ea50 (-1 < dmg) = pad vibration 'h_dmg_N' (no pad). FUN_003361b8 = the hit effect
-    // (MISSING: the effect system FUN_002e6290 / FUN_002e7660 is not decoded). FUN_00567f10 -> FUN_00567d00 returns
+    // (playerHandler -> opts.effect.hit, effects.js). FUN_00567f10 -> FUN_00567d00 returns
     // for Vincent (FUN_0053bb08's object): no damage number on him.
   }
 
@@ -3577,7 +3640,7 @@ export function createEnemyAI(opts) {
                   playerBoneWorld: opts.playerBoneWorld || null,
                   attackPick: a => attackPick(a.ai),     // FUN_0035ff98 on an actor's AI (tests)
                   // single translated functions, for the tests' direct state checks
-                  t: { brain5, brain6, stateMotion, setActorState, bulletEnd, target, send, setMode, setTarget, setActionLayer, action2, action3, action56, flinch, die, navOf,
+                  stageRec, t: { brain5, brain6, stateMotion, setActorState, bulletEnd, target, send, setMode, setTarget, setActionLayer, action2, action3, action56, flinch, die, navOf,
                        makeAttack, attackObjUpdate, attackCentre, sphereCapsule, offence,
                        spreadAim, roomProbe, enemyBulletHit, playerPartTest, targetPoint, damagePlayer, attackDamagePlayer } };
   return world;

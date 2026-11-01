@@ -54,6 +54,9 @@ export const SLOT = {
   0xe0: 'c_bwj0', 0xe1: 'c_bwj1', 0xe2: 'c_bwj2',
   0xbc: 'h_jp0_a', 0xbd: 'h_jp1_a', 0xbe: 'h_jp2_a', 0xbf: 'h_jp3_a', 0xc0: 'h_jp4_a', 0xc1: 'h_jp_f',
   0x3e: 'c_std',                                          // the standing hit (motion class 0x3f, FUN_0059df28)
+  // the death (class 0xb, FUN_00595a60: rows 0x2a-0x2f by hit side); every one of those rows holds the same clip
+  // in z128 (save RAM C+0x7fc). (The corpse class 0xd's rows 0x36-0x3b hold c_sq_fa0; that class never runs here.)
+  0x2a: 'c_st_fa0', 0x2b: 'c_st_fa0', 0x2c: 'c_st_fa0', 0x2d: 'c_st_fa0', 0x2e: 'c_st_fa0', 0x2f: 'c_st_fa0',
 };
 // slots that are empty in z128's slot table (C+0x7fc in the save state): FUN_003455e8 says no.
 // 0xc1 (h_jp_f, the air-shot clip) is empty, so FUN_00596830 plays the h_jp3_a set (aim_g f49).
@@ -64,11 +67,12 @@ export const UNLOADED = new Set([0xc1]);
 export const CLIP_FRAMES = { h_jp0: 3, h_jp1: 10, h_jp2: 10, h_jp3: 16, h_jp4: 15,
   h_jp0_a: 3, h_jp1_a: 10, h_jp2_a: 10, h_jp3_a: 16, h_jp4_a: 15,
   c_wjp0: 3, c_wjp1: 10, c_wjp2: 9, c_bj0: 2, c_bj1: 11, c_bj2: 10, c_bwj0: 2, c_bwj1: 11, c_bwj2: 10,
-  c_std: 16 };                                            // 07703200 (export_web_vincent.py catalogue)
+  c_std: 16, c_st_fa0: 129 };            // 07703200 (export_web_vincent.py catalogue)
 
 // player states (P+0x104) this file deals with
 export const ST = { FOOT: 2, JUMP: 8, FALL: 9, JUMP2: 0x1f, BACK: 0x20, BACK2: 0x21 };
 export const HIT_STATE = 0x18;                            // the big hit (FUN_00562898 -> FUN_00562b30)
+export const DEAD_STATE = 7;                              // HP 0 (FUN_00560fc8 / FUN_00561138 -> FUN_0055b8e0(P, 7))
 const onFoot = s => s >= 2 && s <= 5;
 const inAir = s => s === 8 || s === 9 || s === 0x20;
 
@@ -108,8 +112,19 @@ export function enterState(P, st) {
 //  state 0x18 (the hit, vtable 0x58a9e0): FUN_00539b88, any event: dead (FUN_00316cf8; P+0x28 bit 0x20
 //   clear) -> 7 (not on the page: HP 0 is out of scope, the caller never asks while dead); ground bit
 //   clear -> 0x10; else C+0x45c bit 17 (clear: body flags 0x236) -> 2, or 3 with b44.
+//  state 7 (dead, vtable 0x58ad40): FUN_00538780. Event 0xd (the corpse class done; not reached: see DeathMotion)
+//   -> P+0x118 |= 0x100 (the corpse-settled bit) and FUN_003533e0 unless C+0x564 bit 0x800, then 0. Any other event: C+0x1c0
+//   bit 0x400000 or the ground bit set -> 0; else (in the air) 0x10 when FUN_0036b008 (the angle FUN_00353458(C+0x20,
+//   C+0x90, C+0x10), wrapped to +-pi, 0 beyond +-100 pi, within +-90 deg) else 0xf. Neither state is on the page, so
+//   that case warns and returns 0 (C+0x1c0 bit 0x400000 is not on the page either: taken as clear).
 // Other states: null (handler not on the page).
+let warnedDeadAir = false;
 export function stateEvent(st, ev, ground, b44) {
+  if (st === DEAD_STATE) {
+    if (ev === 0xd || ground) return 0;
+    if (!warnedDeadAir) { warnedDeadAir = true; console.warn('jump_core: state 7 event off the ground: FUN_00538780 -> state 0xf / 0x10 not ported (stays 7)'); }
+    return 0;
+  }
   if (st === HIT_STATE) return ground ? (b44 ? 3 : 2) : 0x10;
   if (st === 2 || st === 3) {
     if (ground) return (ev === 0x1c || ev === 0x1e || ev === 0x3f) ? (b44 ? 3 : 2) : 0;
@@ -129,7 +144,10 @@ export function stateEvent(st, ev, ground, b44) {
 // moving: C+0x1d8 != 0 (the ground speed). From 2 / 3 to the hit 0x18: their default -> FUN_00537aa0,
 // jumptable 0x589e70[0x18] = 0x537b9c (li v0, 0x3f): the hit class 0x3f. From 0x18 (FUN_00539b48):
 // 3 -> 5, 7 -> 0xb, else FUN_00537aa0: 2 -> 3 (0x537acc), 9 -> 0x22 (0x537b34). Others: null (not on the page).
+// To the death state 7: from 2 (FUN_00537d58 case 7 -> 0xb), from 3 (FUN_00538120 default -> FUN_00537d58 -> 0xb),
+// from 0x18 (FUN_00539b48: 0xb); class 0xb = FUN_00595a60 (factory 0x592918 case 0xb, vtable 0x5a6600).
 export function stateMotion(old, st, moving = false) {
+  if (st === DEAD_STATE && (old === 2 || old === 3 || old === HIT_STATE)) return 0xb;
   if ((old === 2 || old === 3) && st === HIT_STATE) return 0x3f;
   if (old === HIT_STATE) return st === 3 ? 5 : st === 2 ? 3 : st === ST.FALL ? 0x22 : null;
   if ((old === ST.JUMP || old === ST.FALL || old === ST.JUMP2 || old === ST.BACK || old === ST.BACK2)
@@ -579,6 +597,37 @@ export class HitMotion {
   }
 }
 
+// FUN_00595a60: the death motion (class 0xb; factory 0x592918 case 0xb -> FUN_005a37b8, vtable 0x5a6600: enter
+// FUN_005959b8 C+0x564 |= 0xc000 and FUN_003467b8(C, 1); leave FUN_005959f8 undoes them and FUN_00340b28(C, 0)).
+// Phase 0: C+0x1c8 is 0xc for Vincent (save RAM), so no FUN_003533e0; FUN_0034b110(0, C) (the move speed C+0xcc
+// = 0: the death slide's mover 0xb sets its own every frame); C+0x564 bit 0x800 clear -> FUN_00353418 (C+0x214 =
+// 0: no turn, C+0x1c4 &= ~2); FUN_00340bb8(C, 0, -1) (no blend); FUN_00340b28(C, 1) (C+0x568 |= 0x20: the clip's
+// root motion moves him) and C+0x568 |= 0x40; FUN_003456c0(1.0, C, row, -1, 0): row = DAT_005a3990[C+0x590 &
+// 0xf] (0x2b 0x2b 0x2a 0x2c 0x2d 0x2e 0x2f: all c_st_fa0), now, not looped; the death cue FUN_00341330(C, 0x56..
+// / 0x62.. by FUN_00340658) (played by enemy_ai.js deathMotionCue; table from ai.json player.death); FUN_00340bb8(C, 1, -1); C+0x710 = identity, C+0x74c = 0;
+// timer 0. Phase 1: from 10 ticks C+0x74c drives FUN_00346210(C, .., 0xf) and message 8 (FUN_00341988(C, 8));
+// the player's message 8 (0x56a414) returns at once for P+0x28 bit 2 (set: 0x20901f), so nothing on the page.
+// Done (+8 |= 1) when the clip is done (FUN_003460d8; C+0x808 bit 0x20000 clear: 0x13fb in the save) or the
+// timer > 420; next motion 0xd (C+0x808 bit 0x10000 clear; else 0x39). The timer += step otherwise.
+// side = C+0x590 & 0xf (the hit side): ctrl.C.hitSide, written by FUN_0055d678 on a melee hit (enemy_ai.js
+// playerHitSide via player.js setHitSide); the bullet path never writes it: 0 from the save RAM (0xa000a00).
+const DEATH_ROW = [0x2b, 0x2b, 0x2a, 0x2c, 0x2d, 0x2e, 0x2f];        // DAT_005a3990
+export class DeathMotion {
+  constructor(side = 0) { this.id = 0xb; this.phase = 0; this.t = 0; this.done = false; this.next = null; this.side = side; this.freeze = false; this.rootMotion = false; }
+  update(io) {
+    const out = [];
+    if (this.phase === 0) {
+      if (io.C) io.C.rotMode = 0;                         // FUN_00353418: C+0x214 = 0 (no turn)
+      out.push(req(DEATH_ROW[this.side & 0xf], { now: true, loop: false, blend: 0 }));
+      this.rootMotion = true;                             // FUN_00340b28(C, 1)
+      this.t = 0; this.phase = 1;
+      return out;                                         // phase 0 returns before the timer
+    }
+    if (io.clipEnded || 420.0 < this.t) { this.done = true; this.next = 0xd; return out; }
+    this.t = f32(this.t + JUMP.STEP);
+    return out;
+  }
+}
 // ---------------------------------------------------------------- head-layer clock
 // The motion player's head layer for the jump clips, enough to answer FUN_003460d8:
 // frame += rate x weight/128 x step (FUN_005aa2a8); a loop resets to 0 at the clip length;
@@ -652,6 +701,10 @@ export class Jump {
     } else if (m === 0x3f) {
       this.motion = new HitMotion();                      // phase 0 runs in this frame's motion update
       this.events.push({ frame: ctrl.frames, ev: 'hit', state: st });
+    } else if (m === 0xb) {
+      // the death: phase 0 runs in this frame's motion update (FUN_005641c0 -> FUN_00341780(C, 0xb))
+      this.motion = new DeathMotion(ctrl.C.hitSide ?? 0);
+      this.events.push({ frame: ctrl.frames, ev: 'death', state: st });
     } else if (m === 3 || m === 5 || m === 8 || m === 9) {
       if (this.motion) this.events.push({ frame: ctrl.frames, ev: 'loco', next: m });
       this.motion = null;
@@ -736,11 +789,13 @@ export class Jump {
                    armed: !!opts.armed, aimChanged: !!opts.aimChanged, groundSpeed: ctrl.C.groundSpeed,
                    headClip: this.clock ? this.clock.clip : null, headBlending: this.clock ? this.clock.blending() : false };
       if (opts.usable) io.usable = opts.usable;
+      io.C = ctrl.C;                                      // the death class's FUN_00353418 (C+0x214)
       const out = this.motion.update(io);
       reqs.push(...out);
       if (this.motion.done) {
         // the done flag sends the class's id to the state handler (FUN_00341af0, stateEvent above)
-        const m = this.motion, st = this.event(ctrl, m.id);
+        // (FUN_00343160 sends it once per class: C+0x564 bit 0x20; the held death class doesn't send it again)
+        const m = this.motion, st = (m instanceof DeathMotion && m.held) ? 0 : this.event(ctrl, m.id);
         if (st) {
           // the state changed: FUN_00343160 drops the class's own next motion (lVar13 = 0)
         } else if (m instanceof AirFireMotion) {
@@ -750,6 +805,13 @@ export class Jump {
         } else if (m instanceof LandMotion) {
           this.events.push({ frame: ctrl.frames, ev: 'loco', next: m.next });
           this.motion = null;                             // back to the locomotion clips (class 3 / 6 / 8 / 9)
+        } else if (m instanceof DeathMotion) {
+          // state 7 answers 0 (FUN_00538780). The class returns next motion 0xd (the corpse class FUN_00595ea8, c_sq_fa0),
+          // but in the game it never starts: T w181_death_aim_b, the done event at f1004 sets C+0x564 bit 0x20 and it
+          // stays set to f1647 (FUN_00341780 would clear it), the head layer holds c_st_fa0 at 128.
+          // GUESS: no next motion; the death class stays, done, and the clip holds its last frame (why FUN_00343160
+          // doesn't switch is not decoded; notes/fidelity-audit.md "Vincent at HP 0")
+          if (!m.held) { m.held = true; this.events.push({ frame: ctrl.frames, ev: 'death done' }); }
         }
       }
     } else if (!opts.action && onFoot(ctrl.P.state) && !ctrl.onGround) {

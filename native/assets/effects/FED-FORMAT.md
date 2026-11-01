@@ -142,6 +142,12 @@ register values live in boot-built `.bss` tables (`DAT_004ee9d0` /
 
 ## 3. Particle definition sub-record — PARTIALLY SOLVED
 
+> **Corrections (worker 0179, 2026-11-01):** see `notes/effects-research.md`. The descriptors are
+> {u16 type, u16 nref, u16 out slot, u16 ref channel[nref], u16 ref slot[nref]}; the lists sit at
+> P+0x30 + 4k with counts at P+0x20 + k (init, keyframe events, eval, draw, death, loop, -, once, late);
+> "INIT values" are each channel's data block; the type -> evaluator vtables are static .data (§7.1 is
+> closed); the sprite records (header +0x70 table) are VIF streams for a VU1 program.
+
 Sub-array at `E+0x14` (count `E+0x0a`). Each slot (rel **E**) → particle record
 `P = E + slot`. The sub-structure below exists **only when `byte@P+0x08 != 0`**
 — the loader guards the entire block on that byte (`FUN_002e4418`,

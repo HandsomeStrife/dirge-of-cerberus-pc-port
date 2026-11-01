@@ -522,6 +522,14 @@ def se_tables(elf):
                 mat_kind=[elf.u32(0x4a1310 + 4 * i) for i in range(14)])
 
 
+# Vincent's death cues (worker 0187): the death class 0xb's phase 0 (FUN_00595a60) plays FUN_00341330(C, cue) with
+# cue = DAT_005a39b0[side] (FUN_00340658 false) or DAT_005a39d0[side] (true), side = C+0x590 & 0xf (FUN_0055d678).
+# Two tables of 7 words (lw; the stack copy in FUN_00595a60 indexes them by side x 4).
+def death_cues(elf):
+    words = lambda a: [elf.u32(a + 4 * i) for i in range(7)]
+    return dict(source='ELF 0x5a39b0 / 0x5a39d0 (FUN_00595a60)', cue=words(0x5a39b0), cue_alt=words(0x5a39d0))
+
+
 # exported for every z128 enemy type
 AI_TYPES = ('e027', 'e048', 'e030')
 BOX_TYPES = ('e027', 'e048', 'e030', 'e036', 'e023', 'e024', 'e001')
@@ -561,7 +569,7 @@ def main():
                sizes={str(r['zones']): zone_size(d, r['zones']) for r in recs if r['zones'] >= 0},
                lock_bones={str(r['zones']): lock_bone(d, r['zones']) for r in recs if r['zones'] >= 0},
                paths=paths(d), nav=nav_graph(d), markers={m: markers(m) for m in boxes}, se=se_tables(elf),
-               pset_script=pset_script, player=dict(script=PLAYER_SCRIPT, pset=PLAYER_PSET, cues=PLAYER_CUES), cues=cue_tables(d))
+               pset_script=pset_script, player=dict(script=PLAYER_SCRIPT, pset=PLAYER_PSET, cues=PLAYER_CUES, death=death_cues(elf)), cues=cue_tables(d))
     res['hitboxes']['p000'] = pbox
     path = os.path.join(out, 'ai.json')
     with open(path, 'w') as fh:

@@ -13,7 +13,7 @@
 import { readFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { partTest } from './enemy_hit.js';
+import { partTest, cylinderHit } from './enemy_hit.js';
 import { loadPoses, boneWorldAt } from './trace_pose.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url)), root = path.resolve(here, '../..');
@@ -182,6 +182,16 @@ ok(tested >= 8 && parts.join() === '6,0,6,1', `hit tests checked: ${tested}; par
   Woff.playerBoneWorld = boneWorldAt(P1, 789); player.pos = P1.get(788).pos.slice(); player.hp = 780;
   const r = Woff.t.enemyBulletHit({ ...seg, f120: 0x2000, shooter: 0x2c, from: {}, damage: 45, kind: 0 });
   ok(r === 1 && player.hp === 780 && Woff.events.includes('hit player (damage off)'), `damage off (?enemydmg=0): the bullet still hits (${r}), HP ${player.hp}`);
+  // the hit effect (FUN_0055db50 -> FUN_003361b8, param_3 = the hit point): spawned at the capsule contact point
+  // (FUN_0055bda8's hit, FUN_0025c770), not at the bullet's step end
+  const spawned = [];
+  const Wfx = AI.createEnemyAI({ data, player, quiet: true, damage: false, effect: { wall() {}, hit: (k, p) => spawned.push([k, p.slice()]) } });
+  Wfx.playerBoneWorld = boneWorldAt(P1, 789); player.pos = P1.get(788).pos.slice(); player.hp = 780;
+  Wfx.t.enemyBulletHit({ ...seg, f120: 0x2000, shooter: 0x2c, from: {}, damage: 45, kind: 0 });
+  const A = player.pos.slice(), cp = cylinderHit(AI.R_PLAYER, seg.prev, seg.pos, A, [A[0], A[1] - 18, A[2]]);
+  const dEnd = spawned[0] ? Math.hypot(...spawned[0][1].map((x, k) => x - seg.pos[k])) : NaN;
+  ok(spawned.length === 1 && cp && spawned[0][1].every((x, k) => x === cp.point[k]) && dEnd > 1,
+    `hit effect at the contact point ${cp && cp.point.map(x => x.toFixed(2))} (${spawned[0] && spawned[0][1].map(x => x.toFixed(2))}; ${dEnd.toFixed(1)} u from the step end)`);
 }
 
 // ---- end to end: #66 (record 44) shoots Vincent 30 u away through the real tick; a wall 10 u in front of the muzzle

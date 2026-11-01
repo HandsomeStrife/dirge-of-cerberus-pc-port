@@ -42,8 +42,11 @@ const ctrlAt = (p, face) => {
   ok(c.hitReact({ flags: 4, dir: [-1, 0, 0], f118: 0x20209 | 0x10 }) === 'none' && c.P.state === 2,
      'big hit with P+0x118 bit 4: no reaction');
   ok(c.hitReact({ flags: 8, dir: [-1, 0, 0] }) === 'missing' && c.P.state === 2, 'knock-down (flags 8): not translated, no state change');
-  ok(c.hitReact({ flags: 4, dir: [-1, 0, 0], aliveBefore: false, deadNow: true }) === 'none' && c.P.state === 2, 'already dead: no reaction (death out of scope)');
-  ok(c.hitReact({ flags: 4, dir: [-1, 0, 0], deadNow: true }) === 'missing' && c.P.state === 2, 'big hit that kills (FUN_00561138): not translated');
+  ok(c.hitReact({ flags: 4, dir: [-1, 0, 0], aliveBefore: false, deadNow: true }) === 'none' && c.P.state === 2, 'already dead: no reaction (FUN_003419c0 != 0x36)');
+  {                                               // worker 0181: the deaths themselves are in test_death.mjs
+    const d = ctrlAt([-1070.03, -146.0675, -1105.5845], [0.9124, 0, -0.4093]); d.step(IDLE()); d.cSnap = null;
+    ok(d.hitReact({ flags: 4, dir: [-1, 0, 0], deadNow: true }) === 'death' && d.P.state === 7, 'big hit that kills (FUN_00561138): state 7');
+  }
   c.active = { name: 'ladder' };
   ok(c.hitReact({ flags: 4, dir: [-1, 0, 0] }) === 'none' && c.P.state === 2, 'on the ladder (FUN_0055a410 states): no reaction');
   c.active = null;

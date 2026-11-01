@@ -1001,3 +1001,69 @@ shot cone', 'Bullet room probe', 'C update order', 'Deflect window'). Replaces B
   voice FUN_0055ea50 ('h_dmg_N', P+0x28 bit 2); HUD FUN_00567fe8 (melee) / FUN_00567f10 (bullets); hit effect
   FUN_003361b8 (bullets, zone nibble), FUN_00567c08 / pad FUN_00336508 (FUN_005720c8); FUN_00562898's script event
   0x29.
+
+## Vincent's death at HP 0 (worker 0181, 2026-11-01)
+
+Trace: tools/trace/scripts/w181_death_* (k_enemy_engage8's route, no shots, `TRACE_POKE=960660=1`: player status
+P+0x17c = 0x960640, +0x20 HP = 1, so the f788 bullet kills). Windows a / b / c (TRACE_FIELDSET=enemy, f780-1647),
+aim_a / aim_b (TRACE_FIELDSET=aim: clip layers, f780-1259), w181_restart (✕ on Restart at f1250). GS dumps +
+screenshots in the worker scratchpad; review image /srv/shared/dirge-port/review/w0181_death.png.
+
+Decoded and on the page:
+- FUN_00565480 at HP 0 on the ground: no flag 2 / 4 / 8 (or flag 2 with P+0x118 bit 3, as every bullet here)
+  and flag 2 alone -> **FUN_00560fc8**: FUN_003533e0, `FUN_00353340(12, 16, C, dir)` (C+0x350 dir, +0x360 = 2d / T,
+  +0x364 = that / T) + FUN_0034edf0(C, 0xb), FUN_0055f0e0(P, 6) (clear), state 7 unless P+0x118 0x8000 / 0x10000.
+  Flag 4 -> **FUN_00561138**: FUN_0034b638(0.25, C, -dir), the same slide (DAT_0046edb0 / b4 = 12 / 16, under
+  FUN_00326298(0xd)), FUN_0034e960(C, 4), state 7. Off the ground / flag 8: FUN_00561270 (not translated, warned).
+- State 7 (FUN_00537628 -> vtable 0x58ad40): enter FUN_005386f0 (FUN_00565bd0(P, 2) lying stance, gun bit off,
+  hit side into P+0x100), leave 0x538768 (P+0x118 &= ~0x100), events FUN_00538780 (0xd -> P+0x118 |= 0x100 +
+  FUN_003533e0; else on the ground 0, in the air 0xf / 0x10), motion slot FUN_00538940. From 2 / 3 / 0x18 the
+  motion is 0xb (FUN_00537d58 case 7; jumptable 0x589e70[7] picks 0xb / 0xc / 0xd by P+0x100 bits 40-41).
+- Motion class 0xb (factory 0x592918 case 0xb, vtable 0x5a6600; enter FUN_005959b8 / leave FUN_005959f8 / update
+  **FUN_00595a60**): phase 0 FUN_0034b110(0), FUN_00353418 (C+0x214 = 0: no turn), no blend, FUN_00340b28(C, 1) (C+0x568
+  bit 0x20: root motion), C+0x568 |= 0x40, row DAT_005a3990[C+0x590 & 0xf] (0x2a-0x2f: all **c_st_fa0** in z128),
+  cue DAT_005a39b0 / 39d0 [side] (0x56 = asj_501 for him; FUN_00340658 on C+0x6c1). Phase 1: from 10 ticks the
+  C+0x74c / message 8 part (his message 8 at 0x56a414 returns for P+0x28 bit 2); done at the clip end (C+0x808 bit
+  0x20000 clear) or 420 ticks; next motion 0xd (0x39 with C+0x808 bit 0x10000). Clip rate 0.6 a frame (traced).
+- Mover 0xb **FUN_003516a0**: velocity = C+0x310 (the root delta) through C x -1 / step, y 0, + C+0x350 x C+0x360;
+  length >= 0.01 -> FUN_0034af98 else FUN_0034b110(0); C+0x360 -= C+0x364 x step, floor 0. The root delta is the head
+  clip's root at (int)(2 x frame) / 2 before the advance (FUN_00343160, as the soldiers' lunge); the page uses the jump
+  pack's root track (rootDelta / glbToGame), which gives the game's world vector (f882). Traced: the slide 12 u plus
+  the clip's 5 u back (frames 0-5), then 4.5 u at f882-908 (frames 56-72) along the railing.
+- FUN_005786e8: FUN_00578748 / FUN_00579570 / FUN_005799f0 only while HP != 0.
+- vt+0x334 **FUN_00576b48** -> FUN_0055cac8: FUN_00341298(C, 0x4e) ('' for him) -> FUN_003412d0(C, 0x4c, 0) (gated;
+  script 297 event 0x25 = the hit voice), script event 0x17 (none in 246 / 297), FUN_005435a8 (manager lock list:
+  FUN_00562f50(-1) on objects locked on him), vt+0x374(2, now) (P+0x244 = the death frame; read by the camera only
+  for P+0x28 bit 0x20), P+0x28c = -1, vt+0x344 = FUN_00576c28 (DAT_0046e54c |= 4 when *(DAT_0046e290+0x30)),
+  FUN_00573378(P, -1) (lock target cleared), FUN_00241760(1, 3, 0) (DAT_004f3044 |= 0x100: FUN_003de130 won't open
+  the pause menu) and FUN_003dec80(0) when DAT_004b8ac8 bit 0 is clear; FUN_00326018(0xc) with status bits 2 / 3.
+
+Traced but not decoded:
+- After the done event (f1004: C+0x564 bit 0x20) no class 0xd starts: the bit stays set to f1647, C+0x570 and the
+  head layer stay c_st_fa0 at 128. FUN_00343160 keeps lVar13 only when FUN_00341af0 is 0, and FUN_00538780 does
+  answer 0 for 0xb on the ground, so the gate is elsewhere in FUN_00343160 (l.276-334). Page GUESS: hold.
+- Camera: eye y -153.9 -> -188.7 and forward y -0.21 -> 0.81 (looking down) over f789-860, then fixed (cam_view
+  stays 0xc). Not decoded (no lead read).
+- Game over: the 'GAME OVER' title (FED effect, animated in ~f900-1000), the HUD gone, the world keeps running
+  (AI clocks, soldiers), the Restart / Quit menu by ~f1218 waits for input. Restart (✕ f1250): fade to black
+  (~f1263), 'Calculating Points' (f1332-1500), then the stage-result Status screen (EXP earned / exchange for gil, waits for input) from ~f1651 to f2600 (w181_restart_long). The checkpoint reload after it is not traced. What starts the game over: two
+  attempts failed (FUN_00576b48's chain; the player-dead checks FUN_00323538 / 003235b8 / 00323628 (stage
+  transitions FUN_0037e048 / FUN_0037cf30 wait on them) and P+0x244). Lead: DAT_0046e54c bit 2 (FUN_00576c28).
+  The menu: the top-level mode machine FUN_00247508 creates FUN_003bf3c8 -> FUN_003bf408 (layout 0x477470); not
+  confirmed as the game-over menu. Second lead (worker 0187): FUN_00321328, called by FUN_0055c7f8 right after
+  vt+0x334 when P+0x28 bit 2 is set (Vincent: yes): DAT_0046e248+0x18 += 1 (likely a death count; FUN_003210f0
+  zeroes it with +0x10 from FUN_0031db30). No reader found by name in the decomp; a reader through another
+  pointer to the same record would show in a watchpoint on it. Page: enemy_ai.js `deathCount` -> W.stageRec.f18.
+
+Review fixes (worker 0187):
+- The hit side **FUN_0055d678(P, point)** (asm 0x55d678-0x55d834): FUN_0055eac8 (melee) calls it after the damage
+  (vt+0x1ec, so after vt+0x334 on a kill) when he was alive before, then FUN_00565480. The point in P's frame
+  (FUN_0054aaf8: FUN_0054a5e8 matrix P+0x60 -> FUN_00261618 R^T (p - row 3)): x on row 0 = up x face, y on row 1
+  (0, -1, 0) = the height. Dead now: y > P+0x30 (18) x 0.3 -> 3 (x > 0.25) / 4 (x < -0.25) / 1, else 5 (x >= 0) /
+  6. Alive: 0 on every path. C+0x590 & 0xf = it -> the death class's row DAT_005a3990[side] (all c_st_fa0) and cue
+  DAT_005a39b0[side] (0x56 0x56 0x57 0x58 0x59 0x5a 0x5b; 39d0: 0x62..0x67). The bullet path (FUN_0055db50) never
+  calls it. Page: enemy_ai.js `playerHitSide` -> play.js `hitSide` -> player.js `setHitSide` (also into the frame's
+  start snapshot, so the hit redo keeps it); the cue table is exported to ai.json `player.death`.
+- FUN_00560fc8's distance: DAT_0046edac (5.0, static) with P+0x28 bits 4 and 0x20, else 12; translated.
+- State 7 off the ground: FUN_00538780 -> 0xf / 0x10 (FUN_0036b008 on the FUN_00353458 angle); not on the page, warned.
+- Mover 0xb's FUN_00356278(C+0x370, body): left out (no reader of body+0xa0 on the page).

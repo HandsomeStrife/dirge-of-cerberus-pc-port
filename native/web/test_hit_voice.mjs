@@ -76,11 +76,31 @@ for (const [gap, draws2] of [[14, 0], [15, 1]]) {
   w.shot();
   ok(w.calls.length === 1, `first hit at the page's frame 0 passes the gate (save C+0x810 359, counter 1575): ${w.calls.map(c => c.name)}`);
 }
-{ // dead after the hit: FUN_0055c978(.., 1) runs no cue
+{ // dead after the hit: vt+0x324 (FUN_00576ac8 -> FUN_0055c978(.., 1)) runs no cue; the death vt+0x334 FUN_00576b48 ->
+  // FUN_0055cac8 runs the gated cue 0x4c (his 0x4e is ''): the same voice script, one draw (worker 0181)
   const w = world([pick(0)]);
   w.player.hp = 10;
   w.shot();
-  ok(w.player.hp === 0 && w.drawn.length === 0 && w.calls.length === 0, `killing hit: no cue, ${w.drawn.length} draws`);
+  ok(w.player.hp === 0 && w.drawn.length === 1 && w.calls.length === 1 && w.calls[0].name === 'bt_v000',
+     `killing hit: no hit cue, the death's gated 0x4c: ${w.drawn.length} draws, ${w.calls.map(c => c.name)}`);
+}
+{ // the death's 0x4c goes through the same 15-frame gate: a hit 5 frames before the killing one shuts it
+  const w = world([pick(0), pick(1)]);
+  w.shot();
+  for (let i = 0; i < 5; i++) w.W.tick(1.2, w.player.pos, w.player.pos);
+  w.player.hp = 10; w.shot();
+  ok(w.player.hp === 0 && w.calls.length === 1 && w.drawn.length === 1, `killing hit 5 frames after a voiced hit: gate shut, no death voice (${w.calls.map(c => c.name)})`);
+}
+{ // the reaction takes the death (state 7): the death class's phase 0 cue 0x56 = asj_501 after the voice (worker 0181)
+  const seen = [];
+  const w = world([pick(0)], { react: h => { seen.push(h.deadNow); return h.deadNow ? 'death' : 'none'; } });
+  w.player.hp = 10;
+  w.shot();
+  ok(seen.length === 1 && seen[0] === true && w.calls.map(c => c.name).join(',') === 'bt_v000,asj_501',
+     `killing hit with the death reaction: ${w.calls.map(c => c.name)} (bt_v000 then asj_501)`);
+  const w2 = world([pick(0)], { react: () => 'none' });
+  w2.player.hp = 10; w2.shot();
+  ok(w2.calls.map(c => c.name).join(',') === 'bt_v000', `no state 7 (reaction none): no death-motion cue (${w2.calls.map(c => c.name)})`);
 }
 
 // ---- melee: FUN_0055eac8 -> vt+0x1ec (the cues; the damage branch skips FUN_0055eac8's own cue block) -> one draw

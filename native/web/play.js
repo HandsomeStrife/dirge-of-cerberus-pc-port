@@ -26,6 +26,7 @@ import { setupAim } from './aim.js';
 import { setupHud } from './hud.js';
 import { setupEnemies } from './enemies.js';
 import { createEnemyAI } from './enemy_ai.js';
+import { createEffects, EffectLayer, wallImpactId } from './effects.js';
 import { boneRows } from './enemy_hit.js';
 
 const params = new URLSearchParams(location.search);
@@ -40,6 +41,7 @@ const ENEMY_AI = params.get('enemyai') !== '0';      // enemy_ai.js: wake trigge
 // (review board 2026-10-30); ?mouselook=game gives the game's USB-mouse path (FUN_00254ac8)
 const MOUSE_DIRECT = params.get('mouselook') !== 'game';
 const MOUSE_SENS = params.has('mousesens') && +params.get('mousesens') > 0 ? +params.get('mousesens') : MOUSE_SENS_DEFAULT;   // degrees per pixel
+const FX = params.get('fx') !== '0';               // the effect engine (effects.js, data/effects): wall impacts, hits on Vincent; ?fx=0 off
 const ENEMY_DMG = params.get('enemydmg') !== '0';    // enemy bullets damage Vincent (decoded hit test, on by default; ?enemydmg=0: they hit, no damage); melee always does
 const AIM = params.get('aim') !== '0';               // aim.js (aim_core.js): the weapon, its camera views, the reticle
 const GAMEHUD = params.get('gamehud') !== '0';       // hud.js (hud_core.js): the game's HUD (HP gauge, weapon panel), ?gamehud=0 off (?hud=0 hides only the debug text)
@@ -638,7 +640,8 @@ async function main() {
   const enemies = ENEMIES ? await setupEnemies({ root, litPatch, light, extra: aiData ? AWAKE.map(k => aiData.records[k]) : [] })
     .catch(e => { console.warn('enemies off:', e.message); return null; }) : null;
   // Vincent's status for the enemy AI: HP 780 = P status +0x20 in the save state (k_enemy_engage8 p_hp)
-  const php = { pos: [ctrl.pos.x, ctrl.pos.y, ctrl.pos.z], hp: 780, id: 0x16, f118: 0x20209, s64: 0 };   // f118 = P+0x118 from the save's RAM (0x20209; player.js hitBranch)
+  const php = { pos: [ctrl.pos.x, ctrl.pos.y, ctrl.pos.z], face: [ctrl.C.face.x, ctrl.C.face.y, ctrl.C.face.z], hp: 780, id: 0x16, f118: 0x20209, s64: 0 };   // f118 = P+0x118 from the save's RAM (0x20209; player.js hitBranch)
+  ctrl.hpZero = () => php.hp === 0;               // FUN_005786e8's FUN_00316cf8: no intent / weapon at HP 0 (worker 0181)
   // Vincent's joints j00..j92 (flat under the glb root: model-space TRS) and his start-of-frame placement (tick)
   const vinJoints = [], vinStart = { pos: null, h: 0 };
   vin.mixRoot.traverse(n => { const m = /^j(\d\d)$/.exec(n.name); if (m && !vinJoints[+m[1]]) vinJoints[+m[1]] = n; });
@@ -668,11 +671,31 @@ async function main() {
   }).catch((e) => console.warn('audio: off', e));
   // FUN_003e9ed0's listener on frame k is the game state of two pad polls before (audio.js soundListener)
   const sndHist = [];
+  // the game's effect engine (effects.js; data from export_web_effects.py): the bullet wall impacts and the hits on Vincent
+  let fx = null, fxLayer = null, fxIds = null;
+  // this game frame's camera (follow.update(1): the eye, up -y, along CAM+0x80) for the effect draw pass
+  const fxCam = new THREE.PerspectiveCamera();
+  const fxCamera = () => {
+    const e = follow.eye, d = follow.M[2];
+    fxCam.position.set(e[0], e[1], e[2]); fxCam.up.set(0, -1, 0); fxCam.lookAt(e[0] + d[0], e[1] + d[1], e[2] + d[2]);
+    return fxCam;
+  };
+  // fetched only when scene.json declares it (export_web_effects.py writes "effects"): no 404 without the data
+  if (FX && !scene.effects) console.warn('effects: not exported (run native/assets/models/export_web_effects.py)');
+  if (FX && scene.effects) try {
+    const get = n => fetch('data/' + scene.effects + '/' + n).then(r => { if (!r.ok) throw new Error(`${n}: HTTP ${r.status}`); return n.endsWith('.json') ? r.json() : r.arrayBuffer(); });
+    const [fed, core, ids] = await Promise.all(['r0001.fed', 'core_ef.bin', 'ids.json'].map(get));
+    fx = createEffects({ fed, core, warn: m => console.warn(m) }); fxIds = ids;
+    fxLayer = new EffectLayer(THREE, fx); root.add(fxLayer.group);
+    window.__fx = { fx, layer: fxLayer, ids };   // for the page tests
+  } catch (e) { console.warn(`effects: off (${e.message}; run export_web_effects.py)`); fx = null; }
   let enemyAI = null;
   try {
     if (enemies) enemies.mpHead = vin.body;            // newer actors draw before older ones (enemies.js add)
     enemyAI = ENEMY_AI && aiData && enemies ? createEnemyAI({ data: aiData, player: php, log: m => console.log(m), damage: ENEMY_DMG,
       sound: snd,
+      // FUN_00335f40 / FUN_003361b8: the impact and hit effects (effects.js)
+      effect: fx ? { wall: (mat, n, p) => { const id = wallImpactId(fxIds, mat, n, fx.warn); if (id >= 0) fx.spawn(id, p); }, hit: (k, p) => fx.spawn(fxIds.hit[k], p) } : null,
       // the walk mesh for soldiers' physics bodies (mover 3, move mode 0xc; body flags 0x36: not a block80 body)
       walkMesh: col,
       // the save's dead records (41-43): FUN_00559748 refuses to activate them
@@ -692,11 +715,14 @@ async function main() {
         if (!h) return null;
         const r = [h.point.x, h.point.y, h.point.z];
         r.surface = h.surface;                     // the hit polygon's surface word (FUN_00553660 material)
+        r.normal = h.normal;                       // the hit normal (effects: FUN_00336478's floor test)
         return r;
       } : null,
       // Vincent's hit reaction FUN_00565480 (player.js hitReact): his C update for this frame runs again
       // with the hit (the game runs it after the object lists); php.pos follows in place
-      react: h => { const r = ctrl.hitReact(h); php.pos[0] = ctrl.pos.x; php.pos[1] = ctrl.pos.y; php.pos[2] = ctrl.pos.z; return r; },
+      react: h => { const r = ctrl.hitReact(h); php.pos[0] = ctrl.pos.x; php.pos[1] = ctrl.pos.y; php.pos[2] = ctrl.pos.z; php.face = [ctrl.C.face.x, ctrl.C.face.y, ctrl.C.face.z]; return r; },
+      // C+0x590 & 0xf, the hit side (FUN_0055d678 writes it, the death class reads it): on his C
+      hitSide: { get: () => ctrl.C.hitSide ?? 0, set: s => ctrl.setHitSide(s) },
       // Vincent's skeleton for the bullets (vt+0x5c bone 3, the part boxes): the drawn joints (the last drawn pose,
       // as the game's MP buffer when the bullets update) placed at his start-of-frame position and facing
       // (after: his C after this frame's update = the controller now, the tick runs after ctrl.step)
@@ -790,7 +816,10 @@ async function main() {
     keys.add(e.code);
     if (!e.repeat) pressed.add(e.code);
     // H: back to the spawn (debug aid, not a game feature)
-    if (e.code === 'KeyH') { ctrl.reset(); if (cape) cape.cloth.started = false; if (weapon) weapon.reset(); follow.reset(ctrl.pos); detached = null; }   // respawn: spawn angles (ctrl.reset cancels the ladder: its exit() clears CAM+0x1c8; the reset FUN_00329f68 -> FUN_003285d0 leaves CAM+0x1c4 / +0x1c8)
+    // page aid (worker 0181): H also puts HP back to the save's 780, so a dead Vincent (state 7, FUN_005786e8's
+    // HP gate) can play on. Not the game's retry: that goes game over -> Restart -> 'Calculating Points' -> the
+    // stage-result Status screen -> (not traced further); the soldiers keep their target-dead state.
+    if (e.code === 'KeyH') { php.hp = 780; ctrl.reset(); if (cape) cape.cloth.started = false; if (weapon) weapon.reset(); follow.reset(ctrl.pos); detached = null; }   // respawn: spawn angles (ctrl.reset cancels the ladder: its exit() clears CAM+0x1c8; the reset FUN_00329f68 -> FUN_003285d0 leaves CAM+0x1c4 / +0x1c8)
     if (e.code === 'KeyR') { e.preventDefault(); report.open(); }
     if (e.code === 'Space' || e.code.startsWith('Arrow')) e.preventDefault();
   });
@@ -911,6 +940,7 @@ async function main() {
       vinStart.pos = pOld; vinStart.h = ctrl.heading;
       // FUN_0053b500 -> FUN_00542ab8 (actor push-out) runs before the actors move (T: k_push16, the push of
       // frame f comes from the positions it starts with and moves Vincent in the same frame)
+      if (fx) fx.begin(STEP);                      // FUN_002efc78 / FUN_002efe00 (before the game logic)
       ctrl.push = enemyAI ? enemyAI.pushOut(pOld) : null;
       ctrl.step(aim(inp, b));
       pressed.clear();                             // an edge is seen by one tick only
@@ -918,7 +948,11 @@ async function main() {
       const g = col.groundY(ctrl.pos.x, ctrl.pos.z, ctrl.pos.y);
       if (g != null) stats.groundErrMax = Math.max(stats.groundErrMax, Math.abs(g - ctrl.pos.y));
       stats.lastGroundErr = g == null ? null : g - ctrl.pos.y;
-      if (enemyAI) { php.pos = [ctrl.pos.x, ctrl.pos.y, ctrl.pos.z]; enemyAI.tick(STEP, pOld, php.pos); }
+      if (enemyAI) { php.pos = [ctrl.pos.x, ctrl.pos.y, ctrl.pos.z]; php.face = [ctrl.C.face.x, ctrl.C.face.y, ctrl.C.face.z]; enemyAI.tick(STEP, pOld, php.pos); }
+      // FUN_002efe98, then the effect draw pass (once a game frame) with this frame's camera: follow.tick ran at
+      // the start of this game frame, as the game's camera does before the draw (the render camera lags a frame)
+      if (fx) { fx.end(); fxLayer.update(fxCamera()); }
+      if (gameHud) gameHud.tick();
       if (enemies) enemies.tick(enemyAI);
       acc -= TICK; n++; stats.ticks++;
     }
