@@ -1,0 +1,47 @@
+{
+ "name": "w167_timer",
+ "frames": 1680,
+ "log_from": 1120,
+ "doc": "worker 0167: w159_walk95 run on to f1680 (no input after f787), logging from f1120 (TRACE_LOG_AT=A0D80): after the path ends (f897 / f930) scripts 127 / 128 event 0x13 set AI mode 1 and cmd 0x106 timer 0 (600 on this difficulty); does the timer's event 1 walk path 6, and does mode 1 ever start an attack (actor state 0x80+)? Run with TRACE_POKE=9540a4=6e,10a2140=6e TRACE_FIELDSET=path TRACE_ERECS=46,47 TRACE_ENEMIES=2 TRACE_LOG_AT=A0D80.",
+ "events": [
+  {
+   "from": 10,
+   "to": 230,
+   "lx": 0.6,
+   "ly": -1.0
+  },
+  {
+   "from": 240,
+   "to": 244,
+   "buttons": [
+    "cross"
+   ]
+  },
+  {
+   "from": 280,
+   "to": 284,
+   "buttons": [
+    "cross"
+   ]
+  },
+  {
+   "from": 300,
+   "to": 470,
+   "lx": 0.6,
+   "ly": -1.0
+  },
+  {
+   "from": 490,
+   "to": 494,
+   "buttons": [
+    "cross"
+   ]
+  },
+  {
+   "from": 500,
+   "to": 787,
+   "lx": 0.6,
+   "ly": -1.0
+  }
+ ]
+}

@@ -883,3 +883,30 @@ clamp, both PST.f64 sites, attackCentre with a marker offset, the HUD text, test
 runs out its life); test_melee's world() no longer edits the shared ai.json.
 - Tests: test_melee (lunge replay, k_lunge166 per-frame fields, root hand cases, review cases; 30/30 mutants killed),
   test_enemies_page 10 (mover 8, distance as the clip's root, HP -49), test_approach 3, test_enemy_hits mid-attack.
+
+## Dan's report "they aren't attacking": records 46 / 47 at their path ends (worker 0167, 2026-11-01)
+
+Report 20261101T140820Z-316b: Vincent idle at (-846.75, -144.45, -950.64), a rifle-raised soldier 10-20 u away
+that never swings. **The game doesn't swing there either; no code change.**
+
+- **Who.** Path 8 (record 47, script 128) ends 0.7 u from Vincent's reported feet and path 5 (record 46,
+  script 127) 18 u from them. Trace w167_timer puts them at (-846.0, -144.6, -950.4) / (-835.9, -148.9, -936.5)
+  after the walk. Path end = manager event 0xf -> script event 0x13: 0x193 (target Vincent), 0x143(1).
+- **Mode 1 never melees a shooter.** FUN_00362998 calls the attack pick FUN_0035ff98 only in state 8, entered
+  from state 0 only when C+0x808 bit 0 is clear (non-shooter). e027 r_* is a shooter, so it runs states 3 / 4 / 5
+  (combat layer 2 fire, stand <-> crouch) and never attacks. Same rule as worker 0154's k_push16 (mode 2).
+- **Never shot.** Page (headless probe, trigger 77's event 0x12 wake, Vincent put at the reported spot): 46 / 47
+  in mode 1, brain states 3-5, r_st_a / r_sq_a, firing, no 0x80+ state. Game (w167_timer = w159_walk95 run to
+  f1680, log f1120-1679): mode 1 the whole window, motions r_st_a / r_sq_a only, positions fixed.
+- **Shot once.** Script event 8 of 127 / 128 does its work only while var 0 == 0. The wake (event 2) has
+  already set var 0 = 1, so a hit after the wake only flinches. A hit before any wake sets var 0, wakes
+  46-49 and walks the path, which ends in mode 1 again. Page: flinch (r_stlld0, 105 -> 81), back to
+  mode 1, keeps firing.
+- **What would make them melee.** Mode 5 (FUN_003639d0: attack pick at d34 < 22). Scripts 127 / 128 set it
+  (a) in event 0x29, posted by the big / knock-down reactions FUN_005618d0 / FUN_00561f78 / FUN_00562898
+  (stagger 0x44 = the 8th hit inside 60-tick gaps; 46 / 47 have 105 HP and take ~24 a pellet, so they die
+  first), or (b) in events 1 / 3 when manager 0xa7 (difficulty 3) is true. The save's difficulty is 1.
+  Event 0x13 also sends cmd 0x106 (600; 300 on hard), not translated (audit row). w167_timer shows no
+  effect from it by f1679.
+- Trace: `TRACE_POKE=9540a4=6e,10a2140=6e TRACE_FIELDSET=path TRACE_ERECS=46,47 TRACE_ENEMIES=2
+  TRACE_LOG_AT=A0D80`, script tools/trace/scripts/w167_timer.json (1680 frames; the log start bounds the script length).
