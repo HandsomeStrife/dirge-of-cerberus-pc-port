@@ -1,0 +1,80 @@
+# The in-game HUD (worker 0175, 2026-11-01)
+
+On the page: `native/web/hud_core.js` (the translated draw list), `native/web/hud.js` (GS stand-in +
+play.js hook, `?gamehud=0` off; `?hud=0` hides only the page's debug text), data
+`native/web/data/hud/hud.json` from `python3 -I native/assets/models/export_web_hud.py [--dump DUMP]`,
+which also declares it in data/scene.json (`"hud"`; export_web_room.py keeps it): play.js fetches it
+only when declared, so no 404 without the data. Tests: `node native/web/test_hud.mjs` (draw list vs
+the hero dump), `node native/web/test_hud_page.mjs` (browser: blend, pixel centres, cost).
+
+## Structure (all decoded)
+- The HUD is a screen of the generic menu-widget system. Constructor FUN_003ad618 (vtable 0x4a52e8,
+  object in DAT_00471380), per-frame update FUN_003add28. It builds 11 panels from layout byte code in
+  the ELF (FUN_003d41e0 / FUN_003d43f8 / FUN_003d4478 -> FUN_003ddc18 -> FUN_003ca488): ops 1-13 create
+  an element (ctor PTR_FUN_0047a6f0[op-1]; op 1 = group, its children follow), 0xe-0x21 set attributes
+  (lengths DAT_0047a6c8: 0xe rect, 0xf rgba, 0x16 id, 0x17 sprite, 0x14 text flags, 0x20 corner colours),
+  0xff ends. Slot i -> HUD+0x38+4i; tables 0x4718d8, 0x471898, 0x471938, 0x471910, 0x471810, **0x471390
+  (slot 5, HP gauge)**, **0x4714d0 (slot 6, weapon / ammo / CHAIN / item)**, 0x471760, 0x471970 (slot 8,
+  item list), 0x471c18, 0x471c50.
+- Draw order: every top-level group is a sibling (+0x30) of the root (HUD+0x18, the reticle's group):
+  root -> slot 1, 3, 4, 5, 6, 7, 8, 9, 10 -> other screens. Element: +2 flags (bit 0 hidden with its
+  children, 2 selectable, 8 bilinear, 0x40 / 0x80 fade exemptions), +3 id, +6 x y w h (absolute HUD px),
+  +0xe inner box, +0x16 rgba, +0x1a sprite, +0x24 first child, +0x34 owner (the HUD: fade +0x2c/+0x30,
+  clip height +0x26), +0x38 vtable (type 1 0x4a64b0, 2 text 0x4a67b0, 4 sprite 0x4a66f0, 7 callback
+  0x4a6630 (+0x3c = code), 10 0x4a6ac0, 13 corner-coloured 0x4a6570).
+- The page draws the save state's tree (positions, colours, sprites, text as the HUD code left them:
+  e.g. the PAL widening FUN_003cb450(+0x34), the slid-shut item list at y 370 h 0) and drives HP.
+
+## Draw paths
+- Sprites FUN_003c97a0 -> FUN_003c94e0 (frame kinds DAT_0047d180: cols, stretch col, rows, stretch
+  row) -> FUN_003cac70 (9th arg = signed frame height, on the stack: 0x3c95d4) -> FUN_003d2e80.
+  Sprite records DAT_0047bfc0[id]: frame list, texture (+4: menu1-4 = PTR_DAT_0047d500[+6]), kind,
+  +7 repeat bits (FUN_003d3fb8 -> CLAMP_1 REGION_REPEAT), +8 corner colours of untextured sprites
+  (FUN_003c8dc0). Type 13: FUN_003d5f68 via FUN_003d3330.
+- HUD -> frame (DAT_004f2258 set): x (12.4) x 0x1b0 >> 9 toward zero, y << 9 / 0x1c0 (FUN_003d2e80,
+  FUN_003d3098); FUN_003d3330 maps only the pixel part and keeps the 1/16 fraction. Scissor
+  FUN_003d3880 (via FUN_003cada0 / FUN_003cae68). PRIM table DAT_0047ad30 (1 gouraud strip, 3 line
+  strip, 5 textured strip). ALPHA (Cs-Cd)As+Cd, TFX modulate, TCC 1, no alpha test, flag 8 -> TEX1 0x60.
+- Groups FUN_003d5ac0: +0x3c bit 0 clips the children to the box rows.
+- Gauges: HP FUN_003ae938 (element 0x0a, 0x3ae910), MP FUN_003aea10 (element 9, 0x3ae9e8), both
+  FUN_003aed60 (rows DAT_00471fa0: c0 left / c1 right, edge lines, lag segment alpha - 0x20); value set
+  FUN_003aec10, 1000 ms drain FUN_003aec78. HP text: FUN_00339988 -> FUN_003adda8 -> FUN_003aed00 ->
+  FUN_003cbb58 / FUN_003cba90 ("cur" 0x12 "max", digits 0x13+).
+- CHAIN: callbacks 0x2e / 0x32 (LAB_003b4f50 / 003b4f78) -> FUN_003b4fa0: scissor to the gauge
+  (HUD+0xbbc), glow pulse FUN_003d0ad0 (0x40..0xc0, half period 200 - 150 cur / max ms) into elements
+  (lists 0x472948 / 50 / 58, FUN_003d5698) and sprite corners (FUN_003d10a8). The dump confirms the
+  draw-order effect: CHAIN (before the callback) 88, pieces after it 103 = one 20 ms frame apart.
+- Text FUN_003d7040 -> FUN_003cc0a8: flag 0x80 -> number font FUN_003cedf0 (cell (c-4)%42 at 12 px,
+  v from row 16 + 464 masked = 224, widths at metrics +0x70, shadow sprite, gradient quad); +0x5c != 0 ->
+  FUN_003cc208 (SJIS-style cell from ASCII, kelfnt0, 16 px cells, flag 2 = 4-copy outline); +0x5c == 0
+  -> FUN_003cd7e8 (NOT translated; only off-screen text uses it at the save).
+- Font: kelfnt0 = data/etc/locale/**uk**/fontdata1.bin TIM3 (linear 4-bit; equals GS memory at TBP 0 as
+  PSMT4HH, 0 mismatches); each texel = two 2-bit glyph planes, CLUT n = FUN_003dd5b0(n) -> CBP 16379-n,
+  colours static at 0x47d380 + 0x40 n. Metrics = menudata.bin entry 2 (FUN_003d2600 -> FUN_003d25c8(2));
+  the save runs the UK locale (its table equals RAM). menu3 / menu4 are PSMT8 (export_web_hud
+  menu_texture8; equal to GS memory, 0 texel / CLUT differences).
+
+## GS stand-in (hud.js; review fixes, worker 0185)
+- One vertex buffer per frame, uploaded only where it changed (bufferSubData of the used range). Batches
+  break only where a primitive overlaps an earlier As > 1 primitive of the same batch (those take three
+  passes: As <= 1, subtract, add the overflow), so every pixel sees the game's order. play.html,
+  headless swiftshader, per HUD frame: 188 -> 115 draw calls, 101 MB -> 12 KiB uploaded, 67 -> 2.1 ms.
+  The calls left are the text: shadow and glyph both reach As > 1 (CLUT alpha 0xb0) and overlap.
+- Blend above 1: exact per channel (fidelity-audit 'As > 0x80 on an 8-bit target').
+- Pixel centres: +0.5 frame px (the GS samples at integer coordinates). Ground truth: the walk dumps'
+  freeze snapshot (GS memory at +0x1a9, FBP 112 PSMCT32 FBW 7) holds the previous displayed frame with
+  the GS's HUD (HP 780 / 780); the hero dump's holds a cutscene frame.
+- The edge lines stay a GUESS (quads one pixel thick).
+
+## Evidence
+- test_hud: all 88 on-screen HUD primitives of the hero dump (z128_hero_163235) equal ours: texture +
+  CLUT, 4 vertices x y u v rgba, scissor. 18 / 18 mutants killed. Review: review/w0175_hud.png.
+
+## Not done
+- Hit-direction ring (FUN_00567c08 -> FUN_003af6b8 / FUN_003af740 / FUN_003b1048 kind 5, decoded by
+  worker 0174): not translated. It draws through the reticle system (root callback 0x3f, aim.js) with
+  the projected matrix HUD+0x260 (FUN_003af580); needs that transform translated and a GS dump of a
+  hit frame (none yet; w174_pain_a f952 would do: grab with a gsgrab-style script, Shift+F8).
+- FUN_003cd7e8 text, low-HP / MP pulses FUN_003af1e0, type-10 elements, the other callbacks (slots 3,
+  4, 8, 9, 10), weapon icon / ammo / item / CHAIN value updates (static at the save values: the page
+  has no ammo, items or CHAIN).

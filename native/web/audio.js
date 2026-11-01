@@ -15,7 +15,7 @@
 
 export const SPU_RATE = 48000;
 export const TICK_HZ = 240;                       // FUN_00010bdc: 36864000 / 0x25800
-const TICK_SAMPLES = SPU_RATE / TICK_HZ;          // 200
+export const TICK_SAMPLES = SPU_RATE / TICK_HZ;          // 200
 
 // ---------------------------------------------------------------------------------------------
 // SPU2 ADPCM (hardware format). 16-byte blocks: filter << 4 | shift, flags, 28 nibbles.
@@ -185,6 +185,16 @@ export class SeRenderer {
   // Render SE program `prog` (Uint8Array) with the request's volume / pan (FUN_0041a190 a1 / a2).
   // GUESS: maxSeconds = 8 is a page cap on the offline render (the driver plays an endless SE until keyed off).
   render(prog, vol = 0x7f, pan = 0x40, maxSeconds = 8) {
+    this.start(prog, vol, pan);
+    const maxTicks = Math.ceil(maxSeconds * TICK_HZ);
+    const L = new Float32Array(maxTicks * TICK_SAMPLES), R = new Float32Array(maxTicks * TICK_SAMPLES);
+    let t = 0;
+    for (; t < maxTicks; t++) if (this.tick(t, L, R, t * TICK_SAMPLES)) { t++; break; }
+    return { left: L.subarray(0, t * TICK_SAMPLES), right: R.subarray(0, t * TICK_SAMPLES), rate: SPU_RATE, events: this.events };
+  }
+
+  // Key the program's tracks on (FUN_000082d0). render() and streaming callers (music.js) then run tick().
+  start(prog, vol = 0x7f, pan = 0x40) {
     const cnt = prog[0] & 0x7f, flags = prog[4];
     if (flags & 8) vol = 0x7f;                    // FUN_000082d0
     const tracks = [];
@@ -204,25 +214,25 @@ export class SeRenderer {
     }
     this.prog = prog; this.tracks = tracks; this.voices = []; this.keyOnQueue = []; this.keyOffQueue = [];
     this.events = [];
-    const maxTicks = Math.ceil(maxSeconds * TICK_HZ);
-    const L = new Float32Array(maxTicks * TICK_SAMPLES), R = new Float32Array(maxTicks * TICK_SAMPLES);
-    let t = 0, liveTracks = tracks.length;
-    for (; t < maxTicks; t++) {
-      // FUN_00000dfc order: queued key-ons / voice updates first (FUN_00002c24, FUN_000025ac), then the
-      // SE tick (FUN_00007224).
-      for (const v of this.keyOffQueue) if (v.phase !== OFF) { v.phase = RELEASE; v.envCount = 0; this.events.push({ t, off: v.key }); }
-      this.keyOffQueue = [];
-      for (const k of this.keyOnQueue) { this.keyOn(k.trk); this.events.push({ t, on: k.trk.key }); }
-      this.keyOnQueue = [];
-      for (const v of this.voices) this.updateVoice(v);
-      for (const trk of tracks) if (trk.active) this.tickTrack(trk);
-      const now = tracks.filter((x) => x.active).length;
-      if (liveTracks && !now) for (const v of this.voices) this.keyOff(v);   // FUN_000034a0, last track
-      liveTracks = now;
-      this.mix(L, R, t * TICK_SAMPLES);
-      if (!now && !this.keyOffQueue.length && this.voices.every((v) => v.phase === OFF)) { t++; break; }
-    }
-    return { left: L.subarray(0, t * TICK_SAMPLES), right: R.subarray(0, t * TICK_SAMPLES), rate: SPU_RATE, events: this.events };
+    this.liveTracks = tracks.length;
+  }
+
+  // One 240 Hz driver tick t, mixed into L / R at sample `at` (TICK_SAMPLES samples). True once the SE is over.
+  tick(t, L, R, at) {
+    const tracks = this.tracks;
+    // FUN_00000dfc order: queued key-ons / voice updates first (FUN_00002c24, FUN_000025ac), then the
+    // SE tick (FUN_00007224).
+    for (const v of this.keyOffQueue) if (v.phase !== OFF) { v.phase = RELEASE; v.envCount = 0; this.events.push({ t, off: v.key }); }
+    this.keyOffQueue = [];
+    for (const k of this.keyOnQueue) { this.keyOn(k.trk); this.events.push({ t, on: k.trk.key }); }
+    this.keyOnQueue = [];
+    for (const v of this.voices) this.updateVoice(v);
+    for (const trk of tracks) if (trk.active) this.tickTrack(trk);
+    const now = tracks.filter((x) => x.active).length;
+    if (this.liveTracks && !now) for (const v of this.voices) this.keyOff(v);   // FUN_000034a0, last track
+    this.liveTracks = now;
+    this.mix(L, R, at);
+    return !now && !this.keyOffQueue.length && this.voices.every((v) => v.phase === OFF);
   }
 
   // FUN_00007224, one track, one driver tick.

@@ -291,3 +291,54 @@ order cue 0x44 -> gate (C+0x810 = 359 = the save) -> rand_i inside it; f952 r = 
 FUN_0040b5c0 conversion matches) -> 5 -> no voice, as the game. f1525: r 0.795133 -> 5 -> none. Open: in w174_pain_m
 C+0x810 was 3035 before the f1525 hit with no gated cue logged from f1440; some earlier write (before f1440, or
 another writer) is not found.
+
+## Music and ambience (worker 0177, decoded and verified)
+
+**The BGM streams are plain ATRAC3, scrambled, decoded on the EE, played at 48 kHz.** The old reading
+(native/assets/audio/FORMAT.md §1/§5: "ATRAC3plus, 44.1 kHz, no EE decoder") was wrong: byte 0 = 0x01 on every frame
+is the scramble, and `libat3dec.c` (assert string 0x4afc20) is in the main ELF.
+
+| step | code | what |
+|---|---|---|
+| script | ev0101 `KerberosSound.playMusic3("bgm_001", 0, 4000)` (end of the opening event; class 0c064001); ev0100 (zone flow, 0c064000) `playBgAreaSound("asj_033")`, then per battle section `playMusic3("bgm_001", 3, 2500)` or `KerberosZone.peace()` + `changeMusicVol(3, 2500)`, later `changeMusicVol(0, 2500)` | KerberosSound natives: table 0x470738 (cls, name, fn), names XOR 0xab; args are read last to first (FUN_003a9f48 / FUN_003a9f10) |
+| playMusic3(name, vol, fade) | FUN_003a0198 (DAT_004efba0 +0x156c == 0, as in the save; != 0: stopMusic, then FUN_003ec500 if the row has flags 0x84): fade < 1 -> FUN_003ec500(name, vol) -> FUN_003ec6f8(file, loop, vol, 1) (opens the stream only if none is open, DAT_004fab80 == 0; else nothing; its FUN_003ed740(vol, 100) ramps vol -> vol); else FUN_003ec560 -> FUN_003ec0d8: a crossfade running (DAT_004fab84) -> return; no stream open -> FUN_003ec6f8(file, loop, vol, 1), start now, no fade (z128's ev0101 call: worker 0182, below); else the crossfade (crossfade over `fade` clock units, curve 0x47d770 / 0x47d780, 4 points at 0, T/4, T/2, T; second stream DAT_004fab84 mixed by FUN_003eb52c / FUN_003eb544, swapped in when done). playMusic2 = FUN_003a02b8 (no fade); stopMusic = FUN_003ebfa0; changeMusicVol = FUN_003a5308 -> FUN_003ed740(vol 0..63, time): linear ramp DAT_004faba4 -> DAT_004faba0 applied per frame in FUN_003ed000 | |
+| file | FUN_003ec680 (sdb row: +0xc bit 0x10 -> loop start +0x10 / end +0x14, flags +0xc), FUN_003eb9a0 (row +8 = FileCode 0x0680fe01), FUN_003ebd40: byte 1 = 0xfe if DAT_0047d714 != 0 else 0xfc. DAT_0047d714 = the sound output setting (FUN_003e7778, also IOP request 0x1b; 2 in the save). The 0xfc files are the `m` files: exact mono (L = R) | data/zone/z128/sound/bgm_NNN.at3 / bgm_NNNm.at3 |
+| read | FUN_003ebda0 -> FUN_0024f870(file, buf, 0x6000, start x 0x180, end x 0x180) -> FUN_0024d730: 64 frames per read, 4 buffers; at `end` the position jumps to `start`. Without the loop flag (+0x224 = 0) it zero-fills past the file end and stops | trace w177_loop |
+| descramble | FUN_003eb9e8(frame, 0x180, K = 0x4fabc0): per 0x60 bytes, q0 ^= K, qi ^= q(i-1) ^ D(i-1) (q = the 16-byte words before any write; D0..D4 = 0x47d7d0..0x47d810). K = FUN_003edb18: K[i] = byte 0x47d7c0 + (i & 15) + ((i ^ 15) & 15) x 16 (bgm.py reads it from the ELF at run time; the save's 0x4fabc0 holds the same key) | every 0xc0 unit then starts with the ATRAC3 sync 0x28 |
+| decode | FUN_003ebaa8(stream, fade?) -> FUN_00458e80(stream + 0x80): ctx +0x6800 input, +0x68c4 volume offset (stream +0x90, 0..63; FUN_00459ed0 subtracts it from every scale-factor index, clamped at 0). FUN_00458dc8 modes: 1 -> 2 ch, coding 2, 0xc0 per ch (BGM); 2 -> 2 ch, joint stereo 0x12, 0x60; 3 -> 1 ch 0xc0 (title.at3); 4 -> 1 ch 0x60 (.at2 voice / SE streams, FUN_003ea640). Output: 4 x (256 L, 256 R) s16 per frame into the PCM ring DAT_0047d754 = 0x1fa0000 (8 slots of 0x1000 after a 0x20 header: u16 write, u16 read, u32 frames). FUN_003eb330 mixes the .at2 streams (6 channels) into the same slot | |
+| IOP | FUN_003ed8e0 -> FUN_0041ae50(1, slot, DAT_0047d768 (0..15), 0x1000): the PCM goes to the IOP (FUN_0041ae50 averages L and R when DAT_0047e86c == 1). Volume: PTR_0047d7a0 (FUN_003ed7d0(0x7f) at the title) -> FUN_0041af80(0x14, 0x7f) = IOP command 0x34 -> irx FUN_00010394(time 0x14, vol 0x7f): ((vol + 1) << 8) - 1 = 0x7fff, ramped over 20 driver ticks, sceSdSetParam 0x0f81 / 0x1081 (core 1 BVOLL / BVOLR: the sound-data input) | the page: gain 0x7fff / 32768 on the voices' scale (audio.js: voice 0x3fff = 1.0) |
+
+**Ambience.** `playBgAreaSound(name)` -> FUN_0039dd80 -> FUN_003e6c88(name, vol): the same name only refreshes the
+volume (FUN_003e8b70); a new one stops the old (FUN_003e65b0), opens an emitter slot (FUN_003e8e18) and
+FUN_003e9c38, sets fixed volume min(vol, 0x7f) (slot flag 0x40, vol << 7) and 0x20000 (FUN_003e8f00: sent as request
+0x17). Save state: DAT_004f5a20 = "asj_033", DAT_004f5a28 = 255, slot 3 (mgr 0xa3a7c0 + 0x10 + 3 x 0x70) flags
+0x22bfe1 (fixed vol 0x7f, 0x8000 no position -> pan 0x40, 0x200000 no Doppler), SE 10011, voice handle 0x20.
+asj_033 = SE 10011: 6 tracks, each an endless 0x06 loop, with pitch / volume slides, LFOs (0x40 / 0x48 / 0x4b, not
+ported) and op 0x78 randomisation. Other natives seen in scripts, not used in z128's gameplay: playBgSound
+(FUN_0039de38 -> FUN_003e6d70), setBgSoundVolume, stopBgAreaSound (FUN_0039ddf0), enableDucking.
+
+**Verification.**
+- Save state: the live key equals FUN_003edb18's; the stream struct (DAT_004fab80 = 0x9ac480) holds BGM_001.AT3,
+  loop 0x1a28 / 0x3a60, vol 0; the ring says 1237 frames decoded, last from input 0x96f480 (= frame 1236 of the file,
+  descrambled in place) into slot 3. Our decode of frames 1230-1236 equals slots 5..3 within 18 LSB (mean 4) after a
+  sign flip: libavcodec's atrac3 vs Sony's fixed point. `python3 -I tools/audio/test_bgm.py`.
+- Trace w177_music (TRACE_FIELDSET=music, idle 280 frames): 46.77 frames decoded and sent to the IOP per second =
+  47,897 samples / s, i.e. 48 kHz (44.1 kHz would be 43.07).
+- Trace w177_loop (TRACE_POKE="4c2694=56fa00": file read position -> frame 14844): reads 14844 -> 14908, then 36
+  frames to the end 14944, wrap to 6696, +28 -> 6724; no reset of the decoder (FUN_00458dc8 runs only at stream start).
+
+- z128's start (worker 0182): ev0101's playMusic3("bgm_001", 0, 4000) took FUN_003ec0d8's no-stream branch, not the
+  crossfade. In the save, DAT_004fab8c (the crossfade start clock, written only in that branch; DAT_004fab90 too) is 0,
+  and the ring's frame count (0x1fa0004 = 1237, reset to the loop position by FUN_003ec6f8 and not by the crossfade)
+  equals bgm_001's own read position (frame 1236). So the music starts at full volume, no fade-in.
+
+**On the page** (music.js; extractor tools/audio/bgm.py -> data/audio/bgm/, declared in se_z128.json "bgm"): bgm_001
+starts (playMusic3("bgm_001", 0, 4000), as ev0101) on the first key / click
+(GUESS: the game's stream runs from zone load) and loops [6696 + 4, 14944 + 4) frames; the 4 seam frames after the end
+are re-decoded with frame 14943's decoder state (bgm.py checks that 4 frames are enough: the re-decode then equals
+the first pass). asj_033 streams through the SE driver translation (audio.js `SeRenderer.start` / `tick`, split out
+of `render` with no change: all 609 z128 programs render bit-identically). `?sound=0` turns both off.
+
+Not on the page: crossfades with a stream open, volume offsets / ramps (both refused with a warning), the mono setting, the
+battle / peace switching in ev0100 (event scripts), the decoder itself (libavcodec instead; running FUN_00458e80
+through port/recomp would make it exact).

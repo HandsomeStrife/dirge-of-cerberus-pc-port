@@ -133,7 +133,8 @@ requests. Use one of the servers.
 | H | back to the start view |
 | R | report (Docker option only) |
 
-Useful URL parameters: `?hud=0` hides the text overlay; `?cam=x,y,z,yaw,pitch` sets the view
+Useful URL parameters: `?hud=0` hides the text overlay; on play.html, `?gamehud=0` hides the
+game's HUD (HP gauge, weapon panel); `?cam=x,y,z,yaw,pitch` sets the view
 (the HUD shows the current values); on play.html, `?ladder=0` starts at the ladder next to the
 start deck; `?packs=` skips the extra animation packs; `?actions=0` turns off jump, ladder and
 shoot.

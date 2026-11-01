@@ -254,6 +254,13 @@ object pass off). Script k_push17 (k_push16 to f960, log from f790); its positio
 with the full `pushstep` set (an earlier run without the `push_out` hook was 0.08-0.1 u off before
 contact: not chased).
 
+### Music stream (TRACE_FIELDSET=music; worker 0177)
+`bgm_ring` (EE PCM ring 0x1fa0000: u16 write / read slot, u32 frames decoded), `bgm_iop_slot` (DAT_0047d768),
+`bgm_main` / `bgm_xfade` (DAT_004fab80 / 84) and `bgm_file` (the main stream's file object at 0x4c2460 in this
+state: +0x220 loop start, +0x224 end, +0x234 read position, bytes = frame x 0x180). Scripts w177_music (idle 280:
+46.77 frames / s = 48 kHz) and w177_loop (with `TRACE_POKE="4c2694=56fa00"`: read position -> frame 14844, wraps at
+14944 to 6696). notes/audio-research.md "Music and ambience".
+
 ### Melee hit (TRACE_MELEE=1, TRACE_CALLLOG=melee; worker 0165)
 With `TRACE_FIELDSET=path`, `TRACE_MELEE=1` adds Vincent's `p_hp`, `p_state`, `p_f118` and `p_pos` (P+0x60 matrix).
 Call-log set `melee`: `make` (FUN_00569dc0's FUN_00541310: the 64-byte record, v0 = the object), `update` (vt+0x214

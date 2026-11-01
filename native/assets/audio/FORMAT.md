@@ -1,5 +1,12 @@
 # Dirge of Cerberus (PS2, SLPS-20200) — audio stream format
 
+> **Correction (worker 0177, 2026-11-01; notes/audio-research.md "Music and ambience").** The 384-byte BGM
+> `.at3` files are NOT ATRAC3plus. They are plain ATRAC3 (2 channels x 0xc0 bytes), XOR-scrambled per 0x60 bytes
+> (FUN_003eb9e8; that is why byte 0 is always 0x01), decoded on the EE by `libat3dec` (FUN_00458e80, in the main
+> ELF), and played at **48 kHz**, not 44.1 kHz. `tools/audio/bgm.py` descrambles and decodes them. §1's AT3+ rows
+> and §5's "AT3+ full decode" are superseded; the `.at2` findings stand. The `.at2` streams are mixed
+> into the same 48 kHz PCM ring by FUN_003eb330; whether that resamples them was not checked.
+
 Recovered spec for the game's headerless ATRAC3-family voice/SE/BGM streams, the
 sound database (`db.bin`), and the wave-dictionary banks (`*.wd`). Decoder:
 `dirge_atdec.c` (links libavcodec's atrac3 / atrac3plus). Validation WAVs in

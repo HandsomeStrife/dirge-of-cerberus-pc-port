@@ -119,9 +119,11 @@ def main():
     blk = sep.read_block(open(os.path.join(nopath, '%08x.bin' % (code | 5)), 'rb').read())
     names = sdb_names(open(os.path.join(nopath, '%08x.bin' % (code | 8)), 'rb').read())
     banks = sorted({sep.tracks(p)[0] for p in blk.values()})
-    json.dump(dict(zone=a.zone, names=names, banks=banks,
-                   programs={str(k): v.hex() for k, v in blk.items()}),
-              open(os.path.join(a.out, 'se_z%03d.json' % a.zone), 'w'))
+    sp = os.path.join(a.out, 'se_z%03d.json' % a.zone)
+    se = dict(zone=a.zone, names=names, banks=banks, programs={str(k): v.hex() for k, v in blk.items()})
+    if os.path.exists(sp) and 'bgm' in json.load(open(sp)):
+        se['bgm'] = json.load(open(sp))['bgm']             # the BGM tracks tools/audio/bgm.py declared: keep them
+    json.dump(se, open(sp, 'w'))
     print('zone %d: %d programs, %d names, banks %s' % (a.zone, len(blk), len(names), banks))
     for b in banks:
         p = os.path.join(a.kel, 'data/sound2/wave%04d.wd' % b)

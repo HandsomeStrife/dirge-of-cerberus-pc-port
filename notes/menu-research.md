@@ -109,3 +109,67 @@ snapshot, then its first word; the methods are ordinary .text functions in the d
    movement FUN_003dde80, FUN_003d5c08 open animation, the pause event handler (vtable
    0x4a5ab0 slots), and the screen dimming. Mid-sized, decodable.
 Suggested order: 2 first (smaller, gives a real pause menu over play.html), then 1.
+
+## Pause menu drawing (worker 0180, 2026-11-01): DONE, on the page
+
+Blocker 2 is closed: `native/web/pause.js` (logic, emits GS-equivalent primitives) +
+`pause_layer.js` (three.js, one draw call) + a hook at the end of play.js (Esc / Enter = Start).
+Data: `python3 -I native/assets/models/export_web_pause.py [--dump pause.gs]` -> data/pause.json
+(+ pause_ref.json for the test). Test: `node native/web/test_pause.mjs` (44 checks; all 84 pause
+draws of the PCSX2 dump equal ours: xy, UV, RGBA, TEX0 / CLUT, CLAMP, TEX1). 14 mutants killed.
+
+Decoded (beyond the code map above)
+- Coordinates: layout units are a 512 x 448 grid. With script flag 0x1e (PAL; DAT_004f2258) every
+  emitter (FUN_003d2e80 sprite, FUN_003d3098 strip, FUN_003d3880 scissor) maps x * 0x1b0 / 512
+  (rounded toward zero, 1/16 px) and y * 512 / 0x1c0 into the 432 x 512 drawable.
+- Image record DAT_0047bfc0: +0 slices (u, v, w, h signed; negative w/h = mirrored UVs), +4 page,
+  +5 kind, +6 lit variant (0 / 2: the focused widget uses pieces [count, 2 count)), +7 repeat flags
+  (bit 0 u, bit 1 v: the stretch piece gets CLAMP REGION_REPEAT with mask = slice size - 1, fix =
+  slice u / v, FUN_003d3fb8), +8 four gradient colours (FUN_003c8dc0, untextured, under the pieces).
+- Kind descriptor DAT_0047d180 (9 ints): lit offset, cols, stretch col, left / right margin piece,
+  rows, stretch row, top / bottom margin piece. FUN_003ca160 makes the inner rect from the margins.
+- Kind 4 (the root frame, image 0xa): FUN_003c9110 draws 5 gouraud quads per row from table
+  0x47a6b0 (width index, slice, direction, colour offset): widths (w - mid) / 4, mid / 4, the rest;
+  the outer quads fade to colour / 4 per channel; right / bottom edges + 15/16.
+- Type 12 (text button): FUN_003d11c0 colours: focused frame = layout rgba, text 0x808a86ff;
+  unfocused (image 6: FUN_003d1950) frame RGB / 2, text 0x80707070; disabled RGB / 4, text 0x80404040.
+  FUN_003d75a0 then draws, for the focused one, the orb (image 7 piece 0 at x + w - 21, y + 8,
+  colour 0x505092) and the highlight frame (image 8 at x + 2, y + 1, w + (img6.w0 - img8.w0),
+  h - (img6.h0 - img8.h0)), both with alpha a = (750 - |750 - t % 1500|) x 0x60 / 750 + 0x20,
+  t = FUN_0023c1f0 (ms) - DAT_004f55e8.
+- Text: strings starting '$&' set widget +0x5e |= 0x480 and go through FUN_003cedf0: byte c is the
+  glyph (ASCII - 0x1d); width = nibble (c - 3) of menudata.bin item 2 + 0x70, + 1 (c >= 0x62: 12;
+  c = 3: space); cell u = ((c - 4) % 42) x 12, row r = (c - 4) / 42, v = ((r x 16 + 0x1d0) >> 5) x 16,
+  CLUT 3 + ((r x 16 + 0x1d0) >> 4 & 1); per glyph a shadow sprite (w + 1, 15 tall, 0x60101010) and a
+  14-tall quad, top = text colour, bottom 0x80ffffff. Spacing +0x65 = 0 (FUN_003e2760 true).
+- Font page 1 'kelfnt0': TBP 0 PSMT4HH (bits 28..31), texels = the kelfnt0 TIM of fontdata1.bin
+  (linear 4-bit, last 0x1c000 bytes of the image region). Two glyph sets share each texel: CLUT 3
+  reads the low 2 bits, CLUT 4 the high 2 bits (alphas 0 / 0x1d / 0x53 / 0x8f, grey 0x80);
+  FUN_003dcf58 uploads CLUTs 1..5 from 0x47d3c0 (flag 0x1e; 0x47d280 otherwise) to
+  CBP 0x3fff - DAT_0047ad14 (4) - n.
+- Pages 2 / 3 = 'menu3' / 'menu4', PSMT8 + 256-colour CLUT in menudata.bin (uk); the TIM tails
+  equal the GS memory at TBP / CBP 10828 / 10824 and 10960 / 10956 word for word.
+- Strings: kelstr.bin ("KelStr 1.1"), body XOR-ed with two 8-byte keys (FUN_003fd370); banks of
+  1024 at +0x28 (offsets from +0x24), FUN_003fd578. Pause: 0x5c00 Tempsave, 0x5c01 Restart, 0x5c02
+  Quit; box questions 0x5c06 (Restart: back to the checkpoint), 0x5c07 (Quit: to the title),
+  0x5c08 (Tempsave: save, then the title); 0x3800 OK, 0x3801 CANCEL.
+- TEX1: FUN_003d3830(1) (0x60, bilinear) around each type-12 draw and each text draw, (0) after the
+  text, so the orb / highlight are nearest; FUN_003d58b8 sets widget flag 8 (bilinear) on the ids in
+  list 0x477c18 = [6] (the "Pause" header).
+- Screen timer (screen +0x28 end, +0x2c cur, +0x30 total, +0x10 flags): open FUN_003d5110 = 100 ms
+  up (flag 0x10), close FUN_003d51c0 = 100 ms down (flag 0x20; closing mid-open mirrors the elapsed
+  time), input locked by flag 2 (FUN_003d4780 / FUN_003d47b8). While cur < total every widget's
+  alpha and the kind 0 / 4 heights scale by cur / total, the dimming (FUN_003d5c40: 512 x 448
+  black, alpha 0x40) too, and the children are scissored at root inner y + inner h x cur / total.
+- Input FUN_003de130: Start (action 0x24) opens screen 0x10 (table 0x47ab10 -> FUN_003bfd30) and,
+  while open, closes it (FUN_003bfd70 -> FUN_003c04c8). FUN_003de568 actions (pad table DAT_004e1080,
+  bytes swapped): 0 ✕ confirm, 1 ○ cancel, 2-5 up / down / left / right. Up / down with neighbour
+  0xff: FUN_003cb018 walks siblings by focus order; wraps only for keyboard / mouse sources.
+- Events FUN_003c0220 (id of the confirmed button): 3 Restart -> box 0x477a10 (0x25), 4 Tempsave ->
+  0x477a50 (0x27), 5 Quit -> 0x477a30 (0x26). The boxes are type-8 widgets (FUN_003b65c0 ->
+  FUN_003b66c0 -> FUN_003b7f38, layout 0x472ad8: root image 0xa 64,149 384x150, type-9 text
+  widget, buttons OK id 6 / CANCEL id 7, CANCEL focused for kind 2). NOT drawn on the page: the
+  type-9 text needs FUN_003cd7e8 (the non-'$&' renderer). Next job for the pause: that renderer +
+  a PCSX2 capture of the open box.
+- Freeze: the pause enters game state 0x17 (FUN_00241f40: script flag 0x12, FUN_00325490, sound
+  volume FUN_003ed7d0(0x30)) and the destructor FUN_003c0110 leaves it, after the close.

@@ -399,8 +399,22 @@ if __import__("os").environ.get("TRACE_PATH_LAYERS"):
     for _k in range(ENEMY_MAX):
         PATH_FIELDS += [("e%d_mp_layers" % _k, "EM%d" % _k, 0x200, "layers", "L", "8 layers x 0x30 at MP+0x200")]
 
+# Opt-in set for the BGM stream (TRACE_FIELDSET=music, worker 0177; notes/audio-research.md "Music"):
+# the EE PCM ring DAT_0047d754 = 0x1fa0000 (u16 write slot, u16 read slot, u32 frames decoded; FUN_003ed000),
+# the slot sent to the IOP next (DAT_0047d768, FUN_003ed8e0) and the main stream struct (DAT_004fab80).
+MUSIC_FIELDS = [f for f in FIELDS if f[0] in ("step",)] + [
+    ("bgm_ring", None, 0x1FA0000, "bytes:8", "D", "FUN_003ed000: +0 u16 write slot, +2 u16 read slot (FUN_003ed8e0), +4 u32 frames decoded"),
+    ("bgm_iop_slot", None, 0x47D768, "u32", "D", "DAT_0047d768: next IOP slot (0..15), FUN_003ed8e0 -> FUN_0041ae50(1, buf, slot, 0x1000)"),
+    ("bgm_main", None, 0x4FAB80, "u32", "D", "DAT_004fab80: main stream struct (FUN_003ec6f8); DAT_004fab84 = crossfade target"),
+    ("bgm_xfade", None, 0x4FAB84, "u32", "D", "DAT_004fab84: crossfade stream (FUN_003ec0d8)"),
+    # The main stream's file object (stream +8; 0x4c2460 in the sea-of-flames state): FUN_0024f870 / FUN_0024d730.
+    ("bgm_file", None, 0x4C2460 + 0x218, "bytes:32", "L", "file +0x218 buffer, +0x21c 0x6000, +0x220 loop start, +0x224 loop end, +0x234 read position (bytes; frame = /0x180)"),
+]
+
 FIELDSET = __import__("os").environ.get("TRACE_FIELDSET")
-if FIELDSET == "path":
+if FIELDSET == "music":
+    FIELDS = MUSIC_FIELDS
+elif FIELDSET == "path":
     FIELDS = PATH_FIELDS
 elif FIELDSET == "enemy":
     FIELDS = ENEMY_FIELDS

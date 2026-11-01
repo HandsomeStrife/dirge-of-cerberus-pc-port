@@ -4,7 +4,7 @@
 // invented behaviour was removed by worker 0078 (notes/fidelity-audit.md).
 //
 // The room comes from room.js (main.js's loader and shader, with its z-fight fixes).
-// Game space, -Y up. URL params: hud=0, aa=1, dpr=N, col=stub (force the stub),
+// Game space, -Y up. URL params: hud=0 (this page's debug text), gamehud=0 (the game's HUD, hud.js), aa=1, dpr=N, col=stub (force the stub),
 // cam=ex,ey,ez,yaw,pitch (detached camera at that view; H re-attaches it),
 // actions=0 (no action modules), packs=a,b (clip packs to load; default ladder, jump, shoot,
 // packs= loads none), zprio=0 / zunder=0 (room.js depth-tie offsets off), cloth=0 (cape
@@ -23,6 +23,7 @@ import { loadRoom } from './room.js';
 import { CapeCloth } from './cloth.js';
 import { createOutputStage } from './output.js';
 import { setupAim } from './aim.js';
+import { setupHud } from './hud.js';
 import { setupEnemies } from './enemies.js';
 import { createEnemyAI } from './enemy_ai.js';
 import { boneRows } from './enemy_hit.js';
@@ -41,6 +42,7 @@ const MOUSE_DIRECT = params.get('mouselook') !== 'game';
 const MOUSE_SENS = params.has('mousesens') && +params.get('mousesens') > 0 ? +params.get('mousesens') : MOUSE_SENS_DEFAULT;   // degrees per pixel
 const ENEMY_DMG = params.get('enemydmg') !== '0';    // enemy bullets damage Vincent (decoded hit test, on by default; ?enemydmg=0: they hit, no damage); melee always does
 const AIM = params.get('aim') !== '0';               // aim.js (aim_core.js): the weapon, its camera views, the reticle
+const GAMEHUD = params.get('gamehud') !== '0';       // hud.js (hud_core.js): the game's HUD (HP gauge, weapon panel), ?gamehud=0 off (?hud=0 hides only the debug text)
 // game sound effects (audio.js; notes/audio-research.md): on by default, ?sound=0 off. Browsers start audio only after
 // a user gesture: the AudioContext is made on the first key / click (the page's existing click-to-look); sounds
 // requested before that are dropped (no extra UI).
@@ -650,6 +652,19 @@ async function main() {
     au.load(128).then(() => { sfx = new SoundEmitters(au); window.__play && (window.__play.sfx = sfx); })
       .catch((e) => console.warn('audio: no SE data (tools/audio/extract.py)', e));
     ['keydown', 'pointerdown'].forEach((e) => addEventListener(e, () => { try { au.resume(); } catch (e2) { /* no AudioContext */ } }));
+    // zone music bgm_001 + area ambience asj_033 (music.js; notes/audio-research.md "Music and ambience")
+    // GUESS: started at the first gesture from frame 0 (browser rule; the game's runs from zone load; notes/fidelity-audit.md)
+    import('./music.js').then(({ GameMusic, AreaSound }) => {
+      const mu = new GameMusic(au), area = new AreaSound(au); let areaOn = false, muOn = false;
+      // ev0100 playBgAreaSound("asj_033"); ev0101 playMusic3("bgm_001", 0, 4000) (no stream open: starts at once)
+      const go = () => {
+        if (!au.ctx || !au.se) return;
+        if (!areaOn) { areaOn = true; area.play('asj_033'); }
+        if (!muOn && mu.meta) { muOn = true; mu.playMusic3('bgm_001', 0, 4000).catch((e) => console.warn('music:', e)); }
+      };
+      mu.load(128).then(go, (e) => console.warn('music: no BGM data (tools/audio/bgm.py)', String(e))); au.ready.then(go, () => {});
+      ['keydown', 'pointerdown'].forEach((e) => addEventListener(e, () => setTimeout(go, 0)));
+    });
   }).catch((e) => console.warn('audio: off', e));
   // FUN_003e9ed0's listener on frame k is the game state of two pad polls before (audio.js soundListener)
   const sndHist = [];
@@ -735,9 +750,10 @@ async function main() {
   let packsDone = false;
   const packsReady = loadPacks(PACKS, anim, motions).then(g => { packsLoaded = g; packsDone = true; return g; });
   // the weapon (aim.js): FUN_00579570 in ctrl.step, the camera's weapon views (follow.weapon), the
-  // reticle in the frame (output.hud). isFrozen: the report freeze (declared below; false until then)
+  // reticle in the frame (output.hud). isFrozen: the report freeze or the pause menu (both declared below;
+  // false until then), so a click while paused can't leave an R1 press that fires on resume
   const weapon = AIM ? await setupAim({ ctrl, anim, motions, col, follow, output, vin, canvas,
-                                     isFrozen: () => { try { return frozen; } catch (_) { return false; } } }) : null;
+                                     isFrozen: () => { try { return frozen || paused; } catch (_) { return false; } } }) : null;
   actionHelp.push('Space jump (✕; the ladder takes it first)');
   if (weapon) actionHelp.push(weapon.help);
   // Vincent's bullets vs the soldiers (aim.js onShot -> enemy_ai playerShot, FUN_00577480), fired in
@@ -747,6 +763,10 @@ async function main() {
   if (weapon) weapon.core.sound = (name) => snd(name, [ctrl.pos.x, ctrl.pos.y, ctrl.pos.z]);
   // the lock-on's soldiers (FUN_00328968 in aim.js aimRay; lock_on.js)
   if (weapon && enemyAI) weapon.targets = () => enemyAI.lockTargets();
+  // the game's HUD in the frame (hud.js, after the reticle in output.hud); follows php.hp each game frame
+  // fetched only when scene.json declares it (export_web_hud.py writes "hud"): no 404 without the data
+  const gameHud = GAMEHUD && scene.hud ? await setupHud({ output, player: php, url: 'data/' + scene.hud }) : null;
+  if (GAMEHUD && !scene.hud) console.warn('hud: not exported (run native/assets/models/export_web_hud.py)');
 
   // detached debug camera (?cam=), same format as main.js
   let detached = null;
@@ -867,7 +887,7 @@ async function main() {
   const stats = { ticks: 0, groundErrMax: 0, colName };
   function frame() {
     requestAnimationFrame(frame);
-    const dt = frozen ? 0 : Math.min(clock.getDelta(), 8 * TICK);   // GUESS: same cap as below (port convenience)
+    const dt = (frozen || paused) ? 0 : Math.min(clock.getDelta(), 8 * TICK);   // GUESS: same cap as below (port convenience)
     acc += dt;
     if (!packsDone) { acc = 0; pressed.clear(); mouse.dx = mouse.dy = 0; }   // clip packs still loading: draw only, no game frame (no mouse banked)
     let n = 0;
@@ -930,8 +950,20 @@ async function main() {
       (weapon ? `   weapon ${weapon.core.P.drawn ? 'out' : 'away'} st ${weapon.core.P.st} T ${weapon.core.P.T}  cam 0x${weapon.core.cam.type.toString(16)}` : '') + '\n' +
       `click: mouse look (drag works too)   WASD move (walk)   Shift run   ${actionHelp.join('   ')}   H respawn   R report`;
   }
+  // ---- pause menu (pause_layer.js / pause.js; Start = Esc or Enter). While it is open the world is frozen
+  // (FUN_00241f40: game state 0x17) and the game sees no input; Restart reloads the zone start.
+  let paused = false;
+  const pause = await (await import('./pause_layer.js')).setupPause({
+    output, blocked: () => frozen,
+    onPause(on) { paused = on; pressed.clear(); mouse.dx = mouse.dy = 0; drag = null; if (!on) { clock.getDelta(); acc = 0; } },
+    // GUESS: Restart reloads the page (its save start) at once. The game first asks in a confirm box
+    // (layout 0x472ad8, not translated) and then restores the last checkpoint (FUN_003c0a20, not
+    // translated); see fidelity-audit "Menus". Tempsave / Quit: inert (no memory card / title on the page)
+    onRequest(r) { if (r === 'restart') location.reload(); },
+  });
+  actionHelp.push('Enter pause (Esc too, but with the pointer locked the browser takes Esc to unlock it)');
   window.__play = { ctrl, anim, follow, aim: weapon, col, stats, camera, renderer, output, root, vin, light, spawnY: gy,
-                    playerState, camView, report, keys, pressed, motions, packsReady, actionHelp, cape, enemies, enemyAI, php };
+                    playerState, camView, report, keys, pressed, motions, packsReady, actionHelp, cape, enemies, enemyAI, php, pause };
   requestAnimationFrame(frame);
 }
 
