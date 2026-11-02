@@ -111,8 +111,9 @@ tools/byo/build_web.sh [--state sea-of-flames.p2s] [--re-extract] [--no-motions]
   with which values) is read from a PCSX2 save state at the start of the level, because the
   game code that sets them up is not decoded yet. Without `--state` the page runs without the
   game's HUD (as with `?gamehud=0`). The same save also gives the effects' random number
-  state, used by one kind of spark (effect type 137). Without `--state` nothing is read from
-  any save: those sparks are left out and the rest of the effects work.
+  state (`rand` and `twister` in `data/effects/ids.json`), which every bullet-impact and hit
+  effect draws from. Without `--state` nothing is read from any save and **all effects are left
+  out** (the page logs one warning: "no rand() state").
 
 Running it again is safe. A verified `extract/` is reused and outputs are overwritten. An
 `extract/` from an older version of the script that lacks files this build reads is unpacked
@@ -223,6 +224,7 @@ See `notes/HANDOFF.md` for the research state.
 | page stuck on "loading", or a 404 on `data/...` | Build first. Serve the `native/web` folder (use `serve.sh`), not the repository root. |
 | `zone music: skipped` | Optional. Install ffmpeg and the libavcodec / libavutil / libswresample dev packages and pkg-config, then build again. |
 | `the game's HUD: skipped (no --state)` | Optional. Build again with `--state your-save.p2s` to include the HUD. |
+| no bullet impacts or hit effects; the console says `no rand() state` | The effects need the save's random number state. Build again with `--state your-save.p2s`. |
 | no sound | Click the page first: browsers start audio only after a click or key press. Check that `?sound=0` is not in the address. |
 | black page, three.js errors | The browser needs WebGL and access to `cdn.jsdelivr.net`. |
 | Report button fails | Expected with the python option. Use `serve.sh docker` if you want reports. |

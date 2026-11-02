@@ -685,7 +685,7 @@ async function main() {
   if (FX && scene.effects) try {
     const get = n => fetch('data/' + scene.effects + '/' + n).then(r => { if (!r.ok) throw new Error(`${n}: HTTP ${r.status}`); return n.endsWith('.json') ? r.json() : r.arrayBuffer(); });
     const [fed, core, ids] = await Promise.all(['r0001.fed', 'core_ef.bin', 'ids.json'].map(get));
-    fx = createEffects({ fed, core, warn: m => console.warn(m) }); fxIds = ids;
+    fx = createEffects({ fed, core, warn: m => console.warn(m), twister: ids.twister, rand: ids.rand }); fxIds = ids;
     fxLayer = new EffectLayer(THREE, fx); root.add(fxLayer.group);
     window.__fx = { fx, layer: fxLayer, ids };   // for the page tests
   } catch (e) { console.warn(`effects: off (${e.message}; run export_web_effects.py)`); fx = null; }

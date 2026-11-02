@@ -6,7 +6,7 @@
 //                   tools/trace/scripts/w172_sound3.json (frames 837 / 875 / 914 / 956 / 998)
 //   dump1/4.json    the effect-texture triangles of the GS dumps taken next to states 1 and 4 (the dump
 //                   frame is 4 game frames after its state: PCSX2 starts the dump late)
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createEffects, EffectRng, wallImpactId, parseFed, parseCore, _internals } from './effects.js';
@@ -77,7 +77,7 @@ const ok = (what, cond, info = '') => { checks++; if (!cond) { fails++; console.
 
 // --- a spawn with no game data: emitter 12 lives 64 frames, its particles die by life
 {
-  const fx = createEffects({ fed, core, warn: () => {} });
+  const fx = createEffects({ fed, core, warn: () => {}, twister: ids.twister, rand: ids.rand ?? 1 });
   fx.begin(1.2); const em = fx.spawn(0x43400, [0, 0, 0]); fx.end();
   ok('spawn returns the emitter', !!em && em.ei === 12);
   ok('spawned in the logic phase: age 0, five particles', em.age === 0 && em.lists[1].length === 5);
@@ -105,10 +105,41 @@ const ok = (what, cond, info = '') => { checks++; if (!cond) { fails++; console.
   ok('particle rotation order != 0: not drawn, warned', ord.n === 0 && ord.w.some(m => m.includes('rotation order')));
   // param +0x1d: a copy of the FED with emitter 12's param record byte +0x1d set
   const b = fed.slice(0), F = parseFed(b), g = F.groupOf(13), param = g + F.u32(g + 0x20 + 4 * (0x43400 & 0x1ff));
-  new Uint8Array(b)[param + 0x1d] = 1;
-  const w = [], fx = createEffects({ fed: b, core, warn: m => w.push(m), rng: new EffectRng(1) });
-  fx.begin(1.2); fx.spawn(0x43400, [0, 0, 30]); fx.end(); fx.update(1.2);
-  ok('emitter param +0x1d != 0: not drawn, warned', fx.sprites({ toView: p => p.slice(0, 3) }).length === 0 && w.some(m => m.includes('+0x1d')));
+  const draw = (mode, buf) => {
+    new Uint8Array(buf)[param + 0x1d] = mode;
+    const w = [], fx = createEffects({ fed: buf, core, warn: m => w.push(m), rng: new EffectRng(1) });
+    fx.begin(1.2); fx.spawn(0x43400, [0, 0, 30]); fx.end(); fx.update(1.2);
+    return { sp: fx.sprites({ toView: p => p.slice(0, 3) }), w };
+  };
+  // FUN_002e7cd0: mode 1 without an attached object (+0x30 == 0, as every page spawn) is the mode-0 matrix
+  const m0 = draw(0, fed.slice(0)), m1 = draw(1, b);
+  ok('emitter param +0x1d == 1 (nothing attached): the same sprites as mode 0 (FUN_002e7cd0 falls through)',
+    m1.sp.length > 0 && JSON.stringify(m1.sp.map(s => s.verts)) === JSON.stringify(m0.sp.map(s => s.verts)) && !m1.w.some(m => m.includes('+0x1d')));
+  const m2 = draw(2, fed.slice(0));
+  ok('emitter param +0x1d == 2 (bone matrix FUN_00269530): not drawn, warned', m2.sp.length === 0 && m2.w.some(m => m.includes('+0x1d')));
+}
+
+// --- no effect twister (ids.json without `twister`: export_web_effects.py run without --state): one warning,
+// no spark lines, the sprites still drawn (worker 0188 review)
+{
+  const w = [], fx = createEffects({ fed, core, warn: m => w.push(m), twister: null, rand: ids.rand ?? 1 });
+  let lines = 0, sprites = 0;
+  fx.begin(1.2); fx.spawn(0x43400, [0, 0, 30]); fx.end();
+  for (let i = 0; i < 6; i++) { fx.update(1.2); const out = fx.sprites({ toView: p => p.slice(0, 3), toViewMatrix: () => _internals.scaleM([1, 1, 1]) }); lines += out.filter(s => s.line).length; sprites += out.filter(s => !s.line).length; }
+  ok('no twister: a warning at load, no spark lines, sprites still drawn', w.some(m => m.includes('no effect twister')) && lines === 0 && sprites > 0, `${w.length} warnings, ${lines} lines, ${sprites} sprites`);
+}
+
+// --- no rand() state (an ids.json exported before `rand`): the frame reseed cannot run, so the page's engine
+// spawns nothing, with one warning; a caller's own rng (tests) runs on, warned
+{
+  const w = [], fx = createEffects({ fed, core, warn: m => w.push(m), twister: ids.twister });
+  fx.begin(1.2); const em = fx.spawn(0x43400, [0, 0, 30]); fx.end();
+  ok('no rand: one warning, nothing spawned', em === null && fx.emitters.length === 0 && w.filter(m => m.includes('no rand() state')).length === 1 && w.some(m => m.includes('left out')), JSON.stringify(w));
+  const w2 = [], fx2 = createEffects({ fed, core, warn: m => w2.push(m), rng: new EffectRng(1) });
+  fx2.begin(1.2); const em2 = fx2.spawn(0x43400, [0, 0, 30]); fx2.end();
+  ok('no rand, a given rng: spawns, warned', em2 !== null && w2.some(m => m.includes('runs on unreseeded')));
+  const fx3 = createEffects({ fed, core, warn: () => {}, twister: ids.twister, rand: ids.rand ?? 1 });
+  fx3.begin(1.2); ok('with rand: spawns', fx3.spawn(0x43400, [0, 0, 30]) !== null); fx3.end();
 }
 
 // --- type 17's transition FUN_002eccc8 (x y z w; FUN_002ecf18 is the same over x y z): b' = new b + ((a t^2 / 2 +
@@ -173,7 +204,7 @@ function replay(em, age, proj, view) {
       for (let i = 0; i < 16; i++) worstM = Math.max(worstM, Math.abs(pj.m50[i] - pr.m50[i]));
       // the channel values (the w lanes of rotation / scale are never written: uninitialised in the game);
       // with the draw pass run every frame the sprite clocks (+0) must equal the game's (= the age)
-      const P = pj.P, F = e.lists && createEffects({ fed, core }).fed;
+      const P = pj.P, F = e.lists && createEffects({ fed, core, warn: () => {} }).fed;
       const size = F.s16(P + 2) / 4;
       // the words each channel type writes (the rest of the region is pool memory in the game);
       // type 10: +0 clock, +4 u16 frame index | flip byte << 16 (its top byte is never written)
@@ -217,7 +248,7 @@ for (const [s, d] of [[1, 'dump1.json'], [4, 'dump4.json']]) {
     const a = dump[i], b = dump[i + 1];
     if (b.i === a.i + 1 && a.tex0 === b.tex0) { quads.push({ tex0: a.tex0, blend: a.blend, v: [...a.v, b.v[2]] }); i++; }
   }
-  let n = 0, exact = 0, worst = 0, sum = 0, zWorst = 0;
+  let n = 0, exact = 0, worst = 0, sum = 0, zWorst = 0, n21 = 0, exact21 = 0;
   for (const em of st.emitters.filter(e => e.ei === 12)) {
     const { sp } = replay(em, em.age + 4.8, proj, view);         // the dump is 4 frames after the state
     for (const sprite of sp) {
@@ -237,15 +268,246 @@ for (const [s, d] of [[1, 'dump1.json'], [4, 'dump4.json']]) {
       const same = tex0 === q.tex0 && blend === q.blend.slice(0, 4).join(',') &&
         sprite.verts.every((v, k) => JSON.stringify(v.rgba) === JSON.stringify(q.v[k][6]) &&
           Math.abs(v.uv[0] - stq[k][0]) < 1e-4 && Math.abs(v.uv[1] - stq[k][1]) < 1e-4);
+      if (sprite.type === 21) { n21++; if (same && best.d < 1) exact21++; }
       if (same) exact++;
       else console.log(`  state ${s} age ${em.age.toFixed(1)}: ${tex0} rgba ${JSON.stringify(sprite.verts[0].rgba)} vs ${q.tex0} ${JSON.stringify(q.v[0][6])}`);
     }
   }
   ok(`dump ${s}: sprites drawn`, n >= 9, `${n}`);
+  // type 21 (FUN_0027bda0 / FUN_0027cd68): the burst, one sub-sprite record (two sprites) per impact
+  ok(`dump ${s}: type 21 burst sprites drawn (6) and each equal to a game sprite within 1 px`, n21 === 6 && exact21 === n21, `${exact21}/${n21}`);
   ok(`dump ${s}: every sprite's TEX0, ALPHA, ST and vertex RGBA equal the game's`, exact === n, `${exact}/${n}`);
   console.log(`  dump ${s}: corners worst ${worst.toFixed(3)} px, mean ${(sum / n).toFixed(3)} px; GS Z worst ${(zWorst * 100).toFixed(3)}%`);
   ok(`dump ${s}: corners within 1 px (worst ${worst.toFixed(2)}, mean ${(sum / n).toFixed(2)})`, worst < 1.0, `${worst}`);
   ok(`dump ${s}: GS Z within 0.3% (worst ${(zWorst * 100).toFixed(2)}%)`, zWorst < 0.003, `${zWorst}`);
 }
+
+// --- worker 0188: types 21 / 137 against RAM and GS dumps of w172_sound3 grabbed around the pellet impacts
+// (f834-836): state B (f831, before them) and its dump (f835), state D (f837, after) and its dump (f841).
+// The replay starts from state B's LCG and effect twister; the spark lives use VU0 R (not in EE RAM: the
+// GUESS in EffectRng), so they are copied from state D's RAM when compared.
+const w188 = join(here, '../../tools/trace/out/w188_fx');
+// a RAM pool (fx_fixture.py 'pools': raw bytes at its address) as the page's pool object
+function ramPool(pl) {
+  const b = Buffer.from(pl.hex, 'hex'), dv = new DataView(b.buffer, b.byteOffset, b.length), base = pl.addr;
+  const u32 = o => dv.getUint32(o, true), s16 = o => dv.getInt16(o, true), f32 = o => dv.getFloat32(o, true);
+  if (pl.type === 137) {
+    const cap = u32(12), size = u32(24), sp = u32(4) - base, tm = u32(8) - base, rg = u32(0) - base + 16;
+    const P = { cap, blocks: u32(16), L: u32(20), size, mask: u32(32), idx: u32(28), carry: f32(36), start: u32(40), now: f32(44),
+      ring: new Float32Array(size), spark: new Int16Array(cap * 8), birth: new Float32Array(cap) };
+    for (let k = 0; k < size; k++) P.ring[k] = f32(rg + 4 * k);
+    for (let s = 0; s < cap; s++) {
+      const q = sp + (s >> 5) * 0x210 + 0x10 + (s & 31) * 0x10;
+      for (let k = 0; k < 8; k++) P.spark[s * 8 + k] = s16(q + 2 * k);
+      P.birth[s] = f32(tm + (s >> 5) * 0x90 + 0x10 + (s & 31) * 4);
+    }
+    return P;
+  }
+  const cap = s16(0x1c), P = { dur: f32(4), life: f32(8), t18: f32(0x18), cap, count: s16(0x1e), start: s16(0x20), flag: dv.getUint8(0x22), recs: [] };
+  for (let i = 0; i < cap; i++) {
+    const r = new ArrayBuffer(0x90); new Uint8Array(r).set(b.subarray(0x30 + i * 0x90, 0x30 + (i + 1) * 0x90));
+    P.recs.push({ f: new Float32Array(r), i: new Int32Array(r), h: new Int16Array(r), u8: new Uint8Array(r) });
+  }
+  return P;
+}
+const relErr = (a, b) => Math.abs(a - b) / Math.max(1, Math.abs(b));
+if (existsSync(join(w188, 'stateD.json'))) {
+  const B = JSON.parse(readFileSync(join(w188, 'stateB.json'), 'utf8')), Dst = JSON.parse(readFileSync(join(w188, 'stateD.json'), 'utf8'));
+  const gB = JSON.parse(readFileSync(join(w188, 'grabB.json'), 'utf8'))[0].state, gD = JSON.parse(readFileSync(join(w188, 'grabD.json'), 'utf8'))[0].state;
+  const imp = Dst.emitters.filter(e => e.ei === 12).sort((a, b) => b.age - a.age);
+  ok('w188: three pellet impacts (emitter 12) in state D', imp.length === 3, `${imp.length}`);
+  const camOf = st => {
+    const V = st.cam.view, P = st.cam.proj;
+    return { view: { toView: p => [0, 1, 2].map(j => f(p[0] * V[j] + p[1] * V[4 + j] + p[2] * V[8 + j] + V[12 + j])), toViewMatrix: () => Float32Array.from(V) },
+      proj: { fx: P[0], fy: P[5], cx: P[8], cy: P[9], zA: P[14], zB: P[10] } };
+  };
+  // the game's step per frame (DAT_004eeb24 varies by ~1e-6): from the type 137 time rings in state D (ring[j]
+  // is written in frame spawn + j - 1; ring[1] = 1.0 is the spawn tail); after D: state D's step
+  const dtAt = new Map();
+  for (const e of Dst.emitters) for (const p of e.parts) for (const pl of Object.values(p.pools)) if (pl.type === 137) {
+    const R = ramPool(pl), s0 = gD - R.idx + 1;
+    for (let j = 2; j <= R.idx; j++) if (!dtAt.has(s0 + j - 1)) dtAt.set(s0 + j - 1, f(R.ring[j & R.mask] - R.ring[(j - 1) & R.mask]));
+  }
+  const stepOf = k => dtAt.get(gB + k) ?? f(Dst.emitters[0].dt);
+  // the LCG and VU0 R are reseeded from rand() every frame (FUN_002d97f8): state B's rand drives the whole replay
+  const rng = new EffectRng(B.lcg, undefined, B.mt, process.env.FXSEED ? null : B.rand);
+  const camB = camOf(B), camD = camOf(Dst);
+  const fx = createEffects({ fed, core, warn: () => {}, rng, proj: camB.proj });
+  const spawnAt = new Map(imp.map(e => [gD - gB - Math.round(e.age / 1.2), e]));
+  const made = new Map();
+  let lastDraw = [];
+  const firstLife = new Map();
+  const lifeFromRam = () => {                                   // VU0 R (GUESS): the sparks' lives from state D
+    for (const [e, em] of made) for (const p of em.lists[1]) {
+      const pr = e.parts.find(q => q.tag === p.tag);
+      for (const [c, pl] of Object.entries(pr?.pools ?? {})) {
+        if (pl.type !== 137) continue;
+        const R = ramPool(pl), S = p.ext[F_slot(p, +c)];
+        for (let s = 0; s < S.start; s++) if (S.spark[s * 8 + 7] === R.spark[s * 8 + 7]) {   // spawned slots only (no wrap here)
+          const key = gD - gB - Math.round(e.age / 1.2) + S.spark[s * 8 + 7];   // the absolute frame (emitters in list order)
+          if (!firstLife.has(key)) firstLife.set(key, S.spark[s * 8 + 3] === R.spark[s * 8 + 3]);   // the frame's first spark: VU0 R from FUN_002d97f8's VRINIT
+          S.spark[s * 8 + 3] = R.spark[s * 8 + 3];
+        }
+      }
+    }
+  };
+  const Fq = parseFed(fed);
+  function F_slot(p, c) { return Fq.u16(Fq.desc(p.P, c) + 4) / 4; }
+  let drawB = null;
+  const DUMP_AFTER = +(process.env.FXDUMP ?? 3);                // dump D shows state D + 3 (MEASURED: sprites 0.44 px at +3, 3.2 px at +4)
+  for (let k = 1; k <= gD - gB + DUMP_AFTER; k++) {
+    fx.begin(stepOf(k));
+    const e = spawnAt.get(k);
+    if (e) { if (process.env.FXSEED) rng.s = seedOf(e); made.set(e, fx.spawn(0x43400, e.p120)); }
+    fx.end();
+    if (process.env.FXLIFE) lifeFromRam();                     // (debug) the lives from RAM; asserted equal below
+    lastDraw = fx.sprites(k <= gD - gB ? camB.view : camD.view);
+    if (k === +(process.env.FXDUMPB ?? 4)) drawB = lastDraw;     // dump B: state B + 4
+    if (k === gD - gB && process.env.FXDBG) for (const [e, em] of made) {
+      console.log('  em age', em.age, 'ram', e.age, 'E', Array.from(em.m.slice(12, 15)), 'ram', e.m.slice(12, 15));
+      for (const pr of e.parts) { const pj = em.lists[1].find(q => q.tag === pr.tag); console.log('   tag', pr.tag, pj && pj.age, pr.age, pj && Array.from(pj.v.slice(0, 8)).map(x => x.toFixed(3)).join(','), '|', pr.v.slice(0, 8).map(x => x === null ? 'n' : x.toFixed(3)).join(',')); }
+    }
+    if (k === gD - gB) {
+      // state D: the type 21 / 137 pools against RAM
+      let n21 = 0, n137 = 0, worst21 = 0, bad = [];
+      for (const [e, em] of made) for (const pr of e.parts) {
+        const p = em.lists[1].find(q => q.tag === pr.tag);
+        for (const [c, pl] of Object.entries(pr.pools)) {
+          const R = ramPool(pl), S = p?.ext?.[F_slot(p, +c)];
+          if (!S) { bad.push(`no pool tag ${pr.tag}`); continue; }
+          if (pl.type === 137) {
+            n137++;
+            if (process.env.FXDBG) { const g = {}; for (let s2 = 0; s2 < R.start; s2++) (g[R.spark[s2 * 8 + 7]] ??= []).push(`${S.spark[s2 * 8 + 3]}/${R.spark[s2 * 8 + 3]}`); console.log('  lives page/ram', e.age.toFixed(1), JSON.stringify(g)); }
+            for (const k2 of ['cap', 'L', 'size', 'mask', 'idx', 'start']) if (S[k2] !== R[k2]) bad.push(`137 ${k2} ${S[k2]} vs ${R[k2]}`);
+            if (relErr(S.carry, R.carry) > 1e-5 || relErr(S.now, R.now) > 1e-4) bad.push(`137 carry/now ${S.carry}/${S.now} vs ${R.carry}/${R.now}`);
+            // the written slots (no wrap here; the rest is heap memory)
+            for (let s = 0; s < R.start; s++) for (let k2 = 0; k2 < 8; k2++) if (S.spark[s * 8 + k2] !== R.spark[s * 8 + k2] ) bad.push(`137 spark ${s}[${k2}] ${S.spark[s * 8 + k2]} vs ${R.spark[s * 8 + k2]}`);
+          } else {
+            n21++;
+            for (const k2 of ['cap', 'count', 'start']) if (S[k2] !== R[k2]) bad.push(`21 ${k2} ${S[k2]} vs ${R[k2]}`);
+            for (let q = 0; q < S.count; q++) {
+              const a = S.recs[(S.start + q) % S.cap], b2 = R.recs[(R.start + q) % R.cap];
+              for (const w of [0, 1, 2, 4, 5, 6, 7, 8, 9, 10, 12, 13, 14, 15, 16, 17, 19, 20, 21, 23, 24, 25, 26, 27, 28, 32, 33, 34, 35]) {
+                const er = relErr(a.f[w], b2.f[w]);
+                if (er > worst21) { worst21 = er; if (er > 1e-5) bad.push(`21 tag ${pr.tag} rec ${q} [${w}] ${a.f[w]} vs ${b2.f[w]}`); }
+              }
+              if (a.i[3] !== b2.i[3] || a.h[22] !== b2.h[22] || a.u8[0x2e] !== b2.u8[0x2e]) bad.push(`21 rec ${q} frame / flip`);
+            }
+          }
+        }
+      }
+      ok(`w188 state D: type 137 pools (spark velocity / acceleration shorts, life (VU0 R), birth, ring, carry) equal RAM (${n137})`, n137 === 3 && !bad.some(x => x.startsWith('137') || x.startsWith('no')), bad.slice(0, 4).join('; '));
+      ok(`w188 state D: type 21 pools equal RAM, floats within 1e-5 (${n21}; worst ${worst21.toExponential(2)})`, n21 === 3 && worst21 < 1e-5 && !bad.some(x => x.startsWith('21')), bad.filter(x => x.startsWith('21')).slice(0, 6).join('; '));
+    }
+  }
+  // The dumps: the camera of the dump frame is not in the save (the shot's recoil moves it between the state
+  // and the dump), so a screen shift is fitted from the textured sprites (types 10 / 21: their RGBA must
+  // match exactly), then the sparks (the VU1 line program's x 127 colours) are compared after the same shift.
+  const compareDump = (nm, dmp, drawn, sparkG = 95) => {
+    const quads = []; for (let i = 0; i + 1 < dmp.tris.length; i++) { const a = dmp.tris[i], b2 = dmp.tris[i + 1]; if (b2.i === a.i + 1 && a.tex0 === b2.tex0) { quads.push({ v: [...a.v, b2.v[2]] }); i++; } }
+    const near = (c, sh) => { let best = null; for (const q of quads) { const d = Math.max(...c.map((g, k) => Math.hypot(g[0] + sh[0] - q.v[k][0], g[1] + sh[1] - q.v[k][1]))); if (!best || d < best.d) best = { d, q }; } return best; };
+    const sps = drawn.filter(s => !s.line);
+    let sh = [0, 0];
+    for (let it = 0; it < 3; it++) {                             // shift = mean corner difference to the nearest quads
+      let sx = 0, sy = 0, n = 0;
+      // fitted on the sprites whose nearest game quad has their RGBA (the same sprite), not on all of them
+      const rgb = sp => JSON.stringify(sp.verts.map(v => v.rgba));
+      for (const sp of sps) { const c = sp.verts.map(v => v.gs), q = near(c, sh).q; if (rgb(sp) !== JSON.stringify(q.v.map(v => v[6]))) continue; c.forEach((g, k) => { sx += q.v[k][0] - g[0]; sy += q.v[k][1] - g[1]; n++; }); }
+      if (n) sh = [sx / n, sy / n];
+    }
+    let worstS = 0, exS = 0, worstSame = 0;
+    const unmatchedS = [];
+    for (const sp of sps) { const b = near(sp.verts.map(v => v.gs), sh); worstS = Math.max(worstS, b.d); if (JSON.stringify(sp.verts.map(v => v.rgba)) === JSON.stringify(b.q.v.map(v => v[6]))) { exS++; worstSame = Math.max(worstSame, b.d); } else unmatchedS.push({ type: sp.type, tag: sp.tag, d: b.d }); }
+    const segs = []; for (const s of drawn.filter(s => s.line)) for (let i = 0; i + 1 < s.verts.length; i++) segs.push({ a: s.verts[i], b: s.verts[i + 1], alpha: s.alpha });
+    const gl = dmp.lines.filter(g => g.v[0][3][0] === 127 && g.v[0][3][1] === sparkG);   // the x 127 colours of this effect's sparks
+    let worstL = 0, col = 0, onSpot = 0, onSpotCol = 0;
+    // game segments no page segment lands on (within 1 px)
+    const unmatched = gl.filter(g => !segs.some(sg => Math.max(Math.hypot(sg.a.gs[0] + sh[0] - g.v[0][0], sg.a.gs[1] + sh[1] - g.v[0][1]), Math.hypot(sg.b.gs[0] + sh[0] - g.v[1][0], sg.b.gs[1] + sh[1] - g.v[1][1])) < 1));
+    for (const sg of segs) {
+      let best = null;
+      for (const g of gl) { const d = Math.max(Math.hypot(sg.a.gs[0] + sh[0] - g.v[0][0], sg.a.gs[1] + sh[1] - g.v[0][1]), Math.hypot(sg.b.gs[0] + sh[0] - g.v[1][0], sg.b.gs[1] + sh[1] - g.v[1][1])); if (!best || d < best.d) best = { d, g }; }
+      if (!best) { worstL = Infinity; continue; }
+      worstL = Math.max(worstL, best.d);
+      if (best.d < 1) { onSpot++; if (JSON.stringify([sg.a.rgba, sg.b.rgba]) === JSON.stringify([best.g.v[0][3], best.g.v[1][3]])) onSpotCol++; }
+      if (JSON.stringify([sg.a.rgba, sg.b.rgba]) === JSON.stringify([best.g.v[0][3], best.g.v[1][3]]) && best.g.alpha.slice(0, 4).join() === (sg.alpha === 0x48 ? '0,2,0,1' : '0,1,0,1')) col++;
+      if (process.env.FXDBG) console.log(`   ${nm}`, sg.a.gs.map(x => (x).toFixed(1)).join(), '>', (sg.b.gs[0] - sg.a.gs[0]).toFixed(1), (sg.b.gs[1] - sg.a.gs[1]).toFixed(1), sg.a.rgba[3], '| game', best.g.v[0][0].toFixed(1), best.g.v[0][1].toFixed(1), '>', (best.g.v[1][0] - best.g.v[0][0]).toFixed(1), (best.g.v[1][1] - best.g.v[0][1]).toFixed(1), best.g.v[0][3][3], best.d.toFixed(2));
+    }
+    console.log(`  w188 dump ${nm}: shift ${sh.map(x => x.toFixed(2))} px; ${sps.length} sprites worst ${worstS.toFixed(2)} px, RGBA ${exS}/${sps.length} (those within ${worstSame.toFixed(2)} px); ${segs.length} spark segments (game ${gl.length}) worst ${worstL.toFixed(2)} px, RGBA + ALPHA ${col}/${segs.length}`);
+    return { sps: sps.length, worstS, exS, worstSame, unmatchedS, segs: segs.length, game: gl.length, worstL, col, sh, onSpot, onSpotCol,
+      unmatchedZero: unmatched.filter(g => Math.hypot(g.v[0][0] - g.v[1][0], g.v[0][1] - g.v[1][1]) < 0.01).length, unmatched: unmatched.length };
+  };
+  const rB = compareDump('B', JSON.parse(readFileSync(join(w188, 'dumpB.json'), 'utf8')), drawB);
+  if (process.env.FXOUT) writeFileSync(process.env.FXOUT, JSON.stringify({ shift: rB.sh, draw: drawB.map(s => ({ line: !!s.line, type: s.type, gs: s.verts.map(v => v.gs), rgba: s.verts.map(v => v.rgba) })) }));
+  ok('w188 dump B (f835): the replay\'s sprites within 1 px (fitted screen shift) and RGBA exact', rB.sps > 0 && rB.worstS < 1 && rB.exS === rB.sps, JSON.stringify(rB));
+  // L: the game does not clear the pool (FUN_002f3068): a slot it never wrote keeps heap bytes; in dump B one has a
+  // life above 1000 and zero velocity, so the game draws a zero-length line at the impact. The page's pools start
+  // at zero. Every other game segment has a page segment on it.
+  ok('w188 dump B: every game spark segment has a page segment within 1 px, except zero-length ones from never-written pool slots',
+    rB.segs > 0 && rB.unmatched === rB.unmatchedZero && rB.unmatched <= 1 && rB.segs + rB.unmatched === rB.game, JSON.stringify({ segs: rB.segs, game: rB.game, unmatched: rB.unmatched, zero: rB.unmatchedZero }));
+  ok('w188 dump B: every spark segment within 1 px of a game segment (same shift)', rB.worstL < 1, `${rB.worstL}`);
+  ok('w188 dump B: every spark vertex RGBA and the ALPHA equal the game\'s', rB.col === rB.segs, `${rB.col}/${rB.segs}`);
+  // dump D (f840: state D + 3): after state D the youngest impact still spawns with an unknown game step and its
+  // carry on a knife edge (0.99999809), so this one is reported, not asserted
+  const rD = compareDump('D', JSON.parse(readFileSync(join(w188, 'dumpD.json'), 'utf8')), lastDraw);
+  // the segments that land on a game segment are the same sparks: their colours (alpha = the life fade
+  // min((life - age) / (life / 2), 1), VU 0x3f4.z) must be the game's
+  ok(`w188 dump D: the sparks on a game segment (${rD.onSpot}) have its RGBA (older sparks: the life fade)`, rD.onSpot >= 20 && rD.onSpotCol === rD.onSpot, `${rD.onSpotCol}/${rD.onSpot}`);
+  // --- the hit on Vincent at f789 (w172_sound3): state A (f787), state C (f789, one frame after the spawn) and
+  // its dump. The game spawns 0x40c00 (emitter 3: param +0x1d = 1) and 0x41800 (emitter 6; source not decoded,
+  // the page spawns only 0x40c00) at the hit point. Frame 1 (the spawn): emitter 3's LCG from its first particle
+  // (seedOf). Frame 2: FUN_002d97f8 reseeds the LCG from rand() (state A's, two steps on), then the soldier's
+  // muzzle emitter 8 (not replayed; first in the list) could draw before emitter 3: its draw count k8 is FITTED
+  // (searched 0-200 for the records to equal RAM; it comes out 0).
+  {
+    const C = JSON.parse(readFileSync(join(w188, 'stateC.json'), 'utf8')), A = JSON.parse(readFileSync(join(w188, 'stateA.json'), 'utf8'));
+    const e3 = C.emitters.find(e => e.ei === 3), e6 = C.emitters.find(e => e.ei === 6), camC = camOf(C);
+    ok('w188 state C: the hit spawned emitters 3 and 6 at one point', e3 && e6 && e3.age === e6.age && e3.p120.every((x, i) => x === e6.p120[i]));
+    const randStep = x => (Math.imul(x, 0x41c64e6d) + 0x3039) >>> 0;
+    const pr21 = e3.parts.find(p => Object.values(p.pools).some(q => q.type === 21)), R21 = ramPool(Object.values(pr21.pools)[0]);
+    const replay = k8 => {
+      const rng = new EffectRng(seedOf(e3), undefined, A.mt, null);
+      const fx = createEffects({ fed, core, warn: () => {}, rng, proj: camC.proj });
+      fx.begin(f(1.2)); const m3 = fx.spawn(0x40c00, e3.p120); fx.end(); const first = fx.sprites(camC.view);
+      rng.libc = randStep(A.rand);                               // frame 1's rand(); frame 2's begin steps it again
+      fx.begin(f(e3.dt)); for (let i = 0; i < k8; i++) rng.next(); fx.end(); const second = fx.sprites(camC.view);
+      const S = m3.lists[1].find(p => p.tag === pr21.tag).ext[F_slot(m3.lists[1].find(p => p.tag === pr21.tag), +Object.keys(pr21.pools)[0])];
+      const errs = []; for (let q = 0; q < R21.count; q++) { const a = S.recs[(S.start + q) % S.cap], b2 = R21.recs[(R21.start + q) % R21.cap]; errs.push(Math.max(...[0, 1, 2, 4, 5, 6, 12, 13, 15, 19, 24, 25, 26, 27].map(w => relErr(a.f[w], b2.f[w])))); }
+      return { fx, rng, m3, first, second, errs, n: S.count };
+    };
+    const r0 = replay(0);
+    ok('w188 state C: the hit\'s type 21 records of the spawn frame (0-2) equal RAM (tag 5\'s type 23 / 24 transitions now run: no extra draws)', r0.n === R21.count && r0.errs.slice(0, 3).every(x => x < 1e-5), JSON.stringify(r0.errs));
+    let k8 = -1; for (let k = 0; k <= 200 && k8 < 0; k++) { const r = replay(k); if (r.errs.every(x => x < 1e-5)) k8 = k; }
+    console.log(`  w188 hit: frame 2 matches RAM with k8 = ${k8} (fitted, 0-200) LCG draws ahead of emitter 3`);
+    ok('w188 state C: the hit\'s frame-2 type 21 records (3-5) equal RAM from the rand() reseed plus emitter 8\'s draws', k8 >= 0, `${k8}`);
+    const { fx: fxC, m3, first } = replay(Math.max(k8, 0));
+    // categories 6 / 8 draw: emitter 3's tag 0 is render category 6
+    ok('w188: the hit draws, incl. its render category 6 particle (tag 0)', first.length > 0 && first.some(s => s.emitter === 3 && s.tag === 0), `${first.filter(s => s.tag === 0).length}`);
+    let nv = 0, worstV = 0, at = '';
+    ok('w188 state C: emitter 3 same particle tags', JSON.stringify(m3.lists[1].map(p => p.tag)) === JSON.stringify(e3.parts.map(p => p.tag)));
+    for (const pr of e3.parts) {
+      const pj = m3.lists[1].find(p => p.tag === pr.tag);
+      if (!pj || pj.skip) continue;
+      for (let c = 0; c < Fq.u8(pj.P + 8); c++) {
+        const d = Fq.desc(pj.P, c), ty = Fq.u16(d), o = Fq.u16(d + 4) / 4;
+        const W = { 1: [0, 1, 2], 2: [0, 1, 2, 4, 5, 6], 4: [0, 1, 2], 7: [0, 1, 2], 9: [0, 1, 2], 15: [0, 1, 2, 3], 16: [0, 1, 2, 3], 17: [0, 1, 2, 3] }[ty];
+        for (const k of W ?? []) { nv++; const er = relErr(pj.v[o + k], pr.v[o + k]); if (er > worstV) { worstV = er; at = `tag ${pr.tag} type ${ty} [${k}] ${pj.v[o + k]} vs ${pr.v[o + k]}`; } }
+      }
+    }
+    ok(`w188 state C: the hit's (emitter 3) particle values within 1e-5 (${nv}, incl. its render category 6 tag 0; worst ${worstV.toExponential(2)})`, nv > 20 && worstV < 1e-5, at);
+    // the dump (C+4: the frame whose sprites fit best; C+3 / C+5 are worse): frames 3-4 are reseeded from rand()
+    // like frame 2, but not checked against RAM (no state there)
+    const dC = JSON.parse(readFileSync(join(w188, 'dumpC.json'), 'utf8'));
+    const quads = []; for (let i = 0; i + 1 < dC.tris.length; i++) { const a = dC.tris[i], b2 = dC.tris[i + 1]; if (b2.i === a.i + 1 && a.tex0 === b2.tex0) { quads.push({ v: [...a.v, b2.v[2]] }); i++; } }
+    let drC = null;
+    const CK = +(process.env.FXCK ?? 4);
+    for (let k = 1; k <= Math.max(4, CK); k++) { fxC.begin(f(e3.dt)); fxC.end(); const dr = fxC.sprites(camC.view); if (k >= 3) compareDump(`C+${k} (reported)`, dC, dr, 111); if (k === CK) drC = dr; }
+    // asserted: most of the hit's sprites have a game sprite with their exact RGBA, within 2.5 px after a shift
+    // fitted on those sprites (the dump frame's camera is not in the save; the residual is not a pure shift).
+    // Reported: the other sprites (no game sprite with their RGBA) and their distance to the nearest game sprite
+    const rC = compareDump('C+4 (asserted)', dC, drC, 111);
+    console.log(`  w188 dump C+4: unmatched sprites (no game sprite with their RGBA), nearest game sprite: ${rC.unmatchedS.map(u => `type ${u.type} tag ${u.tag} ${u.d.toFixed(2)} px`).join(', ')}`);
+    ok(`w188 dump C (C+4): ${rC.exS} / ${rC.sps} of the hit's sprites have a game sprite's exact RGBA, within ${rC.worstSame.toFixed(2)} px (fitted on those)`, rC.exS >= 12 && rC.worstSame < 2.5, JSON.stringify(rC));
+  }
+} else console.log('  (no tools/trace/out/w188_fx: the type 21 / 137 RAM and line checks are skipped)');
 console.log(`${checks - fails}/${checks} checks passed`);
 process.exit(fails ? 1 : 0);

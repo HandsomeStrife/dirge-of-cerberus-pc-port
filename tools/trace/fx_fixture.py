@@ -33,7 +33,25 @@ def f32(x):                      # non-finite words (pool garbage) as null: JSON
 def vec(x, n=4): return struct.unpack_from('<%df' % n, EE, a(x))
 
 
-out = {'lcg': u32(0x4e9400), 'cam': {}, 'emitters': []}
+# worker 0188: + the effect twister FUN_002d9b18 (624 words DAT_004e9408, index DAT_004e9dc8), each particle's
+# channel data block (file offsets: the FED object in RAM is the file) and the raw pools of its type 21 / 137
+# channels (pointer at the channel's value slot; sizes from FUN_0027baa0 / FUN_0027d350)
+out = {'lcg': u32(0x4e9400), 'rand': u32(u32(0x495844) + 0x58), 'mt': {'s': [u32(0x4e9408 + 4 * i) for i in range(624)], 'i': s32(0x4e9dc8)},
+       'cam': {}, 'emitters': []}
+
+
+def pools(p, fed):
+    P = u32(p + 0x40); vr = u32(p + 0x44); res = {}; data = []
+    for i in range(u8(P + 8)):
+        d = u32(u32(P + 0xc) + 4 * i)        # the loader relocates the FED's offsets: absolute in RAM
+        data.append(u32(u32(p + 0x48) + 4 * i) - fed)
+        ty, slot = u16(d), u16(d + 4)
+        q = u32(vr + slot)
+        if ty not in (21, 137) or not q:
+            continue
+        size = 0x30 + s16(q + 0x1c) * 0x90 if ty == 21 else u32(q + 0x30)
+        res[str(i)] = {'type': ty, 'addr': q, 'hex': EE[a(q):a(q) + size].hex()}
+    return res, data
 c = u32(0x50b4f8)
 for nm, o in (('view', 0x150), ('proj', 0x110)):
     out['cam'][nm] = [f32(c + o + 4 * i) for i in range(16)]
@@ -52,6 +70,9 @@ while o:
                                     'v': [f32(u32(p + 0x44) + 4 * i) for i in range(size // 4)],
                                     'vi': [s32(u32(p + 0x44) + 4 * i) for i in range(size // 4)],
                                     'm50': [f32(u32(p + 0x50) + 4 * i) for i in range(16)] if u32(p + 0x50) else None})
+                em['parts'][-1]['pools'], em['parts'][-1]['data'] = pools(p, u32(o + 0x70))
+                em['parts'][-1]['p1c'] = u32(p + 0x1c) == p      # +0x1c = itself: drawn with its own +0x54 (FUN_002e9db0)
+                em['parts'][-1]['m54'] = [f32(u32(p + 0x54) + 4 * i) for i in range(16)] if u32(p + 0x54) else None
                 p = u32(p + 0x14)
         out['emitters'].append(em)
     o = u32(o + 0x14)

@@ -24,6 +24,11 @@ gitignored native/web/data/effects/. Nothing from the game is stored in this scr
   ids.json     from the ELF (elf/SLES_541.85): the effect id tables at the call sites,
                wall 0x4a0c68 (28 words, FUN_00336040: [material * 2 + floor]) and
                hit 0x4a0cd8 (4 words, FUN_003363d0: [(C+0x150 >> 16) & 3]).
+               + twister (worker 0188): the effect Mersenne twister FUN_002d9b18 (624 words at
+               DAT_004e9408, index DAT_004e9dc8) in the save state the page starts from
+               (--state sea-of-flames.p2s; no default), as the LCG DAT_004e9400 already is in
+               effects.js; the type 137 sparks draw from it. Without --state the field is left out
+               and both this script and the page warn (sparks off).
 
 The checks below only validate the layout; they print and fail on a mismatch.
 """
@@ -83,7 +88,10 @@ def main():
     ap.add_argument('--extract', default=os.path.join(ROOT, 'extract/_KEL'))
     ap.add_argument('--elf', default=os.path.join(ROOT, 'elf/SLES_541.85'))
     ap.add_argument('-o', '--out', default=os.path.join(ROOT, 'native/web/data/effects'))
+    ap.add_argument('--state', default=None, help='the save state the page starts from (sea-of-flames.p2s): its effect twister for the type 137 sparks')
     a = ap.parse_args()
+    if a.state and not os.path.isfile(a.state):        # a named state that is not there is an error ('' / none: leave it out)
+        sys.exit('--state %s: no such file' % a.state)
     os.makedirs(a.out, exist_ok=True)
     for name, rel in SRC.items():
         src = os.path.join(a.extract, rel)
@@ -96,6 +104,22 @@ def main():
     ids = {'wall': elf_words(a.elf, 0x4a0c68, 28), 'hit': elf_words(a.elf, 0x4a0cd8, 4)}
     if any((x & 0xfffc0000) != 0x40000 for x in ids['wall'] + ids['hit']):
         sys.exit('effect id tables: an id outside FED 0x40000')
+    if a.state:
+        sys.path.insert(0, os.path.join(ROOT, 'tools/trace'))
+        from p2s import read_p2s
+        ee = read_p2s(a.state)['eeMemory.bin']
+        mt = list(struct.unpack_from('<624I', ee, 0x4e9408))
+        i = struct.unpack_from('<i', ee, 0x4e9dc8)[0]
+        if not 0 <= i < 624:
+            sys.exit('effect twister index %d out of range' % i)
+        ids['twister'] = {'s': mt, 'i': i}
+        # newlib's rand() state (*(PTR_DAT_00495844) + 0x58): FUN_002d97f8 reseeds the effect LCG and VU0 R from
+        # rand() at every effect frame (FUN_002efc78)
+        ids['rand'] = struct.unpack_from('<I', ee, (struct.unpack_from('<I', ee, 0x495844)[0] & 0x1ffffff) + 0x58)[0]
+    else:
+        print('WARNING: no --state given: ids.json has no effect twister (DAT_004e9408) or rand() state, so the page '
+              'leaves out the type 137 sparks of the bullet impacts and hits (and does not reseed the effect LCG each '
+              'frame). Pass --state sea-of-flames.p2s.', file=sys.stderr)
     json.dump(ids, open(os.path.join(a.out, 'ids.json'), 'w'))
     print('wrote', os.path.join(a.out, 'ids.json'))
     declare(a.out)

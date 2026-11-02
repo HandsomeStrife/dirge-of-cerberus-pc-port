@@ -32,23 +32,33 @@ try {
   const errs = [];
   pg.on('pageerror', e => errs.push(e.message));
   pg.on('console', m => { if (m.type() === 'error') errs.push(m.text()); });
+  const fxWarns = []; pg.on('console', m => { if (m.type() === 'warning' && /no rand\(\) state|no effect twister/.test(m.text())) fxWarns.push(m.text()); });
   const open = async q => {
     for (let i = 0; ; i++) { try { await pg.goto(`http://127.0.0.1:${port}/play.html${q}`, { waitUntil: 'load' }); break; } catch (e) { if (i > 20) throw e; await new Promise(r => setTimeout(r, 250)); } }
     await pg.waitForFunction(() => window.__play && window.__play.stats.ticks > 30, null, { timeout: 180000 });
   };
   await open('?enemydmg=0&sound=0');
   ok(await pg.evaluate(() => !!window.__fx && !!window.__fx.fx), 'effects loaded (window.__fx)');
+  ok(fxWarns.length === 0, `ids.json has rand + twister: no "no rand() state" / twister warning (${fxWarns.join(' | ')})`);
   await pg.evaluate(async ([m, w]) => {
     const W = await fetch('data/aim/weapon.json').then(r => r.json());
-    window.__fxShot = { t0: window.__play.stats.ticks };
+    window.__fxShot = { t0: window.__play.stats.ticks, seen: {}, lines: 0 };
+    const { layer } = window.__fx, up = layer.update.bind(layer);   // every draw pass's types (0188)
+    layer.update = cam => { up(cam); for (const s of layer.last) window.__fxShot.seen[s.type] = (window.__fxShot.seen[s.type] ?? 0) + 1;
+      window.__fxShot.lines = Math.max(window.__fxShot.lines, (layer.lpool ?? []).filter(l => l.visible).length); };
     window.__play.enemyAI.queueShot(m, w, W);
   }, [MUZZLE, WALL]);
   await pg.waitForFunction(() => window.__play.stats.ticks > window.__fxShot.t0 + 12, null, { timeout: 60000 });
   const r = await pg.evaluate(w => {
     const { fx, layer } = window.__fx;
     const near = fx.emitters.filter(e => Math.hypot(e.p120[0] - w[0], e.p120[1] - w[1], e.p120[2] - w[2]) < 20);
-    return { near: near.map(e => [e.ei, e.id, +e.age.toFixed(1)]), drawn: layer.pool.filter(m => m.visible).length };
+    const types = {}; for (const s of layer.last) types[s.type] = (types[s.type] ?? 0) + 1;
+    return { near: near.map(e => [e.ei, e.id, +e.age.toFixed(1)]), drawn: layer.pool.filter(m => m.visible).length,
+      seen: window.__fxShot.seen, lines: window.__fxShot.lines };
   }, WALL);
+  // worker 0188: the burst (type 21, FUN_0027cd68) and the sparks (type 137, VU1 line strips) reach the layer
+  ok(r.seen[21] > 0, `type 21 burst sprites drawn: ${JSON.stringify(r.seen)}`);
+  ok(r.seen[137] > 0 && r.lines > 0, `type 137 spark lines drawn (${r.seen[137]} over the frames, up to ${r.lines} line objects at once)`);
   ok(r.near.length >= 1 && r.near.every(e => e[0] === 12 && e[1] === 0x43400), `impact emitters at the wall: ${JSON.stringify(r.near)} (emitter 12, id 0x43400)`);
   ok(r.drawn > 0, `sprites drawn: ${r.drawn}`);
   // the draw pass uses this game frame's camera (follow.tick at the frame's start), not the last rendered one:
@@ -72,7 +82,7 @@ try {
     const r = new THREE.WebGLRenderer({ canvas: document.createElement('canvas') });
     const rt = new THREE.WebGLRenderTarget(4, 4);
     const res = {};
-    for (const alpha of [0x44, 0x48]) {
+    for (const alpha of [0x44, 0x48, 0x42, 0x00]) {           // 0x00: not translated -> not drawn (0188)
       const sprite = { alpha, tex: { k: 'test', W: 1, H: 1, rgba: new Uint8Array([200, 100, 50, 0x80]) },
         verts: [[-100, -100], [100, -100], [-100, 100], [100, 100]].map(([x, y]) => ({ pos: [x, y, 10], uv: [0.5, 0.5], rgba: [128, 128, 128, 64] })) };
       const layer = new EffectLayer(THREE, { sprites: () => [sprite], warn: () => {} });
@@ -88,9 +98,11 @@ try {
   });
   const gs = (alpha, Ct, Cf, Cd) => {
     const Cs = Ct.map((t, k) => Math.min(255, (t * Cf[k]) >> 7)), As = Cs[3];
-    return [0, 1, 2].map(k => Math.max(0, Math.min(255, ((((Cs[k] - (alpha === 0x44 ? Cd[k] : 0)) * As) >> 7) + Cd[k]))));
+    const A = k => alpha === 0x42 ? 0 : Cs[k], B = k => alpha === 0x44 ? Cd[k] : alpha === 0x42 ? Cs[k] : 0;   // 0x42: (0 - Cs) As + Cd
+    return [0, 1, 2].map(k => Math.max(0, Math.min(255, ((((A(k) - B(k)) * As) >> 7) + Cd[k]))));
   };
-  for (const alpha of [0x44, 0x48]) {
+  ok(px[0] && px[0].every((x, k) => Math.abs(x - [40, 80, 160][k]) <= 1), `GS ALPHA 0x0 (not translated): not drawn, pixel ${px[0]} = the background`);
+  for (const alpha of [0x44, 0x48, 0x42]) {
     const want = gs(alpha, [200, 100, 50, 0x80], [128, 128, 128, 64], [40, 80, 160]), got = px[alpha];
     ok(got && got.every((x, k) => Math.abs(x - want[k]) <= 1), `GS ALPHA 0x${alpha.toString(16)}: pixel ${got} = the GS's ${want} (+-1)`);
   }

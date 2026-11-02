@@ -21,9 +21,10 @@
 // types 1 2 4 7 9 14 15 16 17 22 23 24 (init / transition / eval), the sprite draw type 10 with its
 // billboard / depth matrices (FUN_002e3498 / FUN_002e3948) and the VU1 sprite program at MSCAL 4
 // (micro memory instr 298-531: corners, ST, colour x near fade, guard-band culling).
-// Not on the page (warned once, listed in notes/fidelity-audit.md): draw types 11 / 21 / 100 / 137,
-// channel types 3 / 5 / 6 / 8 / 26, render categories other than 0 / 1, rotation orders 1-5, emitter
-// param +0x1d != 0, the emitter fade (those are simulated but not drawn), the emitter frustum cull
+// Also the burst (type 21) and the sparks (type 137, VU1 line strips), worker 0188.
+// Not on the page (warned once, listed in notes/fidelity-audit.md): draw types 11 / 100,
+// channel types 3 / 5 / 6 / 8 / 26, render categories 2 / 7 / 9, rotation orders 1-5, emitter
+// param +0x1d >= 2, the emitter fade (those are simulated but not drawn), the emitter frustum cull
 // (FUN_002da928), the draw buckets (FUN_002e1d88: depth-sorted order), looping particles.
 
 const f = Math.fround;
@@ -86,20 +87,72 @@ function eulerT(m, rot, pos, order) {
 // FUN_002d9880: VU0 R (VRNEXT, then VRINIT with r.w - 1.88725); used only by type 10 flips.
 const bitsF = u => new Float32Array(new Uint32Array([u]).buffer)[0];
 const K98C8 = bitsF(0x387fffd5), K9938 = bitsF(0x37fffec2);
+const K3FF1 = bitsF(0x3ff19120);   // FUN_002d9880 / FUN_002d9828: lui 0x3ff1, ori 0x9120 (1.8872414; not f(1.88725) = 0x3ff19168)
 export class EffectRng {
-  constructor(lcg = 0xdf887fd0, r = 0x3f800000) { this.s = lcg >>> 0; this.R = r >>> 0; }   // lcg: DAT_004e9400 in the z128 save state
+  // mt: the effect twister's state { s: 624 words (DAT_004e9408), i: index (DAT_004e9dc8) } from a save
+  // state (the exporter writes the z128 one into data/effects/ids.json `twister`); without it the twister
+  // draws (type 137 sparks) are left out with a warning
+  // libc: newlib's rand() state (*(PTR_DAT_00495844) + 0x58). Each effect frame starts with FUN_002d97f8
+  // (FUN_002efc78's first call): DAT_004e9400 = rand() (FUN_00448910: state = state x 0x41c64e6d + 0x3039,
+  // returns state & 0x7fffffff) and VRINIT R with the same word. MEASURED, not decoded: rand() advances exactly
+  // once a frame in the w188 windows (A -> C 2, B -> D 6, C -> B 42 steps). Two other rand() callers exist:
+  // FUN_002e0ca8 (FUN_002e0db0 <- FUN_00305c78 <- FUN_002e28d8 <- FUN_00268f18, the material-6 wall impact, not on
+  // the page) and FUN_003a1080 (reached only through a pointer; not found). The page assumes neither runs. Without it (null) the LCG is not reseeded (tests that set
+  // a recovered seed).
+  constructor(lcg = 0xdf887fd0, r = 0x3f800000, mt = null, libc = null) {   // lcg: DAT_004e9400 in the z128 save state
+    this.s = lcg >>> 0; this.R = r >>> 0;
+    this.mt = mt ? { s: Uint32Array.from(mt.s), i: mt.i } : null;
+    this.libc = libc === null || libc === undefined ? null : libc >>> 0;
+  }
+  frame() {                                                    // FUN_002d97f8
+    if (this.libc === null) return;                            // no rand(): createEffects warns (and spawns nothing unless the caller seeds the LCG)
+    this.libc = (Math.imul(this.libc, 0x41c64e6d) + 0x3039) >>> 0;
+    this.s = this.libc & 0x7fffffff;
+    this.R = ((this.s & 0x7fffff) | 0x3f800000) >>> 0;          // VRINIT R, vf (the word as float bits)
+  }
+  // FUN_002d9b18: the effect Mersenne twister (624 words at DAT_004e9408, index DAT_004e9dc8; its own
+  // instance, not enemy_ai's DAT_004fbe00): returns the tempered current word, then twists that word
+  mtNext() {
+    const S = this.mt.s, i = this.mt.i, n = i > 0x26e ? S[0] : S[i + 1];
+    let y = S[i];
+    y ^= y >>> 11; y ^= (y & 0x13a58ad) << 7; y ^= (y & 0x1df8c) << 15; y ^= y >>> 18;
+    let t = ((S[i] & 0x80000000) | (n & 0x7fffffff)) >>> 1;
+    if (n & 1) t ^= 0x9908b0df;
+    S[i] = (t ^ (i < 0xe3 ? S[i + 397] : S[i - 227])) >>> 0;
+    this.mt.i = i > 0x26e ? 0 : i + 1;
+    return y >>> 0;
+  }
+  mtSigned(r) {                                               // FUN_002d9c30: (([1, 2) - 1) x 2 - 1) x r
+    const b = new DataView(new ArrayBuffer(4)); b.setUint32(0, (this.mtNext() & 0x7fffff) | 0x3f800000);
+    return f(f(f(f(b.getFloat32(0) - 1) * 2) - 1) * f(r));
+  }
   next() { this.s = (Math.imul(this.s, 0x41c64e6d) + 0x3039) >>> 0; return this.s; }
   signed(r) { const v = (this.next() & 0x7fff) - 0x4000; return f(f(v * K98C8) * f(r)); }
   unit(r) { const v = this.next() & 0x7fff; return f(f(v * K9938) * f(r)); }
-  // GUESS: the VU0 R register's value at load (not in EE RAM); only the type 10 flip modes use it
+  // VU0 R: set each frame by FUN_002d97f8 (above, when libc is given); r = the value without it.
+  // GUESS (partly): from the frame's VRINIT the chain below reproduces the first 3-5 spark lives of each frame in
+  // w188 state D, then diverges (something else in the frame moves R; not found)
   vrInt(n) {                                                  // FUN_002d9880(n)
     const x = (this.R >>> 4) & 1, y = (this.R >>> 22) & 1;    // PCSX2 AdvanceLFSR
     this.R = ((((this.R << 1) ^ x ^ y) & 0x7fffff) | 0x3f800000) >>> 0;
     const b = new DataView(new ArrayBuffer(4)); b.setUint32(0, this.R, true);
     const r = b.getFloat32(0, true);
-    const w = f(r - f(1.88725)); b.setFloat32(0, w, true);
+    const w = f(r - K3FF1); b.setFloat32(0, w, true);
     this.R = ((b.getUint32(0, true) & 0x7fffff) | 0x3f800000) >>> 0;   // VRINIT R, vf25w
     return Math.trunc(f(f(r - 1) * f(n)));
+  }
+  // FUN_002d9828(n): the same VU0 R step as FUN_002d9880, value ftoi0((R x 2 - 3) x n): (-n, n). The reseed is
+  // R - 1.88725, not 2R - 1.88725 as the decomp reads: the asm's VMUL (x 2.0) and VSUB (- 3.0) write only .x,
+  // while VSUBbc writes vf25.w = vf31.w (R from VRNEXT .xyzw) - vf27.x (0x3ff19120) and VRINIT reads vf25.w
+  // (0x2d9854 / 0x2d9858 / 0x2d986c dest / fsf fields). T: w188 state D spark lives (test_effects).
+  vrSpan(n) {
+    const x = (this.R >>> 4) & 1, y = (this.R >>> 22) & 1;
+    this.R = ((((this.R << 1) ^ x ^ y) & 0x7fffff) | 0x3f800000) >>> 0;
+    const b = new DataView(new ArrayBuffer(4)); b.setUint32(0, this.R, true);
+    const r = b.getFloat32(0, true);
+    const w = f(r - K3FF1); b.setFloat32(0, w, true);
+    this.R = ((b.getUint32(0, true) & 0x7fffff) | 0x3f800000) >>> 0;
+    return Math.trunc(f(f(f(r * 2) - 3) * f(n)));
   }
 }
 
@@ -369,15 +422,369 @@ T[10] = {
   },
   trans() {}, draw: drawSprite,
 };
-const DRAWN_ELSEWHERE = { 11: 'FUN_0027a170', 21: 'FUN_0027cd68', 100: 'FUN_002cb3f0', 137: 'FUN_0027da78' };
+
+// type 21, the burst: a ring of sub-sprites owned by the channel (vtable 0x49aa78: FUN_0027baa0 init,
+// FUN_0027bba0 transition, FUN_0027bda0 eval, FUN_0027cd68 draw, FUN_0027bd70 destroy). The value
+// slot holds the pool pointer (+0), the spawn carry (+4) and this frame's spawn amount (+8).
+// Pool header (FUN_0027baa0): +4 spawn duration, +8 sub life, +0xc / +0x10 / +0x14 fade fields (set by
+// the transition; nothing in the eval or draw reads them), +0x18 time since the transition, +0x1c
+// capacity, +0x1e count, +0x20 start, +0x22 flag; then capacity records of 0x90 bytes from +0x30:
+// +0x00 pos base (+0xc: sprite record offset), +0x10 velocity (+0x1c: age), +0x20 acceleration
+// (+0x2c: u16 frame index, +0x2e: flip byte), +0x30 / +0x40 / +0x50 scale base / rate / acceleration
+// (.w: rotation base / rate / acceleration, degrees), +0x60 colour, +0x70: animation clock, +0x80 colour rate.
+// VU0 helpers of the spawn: FUN_00444ad0 / FUN_002d8808 normalise xyz (w = 0), FUN_00444a88 a x b.
+function vnorm(v) {
+  const s = f(f(f(v[0] * v[0]) + f(v[1] * v[1])) + f(v[2] * v[2]));
+  const q = f(1 / f(Math.sqrt(s)));
+  return Number.isFinite(q) ? [f(v[0] * q), f(v[1] * q), f(v[2] * q), 0] : [0, 0, 0, 0];   // L: VU DIV by 0 -> max float; 0 x max = 0
+}
+function vcross(a, b) { return [f(f(a[1] * b[2]) - f(b[1] * a[2])), f(f(a[2] * b[0]) - f(b[2] * a[0])), f(f(a[0] * b[1]) - f(b[0] * a[1])), 0]; }
+const fbits = x => new Uint32Array(new Float32Array([x]).buffer)[0];
+// FUN_002d93d0(out, origin, dir): rows side = |up x dir|, dir x side, |dir|, origin (+ the identity's row 3);
+// up = (0, 1, 0) (0x46c700) when the bits of dir.x | dir.z are non-zero, else (0, 0, 1) (0x46c710)
+function lookAt(dir) {
+  const up = (fbits(dir[0]) | fbits(dir[2])) ? [0, 1, 0, 1] : [0, 0, 1, 1];
+  const side = vnorm(vcross(up, dir)), fwd = vnorm(dir), mid = vcross(fwd, side);
+  return new Float32Array([...side, ...mid, ...fwd, 0, 0, 0, 1]);
+}
+// FUN_002d8490 (identity) + FUN_002d7f68 (Z, then Y, then X)
+const rotZYX = a => eulerT(ident(), a, [0, 0, 0], 0);
+const SUB = 0x90;
+function subRec() { const b = new ArrayBuffer(SUB); return { f: new Float32Array(b), i: new Int32Array(b), h: new Int16Array(b), u8: new Uint8Array(b) }; }
+T[21] = {
+  init(X, a, o) {                                              // FUN_0027baa0
+    const F = X.F, p = X.p;
+    p.ext ??= {}; p.ext[o] = null; p.i32[o] = 0;
+    const ai = F.s32(a + 0xc);
+    if (ai < 0 || !F.anim(ai)) return;
+    const cap = F.u16(a + 0xf0);
+    const pool = { dur: 0, life: 0, fade: [0, 0, 0], t18: 0, cap, count: 0, start: 0, flag: 0, recs: Array.from({ length: cap }, subRec) };
+    p.v[o + 1] = 0; p.v[o + 2] = 0; p.i32[o + 3] = 0;           // +4, +8, the u16 at +0xc
+    let c = p.cat;                                              // particle +0x58 = P +0xb (FUN_002e8ea8)
+    if (c !== 0 && (c > 4 || c < 3)) c = -1; else c = F.u8(a + 0xfb);
+    if (c === 7) pool.flag = 1;
+    p.ext[o] = pool; p.i32[o] = 1;
+  },
+  trans(X, t, a, o) {                                          // FUN_0027bba0 (asm; not a Ghidra function)
+    const F = X.F, pool = X.p.ext?.[o];
+    if (!pool || (X.p.flags & 2)) return;
+    const rate = F.f32(a + 0x2c), acc = F.f32(a + 0x3c);
+    pool.dur = rate <= 0 ? 0 : (acc >= 0 ? -1 : f(rate / f(-acc)));   // the time the rate runs out; -1 never
+    const life = F.u16(a + 0xf2);
+    pool.t18 = 0; pool.life = f(life); X.p.v[o + 2] = rate;
+    if (!F.u8(a + 0x110)) { pool.fade = [0, 1, 0]; return; }
+    const fin = F.u8(a + 0x111), fout = F.u8(a + 0x112);
+    if (fin + fout < life) pool.fade = [f(life - fout), fin ? f(1 / fin) : 1, fout ? f(1 / fout) : 0];
+    else if (fout < life) { const d = f(life - fout); pool.fade = [d, f(1 / d), fout ? f(1 / fout) : 0]; }
+    else pool.fade = [0, 0, f(1 / fout)];
+  },
+  eval(X, _t, a, o) { evalBurst(X, a, o); },
+  draw(X, a, o, view, out, tex, proj) { drawBurst(X, a, o, view, out, tex, proj); },
+};
+function evalBurst(X, a, o) {                                  // FUN_0027bda0
+  const F = X.F, p = X.p, em = X.em, v = p.v, rng = X.rng, pool = p.ext?.[o];
+  const dt = em.dt;
+  if (!pool || dt === 0) return;
+  const ai = F.s32(a + 0xc), anim = ai >= 0 ? F.anim(ai) : 0;
+  if (!anim) return;
+  pool.t18 = f(pool.t18 + dt);
+  const stop = pool.dur > 0 ? pool.dur < pool.t18 : pool.dur === 0;
+  if (!stop) {
+    const acc = F.f32(a + 0x3c);
+    const amt = f(f(acc * f(f(dt * dt) * 0.5)) + f(F.f32(a + 0x2c) * dt));
+    v[o + 2] = amt;
+    if (amt > 0) {
+      const tot = f(amt + v[o + 1]);
+      if (tot < 1) v[o + 1] = tot;
+      else {
+        let n = Math.trunc(tot);
+        const step = f(dt / tot), fc = F.u8(a + 0xfc);
+        v[o + 1] = f(f(tot - n) - f(f(acc * f(f(fc * fc) * 0.5)) + f(amt * fc)));
+        for (; n > 0; n--) {
+          if (F.u8(a + 0xfd) < 100 && !(rng.vrInt(100) < F.u8(a + 0xfd))) continue;
+          if (pool.count >= pool.cap) break;
+          const r = pool.recs[(pool.count + pool.start) % pool.cap];
+          pool.count++;
+          spawnSub(X, a, o, pool, r, anim, f(f(step * n) - 1));
+        }
+      }
+    }
+  }
+  // age the ring; the dead are counted and dropped from its front
+  let dead = 0;
+  for (let k = 0; k < pool.count; k++) {
+    const r = pool.recs[(pool.start + k) % pool.cap];
+    if (!(r.f[7] < pool.life)) { dead++; continue; }
+    const len = F.u8(anim + 7);
+    let c = f(r.f[28] * F.f32(a + 0x1c));
+    if (f(len) <= c) {
+      if (!(F.u16(anim + 2) & 0x80)) { dead++; continue; }
+      r.h[22] = 0;
+      const li = Math.trunc(f(len));
+      c = f(c - f(li * Math.trunc(Math.trunc(c) / li)));
+      r.f[28] = c;
+    }
+    let k2 = r.h[22] & 0xffff, e;
+    if (k2 === 0) e = anim + 8;
+    else { e = anim + 8 * k2; if (c < f(F.s16(e + 4))) { k2 = 0; e = anim + 8; } else e += 8; }
+    while (f(F.s16(e + 4)) <= c) { k2++; e += 8; }
+    r.h[22] = k2;
+    r.f[7] = f(r.f[7] + dt); r.f[28] = f(r.f[28] + dt);
+    r.i[3] = F.s16(e + 2);
+  }
+  pool.count -= dead;
+  pool.start = (pool.start + dead) % pool.cap;
+  if (pool.count < 0) pool.count = 0;
+}
+// one new sub-sprite (the body of FUN_0027bda0's spawn loop)
+function spawnSub(X, a, o, pool, r, anim, age) {
+  const F = X.F, p = X.p, rng = X.rng, R = r.f;
+  r.h[22] = 0; R[7] = age; R[28] = age;
+  r.i[3] = F.s16(anim + 0xa);
+  const fl = F.u8(a + 0xfa);                                   // flip: as type 10 (VU0 R, FUN_002d9880)
+  let flip = 0;
+  if (fl === 1 || fl === 2) flip = rng.vrInt(0x100) < 0x80 ? 0 : fl;
+  else if (fl === 3) { const q = rng.vrInt(0xff); flip = (q < 0 ? q + 0x3f : q) >> 6; }
+  r.u8[0x2e] = flip;
+  // FUN_0027b9b0(ctx, P+0x50, in, particle +0x58, data +0xfb, out, nrm): category 2 / 6-9 (or 0, 3, 4
+  // with +0xfb == 7) go through FUN_002e3ee8 (world space; not translated), the rest copy in to out
+  // and normalise it into nrm (FUN_00444ad0)
+  const local = vec => {
+    let c = p.cat; const fb = F.u8(a + 0xfb);
+    if (fb !== 0xff && (c === 0 || (c > 2 && c < 5)) && fb === 7) c = 7;
+    if (c === 2 || (c > 5 && c < 10)) { p.noDraw = 'type 21 world-space spawn (FUN_002e3ee8)'; }
+    return { pos: vec, nrm: vnorm(vec) };
+  };
+  const shape = F.u8(a + 0xfe);
+  let nrm = [0, 0, 0, 0];
+  const cone = () => {                                         // a random turn of up to data +0xb0 degrees, then onto dir (data +0x10)
+    const s = f(F.f32(a + 0xb0) * ANG);
+    const ang = [rng.signed(s), rng.signed(s), rng.signed(s)];
+    const Rr = rotZYX(ang);
+    const dir = [0, 1, 2, 3].map(i => F.f32(a + 0x10 + 4 * i));
+    if (dir[0] === 0 && dir[1] === 0) dir[0] = f(1e-6);
+    return mul44(lookAt(dir), Rr);                               // FUN_002d8368(c40, c40, c00) = c00 . c40
+  };
+  if (shape === 0 || shape === 2) {                            // a box: +-data[0..2]
+    const q = local([rng.signed(F.f32(a)), rng.signed(F.f32(a + 4)), rng.signed(F.f32(a + 8))]);
+    R[0] = q.pos[0]; R[1] = q.pos[1]; R[2] = q.pos[2]; nrm = q.nrm;
+  } else if (shape === 1 || shape === 3) {                     // a shell along the cone at radius r
+    const M = cone(), d0 = F.f32(a), sw = F.u8(a + 0x100), mode = F.u8(a + 0x101);
+    let rad = f(F.f32(a + 0xb0) * ANG);                          // f21 keeps the angle when +0x101 > 1
+    if (!sw) { const h = f(d0 * 0.5); rad = f(rng.signed(h) + h); }
+    else if (mode === 0) rad = f(d0 - f(d0 * rng.unit(f(F.u8(a + 0x102) * f(0.01)))));
+    else if (mode === 1) rad = f(d0 * rng.unit(f(F.u8(a + 0x102) * f(0.01))));
+    const q = local(xform(M, [0, 0, rad]));
+    R[0] = q.pos[0]; R[1] = q.pos[1]; R[2] = q.pos[2]; nrm = q.nrm;
+  } else if (shape !== 4 && shape !== 5) {
+    X.warn(`effects: type 21 spawn shape ${shape} (FUN_0027bda0) not translated`); p.noDraw = `type 21 spawn shape ${shape}`;
+  }
+  for (const i of [4, 5, 6, 8, 9, 10]) R[i] = 0;
+  let sp = 0, ac = 0;
+  if (F.u8(a + 0x103)) { sp = F.f32(a + 0xb4); ac = F.f32(a + 0xb8); }
+  if (F.u8(a + 0x104)) { sp = f(sp + rng.signed(F.f32(a + 0xbc))); ac = f(ac + rng.signed(F.f32(a + 0xc0))); }
+  if (shape < 10) {
+    if ([0, 1, 6, 8].includes(shape)) {                        // along the cone (1e-5, 0, 1)
+      const M = cone();
+      if (pool.flag) { X.warn('effects: type 21 pool flag +0x22 (FUN_002d83e0 x P+0x50, x E) not translated'); p.noDraw = 'type 21 pool flag'; }
+      const d = xform(M, [f(1e-5), 0, 1]);
+      for (let i = 0; i < 3; i++) { R[4 + i] = f(d[i] * sp); R[8 + i] = f(d[i] * ac); }
+    } else if ([2, 3, 7, 9].includes(shape)) {                 // radial: along the spawn offset
+      for (let i = 0; i < 3; i++) { R[8 + i] = f(nrm[i] * ac); R[4 + i] = f(nrm[i] * sp); }
+    }
+  }
+  // the second direction (data +0x20, normalised) with its own speed / acceleration
+  const g = [0, 1, 2].map(i => F.f32(a + 0x20 + 4 * i));
+  let s2 = 0, a2 = 0;
+  if (F.u8(a + 0x105)) { s2 = F.f32(a + 0xc4); a2 = F.f32(a + 0xc8); }
+  if (F.u8(a + 0x106)) {
+    for (let i = 0; i < 3; i++) g[i] = f(g[i] + rng.signed(F.f32(a + 0x30 + 4 * i)));
+    s2 = f(s2 + rng.signed(F.f32(a + 0xcc))); a2 = f(a2 + rng.signed(F.f32(a + 0xd0)));
+  }
+  const gn = vnorm(g);
+  for (let i = 0; i < 3; i++) { R[4 + i] = f(R[4 + i] + f(gn[i] * s2)); R[8 + i] = f(R[8 + i] + f(gn[i] * a2)); }
+  // scale (percent; x / y only, z = 100), base / rate / acceleration
+  R[12] = R[13] = 100; R[16] = R[17] = 0; R[20] = R[21] = 0; R[18] = 0; R[14] = 100; R[22] = 0;
+  if (F.u8(a + 0x107)) for (let i = 0; i < 2; i++) { R[12 + i] = F.f32(a + 0x80 + 4 * i); R[16 + i] = F.f32(a + 0x88 + 4 * i); R[20 + i] = F.f32(a + 0x90 + 4 * i); }
+  if (F.u8(a + 0x108)) {                                       // FUN_0027b820(.., mode +0x109, 2)
+    const m = F.u8(a + 0x109);
+    if (m === 0) {
+      const r1 = rng.signed(F.f32(a + 0x98)), r2 = rng.signed(F.f32(a + 0xa0)), r3 = rng.signed(F.f32(a + 0xa8));
+      for (let i = 0; i < 2; i++) { R[12 + i] = f(R[12 + i] + r1); R[16 + i] = f(R[16 + i] + r2); R[20 + i] = f(R[20 + i] + r3); }
+    } else if (m === 1) for (let i = 0; i < 2; i++) {
+      R[12 + i] = f(R[12 + i] + rng.signed(F.f32(a + 0x98 + 4 * i)));
+      R[16 + i] = f(R[16 + i] + rng.signed(F.f32(a + 0xa0 + 4 * i)));
+      R[20 + i] = f(R[20 + i] + rng.signed(F.f32(a + 0xa8 + 4 * i)));
+    }
+  }
+  // rotation (degrees) base / rate / acceleration in the .w lanes
+  R[15] = R[23] = R[19] = 0;
+  if (F.u8(a + 0x10a)) { R[15] = F.f32(a + 0xd4); R[19] = F.f32(a + 0xd8); R[23] = F.f32(a + 0xdc); }
+  if (F.u8(a + 0x10b)) { R[15] = f(R[15] + rng.signed(F.f32(a + 0xe0))); R[19] = f(R[19] + rng.signed(F.f32(a + 0xe4))); R[23] = f(R[23] + rng.signed(F.f32(a + 0xe8))); }
+  // colour and its rate
+  for (let i = 0; i < 4; i++) { R[24 + i] = 128; R[32 + i] = 0; }
+  if (F.u8(a + 0x10c)) for (let i = 0; i < 4; i++) { R[24 + i] = F.f32(a + 0x40 + 4 * i); R[32 + i] = F.f32(a + 0x50 + 4 * i); }
+  if (F.u8(a + 0x10d)) for (let i = 0; i < 4; i++) {
+    R[24 + i] = f(R[24 + i] + rng.signed(F.f32(a + 0x60 + 4 * i)));
+    R[32 + i] = f(R[32 + i] + rng.signed(F.f32(a + 0x70 + 4 * i)));
+  }
+}
+// b + r t + (a x 0.5) t^2, lane by lane as the VU0 does it (FUN_0027cd68)
+const quad = (b, r, a, t) => f(f(b + f(r * t)) + f(f(a * 0.5) * f(t * t)));
+function drawBurst(X, a, o, view, out, tex, proj) {            // FUN_0027cd68
+  const F = X.F, p = X.p, em = X.em, pool = p.ext?.[o];
+  if (!pool) return;
+  const ai = F.s32(a + 0xc), anim = ai >= 0 ? F.anim(ai) : 0;
+  const depthOff = F.u8(a + 0x10e) && F.f32(a + 0xec) !== 0 ? F.f32(a + 0xec) : null;
+  if (F.u8(a + 0x114)) X.warn('effects: type 21 flag +0x114 (packet flag 0x800) not translated');
+  const fb = F.u8(a + 0xfb);
+  for (let k = 0; k < pool.count; k++) {
+    const r = pool.recs[(pool.start + k) % pool.cap], R = r.f, t = R[7];
+    if (!(t < pool.life)) continue;
+    const pos = [0, 1, 2].map(i => quad(R[i], R[4 + i], R[8 + i], t));
+    const sc = [0, 1, 2].map(i => f(f(quad(R[12 + i], R[16 + i], R[20 + i], t) * f(0.001)) * em.scale[i]));
+    const rot = f(f(f(f(f(f(R[23] * t) * t) * 0.5) + f(R[19] * t)) + R[15]) * ANG);
+    let M = new Float32Array([sc[0], 0, 0, 0, 0, sc[1], 0, 0, 0, 0, sc[2], 0, 0, 0, 0, 1]);
+    if (r.u8[0x2e]) M = mul33(flipMatrix(r.u8[0x2e]), M);      // FUN_00276ed8, FUN_002d83e0(c80, flip, c80)
+    if (rot !== 0) M = rotZ(M, rot);                           // FUN_002d7e80
+    let w = [...pos, 1];
+    if (!(fb === 2 || (fb > 5 && fb < 8))) w = xform(em.m, xform(p.m50, w));   // . P+0x50 . E (no parent here)
+    const vp = view.toView(w);                                  // . DAT_70003e00
+    M[12] = vp[0]; M[13] = vp[1]; M[14] = vp[2]; M[15] = 1;
+    let Dm = M;
+    if (depthOff !== null) { Dm = M.slice(); Dm[14] = f(Dm[14] + depthOff); }
+    // colour: (base + rate t) x emitter colour (+0xb0), clamped 0..255, truncated
+    const rgba = [0, 1, 2, 3].map(i => Math.trunc(Math.min(255, Math.max(0, f(f(R[24 + i] + f(R[32 + i] * t)) * em.col[i])))));
+    vuSprite(X, anim + r.i[3], rgba, M, Dm, out, tex, proj, em);   // FUN_00308028(anim + record offset)
+  }
+}
+// type 137, the sparks: line strips computed by a VU1 program (vtable 0x49aad8: FUN_0027d350 init,
+// FUN_0027d5d0 transition (no-op), FUN_0027d5d8 eval, FUN_0027da78 draw, FUN_0027d5a0 destroy). The CPU
+// keeps a time ring (one float per frame) and per spark a 4.12 fixed-point velocity and acceleration, a
+// life and its birth frame; the VU1 program (micro memory instr 649-785, entry MSCAL 8) draws each live
+// spark as a line through its positions at the last L frames.
+T[137] = {
+  init(X, a, o) {                                              // FUN_0027d350
+    const F = X.F, p = X.p;
+    p.ext ??= {}; p.ext[o] = null; p.i32[o] = 0;
+    let cap = (F.u16(a + 0x3c) + 0x1f) & ~0x1f;
+    if (cap > 0x100) cap = 0x100;
+    const blocks = cap >> 5;
+    if (!blocks) return;
+    const L = Math.min(F.u8(a + 0x42), 0x1e);
+    let n = Math.max(cap, L);
+    n = Math.max(n, Math.min(F.u16(a + 0x3e) + F.u16(a + 0x40), 0x100));
+    let size = 1;                                                // the next power of two >= n (n > 1); mask = size - 1
+    if (n > 1) { while ((size << 1) < n) size <<= 1; size <<= 1; }
+    const mask = size - 1;
+    // spark: shorts v x y z, life, a x y z, birth index (V4-16 x 2, unpacked by DAT_0046c280's VIF code)
+    p.ext[o] = { cap, blocks, L, size, mask, idx: 0, carry: 0, start: 0, now: 0,
+      ring: new Float32Array(size), spark: new Int16Array(cap * 8), birth: new Float32Array(cap).fill(-1000) };
+    p.i32[o] = 1;
+  },
+  trans() {},                                                  // FUN_0027d5d0: jr ra
+  eval(X, _t, a, o) { evalSparks(X, a, o); },
+  draw(X, a, o, view, out, tex, proj) { drawSparks(X, a, o, view, out, proj); },
+};
+function evalSparks(X, a, o) {                                 // FUN_0027d5d8
+  const F = X.F, em = X.em, rng = X.rng, S = X.p.ext?.[o];
+  const dt = em.dt;
+  if (!S || dt === 0) return;
+  const i = S.idx, old = S.ring[i & S.mask];
+  S.ring[(i + 1) & S.mask] = S.now = f(old + dt);
+  S.idx = i + 1;
+  const rate = F.f32(a + 0x34);
+  let amt = f(f(rate * dt) + S.carry);
+  if (amt < 1) { S.carry = amt; return; }
+  const n = Math.trunc(amt), nf = f(n);
+  S.carry = f(amt - f(nf * f(Math.trunc(f(amt / nf)))));            // FUN_002d9208
+  S.carry = f(S.carry - f(f(F.u8(a + 0x43)) * rate));
+  if (n > 0 && !rng.mt) { X.warn('effects: type 137 sparks need the effect twister state (DAT_004e9408; ids.json twister): not spawned'); X.p.noDraw = 'type 137 without the twister state'; }
+  for (let j = 0; j < n && rng.mt; j++) {
+    const slot = (S.start + j) % S.cap, q = slot * 8;
+    S.birth[slot] = old;
+    S.spark[q + 7] = i;                                        // the birth frame (short)
+    S.spark[q + 3] = F.u16(a + 0x3e) + rng.vrSpan(F.u16(a + 0x40));   // life +- (FUN_002d9828)
+    const s = f(F.f32(a + 0x38) * f(5.688889));
+    const ang = [rng.mtSigned(s), rng.mtSigned(s), rng.mtSigned(s)];
+    const d = xform(rotZYX(ang), [0, -1, 0]);                  // (0, -1, 0) turned (FUN_002d7f68, FUN_002d8578)
+    const sp = f(F.f32(a + 0x28) + rng.mtSigned(F.f32(a + 0x2c)));
+    let fv = f(F.f32(a + 0x20) + rng.mtSigned(F.f32(a + 0x24)));
+    if (fv < -8) fv = -8; else if (f(7.9999) < fv) fv = f(7.9999);   // the 4.12 range of a short
+    const acc = [0, 1, 2].map(k => f(d[k] * sp)), vel = [0, 1, 2].map(k => f(d[k] * fv));
+    acc[1] = f(acc[1] + F.f32(a + 0x30));
+    for (let k = 0; k < 3; k++) { S.spark[q + k] = ftoi12(vel[k]); S.spark[q + 4 + k] = ftoi12(acc[k]); }   // VFTOI12, PPACH (low halves)
+  }
+  S.start = (S.start + n) % S.cap;
+}
+const ftoi12 = x => (Math.max(-2147483648, Math.min(2147483647, Math.trunc(f(x * 4096)))) << 16) >> 16;
+// The VU1 program at MSCAL 8 (instr 649-785) for one particle's sparks. Parameters (VU 0xf0-0xfa, from
+// FUN_0027da78): the main matrix (FUN_002e3498 with scale 1.0), the start / end colours (data +0 / +0x10 x
+// particle colour x emitter colour / 16384), L, the frame index, the ring mask, the newest time; GIF
+// LINE STRIP (PRIM 0x4a: gouraud, alpha blend), ALPHA from DAT_0046c2a0[data +0x44] (0x44 / 0x48 / 0x42).
+const SPARK_ALPHA = [0x44, 0x48, 0x42];
+// module-level scratch for drawSparks (no per-spark / per-vertex arrays; the output keeps one object a vertex)
+const SPK = { pc: new Float32Array(4), c0: new Float32Array(4), step: new Float32Array(4), v: new Float32Array(3), ac: new Float32Array(3),
+  col: new Float32Array(4), pl: new Float32Array(3), pv: new Float32Array(3) };
+function drawSparks(X, a, o, view, out, proj) {               // FUN_0027da78
+  const F = X.F, p = X.p, em = X.em, S = p.ext?.[o], d = X.d;
+  if (!S) return;
+  const m14 = p.data[D.ref(F, d, 1)];
+  const C = viewMatrix(X, p.m50, F.u8(m14 + 1), view, f(1), null);   // FUN_002e3498(1.0, .., mode = type 14 byte 1)
+  if (!C) return;
+  const ai = F.u8(a + 0x44), alpha = SPARK_ALPHA[ai];
+  if (alpha === undefined) { X.warn(`effects: type 137 alpha preset ${ai} (DAT_0046c2a0) not translated`); return; }
+  const cs = D.refSlot(F, d, 0) / 4, K = f(1 / 16384);         // FUN_002d8908(0x38800000)
+  const Q = f(1 / f(S.L));
+  const { pc, c0, step, v, ac, col, pl, pv } = SPK;
+  for (let i = 0; i < 4; i++) {
+    pc[i] = f(p.v[cs + i] * em.col[i]);
+    c0[i] = f(f(F.f32(a + 4 * i) * pc[i]) * K);
+    const c1 = f(f(F.f32(a + 0x10 + 4 * i) * pc[i]) * K);
+    step[i] = f(f(c1 - c0[i]) * Q);
+  }
+  const nowIdx = S.idx & 0xffff, now = S.now;
+  for (let s = 0; s < S.cap; s++) {
+    const q = s * 8, life = f(S.spark[q + 3]);
+    const age = f(now - S.birth[s]), rem = f(life - age);
+    if (rem <= 0) continue;                                    // FSAND 3 (S | Z)
+    const af = Math.min(f(rem / f(life * 0.5)), 1);            // MINIz with VU 0x3f4.z = 1.0
+    let cnt = ((nowIdx - (S.spark[q + 7] & 0xffff)) << 16 >> 16) + 1;   // 16-bit VI maths
+    if (cnt - S.L > 0) cnt = S.L;
+    for (let k = 0; k < 3; k++) { v[k] = S.spark[q + k] / 4096; ac[k] = S.spark[q + 4 + k] / 4096; }   // ITOF12
+    let verts = null;
+    for (let k = 0; k < cnt; k++) {
+      const t = f(S.ring[(nowIdx - k) & S.mask] - S.birth[s]), t2 = f(t * t);
+      for (let i = 0; i < 4; i++) col[i] = f(c0[i] + f(step[i] * k));
+      col[3] = f(col[3] * af);
+      for (let i = 0; i < 3; i++) pl[i] = f(f(v[i] * t) + f(f(ac[i] * t2) * 0.5));
+      for (let j = 0; j < 3; j++) pv[j] = f(f(f(pl[0] * C[j]) + f(pl[1] * C[4 + j])) + f(f(pl[2] * C[8 + j]) + C[12 + j]));   // xform: view space
+      if (!(pv[2] > 0)) break;                                   // FMAND 0x11: w <= 0 ends the strip
+      const sx = f(f(proj.fx * pv[0] / pv[2]) + proj.cx), sy = f(f(proj.fy * pv[1] / pv[2]) + proj.cy);
+      if (Math.abs(sx - VU.cx) > 1536 || Math.abs(sy - VU.cy) > 1536) break;   // CLIP x2, FCAND 0x14a (guard 1536, VU 0x3f2.w)
+      (verts ??= []).push({ pos: [pv[0], pv[1], pv[2]], gs: [sx, sy],
+        rgba: [Math.trunc(f(col[0] * 127)), Math.trunc(f(col[1] * 127)), Math.trunc(f(col[2] * 127)), Math.trunc(f(col[3] * 127))] });   // MULi 127, FTOI0
+    }
+    if (verts && verts.length > 1) out.push({ line: true, verts, alpha, emitter: em.ei, id: em.id, type: 137, tag: p.tag, slot: s });
+  }
+}
+const DRAWN_ELSEWHERE = { 11: 'FUN_0027a170', 100: 'FUN_002cb3f0' };
 
 // ---------------------------------------------------------------------------------------------
 // The engine. One manager (DAT_004ee2e0, the FED 0x40000 is linked into it).
-export function createEffects({ fed, core, warn = console.warn, rng = new EffectRng(), proj = PROJ } = {}) {
+export function createEffects({ fed, core, warn = console.warn, twister = null, rand = null, rng = null, proj = PROJ } = {}) {
+  const rngGiven = !!rng;
+  rng ??= new EffectRng(undefined, undefined, twister, rand);
   const F = parseFed(fed);
   const tex = core ? parseCore(core) : new Map();
   const warned = new Set();
   const warnOnce = m => { if (!warned.has(m)) { warned.add(m); warn(m); } };
+  // Without rand() the frame reseed (FUN_002d97f8) cannot run: every LCG / VU0 R draw would diverge from the
+  // game's from the first frame, so the page's engine spawns nothing (warned). A caller that passes its own rng
+  // (the tests, with a recovered seed) runs on unreseeded, warned too.
+  const noRand = rng.libc === null;
+  if (noRand) warnOnce(`effects: no rand() state (data/effects/ids.json "rand": export_web_effects.py --state sea-of-flames.p2s): FUN_002d97f8 cannot reseed the effect LCG / VU0 R each frame; ${rngGiven ? 'the given LCG runs on unreseeded' : 'effects are left out'}`);
+  if (!rng.mt) warnOnce('effects: no effect twister state (data/effects/ids.json "twister": export_web_effects.py --state sea-of-flames.p2s): the type 137 sparks are left out');
   const emitters = [];                        // mgr +0x84 list
   let counter = 0;                            // mgr +0x8c
   let phase = 0xc;                            // mgr +0xb0 (0xc after the draw, 5 in the logic, 9 after FUN_002efe98)
@@ -388,6 +795,7 @@ export function createEffects({ fed, core, warn = console.warn, rng = new Effect
   // FUN_002e62b0 (via FUN_002e6290, param_3 = id): FED by id & 0xfffc0000, group (id >> 10) & 0x7f,
   // entry id & 0x1ff -> FUN_002e63d0(age 0, mgr, fedobj, group +8, entry param record, 0)
   function spawn(id, pos) {
+    if (noRand && !rngGiven) return null;                      // no rand(): left out (warned at load)
     if ((id & 0xfffc0000) >>> 0 !== F.code) { warnOnce(`effects: no FED for id 0x${id.toString(16)}`); return null; }
     if (id & 0x200) { warnOnce('effects: id bit 0x200 (FUN_002e8830) not translated'); return null; }
     const g = F.groupOf((id >> 10) & 0x7f);
@@ -438,8 +846,13 @@ export function createEffects({ fed, core, warn = console.warn, rng = new Effect
       v: new Float32Array(buf), i32: new Int32Array(buf), data: [], entry: [], m50: ident(), skip: null,
     };
     if (tag & 0x2000) warnOnce('effects: spawn tag bit 0x2000 (child particles) not translated');
-    // render categories 2 / 6-9 copy a matrix to +0x54 at spawn (FUN_002e9db0) that FUN_002e3498 then uses: not verified
-    if (p.cat !== 0 && p.cat !== 1) p.skip = `render category ${p.cat} (FUN_002e9db0 +0x54 matrix)`;
+    // FUN_002e9db0: render categories 2 / 6-9 give the particle its own +0x54 matrix (+0x1c = itself), which
+    // FUN_002e3498 then uses instead of the emitter matrix +0xe0: 6 / 8 = a copy of +0xe0 (FUN_002d8528, no
+    // parent), 2 = the copy with a unit diagonal, 7 = the copy through FUN_002d86e0, 9 = identity. Every page
+    // emitter stays where it spawned, so the copy equals +0xe0 (MEASURED: w188 state C, the hit's tag 0) and
+    // 6 / 8 draw as category 1. 2 / 7 / 9 are simulated (their channels draw the RNGs as the game) but not drawn.
+    if (p.cat === 2 || p.cat === 7 || p.cat === 9) p.noDraw = `render category ${p.cat} (FUN_002e9db0 +0x54 matrix)`;
+    else if (p.cat > 9) p.skip = `render category ${p.cat}`;
     // FUN_002eb038: the init list (+0x30: count +4, entries from +8 stride 8: u8 channel, u16 data offset)
     const blk = F.list(P, 0);
     for (let j = 0; j < F.u8(blk + 4); j++) {
@@ -447,7 +860,11 @@ export function createEffects({ fed, core, warn = console.warn, rng = new Effect
       const d = F.desc(P, idx), ty = D.type(F, d);
       p.data[idx] = a;
       const ev = T[ty];
-      if (!ev) { if (!DRAWN_ELSEWHERE[ty]) p.skip = p.skip ?? `channel type ${ty}`; else p.skip = p.skip ?? `draw type ${ty} (${DRAWN_ELSEWHERE[ty]})`; continue; }
+      // an untranslated draw type (11 / 100: their init / transition / eval draw no RNG: 0x27a160 / 0x27a168 are
+      // jr ra, 0x2cb300 / 0x2cb3b8 call no RNG function) leaves the particle simulated, so its other channels
+      // draw the RNGs as in the game (worker 0188 review: tag 5's type 23 / 24 transitions are 6 LCG draws before
+      // tag 3's type 21 eval), but not drawn; an untranslated channel type still skips the particle
+      if (!ev) { if (!DRAWN_ELSEWHERE[ty]) p.skip = p.skip ?? `channel type ${ty}`; else p.noDraw = p.noDraw ?? `draw type ${ty} (${DRAWN_ELSEWHERE[ty]})`; continue; }
       ev.init(ctx(em, p, d), a, D.slot(F, d) / 4);
     }
     if (p.skip) warnOnce(`effects: particle with ${p.skip} not translated (emitter ${em.ei}): not drawn`);
@@ -525,11 +942,15 @@ export function createEffects({ fed, core, warn = console.warn, rng = new Effect
     // it stays while either particle list is non-empty
     return !!(F.u16(E) & 1) && (em.lists[0].length + em.lists[1].length > 0);
   }
-  // FUN_002e7cd0: the emitter matrix +0xe0 for a param record with +0x1d == 0 (cat 0)
+  // FUN_002e7cd0: the emitter matrix +0xe0 (emitter byte +1 == 0: categories below 5)
   function emitterMatrix(em) {
-    const r = em.param;
-    // param +0x1d != 0 (attached emitters): another matrix path, not translated: the emitter is not drawn
-    if (F.u8(r + 0x1d) !== 0) { em.noDraw = `param record mode +0x1d = ${F.u8(r + 0x1d)} (FUN_002e7cd0)`; return; }
+    const r = em.param, mode = F.u8(r + 0x1d);
+    // param +0x1d == 1: only an emitter with an attached object (+0x30) takes the attach path
+    // (FUN_002e80e0, then FUN_002e84a8(.., 0)); FUN_002e63d0 clears +0x30 and the flag-1 spawn
+    // (FUN_002e7660, FUN_00335f40 / FUN_003361b8) never sets it, so mode 1 falls through to the
+    // mode-0 code below (0x2e7cd0 asm: bVar1 == 1 && +0x30 == 0 -> the iVar2 != 0 path).
+    // Mode 2 (a bone matrix, FUN_00269530) and > 2 (the matrix is not updated) are not translated.
+    if (mode >= 2) { em.noDraw = `param record mode +0x1d = ${mode} (FUN_002e7cd0)`; return; }
     const p80 = [0, 1, 2].map(i => f(em.p120[i] + F.f32(r + 0x10 + 4 * i)));
     const r90 = [0, 1, 2].map(i => f(em.p130[i] + F.f32(r + 0x20 + 4 * i)));
     em.scale = [0, 1, 2].map(i => f(em.p140[i] * F.f32(r + 0x30 + 4 * i)));
@@ -547,6 +968,7 @@ export function createEffects({ fed, core, warn = console.warn, rng = new Effect
   }
   // The frame (FUN_00248110): begin() before the game logic, end() after it, then the draw.
   function begin(step = 1.2) {
+    rng.frame();                                               // FUN_002efc78 -> FUN_002d97f8: LCG and VU0 R from rand()
     // FUN_002efc78 -> FUN_002e9f98: dt = step (emitter +0xc is 0), FUN_002ea040 per emitter
     for (const em of emitters.slice()) {
       const keep = ageEmitter(em, f(step));
@@ -611,9 +1033,11 @@ function drawSprite(X, a, o, view, out, tex, proj) {
   const ai = F.s32(a + 0xc);
   const anim = ai >= 0 ? F.anim(ai) : 0;
   if (!anim) return;
-  // the type 14 channel (ref 1) carries the billboard mode bytes; the colour slot is ref slot 0
+  // the type 14 channel (ref 1) carries the mode bytes: FUN_002e3498(.., a3 = byte 0, t0 = byte 1 (its mode),
+  // t1 = byte 2, ..) and FUN_002e3948(.., a3 = byte 1, ..) (0x2778b8 asm; worker 0188: byte 0 was read before,
+  // the same value in every type 10 particle of the impacts); the colour slot is ref slot 0
   const m14 = p.data[D.ref(F, d, 1)];
-  const mode = F.u8(m14), mode2 = F.u8(m14 + 1);
+  const mode = F.u8(m14 + 1), mode2 = F.u8(m14 + 1);
   const colSlot = D.refSlot(F, d, 0) / 4;
   const flip = (I[o + 1] >> 16) & 0xff;
   const M = mul33(flipMatrix(flip), p.m50);
@@ -716,7 +1140,7 @@ function vuSprite(X, rec, rgba, C, Dm, out, tex, proj, em) {
     });
     const t = tex.get(`${tex0[1].toString(16)}:${tex0[0].toString(16)}`);
     if (!t) { X.warn(`effects: TEX0 ${tex0[1].toString(16)}${tex0[0].toString(16).padStart(8, '0')} not in core_ef.bin`); continue; }
-    out.push({ verts, tex: t, alpha: alphaReg, emitter: em.ei, id: em.id });
+    out.push({ verts, tex: t, alpha: alphaReg, emitter: em.ei, id: em.id, type: D.type(F, X.d), tag: X.p.tag });
   }
 }
 function xform4(m, v) { const o = [0, 0, 0, 0]; for (let j = 0; j < 4; j++) o[j] = f(f(f(v[0] * m[j]) + f(v[1] * m[4 + j])) + f(f(v[2] * m[8 + j]) + f(v[3] * m[12 + j]))); return o; }
@@ -777,12 +1201,14 @@ export class EffectLayer {
     const THREE = this.THREE, key = `${t.k}:${alpha}`;
     this.mats ??= new Map();
     let m = this.mats.get(key);
-    if (m) return m;
+    if (m !== undefined) return m;
     const A = alpha & 3, B = (alpha >> 2) & 3, Cc = (alpha >> 4) & 3, Dd = (alpha >> 6) & 3;
+    // GS ALPHA (A - B) x C + D (FIX 0x80): 0x44 (Cs - Cd) As + Cd, 0x48 Cs As + Cd, 0x42 (0 - Cs) As + Cd = Cd - Cs As
     let blend;
-    if (A === 0 && B === 1 && Cc === 0 && Dd === 1) blend = [THREE.SrcAlphaFactor, THREE.OneMinusSrcAlphaFactor];
-    else if (A === 0 && B === 2 && Cc === 0 && Dd === 1) blend = [THREE.SrcAlphaFactor, THREE.OneFactor];
-    else { this.fx.warn(`effects: GS ALPHA 0x${alpha.toString(16)} not translated`); blend = [THREE.SrcAlphaFactor, THREE.OneMinusSrcAlphaFactor]; }
+    if (A === 0 && B === 1 && Cc === 0 && Dd === 1) blend = [THREE.SrcAlphaFactor, THREE.OneMinusSrcAlphaFactor, THREE.AddEquation];
+    else if (A === 0 && B === 2 && Cc === 0 && Dd === 1) blend = [THREE.SrcAlphaFactor, THREE.OneFactor, THREE.AddEquation];
+    else if (A === 2 && B === 0 && Cc === 0 && Dd === 1) blend = [THREE.SrcAlphaFactor, THREE.OneFactor, THREE.ReverseSubtractEquation];
+    else { this.fx.warn(`effects: GS ALPHA 0x${alpha.toString(16)} not translated: not drawn`); this.mats.set(key, null); return null; }
     m = new THREE.ShaderMaterial({
       uniforms: { map: { value: this.texture(t) } },
       vertexShader: 'attribute vec4 rgba; varying vec4 vC; varying vec2 vUv; void main() { vC = rgba; vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
@@ -790,7 +1216,7 @@ export class EffectLayer {
       fragmentShader: 'uniform sampler2D map; varying vec4 vC; varying vec2 vUv; void main() { vec4 t = floor(texture2D(map, vUv) * 255.0 + 0.5); vec4 c = min(floor(t * vC / 128.0), 255.0); if (c.a <= 0.0) discard; gl_FragColor = vec4(c.rgb / 255.0, c.a / 128.0); }',
       transparent: true, depthWrite: false, depthTest: true, side: THREE.DoubleSide,   // the GS has no culling; game view -> three view flips the winding
       blending: THREE.CustomBlending,
-      blendEquation: THREE.AddEquation, blendSrc: blend[0], blendDst: blend[1],
+      blendEquation: blend[2], blendSrc: blend[0], blendDst: blend[1],
     });
     this.mats.set(key, m);
     return m;
@@ -815,7 +1241,10 @@ export class EffectLayer {
       for (let r = 0; r < 4; r++) { V[4 * r] = inv[4 * r]; V[4 * r + 1] = -inv[4 * r + 1]; V[4 * r + 2] = -inv[4 * r + 2]; V[4 * r + 3] = r === 3 ? 1 : 0; }
       return V;
     };
-    const list = this.fx.sprites({ toView, toViewMatrix });
+    const all = this.last = this.fx.sprites({ toView, toViewMatrix });   // .last: the page tests
+    const list = [], lines = [];
+    for (const s of all) (s.line ? lines : list).push(s);
+    this.lines(lines, w);
     while (this.pool.length < list.length) {
       const g = new THREE.BufferGeometry();
       g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(12), 3));
@@ -838,8 +1267,61 @@ export class EffectLayer {
         for (let k = 0; k < 4; k++) C[4 * j + k] = vx.rgba[k];
       });
       g.attributes.position.needsUpdate = g.attributes.uv.needsUpdate = g.attributes.rgba.needsUpdate = true;
-      mesh.material = this.material(s.tex, s.alpha);
+      const mat = this.material(s.tex, s.alpha);
+      if (!mat) { mesh.visible = false; return; }
+      mesh.material = mat;
       mesh.renderOrder = 1000 + i;                                    // GUESS: draw buckets (FUN_002e1d88) not decoded: spawn order
+    });
+  }
+  // the type 137 sparks: GS LINE STRIPs, gouraud, untextured: the vertex colour as is (alpha 0x80 = 1.0;
+  // the VU1 program can give alpha above 0x80, so the colour is premultiplied here and blended with
+  // factor 1, as the GS computes Cs x As)
+  lineMaterial(alpha) {
+    const THREE = this.THREE;
+    this.lmats ??= new Map();
+    let m = this.lmats.get(alpha);
+    if (m !== undefined) return m;
+    let src = THREE.OneFactor, dst, eq = THREE.AddEquation;
+    if (alpha === 0x48) dst = THREE.OneFactor;                                     // Cs As + Cd
+    else if (alpha === 0x44) dst = THREE.OneMinusSrcAlphaFactor;                   // (Cs - Cd) As + Cd
+    else if (alpha === 0x42) { dst = THREE.OneFactor; eq = THREE.ReverseSubtractEquation; }   // Cd - Cs As
+    else { this.fx.warn(`effects: GS ALPHA 0x${alpha.toString(16)} for lines not translated: not drawn`); this.lmats.set(alpha, null); return null; }
+    m = new THREE.ShaderMaterial({
+      vertexShader: 'attribute vec4 rgba; varying vec4 vC; void main() { vC = rgba; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+      fragmentShader: 'varying vec4 vC; void main() { float a = vC.a / 128.0; gl_FragColor = vec4(vC.rgb / 255.0 * a, min(a, 1.0)); }',
+      transparent: true, depthWrite: false, depthTest: true,
+      blending: THREE.CustomBlending, blendEquation: eq, blendSrc: src, blendDst: dst,
+    });
+    this.lmats.set(alpha, m);
+    return m;
+  }
+  lines(list, w) {
+    const THREE = this.THREE;
+    this.lpool ??= [];
+    while (this.lpool.length < list.length) {
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(3 * 30), 3));
+      g.setAttribute('rgba', new THREE.BufferAttribute(new Float32Array(4 * 30), 4));
+      const line = new THREE.Line(g); line.frustumCulled = false;
+      this.lpool.push(line); this.group.add(line);
+    }
+    this.lpool.forEach((l, i) => { l.visible = i < list.length; });
+    list.forEach((s, i) => {
+      const line = this.lpool[i], g = line.geometry;
+      const P = g.attributes.position.array, C = g.attributes.rgba.array;
+      s.verts.forEach((vx, j) => {
+        const [x, y, z] = [vx.pos[0], -vx.pos[1], -vx.pos[2]];
+        P[3 * j] = w[0] * x + w[4] * y + w[8] * z + w[12];
+        P[3 * j + 1] = w[1] * x + w[5] * y + w[9] * z + w[13];
+        P[3 * j + 2] = w[2] * x + w[6] * y + w[10] * z + w[14];
+        for (let k = 0; k < 4; k++) C[4 * j + k] = vx.rgba[k];
+      });
+      g.setDrawRange(0, s.verts.length);
+      g.attributes.position.needsUpdate = g.attributes.rgba.needsUpdate = true;
+      const mat = this.lineMaterial(s.alpha);
+      if (!mat) { line.visible = false; return; }
+      line.material = mat;
+      line.renderOrder = 1000 + i;                                     // GUESS: draw buckets not decoded (as the sprites)
     });
   }
 }

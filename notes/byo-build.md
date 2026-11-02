@@ -19,7 +19,7 @@ Worker 0191, 2026-11-01. Scripts: `tools/byo/build_web.sh`, `tools/byo/disc.py`.
 | enemies/placements.json | enemies.js | export_web_placements.py | noPath 06800001 |
 | enemies/ai.json | play.js / enemy_ai.js | export_web_triggers.py **+ ELF (sound names)** | noPath 06800001, 06800009, ELF |
 | aim/weapon.json, reticle.json | aim.js | export_web_aim.py --iso | data/bgd/bgd.bin, data/etc/menudata.bin, ELF |
-| effects/r0001.fed, core_ef.bin, ids.json | play.js -> effects.js | export_web_effects.py (effects) | data/effect/resident/r0000/r0001/fer/r0001.fed, data/effect/core/core_ef.bin, ELF; twister from --state |
+| effects/r0001.fed, core_ef.bin, ids.json | play.js -> effects.js | export_web_effects.py (effects) | data/effect/resident/r0000/r0001/fer/r0001.fed, data/effect/core/core_ef.bin, ELF; twister + rand from --state (without them all effects are left out) |
 | pause.json | pause_layer.js | export_web_pause.py (pause) | ELF, data/etc/locale/uk/{menudata,fontdata1,kelstr}.bin |
 | menu.json | tests only (test_menu_layout) | export_web_menu.py (menu) | ELF |
 | hud/hud.json | hud.js | export_web_hud.py (hud, **only with --state**) | ELF, locale uk menudata/fontdata1, **save state** |
@@ -60,7 +60,8 @@ pause.json, menu.json, hud/hud.json, aim, enemies, room, textures, collision, la
 dev-only files listed above.
 
 Without --state: the effects step reads no save (audit-hooked: no .p2s opened); ids.json = the
-maintainers' minus the `twister` field; the HUD step is skipped and scene.json has no "hud".
+maintainers' minus the `twister` and `rand` fields, so the page leaves ALL effects out (warned; 0188:
+every effect frame reseeds the effect LCG from rand()); the HUD step is skipped and scene.json has no "hud".
 An earlier "disc-only" run was not: export_web_effects.py then defaulted --state to the shared save.
 The build now always passes --state "$STATE" ('' when not given = left out; 0188 removed the default).
 

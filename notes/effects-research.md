@@ -5,8 +5,9 @@ types 1 2 4 7 9 14 15 16 22 23 24, the sprite draw type 10 down to the VU1 progr
 the bullet wall impacts and the soldiers' bullets hitting Vincent. Checked against five PCSX2 save
 states and two GS dumps taken during w172_sound3: every translated particle's values and matrix
 match RAM, every translated sprite's TEX0, ALPHA, ST and vertex RGBA equal the GS draw, corners
-within 1 px. Not translated (warned, not drawn): draw types 11 / 21 / 100 / 137 and a few channel
-types, so each impact shows its flash sprites but not its burst (type 21) or small sparks (type 137).
+within 1 px. Worker 0188 (2026-11-01) added draw types 21 (burst) and 137 (sparks), the hit's param
++0x1d == 1 path and render categories 6 / 8 (see 'Types 21 / 137 (worker 0188)'). Not translated (warned,
+not drawn): draw types 11 / 100 and a few channel types.
 
 Data: `python3 -I native/assets/models/export_web_effects.py` -> `native/web/data/effects/`
 (`r0001.fed`, `core_ef.bin` copied from the user's extract; `ids.json` from the ELF). The exporter
@@ -127,7 +128,7 @@ Test: `node native/web/test_effects.mjs` (146 checks; the game comparisons need
   vs the page drawing the same six impacts; the page's burst is smaller: types 21 / 137).
 
 ## Not done (fidelity-audit rows from 'Bullet wall impact effect')
-Draw types 11 / 21 / 100 / 137, channel types 3 / 5 / 6 / 8 / 26, rotation orders 1-5 (FUN_002d82d0 cases
+Draw types 11 / 100 (21 / 137: worker 0188, above), channel types 3 / 5 / 6 / 8 / 26, rotation orders 1-5 (FUN_002d82d0 cases
 FUN_002d8060 / 80d0 / 8150 / 81d0 / 8250: in four of them the first call reads the output matrix; not
 translated, such particles / emitters are not drawn), render
 categories 2 / 6-9 (+0x54 matrix copy), looping / child / list-0 particles, emitter fade, attached
@@ -135,3 +136,58 @@ emitters (param +0x1d != 0), the frustum cull, the draw buckets, the screen-spac
 decal, FUN_00336508, hit effects on soldiers. Next: type 21 (the burst, FUN_0027bda0 / FUN_0027cd68,
 also a FUN_00308028 sprite) and type 137 (FUN_0027da78, own packets), then a GS dump of a hit on
 Vincent.
+
+## Types 21 / 137, param +0x1d, the hit (worker 0188, 2026-11-01)
+Vtables from the save RAM (DAT_0046c398): 21 -> 0x49aa78 (init FUN_0027baa0, transition FUN_0027bba0 (not a
+Ghidra function: asm), eval FUN_0027bda0, draw FUN_0027cd68, destroy FUN_0027bd70); 137 -> 0x49aad8 (init
+FUN_0027d350, transition FUN_0027d5d0 = jr ra, eval FUN_0027d5d8, draw FUN_0027da78, destroy FUN_0027d5a0).
+Ghidra drops `sq $0` stores (FUN_002d8490 is a real identity; type 137's direction vector is (0, -1, 0), not the
+angles) and shows EE `madd` as `|` (record = pool + 0x30 + i x 0x90): check the asm (capstone + the EE opcodes,
+VU0 macro fields decoded by hand: normalise = xyz, w = 0; cross = a x b).
+- Type 21: a ring of 0x90-byte sub-sprites (layout in effects.js). Spawn amount = acc dt^2 / 2 + rate dt (data
+  +0x3c / +0x2c) + carry; age of the n-th new one = dt / total x n - 1. Shapes (+0xfe) 0 / 2 box +-data[0..2],
+  1 / 3 shell along a random cone (FUN_002d93d0 look-at: up (0, 1, 0) when dir.x | dir.z bits != 0, else (0, 0,
+  1)); velocity along the cone (0 1 6 8) or radial (2 3 7 9); second direction data +0x20 normalised; scale x / y
+  only (z = 100); rotation / colour in .w / own rows. Draw: b + r t + (a x 0.5) t^2, scale x 0.001 x emitter
+  scale, flip, rotZ, position . P+0x50 . E (data +0xfb not 2 / 6 / 7) . view, depth offset data +0xec when +0x10e.
+- Type 137: CPU side in effects.js `evalSparks`; GPU side = VU1 micro memory instr 649-785 (MSCAL 8 -> B 649;
+  `port/vu/tools/vudis.py` on the save's vu1MicroMem; its I-bit immediates are 0.5 and 127.0, the second shown as
+  a bogus BAL). Packet: UNPACK V4-32 11 qw to VU 0xf0 (main matrix, start / end colour / 16384, (32, L, ring
+  size, frame index), (mask, newest time), GIF A+D ALPHA, LINE STRIP tag PRIM 0x4a); per 32-spark block REF to
+  the spark shorts (V4-16 to TOPS+0x10) and the birth times (S-32 to TOPS+0x50); the time ring S-32 to 0x2f0.
+  VU1 constants 0x3f0-0x3f4: (2048, 2048, 2^23), guard 1536, alpha cap 1.0.
+- RNGs: sparks draw the effect twister FUN_002d9b18 (DAT_004e9408 / index DAT_004e9dc8: its own MT instance;
+  only effect channel code draws it) and VU0 R (FUN_002d9828, life). export_web_effects.py --state writes the
+  z128 save's twister into ids.json (no default: build_web.sh passes it).
+- FUN_002e3498's mode is type 14 byte 1 (its 5th argument); the sparks are world-oriented (bytes 1, 0).
+- Param +0x1d == 1 (emitters 3 / 7, the hits): FUN_002e7cd0 attaches only when emitter +0x30 is set; FUN_002e63d0
+  clears it and the flag-1 spawn never sets it -> the mode-0 matrix.
+- Render categories (FUN_002e9db0): 6 / 8 copy E to the particle's +0x54 (equal to E for a static emitter:
+  MEASURED), 2 unit diagonal, 7 FUN_002d86e0, 9 identity; all are now simulated (their RNG draws), 2 / 7 / 9 not drawn.
+- Evidence (w188 grabs of w172_sound3, `tools/trace/out/w188_fx/`, gitignored): A f787 (before the hit on Vincent),
+  B f831 + dump f835 (before the pellet impacts f833-835), C f789 + dump (one frame after the hit), D f837 + dump
+  f840 (after the impacts; this dump is state + 3, not + 4). fx_fixture.py now also writes the twister, each
+  particle's data blocks and raw type 21 / 137 pools (the FED is relocated in RAM: absolute pointers) and the +0x54
+  matrix; dumpfx.py --lines writes the line-strip segments. The camera of a dump frame is not in the save (the
+  shot's recoil moves it by ~1.5 px): the test fits a screen shift from the sprites.
+- The game's step varies (1.1999988 at D); the spark carry sits on a knife edge (0.99999809), so the replay takes
+  each frame's step from the RAM time rings.
+- Hit on Vincent (f789): the game spawns 0x40c00 (emitter 3) AND 0x41800 (emitter 6) at the point; the second's
+  source is not found (FUN_005720c8 and FUN_0055db50 both call FUN_003361b8). Review (manager): the 0188 replay
+  of the hit was off because (1) the hit's tags 4 / 5 have draw types 100 / 11 and were skipped whole, losing tag
+  5's type 23 / 24 transition draws (6 LCG draws before tag 3's type 21 eval): now such particles are simulated,
+  not drawn; and (2) every effect frame reseeds the LCG (below), which was the 'rewind' in frame 2 (emitter 8
+  draws nothing there). Now the hit's type 21 records of both frames equal RAM, and dump C+4 has 13 / 17 sprites
+  with the game's exact RGBA within 1.96 px (shift fitted on those; the dump frame's camera is not in the save).
+- Per-frame reseed: FUN_002efc78 (the effect frame's begin) first calls FUN_002d97f8: DAT_004e9400 = rand()
+  (FUN_00448910, newlib: state *(PTR_DAT_00495844) + 0x58 = state x 0x41c64e6d + 0x3039, returns & 0x7fffffff)
+  and VRINIT R with that word. T: rand() advances exactly once a frame between the w188 states (A -> C 2, B -> D 6,
+  C -> B 42: MEASURED; other rand() callers: FUN_002e0ca8 via FUN_002e28d8 (material-6 impacts) and FUN_003a1080
+  (pointer only)), the impacts replay from state B's rand() alone (no recovered seeds), and every spark life equals
+  RAM: the VU0 R reseed in FUN_002d9880 / FUN_002d9828 is R - 1.8872414 (constant 0x3ff19120; 0188 first used
+  f(1.88725) = 0x3ff19168, which diverged after 3-5 draws; VSUBbc writes vf25.w, the decomp's 2R ignores lane masks).
+  The page gets the z128 save's rand() state from ids.json `rand` (export --state); without it no effects spawn (warned).
+- GS ALPHA 0x42 (DAT_0046c2a0 preset 2) = (0 - Cs) As + Cd: drawn with a reverse-subtract blend; any other ALPHA
+  is not drawn (warned).
+- Floor-hit normal (two attempts): the game's normal is normalize(VU0 vf22) stored by FUN_0026f8a0 at DAT_004e8810
+  after the VU0 collision program (FUN_00271408 kicks VIF0); needs that program decoded. Floors keep no effect.
