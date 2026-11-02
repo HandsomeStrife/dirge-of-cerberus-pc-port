@@ -44,7 +44,10 @@ const MOUSE_SENS = params.has('mousesens') && +params.get('mousesens') > 0 ? +pa
 const FX = params.get('fx') !== '0';               // the effect engine (effects.js, data/effects): wall impacts, hits on Vincent; ?fx=0 off
 const ENEMY_DMG = params.get('enemydmg') !== '0';    // enemy bullets damage Vincent (decoded hit test, on by default; ?enemydmg=0: they hit, no damage); melee always does
 const AIM = params.get('aim') !== '0';               // aim.js (aim_core.js): the weapon, its camera views, the reticle
-const GAMEHUD = params.get('gamehud') !== '0';       // hud.js (hud_core.js): the game's HUD (HP gauge, weapon panel), ?gamehud=0 off (?hud=0 hides only the debug text)
+// OPTION widehud: in full mode the HUD's left / right panels move out to the canvas edges (hud.js panelAnchors;
+// not in the game). ON by default at Dan's request (review board 2026-11-02); ?widehud=0 gives the game's 4:3 layout
+const WIDEHUD = params.get('widehud') !== '0';
+const GAMEHUD = params.get('gamehud') !== '0';      // hud.js (hud_core.js): the game's HUD (HP gauge, weapon panel), ?gamehud=0 off (?hud=0 hides only the debug text)
 // game sound effects (audio.js; notes/audio-research.md): on by default, ?sound=0 off. Browsers start audio only after
 // a user gesture: the AudioContext is made on the first key / click (the page's existing click-to-look); sounds
 // requested before that are dropped (no extra UI).
@@ -575,7 +578,7 @@ async function main() {
   // choice 2026-10-28); ?outblur=1 / 0 forces it.
   const nativeRes = params.get('res') === 'native';
   const output = createOutputStage(renderer, { enabled: params.has('outblur') ? params.get('outblur') !== '0' : nativeRes,
-                                               msaa: params.get('aa') === '1', native: nativeRes });
+                                               msaa: params.get('aa') === '1', native: nativeRes, wideHud: WIDEHUD });
 
   const c0 = new THREE.Vector3(...scene.camera.eye);
   const far = Math.max(c0.distanceTo(lo.clone().add(hi).multiplyScalar(.5)) + lo.distanceTo(hi) + 1, 1);

@@ -530,8 +530,9 @@ export class HudState {
     this.sc = FULL;
     this.metrics = hexBytes(data.font.metrics);
     this.chain = data.chain.map(e => ({ ...e }));
-    let slot = null;
-    for (const e of this.chain) { if (e.depth === 0) slot = e.slot ?? null; e.inSlot = slot; }
+    let slot = null, group = -1;
+    // inGroup: the chain index of the element's top-level group (its panel; hud.js's widehud option)
+    this.chain.forEach((e, i) => { if (e.depth === 0) { slot = e.slot ?? null; group = i; } e.inSlot = slot; e.inGroup = group; });
     this.hpElem = this.find(5, 5);
     // the hit-direction ring (reticle kind 5; hud.json "ring", the save's HUD +0x230.. in values.ring)
     this.ringData = data.ring || null;
@@ -586,6 +587,7 @@ export class HudState {
         default: break;                                        // type 10 (hidden in the save) not translated
       }
       if (this.sc !== FULL) for (let i = n0; i < out.length; i++) out[i].scissor = this.sc;
+      for (let i = n0; i < out.length; i++) out[i].panel = e.inGroup;     // not game state: hud.js widehud
     }
     return out;
   }

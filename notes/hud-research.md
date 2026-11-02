@@ -168,3 +168,36 @@ export_web_hud.py `Setup` / `disc_tree` builds hud.json's `chain` and `values` w
   test_hud_page ok on it).
 - Not translated (the build raises if reached): FUN_003b5378 (panel 4), FUN_003ae5d8's pulses (+0x2c9 / +0x2cb),
   mid-animation states, '$' codes / wrapping in FUN_003cf338, languages 3-6 (rect lists filled at boot).
+
+## Widescreen HUD option (worker 0196, 2026-11-02)
+An EXTRA, not game behaviour (fidelity-audit 'Options'): `// OPTION widehud`, on by default at Dan's request
+(review board 2026-11-02), `play.html?widehud=0` = the game's 4:3 layout. Full mode only; native mode (432 x 512)
+and the HUD maths (mapA / mapB, FUN_003d2e80) are unchanged.
+- Shift: output.js passes `side = max(0, (w - 4/3 h) / 2)` (the canvas's margin beside the CRTC's 4:3 picture) in
+  the full-mode hud() mapping; hud.js adds anchor x side to every vertex x of a primitive (scissor and batching stay
+  in frame px). Size and look unchanged (same kx / ky). Canvas 4:3 or narrower: side 0.
+- Grouping rule: the unit is a **panel** = one top-level group of the HUD tree (depth 0: a layout table's group,
+  slot i -> HUD+0x38+4i, or the root = the reticle's group). hud_core `prims` tags each primitive with its
+  panel (`panel`, the group's chain index). So a widget (gauge, its text, its frame) never splits.
+- Anchor (hud.js `panelAnchors`, read once from the tree as built, so slides / fades / hides never change it):
+  x extent in HUD px = the group's rect, or, when the group covers the whole HUD (0, 0, 512, 448), the union of
+  its descendants' rects with a width (hidden ones too); centre < 512/3 -> left, > 2*512/3 -> right, else centre
+  (also: no extent).
+
+| panel | what | extent (HUD x) | anchor |
+|---|---|---|---|
+| root (HUD+0x18) | reticle group; callback 0x3f = the hit-direction ring | none | centre |
+| slot 1 | hidden, off screen (538..696) | group rect | right |
+| slot 3 | callback 0x4e only | none | centre |
+| slot 4 | top-right gauge (3 icons, bar, text, callback 0x46); all hidden at the start | 260..440 | right |
+| slot 5 | HP / MP gauge, HP text | 17..250 | left |
+| slot 6 | weapon / ammo / CHAIN / item panel | 16..204 | left |
+| slot 7 | hidden boxes + text | 30..132 | left |
+| slot 8 | item list (slid shut at the start) | group rect 16..250 | left |
+| slots 9, 10 | text panels | group rect 16..198 | left |
+
+- Not this layer's: the reticle (aim.js), pause (pause_layer.js) and game-over (gameover_layer.js) draw centred
+  as before; the pause dim quad covers the whole canvas already.
+- Tests: test_hud_page section 5 (slot 5 left edge / slot 4 right edge (shown for the test) on 1600 x 900 and
+  1280 x 720 vs 1200 x 900 / 960 x 720; off = the 4:3 layout + margin; 4:3 and 1000 x 900 unshifted; anchors per
+  panel) and 6 (play.html default on, ?widehud=0 off).

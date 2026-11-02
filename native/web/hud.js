@@ -98,9 +98,37 @@ function fontTexture(F, clut) {
 const TEX_ID = { menu1: 0, menu2: 1, menu3: 2, menu4: 3 };
 const FULL_SC = [0, 431, 0, 511];
 
+// OPTION widehud (not in the game): in full mode the HUD's panels move out to the canvas edges. ON by
+// default at Dan's request (review board 2026-11-02); ?widehud=0 gives the game's 4:3 layout.
+// The unit that moves is a panel: one top-level group of the HUD tree (a layout table, slot i ->
+// HUD+0x38+4i, or the root = the reticle's group), so a widget never splits. Its anchor comes from
+// its x extent in HUD px (0..512): the group's own rect, or, where the group covers the whole HUD
+// (0, 0, 512, 448), the union of its descendants' rects with a width; centre < 512/3 -> -1 (left),
+// > 2*512/3 -> +1 (right), else 0 (stays centred; also a panel with no extent). Read once from the
+// tree as built, so a panel's anchor does not change while its contents slide or fade.
+// List: notes/hud-research.md 'Widescreen HUD option'.
+export function panelAnchors(chain) {
+  const W = 0x200, H = 0x1c0, a = {};
+  for (let i = 0; i < chain.length; i++) {
+    const g = chain[i];
+    if (g.depth !== 0) continue;
+    const r = g.rect;
+    let x0 = Infinity, x1 = -Infinity;
+    if (!(r[0] <= 0 && r[1] <= 0 && r[2] >= W && r[3] >= H) && r[2] > 0) { x0 = r[0]; x1 = r[0] + r[2]; }
+    else for (let j = i + 1; j < chain.length && chain[j].depth > 0; j++) {
+      const c = chain[j].rect;
+      if (c[2] > 0) { x0 = Math.min(x0, c[0]); x1 = Math.max(x1, c[0] + c[2]); }
+    }
+    const m = (x0 + x1) / 2;
+    a[i] = !(x1 > x0) ? 0 : m < W / 3 ? -1 : m > 2 * W / 3 ? 1 : 0;
+  }
+  return a;
+}
+
 export class HudLayer {
   constructor(data) {
     this.state = new HudState(data);
+    this.anchors = panelAnchors(this.state.chain);   // OPTION widehud
     const u = {};
     ['menu1', 'menu2', 'menu3', 'menu4'].forEach((n, i) => { u['t' + i] = { value: menuTexture(data.textures[n]) }; });
     for (const n of [1, 2, 3, 4]) u['f' + n] = { value: fontTexture(data.font, data.font.cluts[String(n)]) };
@@ -189,7 +217,7 @@ export class HudLayer {
     const c = Math.min(Math.floor(Math.max(...cs.map(c => Math.max(c[0], c[1], c[2]))) * tc / 128), 255);
     return c * a / 128 > 255 ? 2 : 1;
   }
-  // o: output.js hud() mapping (frame px -> target px)
+  // o: output.js hud() mapping (frame px -> target px; o.side: the widehud shift)
   draw(renderer, o) {
     const prims = this.state.prims();
     const tx = x => o.cx + (x - o.x0) * o.kx, ty = y => o.cy + (y - o.y0) * o.ky;
@@ -210,7 +238,9 @@ export class HudLayer {
         b = { start: n, count: 0, hi: 0, hiBoxes: [] }; batches.push(b);
       }
       const hi = this.overOne(p);
-      const m = this.emit(p, n, tx, ty);
+      // OPTION widehud: o.side = the canvas's margin beside the 4:3 picture (0 when off / native)
+      const d = o.side ? (this.anchors[p.panel] || 0) * o.side : 0;
+      const m = this.emit(p, n, d ? x => tx(x) + d : tx, ty);
       b.count += m - n; n = m;
       if (hi) { b.hiBoxes.push(bx); b.hi = Math.max(b.hi, hi); }
     }

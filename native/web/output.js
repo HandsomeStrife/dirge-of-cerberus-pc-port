@@ -62,7 +62,7 @@ function quadPass(fragmentShader, uniforms) {
   return { mat, scene };
 }
 
-export function createOutputStage(renderer, { enabled = true, msaa = false, native = true } = {}) {
+export function createOutputStage(renderer, { enabled = true, msaa = false, native = true, wideHud = false } = {}) {
   const qCam = new THREE.Camera();
   const size = new THREE.Vector2();
 
@@ -126,19 +126,25 @@ export function createOutputStage(renderer, { enabled = true, msaa = false, nati
     renderer.autoClear = false;
     const base = { renderer, w, h, x0: CX, y0: CY };
     stage.hud(nat ? { ...base, native: true, cx: CX, cy: CY, kx: 1, ky: 1 }
-                  : { ...base, native: false, cx: w / 2, cy: h / 2, kx: (4 / 3) * h / COLS, ky: h / LINES });
+                  : { ...base, native: false, cx: w / 2, cy: h / 2, kx: (4 / 3) * h / COLS, ky: h / LINES,
+                      // OPTION widehud (hud.js): the margin beside the 4:3 picture, 0 on a canvas narrower than 4:3
+                      side: stage.wideHud ? Math.max(0, (w - DISPLAY_ASPECT * h) / 2) : 0 });
     renderer.autoClear = a;
   }
 
   const stage = {
     enabled,
     native,
+    // OPTION widehud (not in the game; play.js: ON by default at Dan's request, review board 2026-11-02;
+    // ?widehud=0 gives the game's 4:3 layout): full mode only, hud.js moves the HUD's left / right
+    // panels out by o.side; the reticle, ring, pause and game-over layers ignore it (centred)
+    wideHud,
     framebuffer: fbRT,                                 // the 432x512 scene target (headless checks)
     // HUD drawn into the frame after the scene, as the game draws its HUD into the framebuffer
     // before the PCRTC merge: hud({ renderer, native, w, h, x0, y0, cx, cy, kx, ky }) renders into the
     // current target. Frame px (x, y) -> target px: cx + (x - x0) kx, cy + (y - y0) ky (x0, y0 = 213, 256) (native: identity on 432x512;
     // full: the projection centre at the canvas centre, one frame row = h / 512, one frame column
-    // = (4/3 h / 425.5), the CRTC's 4:3 picture)
+    // = (4/3 h / 425.5), the CRTC's 4:3 picture); full mode also passes side (widehud, below)
     hud: null,
     // set the camera's projection for this mode (call at start and on resize)
     fitCamera(camera) {

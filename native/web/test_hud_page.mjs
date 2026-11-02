@@ -148,6 +148,68 @@ try {
     console.log(`     opaque HUD pixels (HP panel) equal to the GS's: +0.5 px ${a.eq} / ${a.n}, no shift ${b.eq} / ${b.n}`);
     ok(a.eq / a.n >= 0.97 && a.eq > b.eq, `pixel centres: with the +0.5 px shift ${(100 * a.eq / a.n).toFixed(1)} % of the opaque HUD pixels equal the GS frame (no shift: ${(100 * b.eq / b.n).toFixed(1)} %)`);
   }
+  // 5. OPTION widehud (full mode, output.js -> hud.js): a panel's bounding box (lit pixels) per canvas size.
+  // Left panel = slot 5 (HP), right panel = slot 4 (hidden at the start: shown here). Want: with the option,
+  // the left panel's left edge sits as far from the canvas edge as in the 4:3 picture from the picture's
+  // edge, the right panel's right edge likewise; without it, today's mapping (the 4:3 layout centred).
+  {
+    const r = await pg.evaluate(async () => {
+      const { createOutputStage } = await import('./output.js');
+      const { panelAnchors } = await import('./hud.js');
+      const { THREE, renderer, data } = T;
+      const L = T.layer(), st = L.state;
+      const gi = s => st.chain.findIndex(e => e.depth === 0 && e.slot === s);
+      for (const e of st.chain) if (e.inGroup === gi(4)) e.flags &= ~1;
+      const all = st.prims.bind(st);
+      const scene = new THREE.Scene(), cam = new THREE.PerspectiveCamera(60, 1, 1, 10);
+      renderer.setClearColor(0x000000, 1);
+      const box = (w, h, wide, slot) => {
+        const stage = createOutputStage(renderer, { enabled: false, native: false, wideHud: wide });
+        st.prims = () => all().filter(p => p.panel === gi(slot));
+        stage.hud = o => L.draw(o.renderer, o);
+        const rt = new THREE.WebGLRenderTarget(w, h, { type: THREE.UnsignedByteType, depthBuffer: false });
+        stage.render(scene, cam, rt);
+        const px = new Uint8Array(w * h * 4);
+        renderer.readRenderTargetPixels(rt, 0, 0, w, h, px);
+        rt.dispose();
+        let x0 = w, x1 = -1, n = 0;
+        for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+          const i = (y * w + x) * 4;
+          if (px[i] + px[i + 1] + px[i + 2] > 0) { n++; if (x < x0) x0 = x; if (x > x1) x1 = x; }
+        }
+        return { x0, x1, n, w };
+      };
+      const out = { anchors: {}, prims4: all().filter(p => p.panel === gi(4)).length };
+      const A = panelAnchors(st.chain);
+      for (const s of ['root', 1, 3, 4, 5, 6, 7, 8, 9, 10]) out.anchors[s] = A[gi(s)];
+      for (const [w, h] of [[1200, 900], [1600, 900], [1000, 900], [960, 720], [1280, 720]])
+        for (const wide of [false, true]) for (const s of [5, 4]) out[`${w}x${h} ${wide ? 'on' : 'off'} ${s}`] = box(w, h, wide, s);
+      st.prims = all;
+      return out;
+    });
+    const B = (w, h, on, s) => r[`${w}x${h} ${on ? 'on' : 'off'} ${s}`];
+    console.log('     widehud boxes (x0..x1): ' + ['1200x900', '1600x900', '1000x900', '960x720', '1280x720'].map(k => { const [w, h] = k.split('x').map(Number);
+      return `${k} on L ${B(w, h, 1, 5).x0} R ${B(w, h, 1, 4).x1} / off L ${B(w, h, 0, 5).x0} R ${B(w, h, 0, 4).x1}`; }).join('; '));
+    ok(JSON.stringify(r.anchors) === JSON.stringify({ 1: 1, 3: 0, 4: 1, 5: -1, 6: -1, 7: -1, 8: -1, 9: -1, 10: -1, root: 0 }),
+      `widehud anchors per panel: slots 5 6 7 8 9 10 left, 1 4 right, root (reticle / ring) and 3 centred (${JSON.stringify(r.anchors)})`);
+    ok(r.prims4 > 0 && B(1200, 900, 1, 4).n > 0 && B(1200, 900, 1, 5).n > 0, `both test panels draw (slot 4: ${r.prims4} prims)`);
+    const same = (a, b) => a.x0 === b.x0 && a.x1 === b.x1 && a.n === b.n;
+    let good = true;
+    for (const [w43, w, h] of [[1200, 1600, 900], [960, 1280, 720]]) {
+      // 4:3 canvas: the option changes nothing
+      good &&= same(B(w43, h, 1, 5), B(w43, h, 0, 5)) && same(B(w43, h, 1, 4), B(w43, h, 0, 4));
+      // 16:9, on: left edge / right margin as on the 4:3 canvas; the panels keep their size
+      const l = B(w, h, 1, 5), r4 = B(w, h, 1, 4);
+      ok(l.x0 === B(w43, h, 1, 5).x0 && w - r4.x1 === w43 - B(w43, h, 1, 4).x1 && l.x1 - l.x0 === B(w43, h, 1, 5).x1 - B(w43, h, 1, 5).x0 && l.n === B(w43, h, 1, 5).n,
+        `widehud on, ${w}x${h}: left panel's left edge ${l.x0} px from the canvas edge, right panel's right edge ${w - 1 - r4.x1} px (4:3: ${B(w43, h, 1, 5).x0} / ${w43 - 1 - B(w43, h, 1, 4).x1}); same size`);
+      // 16:9, off: today's mapping = the 4:3 layout moved by the side margin
+      const m = (w - w43) / 2;
+      ok(B(w, h, 0, 5).x0 === B(w43, h, 0, 5).x0 + m && B(w, h, 0, 4).x1 === B(w43, h, 0, 4).x1 + m,
+        `widehud off, ${w}x${h}: the 4:3 layout centred (left ${B(w, h, 0, 5).x0}, right ${B(w, h, 0, 4).x1}; 4:3 + ${m})`);
+    }
+    ok(good, 'widehud on a 4:3 canvas: positions as without it');
+    ok(same(B(1000, 900, 1, 5), B(1000, 900, 0, 5)) && same(B(1000, 900, 1, 4), B(1000, 900, 0, 4)), 'widehud on a canvas narrower than 4:3 (1000 x 900): no shift');
+  }
   ok(errs.length === 0, 'no page errors' + (errs.length ? ': ' + errs.join('; ') : ''));
   await pg.close();
 
@@ -220,7 +282,15 @@ try {
       }, [a.toString('base64'), b.toString('base64')]);
       ok(orange > 50, `the arrow shows on screen while lit and is gone 2.4 s later (${orange} pixels redder before)`);
     }
+    // 6. play.js wiring of OPTION widehud: on by default, ?widehud=0 off
+    const wideOn = await pg2.evaluate(() => window.__play.output.wideHud);
     await pg2.close();
+    const pg3 = await browser.newPage({ viewport: { width: 960, height: 540 } });
+    await pg3.goto(base + 'play.html?sound=0&widehud=0', { waitUntil: 'load' });
+    await pg3.waitForFunction(() => window.__play && window.__play.stats.ticks > 2, null, { timeout: 120000 });
+    const wideOff = await pg3.evaluate(() => window.__play.output.wideHud);
+    await pg3.close();
+    ok(wideOn === true && wideOff === false, `play.html: widehud on by default (${wideOn}), off with ?widehud=0 (${wideOff})`);
   }
 } finally {
   await browser.close();
