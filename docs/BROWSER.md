@@ -64,9 +64,9 @@ match it. To compare: `python3 -I tools/byo/disc.py isohash your.iso`.
   `ffmpeg libavcodec-dev libavutil-dev libswresample-dev pkg-config`; macOS (Homebrew):
   `ffmpeg pkg-config`. Without them the build skips the music and the page plays without it
   (the sound effects don't need them).
-- Optional, for the **game's HUD** (HP gauge, weapon panel): a PCSX2 save state (`.p2s`) made
-  at the start of the sea-of-flames level, passed with `--state`. See
-  [Optional parts](#optional-parts-music-and-the-hud).
+- Optional, for the **bullet-impact and hit effects**: a PCSX2 save state (`.p2s`) made at the
+  start of the sea-of-flames level, passed with `--state`. See
+  [Optional parts](#optional-parts-music-and-the-effects-random-state).
 - Optional: **Docker** with `docker compose`, for the serve option that includes the Report
   backend. **Node.js** is needed only for the tests.
 
@@ -88,8 +88,8 @@ It takes about 5 to 10 minutes. The script:
 4. builds two small C tools (the texture decoder `dtex` and the collision exporter `cidweb`),
 5. runs the exporters into `native/web/data/` (gitignored): the room, Vincent and his clip
    packs, the gun, the enemies and their AI data, the aim tables, the effects, the pause menu,
-   the menu layouts, the sound effects and, when the optional parts are available, the music
-   (`dirge_atdec`, a third C tool, is built for it) and the HUD.
+   the menu layouts, the game's HUD, the sound effects and, when the optional parts are
+   available, the music (`dirge_atdec`, a third C tool, is built for it).
 
 Some exporters read tables from the game's program file (`SLES_541.85`). The script copies it
 out of your image into `extract/.byo-elf/` for the build and deletes it when it ends; nothing
@@ -101,19 +101,21 @@ The options are:
 tools/byo/build_web.sh [--state sea-of-flames.p2s] [--re-extract] [--no-motions] /path/to/your.iso
 ```
 
-### Optional parts: music and the HUD
+### Optional parts: music and the effects' random state
 
 - **Music** (`data/audio/bgm/`): built when `ffmpeg` and the libavcodec development packages
   are found (see [Prerequisites](#prerequisites)). The zone's track is decoded from the disc
   and stored as FLAC. Without it the page has sound effects but no music.
-- **The game's HUD** (`data/hud/`): built only with `--state FILE`. Its textures, font and
-  layout come from the disc, but the state of the HUD's elements (which panels show, where,
-  with which values) is read from a PCSX2 save state at the start of the level, because the
-  game code that sets them up is not decoded yet. Without `--state` the page runs without the
-  game's HUD (as with `?gamehud=0`). The same save also gives the effects' random number
-  state (`rand` and `twister` in `data/effects/ids.json`), which every bullet-impact and hit
-  effect draws from. Without `--state` nothing is read from any save and **all effects are left
-  out** (the page logs one warning: "no rand() state").
+- **The game's HUD** (`data/hud/`) is always built, from the disc alone: the game's own HUD
+  set-up code is translated, so no save state is needed. The values it shows at the start (HP,
+  weapon, ammo, the selected item, the chain count) are hand-written into the exporter from one
+  save session (PCSX2, at the start of the level). They are not the disc's per-level start data,
+  which has not been checked: a fresh start of the level may show other values (the chain count is
+  most likely 0).
+- **The effects' random state** (`rand` and `twister` in `data/effects/ids.json`), which every
+  bullet-impact and hit effect draws from, is read from a PCSX2 save state at the start of the
+  level, passed with `--state FILE`. Without `--state` nothing is read from any save and **all
+  effects are left out** (the page logs one warning: "no rand() state").
 
 Running it again is safe. A verified `extract/` is reused and outputs are overwritten. An
 `extract/` from an older version of the script that lacks files this build reads is unpacked
@@ -223,7 +225,6 @@ See `notes/HANDOFF.md` for the research state.
 | `... is not gitignored: refusing` | `.gitignore` was changed. Restore it with `git checkout .gitignore`. |
 | page stuck on "loading", or a 404 on `data/...` | Build first. Serve the `native/web` folder (use `serve.sh`), not the repository root. |
 | `zone music: skipped` | Optional. Install ffmpeg and the libavcodec / libavutil / libswresample dev packages and pkg-config, then build again. |
-| `the game's HUD: skipped (no --state)` | Optional. Build again with `--state your-save.p2s` to include the HUD. |
 | no bullet impacts or hit effects; the console says `no rand() state` | The effects need the save's random number state. Build again with `--state your-save.p2s`. |
 | no sound | Click the page first: browsers start audio only after a click or key press. Check that `?sound=0` is not in the address. |
 | black page, three.js errors | The browser needs WebGL and access to `cdn.jsdelivr.net`. |

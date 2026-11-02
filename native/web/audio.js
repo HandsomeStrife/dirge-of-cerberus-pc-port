@@ -184,13 +184,39 @@ export class SeRenderer {
 
   // Render SE program `prog` (Uint8Array) with the request's volume / pan (FUN_0041a190 a1 / a2).
   // GUESS: maxSeconds = 8 is a page cap on the offline render (the driver plays an endless SE until keyed off).
-  render(prog, vol = 0x7f, pan = 0x40, maxSeconds = 8) {
+  // holds: the driver ticks of the pauses' SE holds (GameAudio.setPaused), in SE time. The result's `decay` marks the
+  // ticks where a hold would change something (a running track's voice in DECAY, see holdVoices): a cheap test for
+  // whether a later hold needs a new render.
+  render(prog, vol = 0x7f, pan = 0x40, maxSeconds = 8, holds = []) {
     this.start(prog, vol, pan);
     const maxTicks = Math.ceil(maxSeconds * TICK_HZ);
     const L = new Float32Array(maxTicks * TICK_SAMPLES), R = new Float32Array(maxTicks * TICK_SAMPLES);
+    const decay = new Uint8Array(maxTicks);
     let t = 0;
-    for (; t < maxTicks; t++) if (this.tick(t, L, R, t * TICK_SAMPLES)) { t++; break; }
-    return { left: L.subarray(0, t * TICK_SAMPLES), right: R.subarray(0, t * TICK_SAMPLES), rate: SPU_RATE, events: this.events };
+    for (; t < maxTicks; t++) {
+      if (this.holdVoices(true)) decay[t] = 1;
+      if (holds.includes(t)) this.holdVoices();
+      if (this.tick(t, L, R, t * TICK_SAMPLES)) { t++; break; }
+    }
+    return { left: L.subarray(0, t * TICK_SAMPLES), right: R.subarray(0, t * TICK_SAMPLES), rate: SPU_RATE, events: this.events,
+      decay: decay.subarray(0, t) };
+  }
+
+  // IOP command 6 (irx 0x14008) on a running track's voice (+0x19f): ADSR1 / ADSR2 = 0x7fff / 0x5fff while held. With
+  // those, envTick leaves attack (rate 0x7f), sustain (0x7f) and release (0x1f << 2) still, but a decay ends at once
+  // (level <= (0xf + 1) * 0x800): after the resume the voice is in sustain and the rest of its decay is gone. The
+  // track's timing is frozen (FUN_00007224 skips it), so on the page the hold is this phase change at that tick.
+  // L: a stereo pair's second voice is not changed (only +0x19f is written; whether the pair has its own track slot
+  // was not checked); voices of tracks that already ended are not touched, as in the IOP.
+  // test: only report whether a hold now would change a voice (no change made).
+  holdVoices(test = false) {
+    let hit = false;
+    for (const trk of this.tracks) {
+      if (!trk.active) continue;
+      const v = trk.voices.filter((x) => !x.pair).at(-1);
+      if (v && v.phase === DECAY) { hit = true; if (!test) v.phase = SUSTAIN; }
+    }
+    return hit;
   }
 
   // Key the program's tracks on (FUN_000082d0). render() and streaming callers (music.js) then run tick().
@@ -616,9 +642,11 @@ export class GameAudio {
     const z = String(zone).padStart(3, '0');
     const j = (f) => fetch(this.base + f).then((r) => { if (!r.ok) throw new Error(f + ' ' + r.status); return r.json(); });
     this.ready = (async () => {
-      const [drv, se] = await Promise.all([j('driver.json'), j(`se_z${z}.json`)]);
+      // the resident SE block + names (menu sounds; extract.py se_res.json). Optional: an older extract has none.
+      const [drv, se, res] = await Promise.all([j('driver.json'), j(`se_z${z}.json`), j('se_res.json').catch(() => null)]);
+      if (!res) console.warn('audio: no se_res.json (re-run tools/audio/extract.py): no menu sounds');
       const banks = {};
-      for (const b of se.banks) {
+      for (const b of new Set([...se.banks, ...((res && res.banks) || [])])) {
         const n = String(b).padStart(4, '0');
         const [info, buf] = await Promise.all([j(`wave${n}.json`),
           fetch(this.base + `wave${n}.bin`).then((r) => r.arrayBuffer())]);
@@ -626,9 +654,78 @@ export class GameAudio {
       }
       this.drv = drv; this.se = se; this.banks = banks; this.renderers = {};
       for (const b in banks) this.renderers[b] = new SeRenderer(drv, banks[b]);
+      this.res = res;
       return this;
     })();
     return this.ready;
+  }
+
+  // FUN_003e80d8 cases 2 / 0x16 / 0x17: the id is looked up in each loaded SE block (FUN_003e7ed8, DAT_0047d6c8):
+  // the resident block (boot: FUN_003e78a8 request 4, FileCode 0x02810001) and the zone's sep.bin. Their ids don't overlap.
+  program(id) {
+    const k = String(id);
+    return (this.res && this.res.programs[k]) || (this.se && this.se.programs[k]) || null;
+  }
+
+  // FUN_003eb970 -> FUN_003eb868: sdb slot 0 (the resident names ressddb.bin, FUN_00244db0) first, then slot 1 (the
+  // zone's sdb.bin, FUN_00402220); row +0x10 = the SE id, 0 when the name is in neither.
+  seIdOf(name) {
+    const r = (this.res && this.res.names[name]) || (this.se && this.se.names[name]);
+    return r ? r.id : 0;
+  }
+
+  // FUN_00241f40's sound side (pause on / off): FUN_003e86e0(DAT_0047d718, on) sets the manager word that
+  // FUN_003e80d8 reads (requests 2 / 0x16 then send vol >> 3; 0x17 does not) and queues request 0x19 ->
+  // FUN_00419400(2, on) = IOP command 6 (irx 0x14008), mask 2 = the SE tracks: every playing track whose program
+  // flag byte (prog[4], stored at track +0x1a1 by FUN_000082d0, irx 0x85c4) has neither 0x40 nor 0x80 gets flag 8
+  // (the SE tick FUN_00007224 skips it) and its voice is silenced and held (volume 0, pitch 0, ADSR 0x7fff / 0x5fff);
+  // off: the flag is cleared, ADSR restored, volume / pitch re-sent, and the track goes on from where it stopped.
+  // On the page an SE is one rendered buffer, so held = stopped at its offset and restarted there.
+  setPaused(on) {
+    on = on ? 1 : 0;
+    if (this.sePaused === on) return;
+    this.sePaused = on;
+    if (!this.ctx) return;
+    const now = this.ctx.currentTime;
+    for (const p of this.playing || []) {
+      if (p.flags & 0xc0) continue;                // menu sounds (0x58 / 0x59) and asj_033 (0x80) play on
+      if (on && !p.held) {
+        p.held = Math.min(Math.max(now - p.at, 0), p.buf.duration);
+        try { p.src.onended = null; p.src.stop(); } catch (e) { /* not started */ }
+      } else if (!on && p.held !== undefined && p.held !== false) {
+        const off = p.held; p.held = false;
+        this.rehold(p, off);
+        this.startSource(p, off);
+      }
+    }
+  }
+
+  // The held SE rendered again from its start with the same random-table counter, the hold applied at the driver
+  // tick it was paused on (SeRenderer.holdVoices), on its own renderer so the shared counter is not moved.
+  // Every hold of this SE so far is applied (p.holds, SE-time ticks). Re-rendered only when the new hold tick has a voice
+  // in decay in the current buffer's render (p.decay); else the buffer is already what the IOP plays.
+  rehold(p, off) {
+    const h = Math.floor(off * TICK_HZ);
+    (p.holds ??= []).push(h);
+    if (!p.decay || !p.decay[h]) return false;
+    if (!p.prog || !this.drv || !this.banks[p.bank]) return false;
+    const rd = new SeRenderer(this.drv, this.banks[p.bank]);
+    rd.rngIndex = p.rngStart;
+    const out = rd.render(p.prog, p.vol, p.pan, 8, p.holds);
+    const buf = this.ctx.createBuffer(2, out.left.length, SPU_RATE);
+    buf.copyToChannel(out.left, 0); buf.copyToChannel(out.right, 1);
+    p.buf = buf; p.decay = out.decay;
+    this.rerenders = (this.rerenders || 0) + 1;
+    return true;
+  }
+
+  startSource(p, offset = 0) {
+    const src = this.ctx.createBufferSource();
+    src.buffer = p.buf; src.connect(this.ctx.destination);
+    p.src = src; p.at = this.ctx.currentTime - offset;
+    src.onended = () => { if (!p.held) this.playing = this.playing.filter((q) => q !== p); };
+    src.start(0, offset);
+    return src;
   }
 
   // AudioContext needs a user gesture; call from a key / click handler.
@@ -640,10 +737,12 @@ export class GameAudio {
   // vol / pan: what the game's sound thread passes to FUN_0041a190(entry, pan, vol & 0x7f) (FUN_003e80d8
   // case 2; FUN_003e9220 computes them). pan is FUN_003e9220's angle byte: 0x40 ahead, 0x80 / 0x00 the sides,
   // 0xc0 behind; the IOP indexes its pan table with it (FUN_00001380).
-  playId(id, vol = 0x7f, pan = 0x40) {
+  // code: the request (2 = a gameplay one-shot, 0x16 = a menu sound: FUN_003e80d8 shifts both by 3 while paused).
+  playId(id, vol = 0x7f, pan = 0x40, code = 2) {
     if (!this.se || !this.ctx) return null;
-    const hex = this.se.programs[String(id)];
+    const hex = this.program(id);
     if (!hex) return null;
+    if (this.sePaused && code !== 0x17) vol >>= 3;  // FUN_003e80d8: *(int *)mgr != 0 (FUN_003e86e0)
     const prog = hexBytes(hex);
     const bank = prog[1] | (prog[2] << 8);
     const rd = this.renderers[bank];
@@ -652,6 +751,7 @@ export class GameAudio {
     // advanced by op 0x78 and the randomised pitch / volume / pan / ADSR), and costs a few ms on the main thread.
     // Keep rendered buffers keyed by all four; a hit reuses the buffer and moves the counter to where that render
     // left it, so the output is the same as rendering again (a page cache, not game logic).
+    const rngStart = rd.rngIndex;
     const key = `${id}:${vol}:${pan}:${rd.rngIndex}`;
     this.cache ??= new Map();
     let ent = this.cache.get(key);
@@ -660,18 +760,99 @@ export class GameAudio {
       const out = rd.render(prog, vol, pan);
       const buf = this.ctx.createBuffer(2, out.left.length, SPU_RATE);
       buf.copyToChannel(out.left, 0); buf.copyToChannel(out.right, 1);
-      ent = { buf, rngEnd: rd.rngIndex };
+      ent = { buf, rngEnd: rd.rngIndex, decay: out.decay };
       this.cache.set(key, ent);
       if (this.cache.size > SE_CACHE_MAX) this.cache.delete(this.cache.keys().next().value);
     }
-    const buf = ent.buf;
-    const src = this.ctx.createBufferSource();
-    src.buffer = buf; src.connect(this.ctx.destination); src.start();
-    return src;
+    // the playing list: what IOP command 6 (setPaused) holds; prog[4] = the program's flag byte (track +0x1a1)
+    const p = { buf: ent.buf, decay: ent.decay, flags: prog[4], held: false, prog, vol, pan, rngStart, bank };
+    this.playing ??= [];
+    this.playing.push(p);
+    return this.startSource(p);
   }
 
   playName(name, vol, pan) {
     const row = this.se && this.se.names[name];
     return row ? this.playId(row.id, vol, pan) : null;
+  }
+
+  // FUN_003e9e60(name, x, y): FUN_003eb970 (name -> SE id) -> FUN_003e9d70 (pan from x, y; queued, max 4 a frame) ->
+  // FUN_003e9ed0 the same frame: FUN_003e7850(mgr, id, pan, 0x7f) = request 0x16. An id <= 0 sends nothing (FUN_003e9ed0).
+  playMenu(name, x = -1, y = -1) {
+    const id = this.seIdOf(name);
+    const pan = menuPan(x, y);
+    if (id > 0) this.playId(id, 0x7f, pan, 0x16);
+    return { name, id, pan };
+  }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Menu sounds (worker 0194; notes/audio-research.md "Menu sounds"). Menus latch ONE sound id per frame:
+// FUN_003e1d10(id, x, y) writes DAT_004f58c8 / 58cc / 58ce (the last write of a frame wins); FUN_003e1d90 (once a frame,
+// from the menu manager FUN_003dce38) plays it and clears the latch.
+
+// GUESS: display width from both saves; writer not found (pans verified in w194). DAT_004fcab8 = 0x1c0 in sea-of-flames and
+// w189 cancel; the code reads it as the display width: the XY offset (0x1000 - w) / 2 in FUN_00243948 / FUN_003d28c8 /
+// FUN_00242208 / FUN_0040ff70, w / 0x20 columns in FUN_0040ff70.
+export const MENU_PAN_WIDTH = 0x1c0;
+
+// FUN_003e9d70: x < 0 and y < 0 -> 0x40; x < 0 -> x = 0; else x = min(x, width); pan = (int)(x * 32.0f / width) + 0x30,
+// 0 below 0, 0x80 above 0x7f (single-precision floats, truncation toward zero).
+export function menuPan(x, y, width = MENU_PAN_WIDTH) {
+  if (x < 0) { if (y < 0) return 0x40; x = 0; }
+  if (width <= x) x = width;
+  const p = Math.trunc(Math.fround(Math.fround(Math.fround(x) * 32.0) / Math.fround(width))) + 0x30;
+  return p < 0 ? 0 : p > 0x7f ? 0x80 : p;
+}
+
+// FUN_003cac38 (widget vt+0x7c with the |2 form, as FUN_003cb4a8 calls it): x = +6 + 16, y = +8 + (s16)(+0xc) / 2
+export function menuWidgetPos(w) {
+  return [(w.x + 16) << 16 >> 16, (w.y + Math.trunc(w.h / 2)) << 16 >> 16];
+}
+
+// What a menu action leaves in the latch, from pause.js's record of it (lastSE = the final id of the action, lastSEW = the
+// widget it came from): cursor 6 / confirm 7 / cancel 8 go through FUN_003cb4a8(w, id, force) (cursor FUN_003cbc38: not
+// forced; FUN_003d14e8 / FUN_003caf90 / FUN_003b80f8 / FUN_003b81b8: forced); the rest (pause 1, unpause 2, open 3,
+// close 4, box 9) are FUN_003e1d10(id, -1, -1) / FUN_003cb480(id).
+export function latchMenuSound(m, id, w) {
+  if (id === null || id === undefined) return;
+  if (w && (id === 6 || id === 7 || id === 8)) m.widget(w, id, id !== 6);
+  else m.set(id);
+}
+
+export class MenuSound {
+  // names: FUN_003e1d90's table PTR_DAT_0047d5c8 (extract.py se_res.json "menu", read from the ELF)
+  constructor(names = null) {
+    this.names = names;
+    this.id = 0xff; this.x = -1; this.y = -1;     // DAT_004f58c8 / 58cc / 58ce
+    this.enabled = 1;                             // DAT_004f58c9 (FUN_003e1ea0(1) in FUN_003dd810 / FUN_00245d00)
+    this.last = 0xff; this.lastT = 0;             // DAT_004f58ca / DAT_004f58d0 (FUN_003dd810: 0xff / 0)
+  }
+  set(id, x = -1, y = -1) { this.id = id & 0xff; this.x = x; this.y = y; }   // FUN_003e1d10 (FUN_003cb480: x = y = -1)
+  pending() { return this.id !== 0xff; }         // FUN_003e1d68
+  clear() { this.id = 0xff; }                     // FUN_003e1d80
+  // FUN_003cb4a8(w, id, force): only when forced or nothing is latched yet; the position from FUN_003cac38
+  widget(w, id, force) {
+    if (force || !this.pending()) { const [x, y] = menuWidgetPos(w); this.set(id, x, y); }
+  }
+  // FUN_003e1d90. now: FUN_0023c1f0 (ms). play(name, x, y): the request (GameAudio.playMenu). Returns what played.
+  frame(now, play) {
+    if (this.id === 0xff) return null;
+    let on = this.enabled, out = null;
+    // box-open 9 within 300 ms of a confirm 7 / cancel 8 is not played (lbu + sltiu: unsigned, so only 7 and 8)
+    if (((this.last - 7) >>> 0) < 2 && this.id === 9 && now >>> 0 < (this.lastT + 300) >>> 0) on = 0;
+    if (on) {
+      if (this.id === 0x22) {
+        // not translated: id 0x22 plays the stream "on_a104" (FUN_003eb9a0 -> FUN_003eb088); the pause never sends it
+        console.warn('menu sound 0x22 (stream on_a104, FUN_003eb088) is not translated');
+      } else {
+        // (char) index; entry 0 is "" (no sdb row: FUN_003eb970 gives id 0, nothing is sent)
+        const name = this.names ? this.names[(this.id << 24) >> 24] : null;
+        if (name && play) out = play(name, this.x, this.y);
+      }
+      this.last = this.id; this.lastT = now;
+    }
+    this.clear();
+    return out;
   }
 }

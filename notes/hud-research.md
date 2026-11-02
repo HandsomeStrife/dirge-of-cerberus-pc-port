@@ -22,8 +22,9 @@ the hero dump), `node native/web/test_hud_page.mjs` (browser: blend, pixel centr
   +0xe inner box, +0x16 rgba, +0x1a sprite, +0x24 first child, +0x34 owner (the HUD: fade +0x2c/+0x30,
   clip height +0x26), +0x38 vtable (type 1 0x4a64b0, 2 text 0x4a67b0, 4 sprite 0x4a66f0, 7 callback
   0x4a6630 (+0x3c = code), 10 0x4a6ac0, 13 corner-coloured 0x4a6570).
-- The page draws the save state's tree (positions, colours, sprites, text as the HUD code left them:
-  e.g. the PAL widening FUN_003cb450(+0x34), the slid-shut item list at y 370 h 0) and drives HP.
+- The page draws the tree as the HUD code leaves it at the start (positions, colours, sprites, text:
+  e.g. the PAL widening FUN_003cb450(+0x34), the slid-shut item list at y 370 h 0) and drives HP. Since
+  worker 0195 the exporter builds that tree from the ELF (below); it used to read it from the save.
 
 ## Draw paths
 - Sprites FUN_003c97a0 -> FUN_003c94e0 (frame kinds DAT_0047d180: cols, stretch col, rows, stretch
@@ -117,3 +118,53 @@ play.js passes it and `camYaw: () => follow.yaw`. On with the game HUD (?gamehud
 - FUN_003cd7e8 text, low-HP / MP pulses FUN_003af1e0, type-10 elements, the other callbacks (slots 3,
   4, 8, 9, 10), weapon icon / ammo / item / CHAIN value updates (static at the save values: the page
   has no ammo, items or CHAIN).
+
+## Set-up from the disc (worker 0195, 2026-11-02)
+export_web_hud.py `Setup` / `disc_tree` builds hud.json's `chain` and `values` without a save state;
+`--state` keeps the old read as a cross-check (prints the differences: 0).
+- Layout byte code FUN_003ca488: attribute block FUN_003ca9d8 (defaults: id 0xff, rgba 0x80 x 4, sprite -1,
+  text colour 0x80808080, text x / y 0x7f, +0x3c = 0 on PAL else 4, corners 0x80808080), ops 0xe rect, 0xf
+  rgba, 0x10 / 0x21 text (pointer / DAT_0047a6ac[i]), 0x12 text colour, 0x14 text flags, 0x15 +0x64, 0x16 id,
+  0x17 sprite, 0x1e text x / y, 0x1f group +0x3f, 0x20 corners (0x11 focus, 0x18 / 0x19 / 0x1b / 0x1c: not
+  exported). Op 1 recurses for the children and ends the level. Element init FUN_003c8910 copies the block
+  (+2 flags, +3 id, +6 rect + the parent's x / y, +0x16 rgba, +0x1a sprite, +0x1c / +0x1e = the relative x / y),
+  box FUN_003ca160; text FUN_003cbf18 (+0x4c = +0x58 = colour, +0x5c / +0x5e / +0x60 / +0x62 / +0x64, +0x65 =
+  PAL ? 0 : 1) and FUN_003d03a0 / FUN_003d72e8 (width +0x44: FUN_003d0058 number font, FUN_003cf338 plain);
+  type 13 FUN_003d6730 (corner colours per frame cell, bilinear FUN_003d6a48). Child lists FUN_003cab20
+  (sorted by +5, the parent's at creation); FUN_003caab8 sets the top groups' priorities (-0x32; slots 0 / 2
+  -0x37, so they sort before the root and are not in the draw chain). FUN_003cb0f8 = direct child by id, else
+  the element itself (so lists naming ids a slot lacks write the group: e.g. 0x472940 on slot 4).
+- Language 2 (UK) is PAL (FUN_003e2760) and has no per-language rect list (0x51fb40 / 0x51fb60 [2] = 0).
+- FUN_003ad618's steps after the scripts, in order: bilinear lists 0x471e18 / 20 / 28 (DAT_004b8980 bit 30, set
+  at run time: taken as on, the save's), FUN_003adeb0, priorities, the PAL widening of slot 8 and its 0x53,
+  text buffers DAT_00471e08 (t5c 0x20), FUN_003ae418(0, 1), FUN_003b2600, FUN_003b33d0 (FUN_003b45c8: item
+  list bottom / height, alpha 0 on 0x472910 in slots 8-10, clip, close state 3), FUN_003b4aa8, FUN_003daec8,
+  FUN_003ae030(0, 0, -1), FUN_003ae138(0, 0, 0), FUN_003ae308(0x69300000, 9), FUN_003b2e30, FUN_003af7f0,
+  FUN_003af580 (ring on, counter 0), FUN_003b0370, FUN_003b52c8, FUN_003afb10(1) (everything hidden),
+  FUN_003afbf8(4 / 5 / 6, 1). Screen init FUN_003d5090: fade 100 / 100, clip height 0x1c0.
+- Then (the start): the status setters with START (export_web_hud.py; Vincent's values from the save, hand-
+  written; the weapon icon pair FUN_003db080 takes an 11th stack argument = slot 6 0x16 hidden, read from
+  FUN_003ae030's code), hide FUN_003ad5b0 (slides out: panel 5 = slot 1 stays at +200, state 4), show
+  FUN_003ad560 (FUN_003afb10(0), FUN_003b0128: slide in panels 0, 1, 8-10 and show their lists), the item list
+  FUN_003b48b0 closes (y 370, h 0, sprite -1, alpha 0, the slide home y moved by FUN_003d5df8), the limit fade
+  FUN_003ae5d8 ends (slot 5 0x11 = DAT_00471e38[0] = 0), the gauges drain (FUN_003aec78), and one draw at the
+  start clock writes the CHAIN glow (FUN_003b4fa0: 175 at clock 232753) and FUN_003cc208's 'drawn' flag 0x200.
+  Slides: FUN_003d0f08 (in) / FUN_003d0fd0 (out) / FUN_003d0d50 (sine ease FUN_0045b530 = sinf, 12-bit angle).
+- Evidence: all 114 HUD elements and `values` equal the save's (`--state` reports 0 differences); the save's
+  list has 88 more (other screens on the global root list after slot 10; none on screen, their texts use the
+  untranslated FUN_003cd7e8). Page: hud_core over 200 frames (HP change at 50, a ring hit at 60) gives the same
+  on-screen primitives from both files; the save's adds 16 off-screen ones per frame. test_hud passes on the
+  disc file (the hero dump's 88 primitives). Mutants (scratch copies of the exporter vs the save tree + an
+  HP 500 / 780 / ammo 7 / 18 spot check): 27 / 30 killed; survivors equivalent for this data (child offsets of
+  groups that are moved later; the HP lag settled; slot 6 0x28 hidden at build is shown by the sync).
+- GUESS / hand-written (fidelity-audit 'HUD start values', 'HUD start sequence'): START (weapon, ammo, Potion
+  x 2, limit, MP, chain 2: one save session's progress state, not the disc's stage start (FUN_003b4ea8 resets
+  the chain to 0); clock 232753 / ring counter 1304: arbitrary session values matching the save's phases); the
+  hide -> show order; the build clock 1000.
+- Review fixes (worker 0195, 2026-11-02): `--state` exits 1 on any difference (a disc build that raises counts
+  as one and the save's hud.json is still written); new test `node native/web/test_hud_setup.mjs` (0
+  differences, no .p2s opened without --state, chain / values equal; SKIP without the save); a 0x34 -> 0x30
+  widening mutant exits 1 with 2 differences. native/web/data/hud/hud.json is now the disc build (test_hud,
+  test_hud_page ok on it).
+- Not translated (the build raises if reached): FUN_003b5378 (panel 4), FUN_003ae5d8's pulses (+0x2c9 / +0x2cb),
+  mid-animation states, '$' codes / wrapping in FUN_003cf338, languages 3-6 (rect lists filled at boot).

@@ -32,7 +32,7 @@ const rgbaOf = u => [u & 0xff, (u >>> 8) & 0xff, (u >>> 16) & 0xff, u >>> 24];
 // FUN_003c9110: the edge colour is the colour / 4 per channel, alpha kept
 const quarter = c => [c[0] >> 2, c[1] >> 2, c[2] >> 2, c[3]];
 
-// FUN_003e1d10 sound ids (recorded, not played: the menu SE bank isn't decoded; see notes):
+// FUN_003e1d10 sound ids (played by pause_layer.js through audio.js MenuSound; notes/audio-research.md "Menu sounds"):
 // pause 1 (FUN_003bfe28 -> FUN_003cb480(1)), unpause 2 (FUN_003c04c8), screen open 3 (FUN_003d5110),
 // screen close 4 (FUN_003d51c0), cursor 6, confirm 7, cancel 8 (FUN_003cb4a8)
 export const SE = { pause: 1, unpause: 2, open: 3, close: 4, cursor: 6, confirm: 7, cancel: 8 };
@@ -305,21 +305,22 @@ export class PauseScreen {
     if (this.flags & 2) return null;               // FUN_003d47b8: input locked (set by the close)
     const f = this.focus;
     if (!f) return null;
-    if (a === 0) { this.se = SE.confirm; return { event: f.id }; }  // FUN_003d14e8 -> screen vt+0x24
-    if (a === 1) { this.se = SE.cancel; return { cancel: true }; }  // FUN_003caf90 -> screen vt+0x2c
+    // seW: the widget FUN_003cb4a8 takes the sound's position from (FUN_003cac38; the pan, audio.js menuPan)
+    if (a === 0) { this.se = SE.confirm; this.seW = f; return { event: f.id }; }  // FUN_003d14e8 -> screen vt+0x24
+    if (a === 1) { this.se = SE.cancel; this.seW = f; return { cancel: true }; }  // FUN_003caf90 -> screen vt+0x2c
     if (a === 2 || a === 3) {
       const n = f.nav4[a - 2];
       let t = f;
       if (n === 0xff) t = this.next(f, f.nav, a === 2 ? 1 : 2, kind !== 0);
       else if (!(n & 0x80) || kind !== 0) t = this.next(f, n & 0x7f, 0, true);
-      if (t !== f) { this.setFocus(t); this.se = SE.cursor; return { moved: t.id }; }
+      if (t !== f) { this.setFocus(t); this.se = SE.cursor; this.seW = f; return { moved: t.id }; }   // FUN_003cbc38: the old widget
       return null;
     }
     if (a === 4 || a === 5) {                      // FUN_003cbc38: explicit neighbours only
       const n = f.nav4[a];
       if (n === 0xff || ((n & 0x80) && kind === 0)) return null;
       const t = this.next(f, n & 0x7f, 0, true);
-      if (t !== f) { this.setFocus(t); this.se = SE.cursor; return { moved: t.id }; }
+      if (t !== f) { this.setFocus(t); this.se = SE.cursor; this.seW = f; return { moved: t.id }; }
     }
     return null;
   }
@@ -744,6 +745,7 @@ export class PauseFlow {
   // leaves it, after the close animation
   get active() { return !!this.screen; }
   start(now) {                                     // action 0x24
+    this.lastSEW = null;
     if (!this.screen) { this.screen = new PauseScreen(this.D, { now, pulseBase: this.pulseBase }); this.lastSE = SE.pause; return 'open'; }
     if (this.screen.flags & 2) return null;        // FUN_003d47b8: already closing
     // FUN_003bfd70 -> FUN_003c04c8 (+0x38 / +0x58 / +0x3c / +0x6c all 0 on the page): the pause
@@ -755,10 +757,10 @@ export class PauseFlow {
     const s = this.screen;
     if (!s) return null;
     if (this.box) return this.boxInput(a, now, kind);
-    s.se = null;
+    s.se = null; s.seW = null;
     const r = s.action(a, kind);
-    this.lastSE = s.se;
-    if (r && r.cancel) { s.close(now); this.lastSE = SE.unpause; return { close: true }; }
+    this.lastSE = s.se; this.lastSEW = s.seW;
+    if (r && r.cancel) { s.close(now); this.lastSE = SE.unpause; this.lastSEW = null; return { close: true }; }
     if (r && r.event !== undefined) {               // FUN_003c0220
       const script = BOX_SCRIPT[r.event];
       if (!script) return r;
@@ -766,7 +768,7 @@ export class PauseFlow {
       // old pause.json: the pre-0189 behaviour (the request at once, no box; play.js reloads on Restart)
       if (!box && boxDataMissing(this.D)) return { request: ({ 3: 'restart', 4: 'tempsave', 5: 'quit' })[r.event], id: r.event };
       if (!box) return r;
-      this.box = box; s.hasFocus = false; this.lastSE = box.se;
+      this.box = box; s.hasFocus = false; this.lastSE = box.se; this.lastSEW = null;
       return { box: r.event, id: box.boxId };
     }
     return r;
@@ -776,9 +778,9 @@ export class PauseFlow {
   // FUN_003b7930 -> FUN_003d4588 -> FUN_003d51c0, 100 ms)
   boxInput(a, now, kind) {
     const b = this.box;
-    b.se = null;
+    b.se = null; b.seW = null;
     const r = b.action(a, kind);
-    this.lastSE = b.se;
+    this.lastSE = b.se; this.lastSEW = b.seW;   // ✕ / ○: FUN_003b80f8 / FUN_003b81b8 take the focused button
     if (!r) return null;
     if (r.moved !== undefined) return r;
     let answer;

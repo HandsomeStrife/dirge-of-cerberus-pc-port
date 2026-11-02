@@ -24,7 +24,7 @@ if __import__("os").environ.get("TRACE_LOG_AT"):
 # CLOG_CTRL/DESC sit at the end of the script area: scripts must be <= 1000 frames.
 CLOG_BYTES = 0x30000
 ENTRY = 128
-SLOT = dict(a0=0x10, a1=0x20, a2=0x30, a3=0x40, t0=0x50, t1=0x60, v0=0x70)
+SLOT = dict(ra=0x00, a0=0x10, a1=0x20, a2=0x30, a3=0x40, t0=0x50, t1=0x60, v0=0x70)
 
 
 class Asm(hook.Asm):
@@ -277,6 +277,36 @@ SETS["pain"] = [SETS["sound3"][0],
     dict(id=108, kind="site", where=(0x5720C8, 0x572418, 0x336508), name="fx_1000", copy=[]),
 ]
 
+# worker 0193: who spawns an effect. Every jal to the spawn entry points of the ELF (FUN_002e62b0, FUN_002e6290,
+# FUN_003366b8, FUN_003365e0; the overlay site 0xaa4d80 left out), logging the id (a2 / a0) and the caller (ra = site + 8).
+_S62B0 = [0x2d73a0, 0x2e6298, 0x3c59e4]
+_S6290 = [0x242b38, 0x2463d8, 0x246a8c, 0x246b80, 0x246ba8, 0x246bd0, 0x2473ac, 0x2d73b8, 0x2dbd30, 0x2ed670,
+          0x306328, 0x336728, 0x336abc, 0x381ea0, 0x3835ac, 0x3c1dec, 0x3e11e0, 0x3e1390]
+_S66B8 = [0x3358f4, 0x33593c, 0x335984, 0x335fbc, 0x336170, 0x336230, 0x33629c, 0x336510, 0x336550, 0x3365b8, 0x336608]
+_S65E0 = [0x335318, 0x335678, 0x335710, 0x3357c4, 0x545c50, 0x5579b8, 0x5721e0, 0x57a8f8, 0x580424, 0x580490,
+          0x58236c, 0x582520, 0x587440]
+SETS["fxsrc"] = [
+    dict(id=120, kind="sites", where=(0x2E62B0, _S62B0), name="fx62b0", copy=[cpr("a2"), cpr("ra")]),
+    dict(id=121, kind="sites", where=(0x2E6290, _S6290), name="fx6290", copy=[cpr("a2"), cpr("ra")]),
+    dict(id=122, kind="sites", where=(0x3366B8, _S66B8), name="fx66b8", copy=[cpr("ra")]),
+    dict(id=123, kind="sites", where=(0x3365E0, _S65E0), name="fx65e0", copy=[cpr("ra")]),
+    dict(id=124, kind="sites", where=(0x335F40, [0x54FFC8]), name="wall_fx",                    # FUN_0054ff50
+         copy=[cp("a0", 0, 4), cp("a1", 0, 4)]),                                                 # end, normal (+0x100)
+]
+
+# worker 0194: menu sounds and the pause volume (notes/audio-research.md "Menu sounds"). FUN_003e1d90 (once a frame) plays
+# the latched id: FUN_003e9e60(name 0x47d5c8[id], x, y); FUN_003e9ed0 sends it as FUN_003e7850(_, id, pan, 0x7f);
+# FUN_00241f40 (pause / resume) calls FUN_003e86e0(mgr, paused) and FUN_003ed7d0(vol); FUN_003ed8e0 then sends
+# FUN_0041af80(0x14, vol) (IOP command 0x34: the core-1 input volume, i.e. the BGM).
+SETS["menusnd"] = [SETS["sound3"][1],
+    dict(id=130, kind="site", where=(0x3E1D90, 0x3E1EA0, 0x3E9E60), name="menu_play",
+         copy=[cp("a0", 0, 2), cpr("a1"), cpr("a2")]),      # sdb name, x, y
+    dict(id=131, kind="site", where=(0x3E9ED0, 0x3EA168, 0x3E7850), name="menu_req",
+         copy=[cpr("a1"), cpr("a2"), cpr("a3")]),           # SE id, pan, volume
+    dict(id=132, kind="site", where=(0x241F40, 0x242080, 0x3E86E0), name="se_pause", copy=[cpr("a1")]),
+    dict(id=133, kind="site", where=(0x241F40, 0x242080, 0x3ED7D0), name="bgm_vol", copy=[cpr("a0")]),
+    dict(id=134, kind="site", where=(0x3ED8E0, 0x3EDA60, 0x41AF80), name="bvol_send", copy=[cpr("a0"), cpr("a1")]),
+]
 
 def patch(mem, setname, frame_lo, frame_hi, log_end):
     """Install the hooks of SETS[setname]. Returns (clog_start, clog_end, hooks)."""
@@ -298,6 +328,14 @@ def patch(mem, setname, frame_lo, frame_hi, log_end):
             found = [x for x in range(lo, hi, 4) if struct.unpack_from("<I", mem, x)[0] == JAL(callee)]
             if not found:
                 raise RuntimeError("no jal %#x in %#x..%#x" % (callee, lo, hi))
+            _stub(a, callee, d)
+            sites += [(x, JAL(stub_at)) for x in found]
+            h["sites"] = [hex(x) for x in found]
+        elif h["kind"] == "sites":          # worker 0193: an explicit list of `jal callee` sites (no range scan)
+            callee, found = h["where"]
+            for x in found:
+                if struct.unpack_from("<I", mem, x)[0] != JAL(callee):
+                    raise RuntimeError("no jal %#x at %#x" % (callee, x))
             _stub(a, callee, d)
             sites += [(x, JAL(stub_at)) for x in found]
             h["sites"] = [hex(x) for x in found]

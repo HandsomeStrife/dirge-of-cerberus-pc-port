@@ -375,7 +375,12 @@ def weapons(d):
                         # and the stage version FUN_00310c40 > 0x20, else 400), W+0x94 the bullet's (FUN_00554850 ->
                         # FUN_0033d788, at the sound camera)
                         se_fire=d[o + 0x8c:o + 0x94].split(b'\0')[0].decode('latin-1'), se_range=f(0x74),
-                        se_bullet=d[o + 0x94:o + 0x9c].split(b'\0')[0].decode('latin-1')))
+                        se_bullet=d[o + 0x94:o + 0x9c].split(b'\0')[0].decode('latin-1'),
+                        # bullet-end effect (worker 0193): bullet +0x144 = W+0x7c (FUN_00554568), +0x194 = section-24
+                        # record [+0x144] (FUN_00554850 -> FUN_00311600); FUN_00554ea8 reads its +0x78 flags (0x2000 no
+                        # effect, 8 at the bullet's object), +0x80 (the floor-hit id, FUN_00335960) and +0xb0 (FUN_00335918)
+                        bullet=h(0x7c), f78=SE.u32(d, o + 0x78), fx_floor=struct.unpack_from('<i', d, o + 0x80)[0],
+                        fx_end=struct.unpack_from('<i', d, o + 0xb0)[0]))
     return out
 
 
@@ -435,7 +440,10 @@ def zone_set(d, i, n):
         return None
     r = sec[0x14][0] + SE.u32(d, o19 + 4 * i)
     z = r + SE.u32(d, r + 8) + SE.u32(d, r + 4) * 4 + SE.u32(d, r)
-    return [dict(scale=d[z + 16 * k], flags=struct.unpack_from('<H', d, z + 16 * k + 2)[0]) for k in range(n)]
+    # fx (worker 0193): the record's word bits 12-15, signed: FUN_0055db50 / FUN_0056c3f0 pass
+    # (*(actor +0x19c) << 16) >> 28 to FUN_003361b8 (!= 0: the wall-impact table by that material)
+    return [dict(scale=d[z + 16 * k], flags=struct.unpack_from('<H', d, z + 16 * k + 2)[0],
+                 fx=((d[z + 16 * k + 1] >> 4) ^ 8) - 8) for k in range(n)]
 
 
 def lock_bone(d, i):

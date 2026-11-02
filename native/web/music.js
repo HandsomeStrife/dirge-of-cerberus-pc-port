@@ -20,6 +20,24 @@ import { SeRenderer, hexBytes, SPU_RATE, TICK_HZ, TICK_SAMPLES } from './audio.j
 
 export const BGM_GAIN = 0x7fff / 32768;      // core-1 input volume 0x7fff (IOP FUN_00010394); voices: audio.js mix
 
+// The core-1 input (BGM) volume on the IOP (worker 0194; notes/audio-research.md "Pause volume drop").
+// FUN_003ed7d0(vol) stores PTR_0047d7a0; FUN_003ed8e0 sends it with the next PCM slot as FUN_0041af80(0x14, vol) = IOP
+// command 0x34 -> FUN_00010394(time 0x14, vol): target = vol ? ((vol + 1) << 8) - 1 : 0, in 1/4096 units; with a time,
+// step = ((target << 12 | 0x800) - cur) / time (MIPS div: toward zero) for `time` driver ticks, else cur = target at
+// once. FUN_00010328, run by the 240 Hz driver tick while the count is non-zero: cur += step, BVOLL / BVOLR (sceSd
+// 0x0f81 / 0x1081) = cur >> 12. Checked against the IOP RAM (irx base 0x82130, state at irx 0x5ddb0): sea-of-flames
+// cur 0x7fff800 (the title's FUN_003ed7d0(0x7f) ramp), w189 cancel (paused) cur 0x30ff804, step -0x3f3333, count 0.
+export class BgmVolume {
+  constructor() { this.cur = 0x7fff800; this.step = 0; this.count = 0; }
+  set(time, vol) {                                 // FUN_00010394
+    let t = vol ? (((vol + 1) << 8) - 1) << 12 : 0;
+    if (time) { this.step = Math.trunc(((t | 0x800) - this.cur) / time); this.count = time; }
+    else { this.cur = t; this.count = 0; }
+  }
+  tick() { if (this.count) { this.count--; this.cur += this.step; } }   // FUN_00010328
+  get reg() { return (this.cur >> 12) & 0xffff; }
+}
+
 // One streamed SE program (an endless one, like the area ambience). ticks(n) renders n driver ticks.
 export class SeStream {
   constructor(drv, bank, prog, vol = 0x7f, pan = 0x40) {
@@ -147,11 +165,56 @@ export class GameMusic {
     // the rate bgm.py wrote (48 kHz: the IOP's frame rate, trace w177_music); the context resamples the buffer
     if (info.loop) { src.loop = true; src.loopStart = info.loop_start_sample / info.rate; src.loopEnd = info.loop_end_sample / info.rate; }
     const g = ctx.createGain();
-    g.gain.value = BGM_GAIN;
+    // the IOP's volume now (= BGM_GAIN until a FUN_003ed7d0); the ramp keeps running on the IOP between streams
+    this.catchUp(ctx.currentTime);
+    g.gain.value = (this.vol ? this.vol.reg : 0x7fff) / 32768;
     src.connect(g); g.connect(ctx.destination);
     src.start();
-    this.src = src;
+    this.src = src; this.gain = g;
+    if (this.pendingVol !== undefined) this.sendVolume();        // FUN_003ed8e0: sent with the first PCM slot
+    else this.schedule();                                        // the rest of a ramp still running
     return src;
+  }
+
+  // FUN_003ed7d0(vol): the pause sends 0x30, the resume 0x7f (FUN_00241f40). The IOP gets it only when FUN_003ed8e0
+  // sends a PCM slot (a stream running, DAT_0047d794 != 0), so without music it waits for the stream.
+  // L: applied now, not with the next slot (a slot is 1024 samples, 21 ms).
+  setVolume(vol) {
+    this.pendingVol = vol;
+    if (this.src) this.sendVolume();
+  }
+
+  // FUN_0041af80(0x14, vol) -> IOP FUN_00010394; the 20 ticks of FUN_00010328 as gain steps on the driver's 240 Hz clock
+  sendVolume() {
+    const ctx = this.au.ctx, vol = this.pendingVol & 0x7f;    // FUN_0041af80: param_2 & 0x7f
+    this.pendingVol = undefined;
+    const m = this.vol ??= new BgmVolume();
+    if (!ctx || !this.gain) { m.set(0x14, vol); return; }
+    const t0 = ctx.currentTime;
+    this.catchUp(t0);                                // a new command mid-ramp starts from where the ramp is
+    m.set(0x14, vol);
+    this.volT0 = t0; this.volDone = 0;
+    this.schedule();
+  }
+
+  // FUN_00010328 ticks run on the IOP since the ramp started at volT0 (volDone of them already applied to this.vol)
+  catchUp(t) {
+    const m = this.vol;
+    if (!m || this.volT0 === undefined) return;
+    const n = Math.floor((t - this.volT0) * TICK_HZ);
+    for (; this.volDone < n && m.count; this.volDone++) m.tick();
+  }
+
+  // the ramp's remaining steps as gain values on this.gain, each at its driver tick volT0 + k / 240
+  schedule() {
+    const ctx = this.au.ctx, m = this.vol;
+    if (!ctx || !this.gain || !m) return;
+    const g = this.gain.gain, t = ctx.currentTime;
+    g.cancelScheduledValues(t);
+    g.setValueAtTime(m.reg / 32768, t);
+    if (this.volT0 === undefined) return;
+    const s = Object.assign(new BgmVolume(), m);
+    for (let k = this.volDone + 1; s.count; k++) { s.tick(); g.setValueAtTime(s.reg / 32768, this.volT0 + k / TICK_HZ); }
   }
 
   // stopMusic -> FUN_003ebfa0.

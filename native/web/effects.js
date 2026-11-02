@@ -1330,17 +1330,41 @@ export class EffectLayer {
 export const _internals = { eulerT, scaleM, sincos, T };
 
 // Effect ids at the game's call sites, read from the user's ELF by the exporter (data/effects/ids.json):
-// FUN_00336040 table 0x4a0c68 [material * 2 + floor] (floor = FUN_00260c38: (int)(normal.y bits ^
-// 0x80000000) > 0x3f666666, i.e. y < -0.9f); FUN_003363d0 table 0x4a0cd8 [(C+0x150 >> 16) & 3].
-// FUN_00336478 (bullet +0x140 bits 7-10 == 0): the wall impact id for a material and hit normal.
-// The page's collision normal is not known to have the sign of the game's hit normal (not decoded), so a hit with
-// |n.y| > 0.9 (floor or ceiling) gets no effect (-1) rather than a guessed floor / wall pick; the walls (|n.y| <=
-// 0.9) take the wall id either way.
+// FUN_00336040 table 0x4a0c68 [material * 2 + floor]; FUN_003363d0 table 0x4a0cd8 [(bullet +0x150 >> 16) & 3].
+//
+// FUN_00260c38(normal): (int)(normal.y bits ^ 0x80000000) > 0x3f666666 (0.9f), i.e. -n.y > 0.9f: the hit faces up
+// (the game's y points down). `normal` is the game's hit normal (bullet +0x100 = DAT_004e8810, FUN_0026f8a0:
+// normalize(VU0 vf22)). DECODED: the VU0 micro program (_vcallms 0xa90; port/vu/tools/vudis.py on a save's
+// vu0MicroMem) builds vf13 = v1 - v0 (instr 368), vf25 = v2 - v0 (371), OPMULA / OPMSUB vf13 = vf13 x vf25 (375-376)
+// and vf22 = vf00 - vf13 (420): -(v1 - v0) x (v2 - v0), no branch on the sign, so a back-face hit has the same sign
+// (quads: 448 / 451, 456 / 458, 507). T: 7 save states (DAT_004e8810 vs the triangle at DAT_004e8830..). collision.js's
+// normal is +(v1 - v0) x (v2 - v0) in the same vertex order, so play.js's roomRay hands the negated page normal.
+// Open: the program's back-face culling (instr 396-415) vs the page's double-sided segment test.
+export function floorHit(normal) {
+  return f(-normal[1]) > f(0.9);
+}
+
+// FUN_00336478 (bullet +0x140 bits 7-10 == 0): the wall impact id for a material and the hit normal.
 export function wallImpactId(ids, mat, normal, warn) {
-  if (normal && Math.abs(normal[1]) > 0.9) {
-    if (warn) warn('effects: floor / ceiling hit (|n.y| > 0.9): the hit normal\'s sign (FUN_00260c38) is not decoded; no effect');
+  if (!normal) {
+    if (warn) warn('effects: wall impact without a hit normal (old roomRay): FUN_00260c38 cannot run; no effect');
     return -1;
   }
   const t = ids && ids.wall;
-  return t ? t[(mat & 0xf) * 2] ?? -1 : -1;
+  return t ? t[(mat & 0xf) * 2 + (floorHit(normal) ? 1 : 0)] ?? -1 : -1;
+}
+
+// FUN_003361b8(point, bullet, kind): a bullet hitting a character (FUN_0055db50, FUN_005720c8, FUN_0056c3f0 pass
+// kind = (*(actor +0x19c) << 16) >> 28, the hit zone record's nibble; 0 without a record). kind != 0 ->
+// FUN_00336040(kind, 0) = the wall table [kind x 2]; else FUN_003363d0 (bullet +0x140 bits 7-10 == 0 on the page's
+// bullets) = the hit table [cls], cls = bullet +0x150 bits 16-17 = the shooter's W+0x14 >> 2 & 3 (FUN_00552dd8).
+// T: w193_fxhits (Vincent, class 1, hits #66 / #67: 0x41800 = hit[1]); w174_pain_a (#66, class 3: 0x40c00).
+export function hitImpactId(ids, kind, cls, warn) {
+  if (kind < 0) {
+    // FUN_00336040 indexes its stack copy of the table with a negative index (not data)
+    if (warn) warn(`effects: hit zone effect nibble ${kind} < 0 (FUN_00336040 reads off its table); no effect`);
+    return -1;
+  }
+  const t = kind ? ids && ids.wall : ids && ids.hit;
+  return t ? t[kind ? kind * 2 : cls & 3] ?? -1 : -1;
 }

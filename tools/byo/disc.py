@@ -254,6 +254,9 @@ INPUTS = {
     # outside noPath: sound driver + wave bank 0 (tools/audio/extract.py), the zone music (tools/audio/bgm.py)
     '../data/sound/lib/iopsound.irx': '86164af27e90c49ee8984ae3497d2225165a789a8271bdd019b16e74bfe74aa1',
     '../data/sound2/wave0000.wd': '2ded3a27599d1adb9d7ddaa564a0aacda1a58195634ab546ae36e7dffc9e308b',
+    # the resident SE block (FileCode 0x02810001) and its names (0x03100034): menu sounds (tools/audio/extract.py)
+    '../data/sound2/resident.bin': '3267617ab9456d458206ffffbfb44d3ed440e0a85e87f60019d01624ee98c43f',
+    '../data/etc/ressddb.bin': 'a7f70c5cc23467ec3db99b28e34aefc02806bb2070cbac49a6f1d18fc1b9e1c2',
     '../data/zone/z128/sound/bgm_001.at3': '5c0e50d546d728590f4c974247401624d123df2d32abf2510da27ffd80555138',
     # outside noPath: resident effect file + effect texture pack (export_web_effects.py)
     '../data/effect/resident/r0000/r0001/fer/r0001.fed': '5faf7fdfd9f3a8c8f07de02cd4551711c544e531c8f9c602acf05e005fc0726b',

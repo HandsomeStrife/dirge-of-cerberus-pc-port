@@ -35,10 +35,10 @@ const ok = (what, cond, info = '') => { checks++; if (!cond) { fails++; console.
   ok('wall id material 2 (wall)', wallImpactId(ids, 2, [0, 0, 1]) === 0x43400);
   ok('wall id material 1 (wall)', wallImpactId(ids, 1, [1, 0, 0]) === 0x46400);
   ok('wall table: material 1 floor (FUN_00260c38: y < -0.9f) = 0x47400', ids.wall[3] === 0x47400);
-  // the hit normal's sign is not decoded: floor / ceiling hits (|n.y| > 0.9) get no effect, with a warning
-  const wl = [];
-  ok('wall id: |n.y| > 0.9 (floor or ceiling) -> no effect', wallImpactId(ids, 1, [0, -0.95, 0], m => wl.push(m)) === -1 &&
-    wallImpactId(ids, 1, [0, 0.95, 0]) === -1 && wl.length === 1);
+  // FUN_00260c38 on the game's normal (y down; play.js roomRay negates the page's: MEASURED, effects.js floorHit):
+  // a floor (n.y < -0.9f) takes [mat x 2 + 1], a ceiling the wall id (more in test_effects_hooks.mjs)
+  ok('wall id: floor (n.y = -0.95) -> 0x47400, ceiling (0.95) -> 0x46400', wallImpactId(ids, 1, [0, -0.95, 0]) === 0x47400 &&
+    wallImpactId(ids, 1, [0, 0.95, 0]) === 0x46400);
   ok('wall id: y = -0.9 is a wall', wallImpactId(ids, 1, [0, -0.9, 0]) === 0x46400);
   ok('hit id: weapon class 3', ids.hit[3] === 0x40c00);
 }
@@ -417,7 +417,7 @@ if (existsSync(join(w188, 'stateD.json'))) {
     }
     let worstS = 0, exS = 0, worstSame = 0;
     const unmatchedS = [];
-    for (const sp of sps) { const b = near(sp.verts.map(v => v.gs), sh); worstS = Math.max(worstS, b.d); if (JSON.stringify(sp.verts.map(v => v.rgba)) === JSON.stringify(b.q.v.map(v => v[6]))) { exS++; worstSame = Math.max(worstSame, b.d); } else unmatchedS.push({ type: sp.type, tag: sp.tag, d: b.d }); }
+    for (const sp of sps) { const b = near(sp.verts.map(v => v.gs), sh); worstS = Math.max(worstS, b.d); if (JSON.stringify(sp.verts.map(v => v.rgba)) === JSON.stringify(b.q.v.map(v => v[6]))) { exS++; worstSame = Math.max(worstSame, b.d); } else unmatchedS.push({ emitter: sp.emitter, type: sp.type, tag: sp.tag, d: b.d }); }
     const segs = []; for (const s of drawn.filter(s => s.line)) for (let i = 0; i + 1 < s.verts.length; i++) segs.push({ a: s.verts[i], b: s.verts[i + 1], alpha: s.alpha });
     const gl = dmp.lines.filter(g => g.v[0][3][0] === 127 && g.v[0][3][1] === sparkG);   // the x 127 colours of this effect's sparks
     let worstL = 0, col = 0, onSpot = 0, onSpotCol = 0;
@@ -464,15 +464,18 @@ if (existsSync(join(w188, 'stateD.json'))) {
     ok('w188 state C: the hit spawned emitters 3 and 6 at one point', e3 && e6 && e3.age === e6.age && e3.p120.every((x, i) => x === e6.p120[i]));
     const randStep = x => (Math.imul(x, 0x41c64e6d) + 0x3039) >>> 0;
     const pr21 = e3.parts.find(p => Object.values(p.pools).some(q => q.type === 21)), R21 = ramPool(Object.values(pr21.pools)[0]);
-    const replay = k8 => {
+    const replay = (k8, k6 = 0) => {
       const rng = new EffectRng(seedOf(e3), undefined, A.mt, null);
       const fx = createEffects({ fed, core, warn: () => {}, rng, proj: camC.proj });
-      fx.begin(f(1.2)); const m3 = fx.spawn(0x40c00, e3.p120); fx.end(); const first = fx.sprites(camC.view);
+      // the game's order (w193_fxsrc f789): 0x40c00 in the bullet's vt+0x1b4 (FUN_003361b8), 0x1000 (FUN_00336508,
+      // FED r0000: not on the page), then FUN_00554ea8's bullet-end effect W+0xb0 = 0x41800 (FUN_00335918)
+      fx.begin(f(1.2)); const m3 = fx.spawn(0x40c00, e3.p120); for (let i = 0; i < k6; i++) rng.next();
+      const m6 = fx.spawn(0x41800, e6.p120); fx.end(); const first = fx.sprites(camC.view);
       rng.libc = randStep(A.rand);                               // frame 1's rand(); frame 2's begin steps it again
       fx.begin(f(e3.dt)); for (let i = 0; i < k8; i++) rng.next(); fx.end(); const second = fx.sprites(camC.view);
       const S = m3.lists[1].find(p => p.tag === pr21.tag).ext[F_slot(m3.lists[1].find(p => p.tag === pr21.tag), +Object.keys(pr21.pools)[0])];
       const errs = []; for (let q = 0; q < R21.count; q++) { const a = S.recs[(S.start + q) % S.cap], b2 = R21.recs[(R21.start + q) % R21.cap]; errs.push(Math.max(...[0, 1, 2, 4, 5, 6, 12, 13, 15, 19, 24, 25, 26, 27].map(w => relErr(a.f[w], b2.f[w])))); }
-      return { fx, rng, m3, first, second, errs, n: S.count };
+      return { fx, rng, m3, m6, first, second, errs, n: S.count };
     };
     const r0 = replay(0);
     ok('w188 state C: the hit\'s type 21 records of the spawn frame (0-2) equal RAM (tag 5\'s type 23 / 24 transitions now run: no extra draws)', r0.n === R21.count && r0.errs.slice(0, 3).every(x => x < 1e-5), JSON.stringify(r0.errs));
@@ -482,18 +485,34 @@ if (existsSync(join(w188, 'stateD.json'))) {
     const { fx: fxC, m3, first } = replay(Math.max(k8, 0));
     // categories 6 / 8 draw: emitter 3's tag 0 is render category 6
     ok('w188: the hit draws, incl. its render category 6 particle (tag 0)', first.length > 0 && first.some(s => s.emitter === 3 && s.tag === 0), `${first.filter(s => s.tag === 0).length}`);
-    let nv = 0, worstV = 0, at = '';
-    ok('w188 state C: emitter 3 same particle tags', JSON.stringify(m3.lists[1].map(p => p.tag)) === JSON.stringify(e3.parts.map(p => p.tag)));
-    for (const pr of e3.parts) {
-      const pj = m3.lists[1].find(p => p.tag === pr.tag);
-      if (!pj || pj.skip) continue;
-      for (let c = 0; c < Fq.u8(pj.P + 8); c++) {
-        const d = Fq.desc(pj.P, c), ty = Fq.u16(d), o = Fq.u16(d + 4) / 4;
-        const W = { 1: [0, 1, 2], 2: [0, 1, 2, 4, 5, 6], 4: [0, 1, 2], 7: [0, 1, 2], 9: [0, 1, 2], 15: [0, 1, 2, 3], 16: [0, 1, 2, 3], 17: [0, 1, 2, 3] }[ty];
-        for (const k of W ?? []) { nv++; const er = relErr(pj.v[o + k], pr.v[o + k]); if (er > worstV) { worstV = er; at = `tag ${pr.tag} type ${ty} [${k}] ${pj.v[o + k]} vs ${pr.v[o + k]}`; } }
+    // the translated channels' values of one emitter vs RAM: {n, worst, at}
+    const valErr = (m, e) => {
+      let nv = 0, worstV = 0, at = '';
+      for (const pr of e.parts) {
+        const pj = m.lists[1].find(p => p.tag === pr.tag);
+        if (!pj || pj.skip) continue;
+        for (let c = 0; c < Fq.u8(pj.P + 8); c++) {
+          const d = Fq.desc(pj.P, c), ty = Fq.u16(d), o = Fq.u16(d + 4) / 4;
+          const W = { 1: [0, 1, 2], 2: [0, 1, 2, 4, 5, 6], 4: [0, 1, 2], 7: [0, 1, 2], 9: [0, 1, 2], 15: [0, 1, 2, 3], 16: [0, 1, 2, 3], 17: [0, 1, 2, 3] }[ty];
+          for (const k of W ?? []) { nv++; const er = relErr(pj.v[o + k], pr.v[o + k]); if (er > worstV) { worstV = er; at = `tag ${pr.tag} type ${ty} [${k}] ${pj.v[o + k]} vs ${pr.v[o + k]}`; } }
+        }
       }
-    }
+      return { nv, worstV, at };
+    };
+    ok('w188 state C: emitter 3 same particle tags', JSON.stringify(m3.lists[1].map(p => p.tag)) === JSON.stringify(e3.parts.map(p => p.tag)));
+    const { nv, worstV, at } = valErr(m3, e3);
     ok(`w188 state C: the hit's (emitter 3) particle values within 1e-5 (${nv}, incl. its render category 6 tag 0; worst ${worstV.toExponential(2)})`, nv > 20 && worstV < 1e-5, at);
+    // the bullet-end effect 0x41800 (emitter 6). Between the two spawns the game spawns FUN_00336508's 0x1000 (FED
+    // r0000: not on the page), so the emitter list is 8, 3, 0x1000, 6 and in the end pass (FUN_002efe98) 0x1000's
+    // channels draw the LCG between emitter 3's draws and emitter 6's (the page's spawns draw nothing at the spawn:
+    // every frame-1 draw is in the end pass). k6 = draws given to emitter 6 first (searched 0-64; emitter 3 then
+    // no longer matches, so this replay checks emitter 6 alone): MEASURED 25. The page leaves 0x1000 out, so its
+    // emitter 6 draws 25 values early (notes/effects-research.md 'Bullet end'); the dump replay below has k6 = 0.
+    let k6 = -1; for (let k = 0; k <= 64 && k6 < 0; k++) { const r = replay(Math.max(k8, 0), k); const v = valErr(r.m6, e6); if (v.nv > 0 && v.worstV < 1e-5) k6 = k; }
+    const r6 = replay(Math.max(k8, 0), Math.max(k6, 0)), v6 = valErr(r6.m6, e6);
+    console.log(`  w188 hit: emitter 6 (0x41800) matches RAM with k6 = ${k6} LCG draws after emitter 3's spawn; ${v6.nv} values, worst ${v6.worstV.toExponential(2)} ${v6.at}`);
+    ok('w188 state C: emitter 6 (0x41800, FUN_00554ea8 -> FUN_00335918) same particle tags', JSON.stringify(r6.m6.lists[1].map(p => p.tag)) === JSON.stringify(e6.parts.map(p => p.tag)), `${r6.m6.lists[1].map(p => p.tag)} vs ${e6.parts.map(p => p.tag)}`);
+    ok(`w188 state C: emitter 6's particle values within 1e-5 (${v6.nv}) after r0000 0x1000's ${k6} draws`, k6 === 25 && v6.nv > 20 && v6.worstV < 1e-5, `k6 ${k6} ${v6.at}`);
     // the dump (C+4: the frame whose sprites fit best; C+3 / C+5 are worse): frames 3-4 are reseeded from rand()
     // like frame 2, but not checked against RAM (no state there)
     const dC = JSON.parse(readFileSync(join(w188, 'dumpC.json'), 'utf8'));
@@ -505,7 +524,12 @@ if (existsSync(join(w188, 'stateD.json'))) {
     // fitted on those sprites (the dump frame's camera is not in the save; the residual is not a pure shift).
     // Reported: the other sprites (no game sprite with their RGBA) and their distance to the nearest game sprite
     const rC = compareDump('C+4 (asserted)', dC, drC, 111);
-    console.log(`  w188 dump C+4: unmatched sprites (no game sprite with their RGBA), nearest game sprite: ${rC.unmatchedS.map(u => `type ${u.type} tag ${u.tag} ${u.d.toFixed(2)} px`).join(', ')}`);
+    console.log(`  w188 dump C+4: unmatched sprites (no game sprite with their RGBA), nearest game sprite: ${rC.unmatchedS.map(u => `emitter ${u.emitter} type ${u.type} tag ${u.tag} ${u.d.toFixed(2)} px`).join(', ')}`);
+    // emitter 6 (0x41800, the bullet-end effect): its tag 1 sprites draw from the LCG 25 values early (r0000 0x1000 is
+    // not on the page, see k6 above); the others must still match a game sprite's RGBA
+    const n6 = drC.filter(s => s.emitter === 6 && !s.line).length, u6 = rC.unmatchedS.filter(u => u.emitter === 6).length;
+    ok(`w188 dump C (C+4): emitter 6 (0x41800) draws ${n6} sprites, ${n6 - u6} with a game sprite's exact RGBA; unmatched only its tag 1 (the missing r0000 draws)`,
+      n6 >= 4 && n6 - u6 >= 1 && rC.unmatchedS.filter(u => u.emitter === 6).every(u => u.tag === 1), `${n6} ${u6}`);
     ok(`w188 dump C (C+4): ${rC.exS} / ${rC.sps} of the hit's sprites have a game sprite's exact RGBA, within ${rC.worstSame.toFixed(2)} px (fitted on those)`, rC.exS >= 12 && rC.worstSame < 2.5, JSON.stringify(rC));
   }
 } else console.log('  (no tools/trace/out/w188_fx: the type 21 / 137 RAM and line checks are skipped)');

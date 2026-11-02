@@ -229,5 +229,6 @@ Type 9 (FUN_003e5e98, vtable 0x4a6fb0; 0xc dtor, 0x1c draw FUN_003e5f58, 0xcc se
 - Not translated: FUN_003d1d98 escapes ('$' codes: colours DAT_0047a7c0, flags 4 / 8 strips,
   inline images, typewriter state +0x6c), code 1 colours (DAT_004f2008), Shift-JIS, pages 2-5,
   FUN_003d0058 ('$&' measure). Such strings warn and are not drawn.
-Open: menu sounds (ids 7, 8, 9 recorded), the restart's checkpoint restore (page reloads), Start
+Open: the restart's checkpoint restore (page reloads), Start
 routing while the box has the focus (translated, not checked against the game).
+Menu sounds: done (worker 0194, notes/audio-research.md "Menu sounds").

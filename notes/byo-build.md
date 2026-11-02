@@ -21,9 +21,10 @@ Worker 0191, 2026-11-01. Scripts: `tools/byo/build_web.sh`, `tools/byo/disc.py`.
 | aim/weapon.json, reticle.json | aim.js | export_web_aim.py --iso | data/bgd/bgd.bin, data/etc/menudata.bin, ELF |
 | effects/r0001.fed, core_ef.bin, ids.json | play.js -> effects.js | export_web_effects.py (effects) | data/effect/resident/r0000/r0001/fer/r0001.fed, data/effect/core/core_ef.bin, ELF; twister + rand from --state (without them all effects are left out) |
 | pause.json | pause_layer.js | export_web_pause.py (pause) | ELF, data/etc/locale/uk/{menudata,fontdata1,kelstr}.bin |
+| gameover.json | gameover_layer.js (with pause.json) | export_web_gameover.py (gameover; worker 0192) | ELF, data/etc/locale/uk/kelstr.bin |
 | menu.json | tests only (test_menu_layout) | export_web_menu.py (menu) | ELF |
-| hud/hud.json | hud.js | export_web_hud.py (hud, **only with --state**) | ELF, locale uk menudata/fontdata1, **save state** |
-| audio/driver.json, se_z128.json, wave0000.{bin,json} | audio.js | tools/audio/extract.py (audio) | data/sound/lib/iopsound.irx, noPath 06800005 / 06800008, data/sound2/wave0000.wd |
+| hud/hud.json | hud.js | export_web_hud.py (hud; always, worker 0195) | ELF, locale uk menudata/fontdata1/kelstr (the element tree is built from the ELF's set-up code; no save) |
+| audio/driver.json, se_z128.json, se_res.json, wave0000.{bin,json} | audio.js | tools/audio/extract.py (audio) | data/sound/lib/iopsound.irx, noPath 06800005 / 06800008, data/sound2/wave0000.wd, data/sound2/resident.bin + data/etc/ressddb.bin (resident SE block / names, worker 0194), ELF (menu sound names 0x47d5c8) |
 | audio/bgm/bgm.json, bgm_001.flac | music.js | tools/audio/bgm.py (music, **only with ffmpeg + libavcodec dev**) | data/zone/z128/sound/bgm_001.at3, noPath 06800008, ELF (scramble keys) |
 
 tools/audio/sep.py is a library/print tool (imported by extract.py), not a build step.
@@ -67,6 +68,18 @@ The build now always passes --state "$STATE" ('' when not given = left out; 0188
 
 ## Open
 
-- The HUD needs a save state (element tree; the HUD setup code FUN_003daec8 etc. isn't translated). Until
-  it is, disc-only users have no game HUD.
+- (Closed 2026-11-02, worker 0195: the HUD is built from the disc; see below.)
 - bgm_001.flac byte identity depends on the ffmpeg version (FLAC encoder tag); same machine here.
+
+## The HUD without a save state (worker 0195, 2026-11-02)
+
+export_web_hud.py now builds the element tree as the game does (FUN_003ad618 + the start-of-stage
+setters; notes/hud-research.md "Set-up from the disc") and build_web.sh always runs it, without --state.
+Inputs: the ELF (from the image), locale uk menudata.bin / fontdata1.bin / kelstr.bin (kelstr was
+already in INPUTS for the pause step); audit-hooked run from the ISO opened only those (no .p2s).
+The disc build differs from the save-based hud.json only by the save's 88 other-screen elements after
+slot 10 and the 21 sprite records only they use (nothing on screen); the page's on-screen draw list is
+identical over 200 frames. `--state FILE` still reads the save's tree (byte-identical to the old output)
+and prints the field-by-field differences (0). Maintainers' native/web/data/hud/hud.json was made with
+the save; a disc build's differs as above. Still read from a save in a disc build: the effects' rand() /
+twister (export_web_effects.py --state; session state, not on the disc).

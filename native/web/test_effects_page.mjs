@@ -61,6 +61,18 @@ try {
   ok(r.seen[137] > 0 && r.lines > 0, `type 137 spark lines drawn (${r.seen[137]} over the frames, up to ${r.lines} line objects at once)`);
   ok(r.near.length >= 1 && r.near.every(e => e[0] === 12 && e[1] === 0x43400), `impact emitters at the wall: ${JSON.stringify(r.near)} (emitter 12, id 0x43400)`);
   ok(r.drawn > 0, `sprites drawn: ${r.drawn}`);
+  // worker 0193: a floor hit (FUN_00260c38 on the game's normal; play.js roomRay negates the page's): fired down at the
+  // floor point the game's f833 pellet hit (w193_floor: material 3 floor -> 0x45400), the page's impacts there take
+  // the floor id (with the page's normal unnegated they would take the wall id 0x45000)
+  const FLOOR = [-1049.0, -145.9375, -1108.7];
+  await pg.evaluate(async f => {
+    const W = await fetch('data/aim/weapon.json').then(r => r.json());
+    window.__fxFloor = window.__play.stats.ticks;
+    window.__play.enemyAI.queueShot([f[0], f[1] - 20, f[2]], [f[0], f[1] + 20, f[2]], W);
+  }, FLOOR);
+  await pg.waitForFunction(() => window.__play.stats.ticks > window.__fxFloor + 8, null, { timeout: 60000 });
+  const fl = await pg.evaluate(f => window.__fx.fx.emitters.filter(e => Math.hypot(e.p120[0] - f[0], e.p120[1] - f[1], e.p120[2] - f[2]) < 10).map(e => [e.ei, e.id]), FLOOR);
+  ok(fl.length >= 1 && fl.every(e => e[1] === 0x45400), `floor impacts: ${JSON.stringify(fl)} (id 0x45400 = material 3 floor, as the game's f833-835)`);
   // the draw pass uses this game frame's camera (follow.tick at the frame's start), not the last rendered one:
   // walk so the camera moves, then the layer's camera must sit at follow's eye of the last game frame
   const cam = await pg.evaluate(async () => {

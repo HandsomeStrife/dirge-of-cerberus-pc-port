@@ -411,8 +411,40 @@ MUSIC_FIELDS = [f for f in FIELDS if f[0] in ("step",)] + [
     ("bgm_file", None, 0x4C2460 + 0x218, "bytes:32", "L", "file +0x218 buffer, +0x21c 0x6000, +0x220 loop start, +0x224 loop end, +0x234 read position (bytes; frame = /0x180)"),
 ]
 
+# Opt-in set for the game over (TRACE_FIELDSET=gameover, worker 0192; notes/gameover-research.md). Fixed
+# addresses from the w181 death route (scripts/w192_*): the world-mode object (FUN_00334590's param_2,
+# found by its vtable 0x4a0a78) and the two box screens are heap objects of that run.
+GAMEOVER_FIELDS = [f for f in FIELDS if f[0] in ("step", "pad_held", "p_state", "motion", "cam_matrix")] + [
+    ("clock_ms", None, 0x46B094, "u32", "D", "FUN_0023c1f0: uRam0046b094, the menu clock in ms"),
+    ("p_hp", None, 0x960660, "u32", "D", "Vincent's HP: status P+0x17c (0x960640 in this state) + 0x20 (FUN_00316cf8)"),
+    ("wmode", None, 0x94D58C, "u32", "D", "FUN_00334590 param_2 +0x2c state (lo16), +0x2e timer (hi16, s16)"),
+    ("w_4c", None, 0x915540 + 0x4C, "u32", "D", "DAT_0046e290+0x4c: 1 = game over requested (FUN_00324ab0(1)); FUN_00324a90"),
+    ("end_type", None, 0x47DB6C, "u32", "D", "PTR_0047db6c: end screen type (3 = game over), FUN_003fdb48"),
+    ("end_state", None, 0x4FADBC, "u32", "D", "DAT_004fadbc: FUN_003fdf00 state"),
+    ("end_box", None, 0x47DB78, "u32", "D", "PTR_0047db78: the kind-6 box slot"),
+    ("end_t0", None, 0x47DB84, "u32", "D", "DAT_0047db84: clock at FUN_003fdb48"),
+    ("end_ans", None, 0x47DB88, "u32", "D", "DAT_0047db88: the box result (6 / 7 / 8)"),
+    ("boxes", None, 0x50DB60, "bytes:80", "D", "DAT_0050db60: box slots 0 and 1 (0x28 each)"),
+    ("seq", None, 0x2340A0 + 0x47C, "bytes:20", "G", "kind-6 screen +0x47c index, +0x480 start ms, +0x484, +0x488 table, +0x48c kind, +0x48d mode"),
+    ("seq_10d4", None, 0x2340A0 + 0x10D4, "u32", "G", "kind-6 screen +0x10d4: the menu box slot"),
+    ("menu", None, 0x233EA0 + 0x38, "bytes:40", "G", "kind-0x21 screen +0x38.."),
+    ("focus", None, 0x4F3034, "u32", "D", "DAT_004f3034 focused widget"),
+    ("ui_flags", None, 0x4F3044, "u32", "D", "DAT_004f3044: 0x100 = DAT_0046b1dc count > 0 (FUN_00241760 -> FUN_003e0c78), 0x2000 FUN_003e0cc8"),
+    ("pause", None, 0x477670, "u32", "D", "DAT_00477670: the pause screen (0 = none)"),
+    ("sflags", None, 0x4B8980, "u32", "D", "DAT_004b8980 script flags (FUN_002413c0; bit 0x14 = FUN_003de130's first gate)"),
+    ("pad_gate", None, 0x4E0FF8, "u32", "D", "DAT_004e0ff8 (FUN_00254810 needs 1)"),
+    ("pad_gate2", None, 0x4E1204, "u32", "D", "DAT_004e1204 (FUN_00254810 needs != 0)"),
+    ("fade", None, 0x4EC04C, "f32", "D", "DAT_004ec04c (FUN_002e29e0): FUN_003de130 needs <= 0"),
+    ("dbb0_18", None, 0xA06300 + 0x18, "u32", "G", "DAT_0047dbb0 (0xa06300 in this run) +0x18: bit 5 = FUN_003e2910"),
+    ("gstate", None, 0x4B8B2C, "u32", "D", "DAT_004b8b2c (FUN_00241d68): game state, 0x17 = paused"),
+    ("stage_1558", None, 0x222F80 + 0x1558, "bytes:8", "G", "DAT_0046f850 (0x222f80 here) +0x1558 flags (FUN_003dfd18: bits 44 / 37)"),
+    ("ref_1dc", None, 0x46B1DC, "bytes:8", "D", "DAT_0046b1dc count + DAT_0046b1e0[4] per-kind counts (FUN_00241760)"),
+]
+
 FIELDSET = __import__("os").environ.get("TRACE_FIELDSET")
-if FIELDSET == "music":
+if FIELDSET == "gameover":
+    FIELDS = GAMEOVER_FIELDS
+elif FIELDSET == "music":
     FIELDS = MUSIC_FIELDS
 elif FIELDSET == "path":
     FIELDS = PATH_FIELDS

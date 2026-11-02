@@ -26,7 +26,7 @@ import { setupAim } from './aim.js';
 import { setupHud } from './hud.js';
 import { setupEnemies } from './enemies.js';
 import { createEnemyAI } from './enemy_ai.js';
-import { createEffects, EffectLayer, wallImpactId } from './effects.js';
+import { createEffects, EffectLayer, wallImpactId, hitImpactId } from './effects.js';
 import { boneRows } from './enemy_hit.js';
 
 const params = new URLSearchParams(location.search);
@@ -642,6 +642,7 @@ async function main() {
   // Vincent's status for the enemy AI: HP 780 = P status +0x20 in the save state (k_enemy_engage8 p_hp)
   const php = { pos: [ctrl.pos.x, ctrl.pos.y, ctrl.pos.z], face: [ctrl.C.face.x, ctrl.C.face.y, ctrl.C.face.z], hp: 780, id: 0x16, f118: 0x20209, s64: 0 };   // f118 = P+0x118 from the save's RAM (0x20209; player.js hitBranch)
   ctrl.hpZero = () => php.hp === 0;               // FUN_005786e8's FUN_00316cf8: no intent / weapon at HP 0 (worker 0181)
+  let gameOver = null;                            // gameover_layer.js, set up after the pause (worker 0192)
   // Vincent's joints j00..j92 (flat under the glb root: model-space TRS) and his start-of-frame placement (tick)
   const vinJoints = [], vinStart = { pos: null, h: 0 };
   vin.mixRoot.traverse(n => { const m = /^j(\d\d)$/.exec(n.name); if (m && !vinJoints[+m[1]]) vinJoints[+m[1]] = n; });
@@ -649,9 +650,11 @@ async function main() {
   // until the zone's SE data has loaded. snd(name, pos, range): the game's FUN_0033cc48 / FUN_0033ce10; pos null =
   // FUN_0033cbd8 (at the sound camera = the listener position when sent).
   let sfx = null;
+  const pauseSound = { audio: null, music: null };   // pause_layer.js: menu sounds + the pause's SE hold / BGM volume
   const snd = (name, pos, range = 400.0) => { if (sfx) sfx.play(name, pos, range); };
   if (SOUND) import('./audio.js').then(({ GameAudio, SoundEmitters }) => {
     const au = new GameAudio();
+    pauseSound.audio = au;
     au.load(128).then(() => { sfx = new SoundEmitters(au); window.__play && (window.__play.sfx = sfx); })
       .catch((e) => console.warn('audio: no SE data (tools/audio/extract.py)', e));
     ['keydown', 'pointerdown'].forEach((e) => addEventListener(e, () => { try { au.resume(); } catch (e2) { /* no AudioContext */ } }));
@@ -659,6 +662,7 @@ async function main() {
     // GUESS: started at the first gesture from frame 0 (browser rule; the game's runs from zone load; notes/fidelity-audit.md)
     import('./music.js').then(({ GameMusic, AreaSound }) => {
       const mu = new GameMusic(au), area = new AreaSound(au); let areaOn = false, muOn = false;
+      pauseSound.music = mu;
       // ev0100 playBgAreaSound("asj_033"); ev0101 playMusic3("bgm_001", 0, 4000) (no stream open: starts at once)
       const go = () => {
         if (!au.ctx || !au.se) return;
@@ -696,7 +700,9 @@ async function main() {
     enemyAI = ENEMY_AI && aiData && enemies ? createEnemyAI({ data: aiData, player: php, log: m => console.log(m), damage: ENEMY_DMG,
       sound: snd,
       // FUN_00335f40 / FUN_003361b8: the impact and hit effects (effects.js)
-      effect: fx ? { wall: (mat, n, p) => { const id = wallImpactId(fxIds, mat, n, fx.warn); if (id >= 0) fx.spawn(id, p); }, hit: (k, p) => fx.spawn(fxIds.hit[k], p) } : null,
+      effect: fx ? { wall: (mat, n, p) => { const id = wallImpactId(fxIds, mat, n, fx.warn); if (id >= 0) fx.spawn(id, p); },
+        hit: (kind, cls, p) => { const id = hitImpactId(fxIds, kind, cls, fx.warn); if (id >= 0) fx.spawn(id, p); },   // FUN_003361b8
+        spawn: (id, p) => fx.spawn(id, p) } : null,           // FUN_003366b8(id) + FUN_00335020(pos): the bullet-end effect
       // FUN_00567c08: a bullet's hit on Vincent -> the HUD's hit-direction ring (hud.js; gameHud is set up below)
       hudHit: (p, from) => { if (gameHud) gameHud.hit(p, from); },
       // the walk mesh for soldiers' physics bodies (mover 3, move mode 0xc; body flags 0x36: not a block80 body)
@@ -718,7 +724,7 @@ async function main() {
         if (!h) return null;
         const r = [h.point.x, h.point.y, h.point.z];
         r.surface = h.surface;                     // the hit polygon's surface word (FUN_00553660 material)
-        r.normal = h.normal;                       // the hit normal (effects: FUN_00336478's floor test)
+        r.normal = h.normal.map(v => -v);          // the game's hit normal (+0x100): the page's negated (MEASURED; effects.js floorHit)
         return r;
       } : null,
       // Vincent's hit reaction FUN_00565480 (player.js hitReact): his C update for this frame runs again
@@ -822,7 +828,7 @@ async function main() {
     // page aid (worker 0181): H also puts HP back to the save's 780, so a dead Vincent (state 7, FUN_005786e8's
     // HP gate) can play on. Not the game's retry: that goes game over -> Restart -> 'Calculating Points' -> the
     // stage-result Status screen -> (not traced further); the soldiers keep their target-dead state.
-    if (e.code === 'KeyH') { php.hp = 780; ctrl.reset(); if (cape) cape.cloth.started = false; if (weapon) weapon.reset(); follow.reset(ctrl.pos); detached = null; }   // respawn: spawn angles (ctrl.reset cancels the ladder: its exit() clears CAM+0x1c8; the reset FUN_00329f68 -> FUN_003285d0 leaves CAM+0x1c4 / +0x1c8)
+    if (e.code === 'KeyH') { php.hp = 780; if (gameOver) gameOver.reset(); ctrl.reset(); if (cape) cape.cloth.started = false; if (weapon) weapon.reset(); follow.reset(ctrl.pos); detached = null; }   // respawn: spawn angles (ctrl.reset cancels the ladder: its exit() clears CAM+0x1c8; the reset FUN_00329f68 -> FUN_003285d0 leaves CAM+0x1c4 / +0x1c8)
     if (e.code === 'KeyR') { e.preventDefault(); report.open(); }
     if (e.code === 'Space' || e.code.startsWith('Arrow')) e.preventDefault();
   });
@@ -944,6 +950,8 @@ async function main() {
       // FUN_0053b500 -> FUN_00542ab8 (actor push-out) runs before the actors move (T: k_push16, the push of
       // frame f comes from the positions it starts with and moves Vincent in the same frame)
       if (fx) fx.begin(STEP);                      // FUN_002efc78 / FUN_002efe00 (before the game logic)
+      // gameover.js: FUN_003fdf00 / FUN_00334590 / FUN_004012c0 on last frame's HP (worker 0192)
+      if (gameOver) gameOver.frame(php.hp === 0, STEP);
       ctrl.push = enemyAI ? enemyAI.pushOut(pOld) : null;
       ctrl.step(aim(inp, b));
       pressed.clear();                             // an edge is seen by one tick only
@@ -991,7 +999,8 @@ async function main() {
   // (FUN_00241f40: game state 0x17) and the game sees no input; Restart reloads the zone start.
   let paused = false;
   const pause = await (await import('./pause_layer.js')).setupPause({
-    output, blocked: () => frozen,
+    // the kill's own frame: FUN_00576b48 -> FUN_00241760(1, 3, 0); then gameover.js's FUN_00241760 count / the pad given to the menus (FUN_00253fd8(2))
+    output, blocked: () => frozen || php.hp === 0 || !!(gameOver && gameOver.go.pauseBlocked), sound: pauseSound,
     onPause(on) { paused = on; pressed.clear(); mouse.dx = mouse.dy = 0; drag = null; if (!on) { clock.getDelta(); acc = 0; } },
     // Sent when the confirm box (pause.js openBox, layout 0x472ad8) is answered OK. GUESS: Restart reloads
     // the page (its save start, the page's only checkpoint); the game sets the checkpoint flag
@@ -1001,8 +1010,11 @@ async function main() {
     onRequest(r) { if (r === 'restart') location.reload(); },
   });
   actionHelp.push('Enter pause (Esc too, but with the pointer locked the browser takes Esc to unlock it)');
+  // game over (gameover_layer.js): GUESS: Restart reloads the page, as the pause's Restart; Quit warns (no title)
+  gameOver = await (await import('./gameover_layer.js')).setupGameOver({ output, blocked: () => frozen,
+    onRequest(r) { if (r === 'restart') location.reload(); } });
   window.__play = { ctrl, anim, follow, aim: weapon, col, stats, camera, renderer, output, root, vin, light, spawnY: gy,
-                    playerState, camView, report, keys, pressed, motions, packsReady, actionHelp, cape, enemies, enemyAI, php, pause, gameHud };
+                    playerState, camView, report, keys, pressed, motions, packsReady, actionHelp, cape, enemies, enemyAI, php, pause, gameHud, pauseSound, gameOver };
   requestAnimationFrame(frame);
 }
 

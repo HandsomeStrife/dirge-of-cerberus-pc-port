@@ -15,6 +15,7 @@
 // The dimming quad covers the whole target (in full mode the picture is wider than the 4:3 drawable).
 import * as THREE from 'three';
 import { loadPauseData, PauseFlow } from './pause.js';
+import { MenuSound, latchMenuSound } from './audio.js';
 import { CROSS_KEY } from './player.js';
 
 const MAXV = 8192;                                // the pause + an open box: ~2.5k vertices
@@ -167,8 +168,11 @@ export const PAUSE_KEYS = { start: ['Escape', 'Enter'], cross: [CROSS_KEY], circ
 // onPause(active): the world freezes / resumes. onRequest(name): 'restart' | 'tempsave' | 'quit', sent
 // when the confirm box is answered OK (pause.js PauseFlow). Tempsave / Quit only warn here: the page has
 // no memory card save and no title screen (fidelity-audit "Menus").
+// sound: { audio: GameAudio, music: GameMusic } (play.js fills them in once loaded; null / missing = silent): the menu
+// sounds (audio.js MenuSound, FUN_003e1d10 / FUN_003e1d90) and FUN_00241f40's pause side (audio setPaused, music
+// setVolume 0x30 / 0x7f). notes/audio-research.md "Menu sounds".
 export async function setupPause({ output, url = 'data/pause.json', blocked = () => false,
-                                   onPause = () => {}, onRequest = () => {}, now = () => performance.now() }) {
+                                   onPause = () => {}, onRequest = () => {}, now = () => performance.now(), sound = null }) {
   let json;
   try {
     const r = await fetch(url);
@@ -192,13 +196,27 @@ export async function setupPause({ output, url = 'data/pause.json', blocked = ()
   const flow = new PauseFlow(D, { pulseBase: 0 });
   const clock = () => Math.floor(now() - t0);    // FUN_0023c1f0: milliseconds
   let wasActive = false;
-  const sync = () => { if (flow.active !== wasActive) { wasActive = flow.active; onPause(wasActive); } };
+  // FUN_00241f40 at the pause's creation / destruction: FUN_003ed7d0(0x30 / 0x7f) (BGM volume), FUN_003e86e0 (SE hold)
+  const sync = () => {
+    if (flow.active === wasActive) return;
+    wasActive = flow.active;
+    if (sound && sound.music) sound.music.setVolume(wasActive ? 0x30 : 0x7f);
+    if (sound && sound.audio) sound.audio.setPaused(wasActive);
+    onPause(wasActive);
+  };
+  // the menu sound latch: what the flow's last action wrote (pause.js lastSE / lastSEW)
+  const menuSnd = new MenuSound();
+  const latch = () => {
+    const id = flow.lastSE, w = flow.lastSEW;
+    flow.lastSE = null; flow.lastSEW = null;
+    latchMenuSound(menuSnd, id, w);
+  };
   const has = (k, code) => PAUSE_KEYS[k].includes(code);
   addEventListener('keydown', e => {
     if (blocked() || /^(INPUT|TEXTAREA)$/.test(e.target.tagName)) return;
     if (has('start', e.code)) {
       e.preventDefault();
-      if (!e.repeat) flow.start(clock());
+      if (!e.repeat) { flow.start(clock()); latch(); }
       sync();
       return;
     }
@@ -210,6 +228,7 @@ export async function setupPause({ output, url = 'data/pause.json', blocked = ()
       : has('down', e.code) ? 3 : has('left', e.code) ? 4 : has('right', e.code) ? 5 : -1;
     if (a < 0) return;
     const r = flow.input(a, clock(), 0);           // kind 0: the pad (no wrap at the list ends)
+    latch();
     if (r && r.request) {
       if (r.request !== 'restart') console.warn('pause: ' + r.request + ' confirmed; the page has no ' +
         (r.request === 'quit' ? 'title screen' : 'memory card save') + ' (box closed, nothing done)');
@@ -220,9 +239,14 @@ export async function setupPause({ output, url = 'data/pause.json', blocked = ()
   const prev = output ? output.hud : null;
   if (output) output.hud = o => {
     if (prev) prev(o);
-    const prims = flow.frame(clock());
+    const t = clock();
+    const prims = flow.frame(t);
     sync();
+    // FUN_003e1d90, once a frame (the menu manager FUN_003dce38)
+    const au = sound && sound.audio;
+    if (au && !menuSnd.names && au.res && au.res.menu) menuSnd.names = au.res.menu;
+    menuSnd.frame(t, au && au.ctx ? (n, x, y) => au.playMenu(n, x, y) : null);
     if (prims) layer.draw(o.renderer, o, prims);
   };
-  return { flow, layer, get active() { return flow.active; } };
+  return { flow, layer, menuSound: menuSnd, get active() { return flow.active; } };
 }

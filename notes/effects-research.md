@@ -189,5 +189,34 @@ VU0 macro fields decoded by hand: normalise = xyz, w = 0; cross = a x b).
   The page gets the z128 save's rand() state from ids.json `rand` (export --state); without it no effects spawn (warned).
 - GS ALPHA 0x42 (DAT_0046c2a0 preset 2) = (0 - Cs) As + Cd: drawn with a reverse-subtract blend; any other ALPHA
   is not drawn (warned).
-- Floor-hit normal (two attempts): the game's normal is normalize(VU0 vf22) stored by FUN_0026f8a0 at DAT_004e8810
-  after the VU0 collision program (FUN_00271408 kicks VIF0); needs that program decoded. Floors keep no effect.
+- Floor-hit normal: see 'Bullet end, floors, soldier hits (worker 0193)' below (MEASURED, wired).
+
+## Bullet end, floors, soldier hits (worker 0193, 2026-11-02)
+- Who spawns what: `TRACE_CALLLOG=fxsrc` (tools/trace/calllog.py, hook kind "sites") wraps every jal to FUN_002e62b0 /
+  FUN_002e6290 / FUN_003366b8 / FUN_003365e0 (overlay site 0xaa4d80 left out) and logs the id and the caller (ra - 8);
+  + FUN_00335f40's end / normal (site 0x54ffc8). Runs (gitignored out/): w193_fxsrc (w172_sound3 inputs), w193_fxhits
+  (w172_hits), w193_floor (w172_sound3 route, pitched down then up, a shot after each).
+- **Bullet end (0x41800)**: FUN_00554ea8 (the bullet's end, after the move and the room hit's vt+0x1b4) spawns the bullet
+  record's end effect: +0x194 = FUN_00311600(+0x144) (FUN_00554850; +0x144 = W+0x7c from FUN_00554568, the soldiers'
+  section-24 record: itself in z128); conditions W+0x78 bit 0x2000 clear, +0x120 bit 0x800000 clear, (0x40000000 clear
+  or 0x1000000 or no room hit); G+0x64 (48) >= 0x28: room hit + W+0x80 != -1 + FUN_00260c38 floor -> FUN_00335960
+  (W+0x80 at +0x110), else FUN_00335918 (W+0xb0 at +0xf0; W+0x78 bit 8 -> FUN_0054a720). FUN_00335020 = FUN_002e7660
+  flag 1. z128: W+0xb0 = 0x41800, W+0x80 = -1. T: f789 0x40c00 (0x336230), 0x1000 (0x336510), 0x41800 (0x33593c) at one
+  point; f884 wall 0x46400 then 0x41800; Vincent's pellets none (+0x194 = 0: FUN_00552850, never FUN_00554850).
+  FUN_00556068 sets 0x800000 at the end point only without a room hit (the page set it always: fixed).
+- State C: emitter 6 equals RAM (42 values, 1.7e-7) with 25 LCG draws before it: the r0000 0x1000 emitter's end-pass
+  draws (list 8, 3, 0x1000, 6; the page's spawns draw nothing at the spawn). r0000.fed (FileCode 0, group 4 -> emitter 7,
+  draw types 107 / 109 / 110) is not on the page: emitter 6 draws 25 values early. Dump C+4: 14 / 21 sprites exact RGBA
+  (emitter 6 tag 0 yes, its tag 1 x 3 no).
+- **Floors**: FUN_0026f8a0 stores the hit triangle (vf18-20) at DAT_004e8830.. next to the normal DAT_004e8810: in 7
+  save states the normal = -normalize((v1 - v0) x (v2 - v0)); collision.js's is +, same vertex order. play.js roomRay
+  negates; FUN_00260c38 = -n.y > 0.9f (effects.js floorHit). T: w193_floor f833-835 (0, -1, 0) -> 0x45400 (material 3
+  floor); the page gives the same ids at all 6 logged impacts. DECODED (review 27, checked with vudis.py on the save's
+  vu0MicroMem): _vcallms 0xa90, vf13 = v1 - v0 (368), vf25 = v2 - v0 (371), vf13 = vf13 x vf25 (375-376), vf22 = vf00 - vf13
+  (420; quads 448 / 451 / 456-458 / 507), no branch on the sign. Open: its back-face culling (396-415) vs the page's
+  double-sided test.
+- **Soldier hits**: hitEnemy (FUN_0055db50) -> FUN_003361b8 with the zone record nibble (word bits 12-15, signed; ai.json
+  zones `fx`): != 0 -> wall table [n x 2], else hit table [Vincent's class: weapon.json class & 3 = 1] = 0x41800.
+  T: w193_fxhits f843 / f870 / f871. Also f871: FUN_00580410 -> FUN_003365e0(0x4800) (r0000; not followed).
+- Tests: test_effects_hooks.mjs (new, hooked: 16 checks incl. the w193_floor impacts), test_effects 207, test_bullet_hit
+  44 (bullet frame: hit effect then 0x41800 at one point), test_effects_page + the floor shot.

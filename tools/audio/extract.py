@@ -10,6 +10,10 @@ Writes (all game-derived; native/web/data/** is excluded by .gitignore):
   waveNNNN.bin     SPU-ADPCM sample area of data/sound2/waveNNNN.wd (what the IOP uploads to SPU RAM)
   waveNNNN.json    instruments -> regions (32-byte records, fields named in notes/audio-research.md)
   se_zNNN.json     sdb.bin names -> SE id, and the SE programs of the zone's sep.bin (hex)
+  se_res.json      the resident SE block data/sound2/resident.bin (FileCode 0x02810001, loaded at boot by
+                   FUN_003e78a8 request 4) and the resident names data/etc/ressddb.bin (0x03100034, sdb slot 0:
+                   FUN_00244db0 -> FUN_003eb7a8(0, ...)); "menu" = the menu sound names FUN_003e1d90 plays,
+                   PTR_DAT_0047d5c8[id] read from the ELF (--elf; left out with a warning when there is none)
 
 Formats are decoded from the game's code (EE FUN_003e8e18 / FUN_003e7ed8 / FUN_0041a190, IOP
 iopsound.irx FUN_000082d0 / FUN_0000b578 / FUN_00001c5c / FUN_00001d0c / FUN_00001380 / FUN_000012b0).
@@ -89,11 +93,34 @@ def sdb_names(d):
     return out
 
 
+MENU_NAMES, MENU_COUNT = 0x47D5C8, 34        # FUN_003e1d90: (&PTR_DAT_0047d5c8)[id] (ids 0..0x21; 0x22 is a stream)
+
+
+def elf_menu_names(elf):
+    """FUN_003e1d90's name table: id -> sdb name (None for a null / empty entry)."""
+    phoff, = struct.unpack_from('<I', elf, 0x1c)
+    phnum, = struct.unpack_from('<H', elf, 0x2c)
+    segs = [struct.unpack_from('<8I', elf, phoff + 32 * i) for i in range(phnum)]
+
+    def rd(va, n):
+        for t, off, vaddr, _p, fsz, _m, _f, _a in segs:
+            if t == 1 and vaddr <= va and va + n <= vaddr + fsz:
+                return elf[off + va - vaddr:off + va - vaddr + n]
+        raise ValueError('ELF va 0x%x not loaded' % va)
+    out = []
+    for i in range(MENU_COUNT):
+        p, = struct.unpack('<I', rd(MENU_NAMES + 4 * i, 4))
+        name = rd(p, 8).split(b'\0')[0].decode('latin1') if p else ''
+        out.append(name or None)
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--kel', default='extract/_KEL')
     ap.add_argument('--zone', type=int, default=128)
     ap.add_argument('--out', default='native/web/data/audio')
+    ap.add_argument('--elf', default='elf/SLES_541.85')
     ap.add_argument('--wav')
     ap.add_argument('--bank', type=int, default=0)
     ap.add_argument('--region', type=int, nargs='*', default=[])
@@ -125,6 +152,18 @@ def main():
         se['bgm'] = json.load(open(sp))['bgm']             # the BGM tracks tools/audio/bgm.py declared: keep them
     json.dump(se, open(sp, 'w'))
     print('zone %d: %d programs, %d names, banks %s' % (a.zone, len(blk), len(names), banks))
+    # resident block + names (menu sounds; notes/audio-research.md "Menu sounds")
+    rblk = sep.read_block(open(os.path.join(a.kel, 'data/sound2/resident.bin'), 'rb').read())
+    rnames = sdb_names(open(os.path.join(a.kel, 'data/etc/ressddb.bin'), 'rb').read())
+    rbanks = sorted({sep.tracks(p)[0] for p in rblk.values()})
+    res = dict(names=rnames, banks=rbanks, programs={str(k): v.hex() for k, v in rblk.items()})
+    if os.path.exists(a.elf):
+        res['menu'] = elf_menu_names(open(a.elf, 'rb').read())
+    else:
+        print('  no ELF %s: se_res.json without the menu sound names (no menu sounds on the page)' % a.elf)
+    json.dump(res, open(os.path.join(a.out, 'se_res.json'), 'w'))
+    print('resident: %d programs, %d names, banks %s, menu names %s' % (len(rblk), len(rnames), rbanks, 'menu' in res))
+    banks = sorted(set(banks) | set(rbanks))
     for b in banks:
         p = os.path.join(a.kel, 'data/sound2/wave%04d.wd' % b)
         if not os.path.exists(p):

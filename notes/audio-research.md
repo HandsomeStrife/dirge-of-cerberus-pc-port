@@ -342,3 +342,76 @@ of `render` with no change: all 609 z128 programs render bit-identically). `?sou
 Not on the page: crossfades with a stream open, volume offsets / ramps (both refused with a warning), the mono setting, the
 battle / peace switching in ev0100 (event scripts), the decoder itself (libavcodec instead; running FUN_00458e80
 through port/recomp would make it exact).
+
+## Menu sounds (worker 0194, decoded and verified)
+
+**The latch.** Menus never play a sound directly: `FUN_003e1d10(id, x, y)` writes DAT_004f58c8 (id, s8) / 58cc / 58ce
+(x, y, s16), so the last write of a frame wins. `FUN_003cb480(id)` = FUN_003e1d10(id, -1, -1). `FUN_003cb4a8(w, id,
+force)` writes only when `force` or nothing is latched (FUN_003e1d68), with the widget position from vt+0x7c in its |2
+form = **FUN_003cac38**: x = w+6 + 16, y = w+8 + (s16)(w+0xc) / 2. The cursor (FUN_003cbc38, the widget being left) is
+not forced; confirm FUN_003d14e8, cancel FUN_003caf90 and the box's FUN_003b80f8 / FUN_003b81b8 are. Screens with flag
+0x4000 clear the latch (FUN_003e1d80) instead of latching 3 / 4 (pause and box: flag clear in RAM).
+
+**The play.** `FUN_003e1d90`, once a frame from the menu manager FUN_003dce38 (after the input FUN_003de130 and the
+screen timers / destroy FUN_003dd9f8): nothing when the id is 0xff; enabled flag DAT_004f58c9 (FUN_003e1ea0(1) at
+boot); **a box-open 9 within 300 ms of a played 7 / 8 is dropped** (DAT_004f58ca last id, `lbu` + `sltiu`: unsigned, so
+only 7 / 8; DAT_004f58d0 its clock); id 0x22 plays the stream `on_a104` (FUN_003eb088; not used by the pause, not
+translated); else `FUN_003e9e60((&PTR_DAT_0047d5c8)[id], x, y)`; then last / time are updated (only when played) and the
+latch cleared. FUN_003e9e60 -> FUN_003eb970 (name -> sdb row +0x10; FUN_003eb868 searches **sdb slot 0 = FileCode
+0x03100034 data/etc/ressddb.bin** (FUN_00244db0 -> FUN_003eb7a8(0, ...), boot) before slot 1 = the zone's sdb.bin
+(FUN_00402220)) -> **FUN_003e9d70** (pan: x < 0 and y < 0 -> 0x40; x < 0 -> 0; x = min(x, DAT_004fcab8 = 0x1c0);
+`(int)(x * 32.0f / 448.0f) + 0x30`; queued, at most 4 a frame) -> FUN_003e9ed0 (same frame) -> `FUN_003e7850(mgr, id,
+pan, 0x7f)` = request **0x16** -> FUN_003e80d8 (like case 2; the voice is not registered with an emitter slot). The
+programs are in the **resident SE block FileCode 0x02810001 = data/sound2/resident.bin** (59 programs, bank 0), loaded
+at boot by FUN_003e78a8(mgr, 0, 0x2810001, 0) (request 4).
+
+| pause.js SE | game | table 0x47d5c8 | SE id | flags (prog[4]) |
+|---|---|---|---|---|
+| pause 1 | FUN_003bfe28 -> FUN_003cb480(1) (after the open's 3) | msj_008 | 9 | 0x58 |
+| unpause 2 | FUN_003c04c8 (after the close's 4) | msj_009 | 10 | 0x58 |
+| open 3 / close 4 | FUN_003d5110 / FUN_003d51c0 (always overwritten on the pause path) | msj_004 / msj_005 | 5 / 6 | 0x58 |
+| cursor 6 | FUN_003cbc38 (not forced) | msj_000 | 1 | 0x59 |
+| confirm 7 / cancel 8 | FUN_003d14e8 / FUN_003caf90 | msj_003 / msj_002 | 4 / 3 | 0x58 |
+| box open 9 | FUN_003b7f38 | msj_003 | 4 | 0x58 |
+
+Flag byte bit 3 forces the sequence volume to 0x7f (FUN_000082d0), so the pause's `vol >> 3` (below) does not touch
+them, and 0x40 keeps them playing through the pause's SE hold.
+
+**Verified.** PCSX2 trace **w194_menusnd** (TRACE_CALLLOG=menusnd, new set in calllog.py: menu_play, menu_req, se_send,
+se_pause, bgm_vol, bvol_send; script: Start f60, ↓ f100, ↑ f130, ✕ on Restart f170, ← f230, ○ f270, ○ f320): f61 msj_008
+(-1, -1) -> SE 9 pan 0x40; f101 msj_000 (192, 206) -> SE 1 pan 61; f131 msj_000 (192, 232); f171 msj_003 (-1, -1) (the box's
+9 over the confirm 7); f231 msj_000 (285, 247) pan 68 (from CANCEL); f271 msj_002 (143, 247) pan 58 (OK focused); f321
+msj_009. Every request goes to the IOP one frame later at vol 0x7f >> 3 = 15 (paused). The page's pause flow replays the
+same script to the same names, positions, ids and pans (test_audio_menu). The w189 cancel save: latch 0xff, last 9,
+DAT_004fcab8 0x1c0, widget rects equal pause.js's.
+
+**Offline render** (audio.js SeRenderer, bank 0): all 7 programs end by themselves (0.12-0.61 s); msj_008 / 009 / 004 /
+005 use op 0x40 (an LFO, track 1) and msj_000 op 0x58: both in the existing 'SE player skips LFO opcodes' gap, so those
+play without them. No PCSX2 audio capture exists (the tracer has none), so the samples are not compared with the game's
+output.
+
+## Pause volume drop (worker 0194, decoded and verified)
+
+FUN_00241f40 (game state 0x17 on / off, at the pause screen's creation and destruction) does, for the sound:
+1. **BGM:** `FUN_003ed7d0(0x30)` on pause, `(0x7f)` on resume: PTR_0047d7a0 = vol; FUN_003ed8e0 sends it with the next
+   PCM slot (only while a stream runs) as `FUN_0041af80(0x14, vol & 0x7f)` = IOP command 0x34 -> irx **FUN_00010394**:
+   target = vol ? ((vol + 1) << 8) - 1 : 0; with a time: cur (1/4096 units, irx 0x5ddb0) steps by
+   ((target << 12 | 0x800) - cur) / time (MIPS div) for `time` = 20 driver ticks, applied by **FUN_00010328** from the
+   240 Hz tick (irx 0x8c8: while the count is non-zero): BVOLL / BVOLR (0x0f81 / 0x1081, core 1's sound-data input = the
+   BGM only) = cur >> 12. So 0x7fff -> 0x30ff linear over 83 ms. IOP RAM (irx base 0x82130): sea-of-flames cur 0x7fff800;
+   w189 cancel (paused) cur 0x30ff804, step -0x3f3333, count 0, exactly the ramp from 0x7fff800. Trace w194: bgm_vol 0x30
+   at f61, bvol_send (0x14, 0x30) the same frame; 0x7f / (0x14, 0x7f) at f326 (after the 100 ms close).
+2. **SE:** `FUN_003e86e0(DAT_0047d718, on)`: the manager word (0 / 1 in the saves) that makes FUN_003e80d8 send requests 2
+   / 0x16 at `vol >> 3` (0x17, the area ambience, not), and request 0x19 -> `FUN_00419400(2, on)` = IOP command 6 (table
+   irx 0x1b8e4 -> 0x14008), mask 2: for each of the 48 SE tracks (0x1a4 bytes) that runs and whose program flag byte
+   (track +0x1a1, written by FUN_000082d0 at irx 0x85c4) has neither 0x40 nor 0x80: track +0x148 |= 8 (the SE tick
+   FUN_00007224 skips it) and its voice (+0x19f) gets volume 0 / 0, ADSR 0x7fff / 0x5fff, pitch 0; off: flag cleared,
+   ADSR from the voice's +0x84 / +0x86, voice update flags 3. In the paused save only asj_033's tracks run (flag byte 0x80:
+   the ambience plays on), none flagged. All z128 combat SEs have flag byte 0 (held).
+   (FUN_00403470 and FUN_002f24b0 in the same function are not sound: not part of this.)
+
+**On the page:** pause_layer.js calls `GameMusic.setVolume(0x30 / 0x7f)` (music.js `BgmVolume`: the 20 steps as gain
+values at the 240 Hz clock; a command mid-ramp starts from where the ramp is) and `GameAudio.setPaused` (held one-shot
+buffers stop at their offset and restart there; `playId` shifts vol for codes 2 / 0x16 while paused) when the flow's
+`active` changes, i.e. at the screen's creation and after its close, as FUN_00241f40. L: the volume is applied at once,
+not with the next PCM slot (<= 21 ms); a held SE's release tail is held too (the IOP holds only running tracks' voices).

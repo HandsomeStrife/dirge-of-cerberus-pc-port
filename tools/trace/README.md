@@ -206,6 +206,20 @@ are only taken in `TRACE_CALLLOG_FRAMES=lo:hi` and are written to `<name>.calls.
 the top 0x30000 bytes of the frame-log area, and scripts must be ≤ 1000 frames. Used for
 notes/enemy-research.md §11 (scripts k_bullet1 / k_bullet2).
 
+### Effect spawn call log (TRACE_CALLLOG=fxsrc, worker 0193)
+Hook kind `sites` patches an explicit list of `jal callee` addresses (no range scan); `cpr("ra")` logs the caller
+(ra - 8 = the site). Set `fxsrc`: every ELF jal to FUN_002e62b0 / FUN_002e6290 (id in a2), FUN_003366b8 /
+FUN_003365e0 (id in a0), and `wall_fx` (FUN_0054ff50 -> FUN_00335f40: end point, normal). Scripts (env in each doc):
+w193_fxsrc (w174_pain_a's inputs), w193_fxhits (w172_hits'), w193_floor (w172_sound3's route, pitch down / up, a shot
+after each);
+notes/effects-research.md 'Bullet end, floors, soldier hits'.
+
+### Menu sound call log (TRACE_CALLLOG=menusnd, worker 0194)
+Set `menusnd`: `menu_play` (FUN_003e1d90 -> FUN_003e9e60: name, x, y), `menu_req` (FUN_003e9ed0 -> FUN_003e7850: id, pan,
+vol), `se_send`, `se_pause` / `bgm_vol` (FUN_00241f40 -> FUN_003e86e0 / FUN_003ed7d0), `bvol_send` (FUN_003ed8e0 ->
+FUN_0041af80). Script w194_menusnd (pause, cursor, box, cancel, resume; `log_from` 260: the call log covers all 400 frames).
+Run with `TRACE_SCRATCH` = the unit's scratch dir (the `EnvironmentFile` path) and the sandbox off. notes/audio-research.md "Menu sounds".
+
 ### Sound call log (TRACE_CALLLOG=sound3, worker 0172)
 Set `sound3` logs every new SE: `play_name` (FUN_0033cc90 -> FUN_003e8e18: sdb name, emitter position, slot), `slot_open`
 (FUN_003e8bc8 -> FUN_003e9b80: the sdb name of every new slot, whatever the caller), `se_new` (FUN_003e9220 ->
@@ -286,3 +300,8 @@ scripts over 1024 frames (script frames = (LOG - 0x97000) / 24). Script w159_wal
 (mover 0xd follow state, C+0x330 search request), `c398` / `a108` (nav node) and `list` (*(C+0x3a8), logged from the
 word below: skip 2 bytes). Script w161_chase (frames 1280, log from 1000; `TRACE_LOG_AT=9E800`; pokes as its doc):
 46 / 47 in brain mode 5 taking nav-graph paths; notes/enemy-ai-hook.md 'Nav graph and search'.
+
+### Game over (TRACE_FIELDSET=gameover, worker 0192)
+The world-mode object (FUN_00334590: state / timer), DAT_0046e290+0x4c, the end screen (PTR_0047db6c, DAT_004fadbc,
+DAT_0047db78 / 84 / 88), the box slots DAT_0050db60, the sequence screen and the menu box (heap addresses of the w192
+run), focus, DAT_004f3044 and the clock. Scripts w192_gameover / w192_quit (env in their docs); notes/gameover-research.md.

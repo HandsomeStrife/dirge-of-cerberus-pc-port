@@ -28,6 +28,7 @@
 import { cylinderHit, partTest, cone } from './enemy_hit.js';
 import * as PM from './path_mover.js';
 import * as NG from './nav_graph.js';
+import { floorHit } from './effects.js';
 // PS2 FPU rounding toward zero for a stored f32 (player.js chop; not imported: player.js needs three.js)
 const _cb = new DataView(new ArrayBuffer(4));
 export function chop(x) {
@@ -2831,7 +2832,7 @@ export function createEnemyAI(opts) {
     const p = b.start.map((x, k) => f(x + f(b.dir[k] * t)));
     const dist = f(len3(sub3(p, b.start)));                                   // +0x158
     let done = 0;
-    if (b.endDist < dist) { b.pos = b.end.slice(); b.f120 |= 0x800000; done = 1; }
+    if (b.endDist < dist) { b.pos = b.end.slice(); if (!(b.f120 & 1)) b.f120 |= 0x800000; done = 1; }   // FUN_00556068: not after a room hit
     else if (b.range < dist) { b.f120 |= 0x800000; done = 1; }                // +0x90 not moved in this branch
     else b.pos = p;
     if (!done && !(b.f120 & 0x2000000) && !(b.speed > 0 && b.age <= 1800.0 && dist <= 3000.0)) { b.f120 |= 0x800000; done = 1; }
@@ -2843,10 +2844,11 @@ export function createEnemyAI(opts) {
       return hit || done;
     }
     if (enemyBulletHit(b)) {
+      endEffect(b, b.hitPoint);                                               // +0xf0 = the hit point (T: w193_fxsrc f789)
       bulletEnd(b, 1);
       return 1;
     }
-    if (done) { wallSound(b); bulletEnd(b, 0); }
+    if (done) { wallSound(b); endEffect(b, b.end); bulletEnd(b, 0); }         // +0xf0 = +0xd0 (FUN_00556068)
     return done;
   }
   // The bullet's end, FUN_005549f0 -> FUN_00554ea8: with +0x120 bit 1 (the room probe hit) the stage object's
@@ -2913,6 +2915,7 @@ export function createEnemyAI(opts) {
     if (b.f120 & 0x200) warnOnce('enemy_ai: friendly-fire bullet (+0x120 bit 0x200) vs soldiers not translated');
     const hit = playerFilter(b) ? playerPartTest(b) : null;
     shotVolumes(b, hit ? hit.dist : FLT_MAX);
+    if (hit) b.hitPoint = hit.point;                                          // +0xd0 = +0xf0 = +0x110 = the hit
     return hit ? playerHandler(b, hit) : 0;
   }
   // FUN_0055d100(P, bullet): false with bullet bit 0x4000; P+0x28 bit 4 (set: 0x20901f) with FUN_00326500 and a
@@ -2968,7 +2971,14 @@ export function createEnemyAI(opts) {
   function playerHandler(b, hit) {
     if (hit.deflect) { events.push('deflect player'); return 1; }
     if (P.f118 & 0x20) return 0;
-    if (opts.effect) opts.effect.hit((b.from?.ai?.W?.cls ?? 0) & 3, hit.point); // FUN_0055db50 -> FUN_003361b8(param_3 = the hit point): bullet +0x150 = W+0x14 >> 2 & 3
+    if (opts.effect) {
+      // FUN_003361b8's gate: +0x120 bit 2 set -> FUN_003354b8 (not translated; as wallSound)
+      if (b.f120 & 2) warnOnce('enemy_ai: bullet +0x120 bit 2 (FUN_003361b8 gate FUN_003354b8) not translated: hit effect spawned');
+      opts.effect.hit(0, (b.from?.ai?.W?.cls ?? 0) & 3, hit.point);
+    }
+    // FUN_005720c8: FUN_00336508 = FUN_003366b8(0x1000) when now - P+0x280 > DAT_0046ee28 (15): FED r0000, not on the page
+    // (its LCG draws precede the bullet-end effect in the game's end pass; notes/effects-research.md 'Bullet end')
+    if (opts.effect) warnOnce('enemy_ai: FUN_00336508 effect 0x1000 (FED r0000) on a hit on Vincent not translated'); // FUN_0055db50 -> FUN_003361b8(param_3 = the hit point, kind: P+0x19c = 0): bullet +0x150 = W+0x14 >> 2 & 3
     if (DAMAGE) damagePlayer(b);
     else events.push('hit player (damage off)');
     // FUN_00567c08(P, bullet +0xc0 = b.start) unless bullet +0x140 bit 1 (never set on the page's soldier bullets):
@@ -2986,6 +2996,39 @@ export function createEnemyAI(opts) {
     if (!ai) return;
     if (hit) { ai.f78 = short(ai.f78 + 1); ai.f5c = S.now; }
     else { ai.f74 = short(ai.f74 + 1); ai.f54 = S.now; }
+  }
+
+  // FUN_00554ea8 (the bullet's end): the bullet-end effect of its record +0x194 (FUN_00554850: FUN_00311600(+0x144),
+  // the section-24 record W+0x7c; Vincent's bullets (FUN_005408e8 -> FUN_00553630 -> FUN_00552dd8) keep +0x194 = 0
+  // from FUN_00552850: none). With W+0x78 bit 0x2000 clear, +0x120 bit 0x800000 clear (timed out / past its range)
+  // and (+0x120 bit 0x40000000 clear or bit 0x1000000 or no room hit): FUN_00310c40() = G+0x64 (48) >= 0x28, so a room
+  // hit (bit 0) with W+0x80 != -1 on a floor (FUN_00260c38(+0x100)) -> FUN_00335960 (W+0x80) at +0x110, else
+  // FUN_00335918 (W+0xb0 != -1) at +0xf0 (W+0x78 bit 8: FUN_0054a720's position, not translated); FUN_003366b8 spawns,
+  // FUN_00335020 places it (flag 1). It runs after the hit's vt+0x1b4 (wall: FUN_0054fee0, Vincent: FUN_005720c8).
+  // T: w193_fxsrc (w172_sound3 inputs): #66's hit on Vincent f789 spawns 0x40c00, 0x1000, then 0x41800 from 0x33593c
+  // at the hit point; #67's wall hit f884 0x46400 then 0x41800; Vincent's pellets nothing. FUN_0033d760 (W+0x9c
+  // sound) follows: empty for z128's records (not on the page).
+  function endEffect(b, pos) {
+    const W0 = b.from && b.from.ai && b.from.ai.W;
+    if (!W0 || !opts.effect || !opts.effect.spawn) return;
+    if (W0.bullet == null || W0.fx_end == null) { warnOnce('enemy_ai: ai.json weapons have no bullet-end fields (W+0x7c / +0xb0: rebuild data/enemies); no bullet-end effect'); return; }
+    if (W0.bullet < 0) { warnOnce('enemy_ai: bullet +0x144 < 0 (FUN_005547c0 ELF records) not translated; no bullet-end effect'); return; }
+    const W = data.weapons[W0.bullet];                                        // FUN_00311600: 0 past the count
+    if (!W) return;
+    const f120 = b.f120 | 0, room = f120 & 1;
+    // FUN_00554ea8's room branch first (+0x194 != 0): W+0x78 bit 0x10 -> +0x120 |= 0x10000 before the wall's vt+0x1b4
+    // (no decal draws in wallSound); the 0x2000 test and the early return come after it
+    if (room && (W.f78 & 0x10)) warnOnce('enemy_ai: bullet record W+0x78 bit 0x10 (+0x120 |= 0x10000: no decal) not translated');
+    if (W.f78 & 0x2000) return;
+    // FUN_00554ea8 returns early (before this) with neither 0x800000 nor 0x1000000 when, after a room hit, bit 0x8000000
+    // or 0x20000000 is set, or without one, bit 0x20000000 (the page's bullets never set those bits): not translated
+    if (!(f120 & 0x1800000) && (f120 & (room ? 0x28000000 : 0x20000000))) { warnOnce('enemy_ai: FUN_00554ea8 early return (+0x120 0x8000000 / 0x20000000) not translated'); return; }
+    if (f120 & 0x800000) return;
+    if ((f120 & 0x40000000) && !(f120 & 0x1000000) && room) return;
+    if (room && W.fx_floor !== -1 && b.normal && floorHit(b.normal)) { if (pos) opts.effect.spawn(W.fx_floor >>> 0, pos); return; }   // +0x110 = +0xf0 here
+    if (W.fx_end === -1 || !pos) return;
+    if (W.f78 & 8) { warnOnce('enemy_ai: weapon W+0x78 bit 8 (bullet-end effect at FUN_0054a720) not translated'); return; }
+    opts.effect.spawn(W.fx_end >>> 0, pos);
   }
 
   // FUN_0055db50 -> FUN_0055d2c0 -> vt+0x1ec FUN_0055c7f8 on the player
@@ -3063,6 +3106,7 @@ export function createEnemyAI(opts) {
         from: P, start, dir, end, endDist: f(len3(sub3(start, end))), range,
         speed: f(W.speed10 * f(0.16666667)),                                  // +0x12c = W+0x2c / 6
         age: 0, pos: start.slice(), prev: start.slice(), f120: bulletFlags(W), f148: 0,
+        cls: W.class & 3,                                                     // +0x150 bits 16-17 = W+0x14 >> 2 & 3 (FUN_00552dd8)
         delay: i + 2,                                                         // +0x142 = pellet index + 2
         damage: W.damage, hit: W.hit ?? 0,                                    // +0x134 (short)W+0x40, +0x153 W+0x4a
         kind: (W.flags & 0x80000) && JITTER_ON ? 2 : 0,                      // FUN_00554738
@@ -3337,8 +3381,17 @@ export function createEnemyAI(opts) {
       }
     }
     aiHit(a, shooter, dmg);                                                   // FUN_00360870
-    // FUN_003361b8 (hit effect by the zone's nibble) and FUN_00567f10 (actor +0x28 bit 0x20 clear):
-    // not on the page
+    // FUN_003361b8(hit point, bullet, (*(a+0x19c) << 16) >> 28): the hit effect by the zone record's nibble (0: the
+    // hit table by the bullet's +0x150 class, Vincent's W+0x14 >> 2 & 3; effects.js hitImpactId). T: w193_fxhits
+    if (opts.effect) {
+      if (a.f19c && a.f19c.fx == null) warnOnce('enemy_ai: ai.json zones have no fx nibble (old export: rebuild data/enemies); kind 0 used');
+      if (b.f120 & 2) warnOnce('enemy_ai: bullet +0x120 bit 2 (FUN_003361b8 gate FUN_003354b8) not translated: hit effect spawned');
+      opts.effect.hit(a.f19c ? a.f19c.fx ?? 0 : 0, b.cls ?? 0, hitpos);
+      // T: w193_fxhits f871 (Vincent's second hit on #67): FUN_00580410 -> FUN_003365e0(0x4800) (FED r0000; its
+      // source object and condition not followed)
+      warnOnce('enemy_ai: FUN_00580410 effect 0x4800 (FED r0000) at some soldier hits (condition not decoded) not translated');
+    }
+    // FUN_00567f10 (actor +0x28 bit 0x20 clear): not on the page
     events.push(`hit ${a.id} part ${a.part} dmg ${dmg} hp ${a.hp}`);
   }
 
@@ -3646,6 +3699,7 @@ export function createEnemyAI(opts) {
                   // single translated functions, for the tests' direct state checks
                   stageRec, t: { brain5, brain6, stateMotion, setActorState, bulletEnd, target, send, setMode, setTarget, setActionLayer, action2, action3, action56, flinch, die, navOf,
                        makeAttack, attackObjUpdate, attackCentre, sphereCapsule, offence,
-                       spreadAim, roomProbe, enemyBulletHit, playerPartTest, targetPoint, damagePlayer, attackDamagePlayer } };
+                       spreadAim, roomProbe, enemyBulletHit, playerPartTest, targetPoint, damagePlayer, attackDamagePlayer,
+                       endEffect, bulletUpdate, hitEnemy } };
   return world;
 }

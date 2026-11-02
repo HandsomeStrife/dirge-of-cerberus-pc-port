@@ -185,13 +185,27 @@ ok(tested >= 8 && parts.join() === '6,0,6,1', `hit tests checked: ${tested}; par
   // the hit effect (FUN_0055db50 -> FUN_003361b8, param_3 = the hit point): spawned at the capsule contact point
   // (FUN_0055bda8's hit, FUN_0025c770), not at the bullet's step end
   const spawned = [];
-  const Wfx = AI.createEnemyAI({ data, player, quiet: true, damage: false, effect: { wall() {}, hit: (k, p) => spawned.push([k, p.slice()]) } });
+  const Wfx = AI.createEnemyAI({ data, player, quiet: true, damage: false, effect: { wall() {}, hit: (kind, cls, p) => spawned.push([cls, p.slice(), kind]) } });
   Wfx.playerBoneWorld = boneWorldAt(P1, 789); player.pos = P1.get(788).pos.slice(); player.hp = 780;
   Wfx.t.enemyBulletHit({ ...seg, f120: 0x2000, shooter: 0x2c, from: {}, damage: 45, kind: 0 });
   const A = player.pos.slice(), cp = cylinderHit(AI.R_PLAYER, seg.prev, seg.pos, A, [A[0], A[1] - 18, A[2]]);
   const dEnd = spawned[0] ? Math.hypot(...spawned[0][1].map((x, k) => x - seg.pos[k])) : NaN;
   ok(spawned.length === 1 && cp && spawned[0][1].every((x, k) => x === cp.point[k]) && dEnd > 1,
     `hit effect at the contact point ${cp && cp.point.map(x => x.toFixed(2))} (${spawned[0] && spawned[0][1].map(x => x.toFixed(2))}; ${dEnd.toFixed(1)} u from the step end)`);
+  // worker 0193: the whole bullet frame (FUN_005549f0): the hit's effect (FUN_003361b8), then FUN_00554ea8's
+  // bullet-end effect W+0xb0 at +0xf0 = the same contact point (T: w193_fxsrc f789: 0x40c00 and 0x41800 at one point)
+  if (data.weapons[0].fx_end != null) {
+    const log = [];
+    const Wb = AI.createEnemyAI({ data, player, quiet: true, damage: false, effect: { wall() {}, hit: (kind, cls, p) => log.push(['hit', p.slice()]), spawn: (id, p) => log.push([id, p.slice()]) } });
+    Wb.playerBoneWorld = boneWorldAt(P1, 789); player.pos = P1.get(788).pos.slice(); player.hp = 780;
+    const v = seg.pos.map((x, k) => x - seg.prev[k]), L = Math.hypot(...v);
+    const b = { from: { ai: { W: data.weapons[0], f74: 0, f78: 0 } }, start: seg.prev.slice(), dir: v.map(x => Math.fround(x / L)), end: seg.pos.map(x => x + v[0]),
+      endDist: 2 * L, range: 515, speed: Math.fround(L), age: 0, pos: seg.prev.slice(), prev: seg.prev.slice(), f120: 0x2000, delay: 0,
+      damage: 45, hit: 6, f148: 0, kind: 0, shooter: 0x2c };
+    const r = Wb.t.bulletUpdate(b, 1.0);
+    ok(r === 1 && log.length === 2 && log[0][0] === 'hit' && log[1][0] === 0x41800 && cp && log[1][1].every((x, k) => x === log[0][1][k]) && log[0][1].every((x, k) => Math.abs(x - cp.point[k]) < 1e-3),
+      `bullet frame: hit effect, then the bullet-end 0x41800 at the same contact point (${log.map(l => l[0] === 'hit' ? 'hit' : '0x' + l[0].toString(16)).join(' ')})`);
+  }
 }
 
 // ---- end to end: #66 (record 44) shoots Vincent 30 u away through the real tick; a wall 10 u in front of the muzzle

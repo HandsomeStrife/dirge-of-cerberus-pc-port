@@ -22,10 +22,9 @@
 #   --re-extract   unpack again even if extract/ verifies (only replaces an extract this
 #                  script made; it never deletes an extract/_KEL it did not create)
 #   --no-motions   skip the motion catalogue (data/vincent/motions.json, reference only)
-#   --state FILE   a PCSX2 save state (.p2s) of the sea-of-flames start, for the game's HUD
-#                  (data/hud): the HUD's element tree is read from the save, it is not decoded
-#                  from the disc yet. Without it the HUD step is skipped and play.html runs
-#                  without the game's HUD (and without the effects' type 137 sparks).
+#   --state FILE   a PCSX2 save state (.p2s) of the sea-of-flames start, for the effects'
+#                  random state (type 137 sparks). Without it the sparks are left out. The
+#                  game's HUD is built from the disc (ELF + locale files) either way.
 #   -h, --help
 set -euo pipefail
 
@@ -324,25 +323,25 @@ run pause $PY export_web_pause.py --elf "$ELF" --disc "$KEL" -o "$DATA/pause.jso
 [ -s "$DATA/pause.json" ] || fail "data/pause.json missing (log: $LOGS/pause.log)"
 tail -n 1 "$LOGS/pause.log" | cut -c1-160
 
+step "game over menu: layout 0x477c38, sequence table, messages (ELF + locale uk kelstr) -> data/gameover.json"
+run gameover $PY export_web_gameover.py --elf "$ELF" --disc "$KEL" -o "$DATA/gameover.json"
+[ -s "$DATA/gameover.json" ] || fail "data/gameover.json missing (log: $LOGS/gameover.log)"
+echo "ok"
+
 step "menu layout scripts (ELF) -> data/menu.json (read by the menu layout tests)"
 run menu $PY export_web_menu.py --elf "$ELF" -o "$DATA/menu.json"
 [ -s "$DATA/menu.json" ] || fail "data/menu.json missing (log: $LOGS/menu.log)"
 echo "ok"
 
-if [ -n "$STATE" ]; then
-  step "the game's HUD (ELF + locale uk menudata/fontdata1, element tree from the save state) -> data/hud"
-  # export_web_hud.py also declares "hud" in scene.json (play.js draws the HUD only then)
-  run hud $PY export_web_hud.py --iso "$ISO" --locale "$KEL/data/etc/locale/uk" --state "$STATE" -o "$DATA/hud"
-  [ -s "$DATA/hud/hud.json" ] || fail "data/hud/hud.json missing (log: $LOGS/hud.log)"
-  tail -n 1 "$LOGS/hud.log" | cut -c1-160
-else
-  step "the game's HUD: skipped (no --state)"
-  echo "The HUD's element tree is read from a save state; it is not decoded from the disc yet."
-  echo "play.html runs without the game's HUD. Pass --state sea-of-flames.p2s to include it."
-fi
+step "the game's HUD (ELF layout scripts + set-up, locale uk menudata/fontdata1/kelstr) -> data/hud"
+# export_web_hud.py builds the element tree as FUN_003ad618 does (no save state) and declares
+# "hud" in scene.json (play.js draws the HUD only then)
+run hud $PY export_web_hud.py --iso "$ISO" --locale "$KEL/data/etc/locale/uk" -o "$DATA/hud"
+[ -s "$DATA/hud/hud.json" ] || fail "data/hud/hud.json missing (log: $LOGS/hud.log)"
+tail -n 1 "$LOGS/hud.log" | cut -c1-160
 
-step "sound effects: driver tables (iopsound.irx), z128 SE programs (sep.bin, sdb.bin), wave banks -> data/audio"
-run audio $PY "$REPO/tools/audio/extract.py" --kel "$KEL" --zone 128 --out "$DATA/audio"
+step "sound effects: driver tables (iopsound.irx), z128 + resident SE programs and names, menu names (ELF), wave banks -> data/audio"
+run audio $PY "$REPO/tools/audio/extract.py" --kel "$KEL" --elf "$ELF" --zone 128 --out "$DATA/audio"
 [ -s "$DATA/audio/se_z128.json" ] || fail "data/audio/se_z128.json missing (log: $LOGS/audio.log)"
 head -n 1 "$LOGS/audio.log" | cut -c1-160
 
