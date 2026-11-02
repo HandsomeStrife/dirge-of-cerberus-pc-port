@@ -292,6 +292,22 @@ FUN_0040b5c0 conversion matches) -> 5 -> no voice, as the game. f1525: r 0.79513
 C+0x810 was 3035 before the f1525 hit with no gated cue logged from f1440; some earlier write (before f1440, or
 another writer) is not found.
 
+**On the page (worker 0197, 2026-11-02; Dan: "I didnt hear any grunts").** Headless Chromium, default options, record
+69 firing at Vincent from 80 u: the grunts play. Every gated hit reaches event 0x25, about 3 in 7 of those draw 0-2,
+and each bt_v00N starts a buffer source on the running AudioContext the next frame at vol 114, pan 64-65. The game sends
+the same: w172_sound3 se_new f790 SE 37003 a3 (vol) 114, a2 (pan) 63. Measured: 6 / 20, 7 / 21 and 20 / 50 hits grunt
+(30-40%; one soldier hits every 10-40 frames, so about 2 in 3 hits pass the gate). The data is right: bt_v000-002 =
+SE 37001-37003 (sdb flags 0x20), bank 0, regions 0xbf-0xc1. The samples start on ADPCM block boundaries (the block
+before each start has the end flag). They are 44.1 kHz recordings (key 60 + tune -376/256 semitone -> pitch 0xeb2)
+lasting 0.16 / 0.15 / 0.24 s, and the program keys off after 9 / 9 / 17 sequence ticks. Rendered at vol 114: peak
+0.31-0.39, RMS about 0.095 over 0.14-0.24 s. Record 69's gun bsj_007 (vol 93): peak 0.48, RMS 0.049 over 0.49 s;
+bsj_064 at the sound camera: peak 0.035. So a grunt is louder than the gunfire but much shorter, and it lands on the
+frame of a hit, next to that shot's sounds. The game sends both at the same levels; the EE-side requests match. The
+IOP's output is not graded against a PCSX2 audio capture: none has been made for any SE yet. Test:
+`node native/web/test_hit_voice_page.mjs` (page, sandbox off; 8 / 8 mutants killed). Side note: `window.__play.sfx`
+is unset when the SE data loads before `__play` exists (play.js only assigns it if `__play` is already there). This
+only affects test hooks; the page's own `snd` uses the closure.
+
 ## Music and ambience (worker 0177, decoded and verified)
 
 **The BGM streams are plain ATRAC3, scrambled, decoded on the EE, played at 48 kHz.** The old reading
