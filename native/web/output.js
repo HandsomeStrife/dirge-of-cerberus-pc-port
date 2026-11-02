@@ -132,8 +132,36 @@ export function createOutputStage(renderer, { enabled = true, msaa = false, nati
     renderer.autoClear = a;
   }
 
+  // the previous frame (worker 0202): the GAME OVER title's glow (effects.js type 35, FUN_00278b50) copies the
+  // displayed frame buffer (TBP 0xe00 = DISPFB FBP 112: last frame's scene + HUD, copied from FBP 224 at the flip)
+  // into its page. While stage.keepFrame is set, each render copies its scene + HUD target (before the PCRTC merge,
+  // as FBP 112 holds it) into prev, which the next frame's glow pass reads (gameover_title.js TitleLayer).
+  // The camera that drew it is kept with it (prevView / prevProj, the projection with its view offset), so a reader maps
+  // a world point to the copy's texels as this render placed it. With msaa the targets are multisampled and the copy
+  // (copyTexSubImage2D) is invalid: warned, no previous frame (the glow is then not drawn). Turning keepFrame off frees it.
+  let prev = null, msaaWarned = false;
+  function keepFrame(w, h, camera) {
+    if (!stage.keepFrame || msaa) {
+      if (stage.keepFrame && !msaaWarned) { msaaWarned = true; console.warn('output: aa=1 (multisampled targets): no previous-frame copy, the GAME OVER glow is not drawn'); }
+      if (prev) { prev.dispose(); prev = null; }
+      stage.prevFrame = stage.prevView = stage.prevProj = null;
+      return;
+    }
+    if (!prev || prev.image.width !== w || prev.image.height !== h) {
+      if (prev) prev.dispose();
+      prev = new THREE.FramebufferTexture(w, h);
+      prev.minFilter = prev.magFilter = THREE.LinearFilter;          // the copy samples bilinear (TEX1 0x61, w198 g4)
+    }
+    renderer.copyFramebufferToTexture(prev);
+    stage.prevFrame = prev;
+    camera.updateMatrixWorld();
+    stage.prevView = camera.matrixWorldInverse.clone(); stage.prevProj = camera.projectionMatrix.clone();
+  }
+
   const stage = {
     enabled,
+    renderer,
+    keepFrame: false, prevFrame: null, prevView: null, prevProj: null,
     native,
     // OPTION widehud (not in the game; play.js: ON by default at Dan's request, review board 2026-11-02;
     // ?widehud=0 gives the game's 4:3 layout): full mode only, hud.js moves the HUD's left / right
@@ -181,7 +209,9 @@ export function createOutputStage(renderer, { enabled = true, msaa = false, nati
         : { mode: 'full', merge: stage.enabled };
     },
     // render `scene` through the output stage into `target` (null = the canvas)
-    render(scene, camera, target = null) {
+    // keep: false = not the frame the game shows (report.js's captures): the kept frame stays the last displayed one
+    render(scene, camera, target = null, { keep: keepIt = true } = {}) {
+      const keep = keepIt ? keepFrame : () => {};
       const s = targetSize(target);
       if (stage.native) {
         const autoClear = renderer.autoClear;
@@ -190,6 +220,7 @@ export function createOutputStage(renderer, { enabled = true, msaa = false, nati
         renderer.clear();
         renderer.render(scene, camera);
         drawHud(FB_W, FB_H, true);
+        keep(FB_W, FB_H, camera);
         merge.mat.uniforms.c2on.value = stage.enabled ? 1 : 0;
         renderer.setRenderTarget(vckRT);
         renderer.render(merge.scene, qCam);
@@ -210,7 +241,7 @@ export function createOutputStage(renderer, { enabled = true, msaa = false, nati
         return;
       }
       if (!stage.enabled) {
-        renderer.setRenderTarget(target); renderer.render(scene, camera); drawHud(s.x, s.y, false);
+        renderer.setRenderTarget(target); renderer.render(scene, camera); drawHud(s.x, s.y, false); keep(s.x, s.y, camera);
         renderer.setRenderTarget(null); return;
       }
       if (rt.width !== s.x || rt.height !== s.y) rt.setSize(s.x, s.y);
@@ -221,6 +252,7 @@ export function createOutputStage(renderer, { enabled = true, msaa = false, nati
       renderer.clear();
       renderer.render(scene, camera);
       drawHud(s.x, s.y, false);
+      keep(s.x, s.y, camera);
       renderer.setRenderTarget(target);
       renderer.render(full.scene, qCam);
       renderer.setRenderTarget(null);

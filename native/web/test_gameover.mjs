@@ -198,13 +198,43 @@ else {
     eq([gj.title.fed, gj.title.id], ['gameover_title.fed', 0x81840000], 'gameover.json declares the title FED 0x81840000');
     const b = fs.readFileSync(tf), fed = () => b.buffer.slice(b.byteOffset, b.byteOffset + b.length);
     eq(TITLE_DELAY, 14, 'title spawn 14 frames after the request frame (MEASURED: page frame 880 -> 894)');
-    // the RNG: the translated title draws nothing from the effect LCG / VU0 R / twister (so sharing the 3D one is safe)
+    // the RNG (worker 0202): the title DOES draw from the shared effect LCG / VU0 R (types 20 / 24 / 103; worker 0198's
+    // '0 draws' held while those particles were skipped); checked frame by frame against the call logs in the closed
+    // loop below. Here: never the twister (no type 137 in the title)
     {
       const rng = new EffectRng(); let calls = 0;
-      for (const k of ['next', 'signed', 'unit', 'vrInt', 'vrSpan', 'mtNext', 'mtSigned']) { const o = rng[k].bind(rng); rng[k] = (...a) => { calls++; return o(...a); }; }
+      for (const k of ['mtNext', 'mtSigned']) { const o = rng[k].bind(rng); rng[k] = (...a) => { calls++; return o(...a); }; }
       const t = createTitle(fed(), { rng, warn: () => {} });
       t.begin(1.2); t.logic(true); for (let i = 0; i < 400; i++) { t.begin(1.2); t.logic(true); t.end(); t.sprites(); }
-      ok(t.emitter && calls === 0, `the title's translated part draws no RNG (${calls} calls over 400 frames)`);
+      ok(t.emitter && calls === 0, `the title never draws the effect twister (${calls} calls over 400 frames)`);
+    }
+    // the glow's repeats (worker 0202 review): this FED has scale 100 % and one repeat, so FUN_00278b50's growth never runs
+    // here; a hand case on a patched copy (tag 0's type 35 blocks: +8 = 200 %, +0x13 = 2 repeats): after each draw the box
+    // grows by (200 x 0.01 - 1) / 2 = 0.5 of its size on each side (x1 += trunc(w k), x0 -= trunc(w k); y alike)
+    {
+      const { parseFed } = await import('./effects.js');
+      const buf = fed(), F = parseFed(buf), dv = new DataView(buf), P = F.part(F.emitter(0), 0);
+      const blocks = [];
+      const blk = F.list(P, 0);
+      for (let j = 0; j < F.u8(blk + 4); j++) if (F.u16(F.desc(P, F.u8(blk + 8 + 8 * j))) === 35) blocks.push(blk + F.u16(blk + 8 + 8 * j + 2));
+      for (let k = 0; k < F.u8(P + 0x21); k++) { const ev = F.event(P, k); for (let j = 0; j < F.u8(ev + 4); j++) { const e = ev + 8 + 8 * j; if (F.u16(F.desc(P, F.u8(e))) === 35) blocks.push(ev + F.u16(e + 2)); } }
+      for (const a of blocks) { dv.setFloat32(a + 8, 200, true); dv.setUint8(a + 0x13, 2); }
+      const t = createTitle(buf, { warn: () => {} });
+      t.begin(1.2); t.logic(true);
+      let g = null;
+      for (let i = 0; i < 200 && !g; i++) { t.begin(1.2); t.logic(true); t.end(); g = t.sprites().find(s => s.glow && s.tag === 0); }
+      const [b0, b1] = g ? g.boxes : [];
+      const w = b0 && b0[2] - b0[0], h = b0 && b0[3] - b0[1], dx = Math.trunc(w * 0.5), dy = Math.trunc(h * 0.5);
+      ok(blocks.length >= 2 && g && g.boxes.length === 2 && b1.join() === [b0[0] - dx, b0[1] - dy, b0[2] + dx, b0[3] + dy].join(),
+        `glow repeats (hand case, scale 200 %, 2 repeats): the second box = the first grown by trunc(size x 0.5) each side (${b0} -> ${b1})`);
+    }
+    // type 20's loop wrap (FUN_0027b680 -> FUN_002d9208(x + 4096, 4096) outside [0, 4096)): this FED's UV offset reaches only
+    // ~1924 in 60 s (the first wrap would come ~2 min into the menu; no capture has it): a hand case on the loop method
+    {
+      const { _internals } = await import('./effects.js');
+      const v = new Float32Array(16); v[2] = 4100.5; v[3] = -10.25;
+      _internals.T[20].loop({ F: { f32: () => 0 }, p: { v } }, 0, 0, 0, 0, 0);
+      ok(v[2] === 4.5 && v[3] === 4085.75, `type 20 loop: the UV offset wraps by FUN_002d9208 (4100.5 -> ${v[2]}, -10.25 -> ${v[3]}; hand case, not in the captures)`);
     }
     // the FED's own textures (FUN_002eba88 -> FUN_00309f28): every CLUT = the game's GS memory at its CBP (dump f1050;
     // tools/trace/dumpfx.py --fed .. --clut-out), which fixes where the image and CLUT start in each TIM2
@@ -220,22 +250,67 @@ else {
     }
     // closed loop on the traced HP (as run() above): the page frame k, the title alongside
     const states = { 905: 'ram1', 964: 'ram3', 1045: 'ram4', 1146: 'ram5' };   // state counter S = after frame S - 1
-    const dumps = { 968: 'dump3', 1049: 'dump4', 1150: 'dump5' };              // GS dump = its state + 4 frames
+    // GS dump = its state + 4 frames (dump5: + 3, worker 0202: MEASURED by the glow's alpha ramp, tag 0's type 17 alpha
+    // 4.56 at page frame 1149 and 5.47 at 1150 vs RGBA alpha 4 in the dump; the static letters could not tell)
+    const dumps = { 968: 'dump3', 1049: 'dump4', 1149: 'dump5' };
     const have = rg && Object.values(states).concat(Object.values(dumps)).every(f => fs.existsSync(path.join(W, f + '.json')));
     if (!have) console.log('SKIP title vs the game: no w192_gameover trace or tools/trace/out/w198/ fixtures');
     else {
       const t = createTitle(fed(), { warn: () => {} });
       const g = new GameOver(null);
       let spawnAt = -1;
-      const res = {};
+      const res = {}, rcalls = {};
+      // worker 0202: (1) the effect step. The game ages the title's emitter by the effect frame's own step (+0x20:
+      // 1.1999969 / 1.1999988 / 1.2000008), not the logic step the page passes (1.1999999; its source is not decoded,
+      // fidelity-audit 'Game over'): tools/trace/out/w202_fxtitle.jsonl (TRACE_FXTITLE=d15820 on w192_gameover) logs it,
+      // the page frame k's step = record k + 2. (2) the RNG: the call logs (TRACE_CALLLOG=w202lcg, log frame = page frame
+      // + 2) give each frame's reseed (FUN_002d97f8's rand()) and every LCG / VU0 R draw in order; the draws of other
+      // callers (the level's 0x2a1b68 effect) are replayed before the title's next own draw, so the title draws the
+      // game's values. Without these files: the logic step and an unseeded generator (the value checks of the random
+      // lanes are then skipped).
+      const fxtP = path.join(root, 'tools/trace/out/w202_fxtitle.jsonl'), fxt = {};
+      if (fs.existsSync(fxtP)) for (const l of fs.readFileSync(fxtP, 'utf8').split('\n')) { if (!l) continue; const r = JSON.parse(l); if (r.frame !== undefined) fxt[r.frame] = r; }
+      const stepOf = k => (k > 894 && fxt[k + 2]) ? fxt[k + 2].fxt_dt : rg[k].step;
+      const logs = [['w202', 'w202_lcg'], ['w202b', 'w202_lcg'], ['w202c', 'w202_lcg2'], ['w202d', 'w202_lcg3']].map(([d, f]) => path.join(root, 'tools/trace/out', d, f + '.calls.jsonl'));
+      const haveLogs = logs.every(f => fs.existsSync(f)) && Object.keys(fxt).length > 0;
+      const titleCaller = r => r >= 0x27b120 && r < 0x27b300 || r >= 0x2755a0 && r < 0x275850 || r >= 0x2a9d60 && r < 0x2aa120;
+      const LOG = {}, win = [];
+      if (haveLogs) for (const f of logs) {
+        const ls = fs.readFileSync(f, 'utf8').split('\n').filter(Boolean).map(l => JSON.parse(l));
+        win.push(ls[0].meta.frames);
+        for (const e of ls.slice(1)) {
+          const L = LOG[e.frame - 2] ??= { seed: null, seq: [] };
+          if (e.hook === 'fx_reseed') L.seed = e.v0 >>> 0; else L.seq.push({ hook: e.hook, title: titleCaller(e.ra - 8) });
+        }
+      }
+      const rng = t.fx.rng, raw = {};
+      for (const m of ['next', 'signed', 'unit', 'vrSpan', 'vrInt']) raw[m] = rng[m].bind(rng);
+      let cur = null, lf = null, lp = 0, lbad = 0;
+      for (const [m, tag] of [['signed', 'lcg_signed'], ['unit', 'lcg_unit'], ['vrSpan', 'vr_span'], ['vrInt', 'vr_flip']]) {
+        rng[m] = (...a) => {
+          if (cur) cur.push(tag);
+          if (lf) {
+            while (lp < lf.seq.length && !lf.seq[lp].title) { if (lf.seq[lp].hook.startsWith('lcg')) raw.next(); else raw.vrSpan(0); lp++; }
+            if (lp < lf.seq.length && lf.seq[lp].hook === tag) lp++; else lbad++;
+          }
+          return raw[m](...a);
+        };
+      }
+      const F0 = t.fx.fed, drawType = P => F0.u16(F0.desc(P, F0.u16(F0.list(P, 3))));
       for (let k = 781; k <= 1150; k++) {
-        t.begin(rg[k].step);
+        cur = rcalls[k] = [];
+        lf = haveLogs && LOG[k] && LOG[k].seed !== null ? LOG[k] : null; lp = 0;
+        if (lf) { rng.s = lf.seed; rng.R = ((lf.seed & 0x7fffff) | 0x3f800000) >>> 0; }   // FUN_002d97f8: LCG = rand(), VRINIT R
+        // the emitter age as the game had it before this frame (record k + 1): the game's age is not always f(age + dt)
+        // of its own +0x20 (84 of 350 frames differ by an ulp; the clock's update is not decoded), which drifts 1e-3 by f1147
+        if (t.emitter && k > 895 && fxt[k + 1]) t.emitter.age = fxt[k + 1].fxt_age;
+        t.begin(stepOf(k));
         g.frame(rg[k].p_hp === 0, rg[k].step, rg[k + 1].clock_ms);
         t.logic(g.started);
         if (t.emitter && spawnAt < 0) spawnAt = k;
         t.end();
         const sp = t.sprites();
-        if (states[k]) res[states[k]] = t.emitter ? { age: t.emitter.age, parts: t.emitter.lists[1].map(p => ({ tag: p.tag, age: p.age, ev: p.ev, skip: p.skip, noDraw: p.noDraw, v: p.v.slice(), m50: p.m50.slice() })) } : null;
+        if (states[k]) res[states[k]] = t.emitter ? { age: t.emitter.age, parts: t.emitter.lists[1].map(p => ({ tag: p.tag, age: p.age, ev: p.ev, skip: p.skip, noDraw: p.noDraw, v: p.v.slice(), i32: p.i32.slice(), m50: p.m50.slice(), dt: drawType(p.P), ext: p.ext ? JSON.parse(JSON.stringify(p.ext)) : null, data: p.data.slice() })) } : null;
         if (dumps[k]) res[dumps[k]] = sp;
       }
       eq(spawnAt, 894, 'title spawned in page frame 894 (request 880 + 14; RAM: age 13.2 at state counter 906 .. 302.4 at 1147)');
@@ -251,19 +326,63 @@ else {
           const p = P.parts.find(q => q.tag === rp.tag);
           if (!p) continue;
           if (p.ev !== rp.ev) evBad++;
-          if (p.skip || p.noDraw) continue;                       // channels of the untranslated draw types
+          if (p.skip || p.noDraw || p.dt !== 10) continue;        // the type 10 particles (the other draw types: below)
           rp.v.forEach((x, i) => { if (x === null || i === 11 || i === 19) return; nv++; worst = Math.max(worst, Math.abs(p.v[i] - x) / Math.max(1, Math.abs(x))); });
           if (rp.m50 && rp.m50.some((x, i) => Math.abs(p.m50[i] - x) > 1e-4 * Math.max(1, Math.abs(x)))) mBad++;
         }
         // 2e-6: a type 17 colour mid-fade (ram3 tag 16: 85.18585 vs 85.18575, both 85 as RGBA): the PS2 FPU / VU0 truncate
-        const any = R.parts.some(rp => { const p = P.parts.find(q => q.tag === rp.tag); return p && !p.skip && !p.noDraw; });
+        const any = R.parts.some(rp => { const p = P.parts.find(q => q.tag === rp.tag); return p && !p.skip && !p.noDraw && p.dt === 10; });
         ok(evBad === 0 && mBad === 0 && worst < 2e-6 && (nv > 0 || !any), `${name}: event indices, matrices and ${nv} values = RAM (worst rel ${worst.toExponential(2)} < 2e-6)`);
+        // worker 0202: the channels of draw types 20 / 35 / 103 (the fixture's 'vall' / 'pool', title_fixture.py).
+        // Their particles' other channels (type 17 colour ramps) follow the particle age, which drifts from RAM by
+        // up to 1.8e-4 (the emitter age: 181.19974 vs 181.19992 at f1046, within the 1e-3 above): checked here only
+        // for the new channels' own values. Type 20: the base / rate / acceleration lanes whose random range is 0
+        // (the others take this frame's LCG values: the RNG order is checked against the call logs below).
+        if (!R.parts[0].vall || !haveLogs) { console.log(`SKIP ${name} types 20 / 35 / 103: no 'vall' (re-run tools/trace/title_fixture.py) or no w202 logs`); continue; }
+        let w2 = 0, n20 = 0, n35 = 0, n103 = 0, pBad = 0;
+        const rel = (a, b) => Math.abs(a - b) / Math.max(1, Math.abs(b));
+        for (const rp of R.parts) {
+          const p = P.parts.find(q => q.tag === rp.tag);
+          if (!p || ![20, 35, 103].includes(p.dt)) continue;
+          const Pd = F0.part(F0.emitter(0), p.tag), ld = F0.list(Pd, 3), di = F0.u16(ld), d = F0.desc(Pd, di), o = F0.u16(d + 4) / 4;
+          if (p.dt === 20) for (let j = 2; j < 8; j++) { if (!haveLogs && F0.f32(p.data[di] + 0x28 + 4 * (j - 2)) !== 0) continue; n20++; w2 = Math.max(w2, rel(p.v[o + j], rp.vall[o + j])); }
+          if (p.dt === 35) { n35++; w2 = Math.max(w2, rel(p.v[o], rp.vall[o])); }
+          if (p.dt === 103) {
+            n103++; w2 = Math.max(w2, rel(p.v[o + 1], rp.vall[o + 1]));
+            const mine = p.ext[o], game = rp.pool[o];
+            if (!game || mine.length !== game.length) { pBad++; continue; }
+            game.forEach((G, j) => {
+              const M = mine[j];
+              if (M.live !== G.live) { pBad++; return; }
+              if (!G.live) return;
+              if (M.life !== G.life || M.half !== G.half) pBad++;
+              for (const key of ['pos', 'tail', 'vel', 'acc']) for (let c = 0; c < 3; c++) w2 = Math.max(w2, rel(M[key][c], G[key][c]));
+              for (const key of ['fade', 'rate', 'len']) w2 = Math.max(w2, rel(M[key], G[key]));
+            });
+          }
+        }
+        ok(pBad === 0 && w2 < 1e-5, `${name}: types 20 / 35 / 103 = RAM, with the game's step and RNG (${n20} type 20 lanes, ${n35} type 35 clocks, ${n103} type 103 accumulators + point pools; worst rel ${w2.toExponential(2)} < 1e-5)`);
+      }
+      // the RNG order (worker 0202): every LCG / VU0 R draw of the title's channels in the call logs
+      // (TRACE_CALLLOG=w202lcg on w192_gameover: tools/trace/out/w202 / w202b / w202c; callers 0x27b120..0x27b300 type 20's
+      // transition, 0x2755a0..0x275850 type 24, 0x2a9d60..0x2aa120 type 103's eval; log frame = page frame + 2)
+      {
+        if (!haveLogs) console.log('SKIP title RNG order: no w202 call logs / w202_fxtitle trace (tools/trace/out/w202*)');
+        else {
+          let frames = 0, bad = [], draws = 0;
+          for (const [lo, hi] of win) for (let k = lo - 2; k < hi - 2 && k <= 1150; k++) {
+            frames++; const own = (LOG[k]?.seq ?? []).filter(e => e.title).map(e => e.hook);
+            const a = (rcalls[k] ?? []).join(), b = own.join(); draws += own.length;
+            if (a !== b) bad.push(`f${k}: page [${a}] vs game [${b}]`);
+          }
+          ok(bad.length === 0 && lbad === 0 && draws > 300, `title RNG draws = the game's, frame by frame and in order (${frames} frames, ${draws} draws: types 20 / 24 / 103; other callers replayed between)${bad.length ? ': ' + bad.slice(0, 3).join('; ') : ''}`);
+        }
       }
       // sprites against the dumps: TEX0, ALPHA, vertex RGBA exact, corners < 0.15 px; every FED-textured draw of the
       // dump that is not one of type 35's frame-buffer passes (or type 11's texture 0 mesh) is one of ours
       const blendOf = a => [a & 3, (a >> 2) & 3, (a >> 4) & 3, (a >> 6) & 3];
       for (const [k, name] of Object.entries(dumps)) {
-        const sp = res[name], T = JSON.parse(fs.readFileSync(path.join(W, name + '.json')));
+        const all = res[name], sp = all.filter(s => !s.glow), T = JSON.parse(fs.readFileSync(path.join(W, name + '.json')));
         // ours: the tex2 sprites and the letters (tex1, ALPHA 0x44); type 35's tex1 passes go through its 64 x 64 page
         const own = T.filter(r => r.tex0 === '0x4006388621313000' || (r.tex0 === '0x4006380621312e00' && r.blend.slice(0, 4).join() === '0,1,0,1' && !r.v.some(v => v[0] === 2016 || v[0] === 2080)));
         let worst = 0, bad = 0;
@@ -284,6 +403,32 @@ else {
         }
         ok(sp.length > 0 && bad === 0 && worst < 0.15 && used.size === own.length,
           `${name} (f${k}): our ${sp.length} sprites = the dump's ${own.length / 2} type-10 sprites (${used.size} / ${own.length} triangles; corners ${worst.toFixed(3)} px; RGBA / ALPHA / TEX0 exact; ${T.length - own.length} triangles of untranslated types not drawn)`);
+        // worker 0202: type 35's glows against the page passes of the dump (dumpfx.py --glow: glowN.json): per glow the
+        // record drawn into the 64 x 64 page (FRAME FBW 1, TEX 0x2e00: corners, RGBA, ALPHA), the copy of the frame (TEX0
+        // 0x66401ce00 = TBP 0xe00 / TBW 7 / CT32 / 512 x 512: ST), the page drawn back (TEX0 0x598006a00: XY 12.4, RGBA,
+        // ALPHA) — the four draws of FUN_00278b50, exact
+        const gp = path.join(W, 'glow' + name.slice(4) + '.json');
+        if (!fs.existsSync(gp)) { console.log(`SKIP ${name} glows: no ${gp} (dumpfx.py --glow)`); continue; }
+        const GL = JSON.parse(fs.readFileSync(gp)), glows = all.filter(s => s.glow);
+        const back = GL.filter(r => r.frame === '0x700e0' && r.tme), copy = GL.filter(r => r.tex0 === '0x66401ce00'), into = GL.filter(r => r.frame === '0x10150' && r.tme && r.tex0 !== '0x66401ce00');
+        const xyMatch = (r, X0, Y0, X1, Y1, e = 0) => r.v.every(v => (Math.abs(v[0] - X0) <= e || Math.abs(v[0] - X1) <= e) && (Math.abs(v[1] - Y0) <= e || Math.abs(v[1] - Y1) <= e));
+        let gBad = 0, gWorst = 0, gExact = 0, pExact = 0;
+        for (const s of glows) {
+          const [X0, Y0, X1, Y1] = s.boxes[0].map(x => x / 16);
+          // the box: exact with the EE / VU0 rounding toward zero (effects.js rz); matched within 1/16 px, the exact ones counted
+          const b2 = back.filter(r => xyMatch(r, X0, Y0, X1, Y1, 0.0625));
+          if (b2.length === 2 && b2.every(r => xyMatch(r, X0, Y0, X1, Y1))) gExact++;
+          if (b2.length !== 2 || b2.some(r => r.v.some(v => v[6].join() !== s.rgba.join()) || blendOf(s.alpha).join() !== r.blend.slice(0, 4).join())) { gBad++; continue; }
+          const at = Math.min(...b2.map(r => r.i));
+          const c2 = copy.filter(r => r.i < at && r.i >= at - 2);
+          if (c2.length !== 2) { gBad++; continue; }
+          for (const r of c2) for (const v of r.v) gWorst = Math.max(gWorst, Math.min(Math.abs(v[3] - s.copy.st[0]), Math.abs(v[3] - s.copy.st[2])), Math.min(Math.abs(v[4] - s.copy.st[1]), Math.abs(v[4] - s.copy.st[3])));
+          const l2 = into.filter(r => r.i < at - 2 && r.i >= at - 4), q = s.page[0];
+          if (l2.length !== 2 || !l2.every(r => xyMatch(r, q.x[0] + 2016, q.y[0] + 2016, q.x[1] + 2016, q.y[1] + 2016, 0.0625) && r.v.every(v => v[6].join() === q.rgba.join()) && blendOf(q.alpha).join() === r.blend.slice(0, 4).join())) gBad++;
+          else if (l2.every(r => xyMatch(r, q.x[0] + 2016, q.y[0] + 2016, q.x[1] + 2016, q.y[1] + 2016))) pExact++;
+        }
+        ok(glows.length > 0 && glows.length === back.length / 2 && gBad === 0 && gWorst < 1e-7 && gExact === glows.length && pExact >= glows.length * 3 / 4,
+          `${name} (f${k}): our ${glows.length} type 35 glows = the dump's ${back.length / 2} page passes (record into the page: RGBA / ALPHA exact, corners exact for ${pExact} / ${glows.length}, the rest within 1/16 px (VU1 rounding); copy ST worst ${gWorst.toExponential(1)}; draw-back XY ${gExact} / ${glows.length}, RGBA, ALPHA exact)`);
       }
     }
   }

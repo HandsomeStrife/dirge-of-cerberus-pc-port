@@ -990,5 +990,37 @@ else {
   }
 }
 
+// ---- cmd 0x108's magazine draw against the game's twister (worker 0204; trace w204_t56rng: the k_enemy_engage2 run into
+// trigger 56, TRACE_RNG=1 TRACE_CALLLOG=w204rng TRACE_CALLLOG_FRAMES=158:175 TRACE_FIELDSET=enemy TRACE_ERECS=44
+// TRACE_ENEMIES=1). The game draws twice in frames 158-174, both FUN_0035ee08 -> FUN_00360418 (records 50 / 51 activated by
+// script 91's 0x108). The page's world, its twister loaded with the record of the crossing frame, crossing the same
+// positions: the same draws (the twister state after = the next record's, word for word) and the same rounds.
+{
+  const T = path.join(OUT, 'w204_t56rng');
+  if (!existsSync(T + '.jsonl') || !existsSync(T + '.calls.jsonl')) console.log('SKIP: tools/trace/out/w204_t56rng trace missing (0x108 magazine draws)');
+  else {
+    const recs = readFileSync(T + '.jsonl', 'utf8').trim().split('\n').slice(1).map(l => JSON.parse(l.replace(/\bNaN\b/g, 'null')));
+    const calls = readFileSync(T + '.calls.jsonl', 'utf8').trim().split('\n').slice(1).map(l => JSON.parse(l.replace(/\bNaN\b/g, 'null')));
+    const draws = calls.filter(e => e.hook === 'rand'), refills = calls.filter(e => e.hook === 'refill');
+    const f = draws.length ? draws[0].frame : -1;
+    ok(draws.length === 2 && draws.every(e => e.frame === f && e.ra === 0x360480) && refills.length === 2,
+       `T: frames 158-174 draw only twice, both in frame ${f} from FUN_00360418 (callers ${[...new Set(draws.map(e => e.ra.toString(16)))]})`);
+    const rf = r => { const g = new AI.GameRandom(1); for (let i = 0; i < 624; i++) g.s[i] = Buffer.from(r.rng_state.slice(8 * i, 8 * i + 8), 'hex').readUInt32LE(0); g.i = r.rng_idx; return g; };
+    // the call log's frame = the record that shows the result (each record is logged before its frame's logic, at the pad
+    // poll that also counts the frame): the logic ran between records f - 1 and f
+    const r0 = recs.find(r => r.frame === f - 1), r1 = recs.find(r => r.frame === f);
+    const g = rf(r0), want = rf(r1), got = [];
+    const player = { pos: r0.matrix[3].slice(0, 3), hp: 780, id: 0x16, f118: 0, s64: 0 };
+    const Wr = AI.createEnemyAI({ data, player, quiet: true, log: () => {}, deadRecs: [41, 42, 43], rand: () => { const v = g.rand(); got.push(v); return v; } });
+    Wr.tick(1.2, r0.matrix[3].slice(0, 3), r1.matrix[3].slice(0, 3));
+    const a = [50, 51].map(k => Wr.actors.find(x => x.rec === k));
+    ok(a.every(Boolean) && got.length === 2 && g.i === want.i && g.s.every((v, i) => v === want.s[i]),
+       `page: records 50 / 51 activated in that frame with ${got.length} draws; the twister after = the game's next record (index ${g.i} / ${want.i})`);
+    ok(a.every(Boolean) && a.map(x => x.ai.rounds & 0xffff).join() === refills.map(e => parseInt(e['a0+0x7c'].u[0], 16) & 0xffff).join(),
+       `rounds after the draw: page ${a.map(x => x && x.ai.rounds)} = game ${refills.map(e => parseInt(e['a0+0x7c'].u[0], 16) & 0xffff)}`);
+    ok(got.every((v, i) => Math.abs(v - draws[i].f0) < 1e-6), `draw values ${got.map(v => v.toFixed(6))} = the call log's ${draws.map(e => e.f0)}`);
+  }
+}
+
 console.log((fail ? `${fail} FAILED` : 'all ok') + (gaps ? ` (${gaps} known gaps)` : ''));
 process.exit(fail ? 1 : 0);

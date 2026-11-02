@@ -26,8 +26,24 @@ while o:
     p = u32(o + 0x64)
     while p:
         P = u32(p + 0x40); size = (s16(P + 2) + 99) & ~3
+        # worker 0202: 'vall' = the whole value region (finite words, no 40-word cap); 'pool' = each type 103
+        # channel's points (value word 0 -> object: +8 end, +0xc start; 0x60-byte points: pos, tail, vel, acc,
+        # u16 life +0x40, u16 half +0x42, fade +0x44, rate +0x48, live +0x4c, length +0x50)
+        V = u32(p + 0x44); pools = {}
+        for i in range(EE[a(P + 8)]):
+            d = u32(u32(P + 0xc) + 4 * i)        # the loader relocates the FED's offsets: absolute in RAM (fx_fixture.py)
+            if u16(d) == 103:
+                o = u32(V + u16(d + 4)); q, end = (u32(o + 0xc), u32(o + 8)) if o else (0, 0); pts = []
+                while q and q < end and len(pts) < 64:
+                    pts.append({'pos': [f32(q + 4 * j) for j in range(3)], 'tail': [f32(q + 0x10 + 4 * j) for j in range(3)],
+                                'vel': [f32(q + 0x20 + 4 * j) for j in range(3)], 'acc': [f32(q + 0x30 + 4 * j) for j in range(3)],
+                                'life': u16(q + 0x40), 'half': u16(q + 0x42), 'fade': f32(q + 0x44), 'rate': f32(q + 0x48),
+                                'live': u32(q + 0x4c), 'len': f32(q + 0x50)})
+                    q += 0x60
+                pools[u16(d + 4) // 4] = pts
         em['parts'].append({'tag': EE[a(p + 0x22)], 'age': f32(p + 0x30), 'ev': s16(p + 0x36), 'flags': u16(p + 2),
                             'v': [fin(f32(u32(p + 0x44) + 4 * i), i) for i in range(size // 4)],
+                            'vall': [fin(f32(V + 4 * i), 0) for i in range(size // 4)], 'pool': pools,
                             'm50': [f32(u32(p + 0x50) + 4 * i) for i in range(16)] if u32(p + 0x50) else None})
         p = u32(p + 0x14)
     out['emitters'].append(em)

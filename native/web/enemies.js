@@ -154,6 +154,11 @@ export async function setupEnemies({ root, litPatch, light, extra = [] }) {
   // dead in the save state (the page's start): no body, nothing drawn (FUN_00559748 builds none for
   // a dead status). deadRecs: the same records for enemy_ai (createEnemyAI deadRecs: it refuses them)
   const deadRecs = P.save_state_dead?.records ?? P.placements.filter(p => p.dead).map(p => p.rec);
+  // the stage load's statuses (FUN_00319190: flags +0x40 bit 3 and the tag among the event actors; placements.json
+  // load_flag_records / event_actors, GUESS tags as there) for enemy_ai stageLoad at a Restart (worker 0204). Record 0 is
+  // Vincent (p_Vin): the player object (class 0x58f128), placed by the page's own code.
+  const tags = new Set(P.event_actors?.tags ?? []);
+  const loadRecs = (P.load_flag_records ?? []).filter(r => tags.has(r.tag) && r.rec !== 0).map(r => r.rec);
   const fromRec = r => ({ rec: r.rec, tag: 'rec' + r.rec, model: r.model, pos: r.pos, face: r.face, up: [0, -1, 0] });   // GUESS: ai.json carries no up vector; (0,-1,0) as for 41/42 (the up check can't fire here)
   let list = P.placements.filter(p => IDLE[p.model] && !p.dead).concat(extra.map(fromRec));
   if (ALL) {
@@ -306,7 +311,7 @@ export async function setupEnemies({ root, litPatch, light, extra = [] }) {
     else if (n - 1 <= L.frame) L.frame = n - 1;
   }
   return {
-    actors, deadRecs, add, remove, partPose,
+    actors, deadRecs, loadRecs, add, remove, partPose,
     // FUN_00345e58 -> FUN_00344340: a clip's root speed (aim.js rootSpeed, its GUESS frame unit) from a drawn
     // actor of that model; null when no such actor or clip is loaded
     rootSpeed(model, clip) {

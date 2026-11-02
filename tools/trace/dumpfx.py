@@ -27,6 +27,7 @@ ap.add_argument('--extract', default=os.path.join(ROOT, 'extract/_KEL'))
 ap.add_argument('--lines', action='store_true')
 ap.add_argument('--flat', help='(worker 0200) write the last frame\'s untextured triangles at least 400 px wide (type 107 screen sprites) to this JSON')
 ap.add_argument('--fed', action='append', default=[], help='(worker 0198) also the draws with this FED\'s own TIM2 TEX0s')
+ap.add_argument('--glow', help='(worker 0202) write the last frame\'s type 35 page passes to this JSON: draws into a 64-wide frame (FBW 1) and the page drawn back (TEX0 TBW 1, CT32), with FRAME / TEX0 / ALPHA / TEST and the vertices (x, y, z, s, t, q, rgba)')
 ap.add_argument('--clut-out', help='(worker 0198) with --fed: write the CT32 CLUT (256 words, CSM1 logical order) at each FED texture\'s CBP in the dump\'s frozen GS memory')
 args = ap.parse_args()
 buf = open(args.dump, 'rb').read()
@@ -81,6 +82,15 @@ if args.flat:                        # (worker 0200) the screen sprites: untextu
             fl.append({'i': i, 'blend': c['blend'], 'test': c.get('test'), 'v': [[v[0] / 16, v[1] / 16, v[2], list(v[8:12])] for v in t[:3]]})
     json.dump(fl, open(args.flat, 'w'))
     print(len(fl), 'flat screen tris ->', args.flat)
+if args.glow:                        # (worker 0202) type 35: FRAME FBW 1 (the page) or TEX0 TBW 1 PSMCT32 (the page drawn back)
+    gl = []
+    for i in range(a, b):
+        t = gif.tris[i]; c = t[3]; fr = c['frame'] or 0; t0 = c.get('tex0') or 0
+        if ((fr >> 16) & 0x3f) == 1 or (c.get('tme') and ((t0 >> 14) & 0x3f) == 1 and ((t0 >> 20) & 0x3f) == 0):
+            gl.append({'i': i, 'frame': hex(fr), 'tex0': hex(t0), 'tme': c.get('tme'), 'blend': c['blend'], 'test': c.get('test'),
+                       'xyoff': c.get('xyoffset'), 'v': [[v[0] / 16, v[1] / 16, v[2], v[3], v[4], v[5], list(v[8:12])] for v in t[:3]]})
+    json.dump(gl, open(args.glow, 'w'))
+    print(len(gl), 'glow page triangles ->', args.glow)
 if args.lines:
     last = gif.tris[a][3]['vframe'] if a < len(gif.tris) else max((g['vframe'] for g in segs), default=0)
     lines = [g for g in segs if g['vframe'] == last and not g['tme']]

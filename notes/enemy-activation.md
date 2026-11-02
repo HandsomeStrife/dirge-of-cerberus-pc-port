@@ -156,3 +156,8 @@ trace of recs 67 / 68 (trigger 57) or 20 / 21. Not needed for the ladder-top pai
   param_2 == +0x28 bit 0); a dead status is refused; 0x108 passes param_3 = 0, so event 3 does not run.
 - Script 0 event 0x22 runs in the VM until op 37 (push_data_ref, not translated) and skips manager
   0x1e / 0x3e / 0xa4 / 0x35 / 0x38; the page does not run it yet.
+
+## 41-43 (worker 0204, 2026-11-02)
+- Stage-load placements (bit 3 + event-actor tag), not script 0: FUN_00558f68 activates them with event 3 inline; their
+  scripts start cmd 0x106 timers (FUN_0053e868 -> manager event 0xd -> script event 1). Ported as enemy_ai `stageLoad` /
+  `timerTick`, run by the Restart; notes/checkpoint-research.md "41-43 at the checkpoint".

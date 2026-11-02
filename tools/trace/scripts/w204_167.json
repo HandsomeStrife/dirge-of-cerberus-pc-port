@@ -1,0 +1,47 @@
+{
+ "name": "w204_167",
+ "frames": 1680,
+ "log_from": 1400,
+ "doc": "worker 0204: w167_timer logged from f1400 with the script timers / vars: 46 / 47 timer 0 (600 from the path end) expires at f1498 / f1531, event 1 re-arms 200 and keeps mode 1 (manager short 0 = 1 from script 110). Run with TRACE_POKE=9540a4=6e,10a2140=6e TRACE_FIELDSET=enemy TRACE_EVARS=1 TRACE_ERECS=46,47 TRACE_ENEMIES=2 TRACE_LOG_AT=A0D80.",
+ "events": [
+  {
+   "from": 10,
+   "to": 230,
+   "lx": 0.6,
+   "ly": -1.0
+  },
+  {
+   "from": 240,
+   "to": 244,
+   "buttons": [
+    "cross"
+   ]
+  },
+  {
+   "from": 280,
+   "to": 284,
+   "buttons": [
+    "cross"
+   ]
+  },
+  {
+   "from": 300,
+   "to": 470,
+   "lx": 0.6,
+   "ly": -1.0
+  },
+  {
+   "from": 490,
+   "to": 494,
+   "buttons": [
+    "cross"
+   ]
+  },
+  {
+   "from": 500,
+   "to": 787,
+   "lx": 0.6,
+   "ly": -1.0
+  }
+ ]
+}

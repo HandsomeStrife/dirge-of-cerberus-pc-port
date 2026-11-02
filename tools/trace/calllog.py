@@ -303,6 +303,20 @@ SETS["w200lcg"] = [SETS["fxsrc"][2],
     dict(id=142, kind="site", where=(0x2EFC78, 0x2EFE00, 0x2D97F8), name="fx_reseed", copy=[cpr("ra")]),
 ]
 
+# worker 0202: the same LCG draws plus the VU0 R spans (FUN_002d9828 / FUN_002d9880) during the GAME OVER title:
+# which title channels (types 24 / 103 / 119) draw, in what order.
+# worker 0204: every shared-RNG draw (each `jal FUN_0040b5c0`, f0 = the value) with its caller, and the activation's
+# magazine draw FUN_00360418 (its a0 = the AI, +0x7c after the call = the rounds): trigger 56's 0x108 on records 50 / 51
+SETS["w204rng"] = [
+    dict(id=150, kind="site", where=(0x100000, 0x5B0000, 0x40B5C0), name="rand", copy=[cpr("ra")]),
+    dict(id=151, kind="site", where=(0x35EE08, 0x35EF50, 0x360418), name="refill", copy=[cpr("ra"), cp("a0", 0x7C, 1)]),
+]
+
+SETS["w202lcg"] = SETS["w200lcg"][1:] + [
+    dict(id=146, kind="site", where=(0x270000, 0x2E0000, 0x2D9828), name="vr_span", copy=[cpr("ra")]),
+    dict(id=147, kind="site", where=(0x270000, 0x2E0000, 0x2D9880), name="vr_flip", copy=[cpr("ra")]),
+]
+
 # worker 0200: who calls FUN_00580410 (FUN_003365e0(0x4800) at FUN_0054a720's position of its object a0)
 SETS["w200_4800"] = [SETS["fxsrc"][3],
     dict(id=143, kind="site", where=(0x518838, 0x518a00, 0x580410), name="c580410_518838", copy=[cpr("a0"), cpr("ra")]),

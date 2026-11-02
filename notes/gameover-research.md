@@ -108,8 +108,44 @@ The GAME OVER title and its backdrop are one effect on the ordinary FED engine (
   tools/trace/out/w198 (g1-5.gs, s1-5.p2s, grab_log.json); fixtures: tools/trace/title_fixture.py sN.p2s ramN.json,
   tools/trace/dumpfx.py gN.gs dumpN.json --fed a0097.fed [--clut-out clutN.json].
 
+## Title draw types (worker 0202, 2026-11-02)
+Vtables (DAT_0046c398[type], w198 s4): 11 0x49a898, 20 0x49a9b8, 35 0x49a6f8, 103 0x49d1c0, 119 0x49db70 (+0xc init, +0x14
+transition, +0x1c eval, +0x24 draw, +0x2c destroy, +0x34 loop). Which tags: 35 = tags 0 / 5 / .. / 35 (looping glows, life
+120) and 3 / 8 / .. / 38 (one-shot, life 101); 119 = 4 / 9 / .. / 39; 11 = 40, 41; 20 = 58, 59, 61; 103 = 67..90.
+- **Type 35, the letter glow** (FUN_00278b50; effects.js drawGlow): four GS draws a letter (w198 g4 56436..56499): the 64 x 64
+  page at TBP 0x2a00 (FUN_002eec78 FRAME / SCISSOR / XYOFFSET 32256; FUN_002eea80 clear), the letter's record drawn into
+  it with diag(512 / extent) + (2037, 2048, 400000) (PAL), the frame copied in with FBMSK 0xff000000 (RGB only) from TBP
+  0xe00 = DISPFB 112 (the last displayed frame: the data byte +0x11 = 1 picks FUN_002ef560 buffer 1), ST = (box - XYOFFSET
+  1824 / 1792) / 512, then the page drawn back over the box (C . S of (+-e/16, +-e/16), / w, VFTOI4), MODULATE (128, 0, 0,
+  colour alpha), ALPHA 0x48: a red, additive halo of what was on screen under the letter, masked by the letter.
+  TEX1 0x61 (bilinear) on all three textured draws, CLAMP 0. Tables (ELF): DAT_0046c230 sizes 256 / 128 / 64 / 32,
+  238 XYOFFSET, 240 TBW, 248 TW, 250 ALPHA 0x48 / 0x42 / 0x88. Page: TitleLayer.glows renders the page in a 64 x 64
+  render target per glow from output.prevFrame (output.js keeps the scene + HUD target of the last render while the title
+  lives) and draws it back. Rounding: the EE / VU round toward zero (effects.js rz): boxes and ST exact in all three dumps.
+- **RNG** (TRACE_CALLLOG=w202lcg: every LCG / VU0 R draw in 0x270000..0x2e0000 with its caller; out/w202, w202b, w202c, w202d,
+  frames 893..1150): the title DOES draw: type 20's transition 6 LCG a particle (0x27b270..), type 24 inside the 119
+  particles 1 each (0x275684), type 103's eval 9 LCG + 1 VU0 R span per strand point (0x2a9eb4..0x2a9f64). Type 119's own
+  channel: none. The 3 draws at 0x2a1b68 every 10 frames are a level effect (also in 0200's gameplay log), not the title.
+  Log frame = page frame + 2. Page: all simulated (T[20], T[35], T[103]; 119 in DRAWN_ELSEWHERE): the draws equal the
+  game's frame by frame (test_gameover replays the logged reseed and the other callers' draws).
+- **Effect step**: the title emitter (heap 0xd15820 in every w198 state; TRACE_FXTITLE=d15820 -> out/w202_fxtitle.jsonl)
+  ages by its own +0x20 dt (1.1999969 / 1.1999988 / 1.2000008), not the logic step 1.1999999; its age is not always
+  age + dt to the ulp (84 / 350 frames). Not decoded; on the page the emitter age drifts <= 1e-3, one schedule step
+  (f1019) lands a frame late.
+- **Types 11 / 20**: FED models (header +0x6c, 5 models; +0x18 scale, +0x28 TEX0, colours) through FUN_002f2f08 -> flag 0x2000
+  -> FUN_002f93d8 (35 KB, not decoded; type 20 sets 0x2100) or FUN_002f5c50. Type 20's UV scroll is translated (init /
+  transition / loop), the draw is not. **Type 119**: FUN_002b4de0 picks a sub-object (data +0x34: FUN_002a49e8, +0x35:
+  FUN_002a5268, +0x36: 0x49cc68); draw FUN_002b4f70 via FUN_00284fd0 / FUN_00285d38 (frame-buffer, 576 tris = 8 x 72 in g2 /
+  g3, TEX0 0xe00, TEST 0x31001). **Type 103's lines** (FUN_002aa120) come after the HUD (seq 57216, after layer 6's clear).
+- a0093.fed (file 0x31000fc, FileCode 0x81740000): no emitter of it on any of the six managers (DAT_004ee8c0 list:
+  4ec7f0 / 4ee2e0 / 4ee3c0 / 4ee4a0 / 4ee580 / 4ee660, +0x84 lists, the emitters' FED +0x70 -> +4) in the five w198 states
+  (f906..1147): 4ee2e0 holds 9 x 0x406c0000, 4ee3c0 0x20000000 + 0x20040000s (level), 4ee4a0 only 0x81840000. Nothing is
+  spawned from it during the game over (as 0198 found); what it is for is not traced.
+- Evidence: glowN.json (dumpfx.py --glow), ramN.json with 'vall' / 'pool' (title_fixture.py), the call logs, w202_fxtitle.
+  The last dump (g5) is page frame 1149 (state + 3), not 1150: the glow's alpha ramp shows it.
+
 ## Open
-- GAME OVER title: draw types 11 / 20 / 35 / 103 / 119 (above); the death camera (FUN_0032ace0's CAM+0x1e8 0x400000 branch, CAM+0x230
-  phases), HUD slide-out (FUN_003aff20), the voice (stream SE), the volume ramp hooks, the world stop after the
+- GAME OVER title: the draws of types 11 / 20 (FUN_002f93d8), 103 (lines, layer 6), 119 (FUN_002b4f70); the effect step; the death camera (FUN_0032ace0's CAM+0x1e8 0x400000 branch, CAM+0x230
+  phases), HUD slide-out (FUN_003aff20: done, worker 0203, notes/hud-research.md 'Slide-out at game over'), the voice (stream SE), the volume ramp hooks, the world stop after the
   answer, menu sounds through audio.js MenuSound, the Restart path (done: worker 0201, notes/checkpoint-research.md), Quit ->
   title.

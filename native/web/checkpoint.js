@@ -21,6 +21,10 @@
 //   (HP 10 / 28 / 24, astate 3) [dead in the save]; event flags all 0 [the page's start: {2: 7, 46: 1}].
 // Where the stage start's position comes from in code / data is not found (stage files and every extracted file
 // searched for the floats: no plain copy; two attempts, notes): the page takes the traced values below.
+// Worker 0204: the placement itself is FUN_00558cc0 (actor at its status matrix +0x30 / +0x40 / +0x50; call log
+// w204pos: Vincent at frame 10, 41-43 at frame 24, both from 0x558d60), and status matrices are written from the loaded
+// event actor's model by FUN_003157b0 (FUN_003159b8 / FUN_00319190): the opening cutscene's final pose. So the start
+// position is the cutscene's hand-off; it needs the event (cutscene) runtime.
 
 // Vincent at the checkpoint (T: w201_reload record 10; x / z = the save state's C+0x30 bit for bit)
 export const CHECKPOINT = Object.freeze({
@@ -80,7 +84,11 @@ export function restoreCheckpoint(sys) {
     if (sys.php) { sys.php.pos = [ctrl.pos.x, ctrl.pos.y, ctrl.pos.z]; sys.php.face = [ctrl.C.face.x, ctrl.C.face.y, ctrl.C.face.z]; }
   }
   // GUESS: holstered after the restart (the game's opening cutscene leaves him with the gun drawn, h_st_a; that
-  // hand-off is not decoded, so the page doesn't draw it)
+  // hand-off is not decoded, so the page doesn't draw it). Worker 0204: no stage-start command draws it: in 0201's reload
+  // state (before the stage loop's first frame) P+0x104 is already state 3 (gun up) with h_st_a and his status facing
+  // (0.0008, 0, 1), so both come from the cutscene's end. The event VM's game calls (FUN_00326660 cases 0x64-0x7a,
+  // FUN_003262b8: player placement FUN_00558cc0 / FUN_0054b1a0, FUN_00578548, FUN_005764d0 = state 2 / 3 by P+0x2a8
+  // bit 0) and the event file's last commands would be needed.
   warnOnce('restart: the gun is drawn at the game\'s checkpoint (after the opening cutscene); the page restarts holstered');
   if (sys.weapon) sys.weapon.reset();
   if (sys.cape) sys.cape.cloth.started = false;
@@ -106,9 +114,9 @@ export function restoreCheckpoint(sys) {
   if (sys.sfx) sys.sfx.pending.length = 0;
   if (sys.rebuildEnemies) {
     out.enemies = sys.rebuildEnemies(C.eventFlags, C.frame, { now: C.aiNow, acc: C.aiAcc });
-    // MISSING: 41-43 are alive and attacking at the game's checkpoint; the stage-start scripts that activate them
-    // (stage controller script 0 event 0x22 / 0x23, notes/enemy-activation.md) are not translated
-    warnOnce('restart: soldiers 41-43 (alive at the game\'s checkpoint) are not activated: the stage-start scripts are not translated');
+    // 41-43: the rebuilt world runs the stage-load pass (enemy_ai stageLoad = FUN_00319190 -> FUN_005453b0 ->
+    // FUN_00558f68, worker 0204) from play.js rebuildEnemies; their placement move at record 24 (the cutscene's
+    // hand-off) is warned by enemy_ai.
   }
   if (sys.music) sys.music();
   return out;

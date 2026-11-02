@@ -210,6 +210,73 @@ try {
     ok(good, 'widehud on a 4:3 canvas: positions as without it');
     ok(same(B(1000, 900, 1, 5), B(1000, 900, 0, 5)) && same(B(1000, 900, 1, 4), B(1000, 900, 0, 4)), 'widehud on a canvas narrower than 4:3 (1000 x 900): no shift');
   }
+  // 7. widehud while the HUD slides (worker 0203): the slide moves a whole panel (FUN_003cb380 on its group) and the
+  // option shifts by panel, so at every slide time a panel's lit pixels on 1600 x 900 (on) are the 4:3 canvas's
+  // (1200 x 900) moved by the margin: same box size, same count, left edge at the same distance from the canvas edge
+  {
+    const r = await pg.evaluate(async () => {
+      const { createOutputStage } = await import('./output.js');
+      const { THREE, renderer } = T;
+      const scene = new THREE.Scene(), cam = new THREE.PerspectiveCamera(60, 1, 1, 10);
+      renderer.setClearColor(0x000000, 1);
+      const out = {};
+      for (const t of [0, 60, 150, 250, 400, 600]) {
+        const L = T.layer(), st = L.state;
+        const gi = s => st.chain.findIndex(e => e.depth === 0 && e.slot === s);
+        st.now = st.mnow = 50000; st.hideAll(); st.mnow += t; st.slideFrame();
+        const all = st.prims.bind(st);
+        for (const slot of [5, 6]) for (const [w, wide] of [[1200, false], [1600, true]]) {
+          const stage = createOutputStage(renderer, { enabled: false, native: false, wideHud: wide });
+          st.prims = () => all().filter(p => p.panel === gi(slot));
+          stage.hud = o => L.draw(o.renderer, o);
+          const rt = new THREE.WebGLRenderTarget(w, 900, { type: THREE.UnsignedByteType, depthBuffer: false });
+          stage.render(scene, cam, rt);
+          const px = new Uint8Array(w * 900 * 4);
+          renderer.readRenderTargetPixels(rt, 0, 0, w, 900, px);
+          rt.dispose();
+          let x0 = w, x1 = -1, y0 = 900, y1 = -1, n = 0;
+          for (let y = 0; y < 900; y++) for (let x = 0; x < w; x++) {
+            const i = (y * w + x) * 4;
+            if (px[i] + px[i + 1] + px[i + 2] > 0) { n++; x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y); }
+          }
+          out[`${t} ${slot} ${w}`] = { x0, x1, y0, y1, n };
+        }
+      }
+      // a slot-5 sprite moved past the frame's right edge (frame x 440..): the game's full-frame scissor cuts it; with
+      // widehud on, its panel is shifted and the canvas is the frame, so it shows (as a panel sliding out to the right)
+      {
+        const L = T.layer(), st = L.state, gi = st.chain.findIndex(e => e.depth === 0 && e.slot === 5);
+        const sp = st.prims().filter(p => p.panel === gi && p.kind === 'sprite' && !p.scissor);
+        const p0 = JSON.parse(JSON.stringify(sp[0])), x0 = Math.min(p0.v[0][0], p0.v[1][0]);
+        for (const v of p0.v) v[0] += 440 - x0;
+        st.prims = () => [p0];
+        for (const [w, wide] of [[1600, true], [1600, false]]) {
+          const stage = createOutputStage(renderer, { enabled: false, native: false, wideHud: wide });
+          stage.hud = o => L.draw(o.renderer, o);
+          const rt = new THREE.WebGLRenderTarget(w, 900, { type: THREE.UnsignedByteType, depthBuffer: false });
+          stage.render(scene, cam, rt);
+          const px = new Uint8Array(w * 900 * 4);
+          renderer.readRenderTargetPixels(rt, 0, 0, w, 900, px);
+          rt.dispose();
+          let n = 0, x0c = w;
+          for (let i = 0; i < px.length; i += 4) if (px[i] + px[i + 1] + px[i + 2] > 0) { n++; x0c = Math.min(x0c, (i / 4) % w); }
+          out['edge ' + (wide ? 'on' : 'off')] = { n, x0: x0c };
+        }
+      }
+      return out;
+    });
+    ok(r['edge on'].n > 0 && r['edge on'].x0 >= 1200 && r['edge off'].n === 0,
+       `widehud: a shifted panel past the frame's right edge still draws (on: ${r['edge on'].n} px from x ${r['edge on'].x0}; off: ${r['edge off'].n}, the game's frame scissor)`);
+    const bad = [];
+    let lit = 0;
+    for (const t of [0, 60, 150, 250, 400, 600]) for (const slot of [5, 6]) {
+      const a = r[`${t} ${slot} 1200`], b = r[`${t} ${slot} 1600`];
+      if (a.n) lit++;
+      if (a.n !== b.n || (a.n && (a.x0 !== b.x0 || a.x1 - a.x0 !== b.x1 - b.x0 || a.y0 !== b.y0 || a.y1 !== b.y1))) bad.push(`t ${t} slot ${slot}`);
+    }
+    ok(lit >= 6 && bad.length === 0 && r['600 5 1200'].n === 0 && r['600 6 1200'].n === 0,
+       `widehud during the slide-out: HP (slot 5) and weapon (slot 6) panels move as units at t 0 / 60 / 150 / 250 / 400 ms, gone at 600${bad.length ? ': differ ' + bad.join(', ') : ''}`);
+  }
   ok(errs.length === 0, 'no page errors' + (errs.length ? ': ' + errs.join('; ') : ''));
   await pg.close();
 
@@ -291,6 +358,86 @@ try {
     const wideOff = await pg3.evaluate(() => window.__play.output.wideHud);
     await pg3.close();
     ok(wideOn === true && wideOff === false, `play.html: widehud on by default (${wideOn}), off with ?widehud=0 (${wideOff})`);
+  }
+  // 8. play.html, the game over (worker 0203): gameover.js 'begin' (FUN_003fdb48(3)) -> hud.js hideAll -> the panels
+  // slide out from that frame's clock (FUN_003aff20); Restart (checkpoint.js -> hud.js reset) slides them back in
+  // (FUN_003ad560) to the start layout; H does the same, also during the slide
+  {
+    const pg4 = await browser.newPage({ viewport: { width: 960, height: 540 } });
+    const errs4 = [];
+    pg4.on('pageerror', e => errs4.push(e.message));
+    await pg4.goto(base + 'play.html?sound=0', { waitUntil: 'load' });
+    await pg4.waitForFunction(() => window.__play && window.__play.stats.ticks > 30, null, { timeout: 120000 });
+    const skip = await pg4.evaluate(async () => {
+      const P = window.__play;
+      if (!P.gameHud || !P.gameOver) return !P.gameHud ? 'no game HUD' : 'no game over';
+      const H = await import('./hud_core.js');
+      const data = await (await fetch('data/hud/hud.json')).json();
+      const log = window.__hlog = [];
+      const t0 = P.gameHud.tick;
+      // per game frame, after hud.js tick: the HUD clock, slots 5 / 8's group, whether this frame began the game over
+      P.gameHud.tick = () => {
+        t0();
+        const st = P.gameHud.state, g = s => st.chain[st.groupOf[s]];
+        log.push({ now: st.now, y5: g(5).rect[1], st5: g(5).slide[0], t5: g(5).slide[6], x8: g(8).rect[0], begin: P.gameOver.go.events.includes('begin'), restarts: P.restart.count });
+      };
+      window.__ref = { H, data };
+      return null;
+    });
+    if (skip) console.log('SKIP game over slide on play.html: ' + skip);
+    else {
+      await pg4.evaluate(() => { window.__play.php.hp = 0; });
+      await pg4.waitForFunction(() => { const L = window.__hlog, i = L.findIndex(r => r.begin); return i >= 0 && L.length > i + 30; }, null, { timeout: 60000 });
+      const A = await pg4.evaluate(() => {
+        const L = window.__hlog, i = L.findIndex(r => r.begin), { H } = window.__ref;
+        const an = [2, 5, 0, 0, 0, -100, 0], tab = window.__ref.data.slides[0], want = [];
+        H.slideStart(an, tab, L[i].now, true);
+        for (let k = 0; k <= 30; k++) { const xy = H.slideAt(an, L[i + k].now); if (xy) want.push(xy[1]); else want.push(want[want.length - 1]); }
+        return { t5: L[i].t5, now: L[i].now, ys: L.slice(i, i + 31).map(r => r.y5), want, x8: L[i + 10].x8, st5: [L[i + 24].st5, L[i + 25].st5],
+                 before: L[i - 1].y5 };
+      });
+      ok(A.t5 === A.now && A.before === 0 && A.ys[0] === 0, `the slide-out starts in the frame gameover.js begins (FUN_003fdb48(3) -> FUN_003ad5b0; start ${A.t5} = that frame's clock ${A.now})`);
+      ok(A.ys.join() === A.want.join() && A.x8 === -496 && A.st5.join() === '3,4',
+         `HP panel per frame = FUN_003d0d50 (${A.ys.slice(0, 26).join(' ')}); slots 8-10 gone after 10 frames, 5 / 6 after 25`);
+      // Restart from the game over menu
+      await pg4.waitForFunction(() => window.__play.gameOver.go.menu, null, { timeout: 60000 });
+      await pg4.waitForTimeout(300);
+      await pg4.keyboard.press('Space');
+      await pg4.waitForFunction(() => { const L = window.__hlog, i = L.findIndex(r => r.restarts === 1); return i >= 0 && L.length > i + 30; }, null, { timeout: 60000 });
+      const R = await pg4.evaluate(() => {
+        const L = window.__hlog, i = L.findIndex(r => r.restarts === 1), P = window.__play, { H, data } = window.__ref;
+        const ref = new H.HudState(data), st = P.gameHud.state;
+        return { ys: L.slice(i, i + 14).map(r => r.y5), x8: L[i].x8,
+                 same: st.chain.every((e, k) => e.rect.join() === ref.chain[k].rect.join() && e.box.join() === ref.chain[k].box.join() && e.flags === ref.chain[k].flags) };
+      });
+      ok(R.ys[0] < 0 && R.ys[0] > -100 && R.ys[12] === 0 && R.x8 === 16 && R.same,
+         `Restart: the rebuilt HUD slides in (HP panel ${R.ys.join(' ')}; slots 8-10 already in), then the start layout`);
+      // H during a new slide-out (5 frames in): back in, then the start layout
+      await pg4.evaluate(() => { window.__hlog.length = 0; window.__play.php.hp = 0; });
+      await pg4.waitForFunction(() => { const L = window.__hlog, i = L.findIndex(r => r.begin); return i >= 0 && L.length > i + 5; }, null, { timeout: 60000 });
+      await pg4.keyboard.press('KeyH');
+      await pg4.waitForTimeout(1500);
+      const Hh = await pg4.evaluate(() => {
+        const P = window.__play, { H, data } = window.__ref, ref = new H.HudState(data), st = P.gameHud.state;
+        return { hp: P.php.hp, same: st.chain.every((e, k) => e.rect.join() === ref.chain[k].rect.join() && e.box.join() === ref.chain[k].box.join() && e.flags === ref.chain[k].flags) };
+      });
+      ok(Hh.hp === 780 && Hh.same, 'H during the slide-out: the HUD comes back to the start layout');
+      // the pause during the slide-in: FUN_0023c1f0 (the slides' clock) runs on through the game's pause, so after a
+      // 1.5 s pause the first game frame has the slide done (the page's game frames stop while paused)
+      await pg4.evaluate(() => { window.__hlog.length = 0; });
+      await pg4.keyboard.press('KeyH');
+      await pg4.keyboard.press('Enter');
+      await pg4.waitForTimeout(1500);
+      const pz = await pg4.evaluate(() => ({ open: window.__play.pause.active, n: window.__hlog.length, y: window.__hlog.map(r => r.y5) }));
+      await pg4.keyboard.press('Enter');
+      await pg4.waitForTimeout(500);
+      const pa = await pg4.evaluate(() => window.__hlog.map(r => [r.y5, r.st5]));
+      const after = pa.slice(pz.n);
+      ok(pz.open && pz.y.length < 12 && pz.y.every(y => y < 0) && after.length > 0 && after[0][0] === 0 && after[0][1] === 2,
+         `pause during the slide-in (H): paused after ${pz.n} frames (y ${pz.y.join(' ')}), the first frame after it at the start layout (${after.slice(0, 3).map(a => a.join('/')).join(' ')})`);
+    }
+    ok(errs4.length === 0, 'no page errors (play.html game over)' + (errs4.length ? ': ' + errs4.join('; ') : ''));
+    await pg4.close();
   }
 } finally {
   await browser.close();

@@ -230,4 +230,39 @@ for (const w of WALK) {
   const warns = logs.filter(m => /path_mover|0x131|motion state|aimed walk/.test(m));
   ok(warns.length === 0, `no path / locomotion warnings (${warns.join(' | ')})`);
 }
+
+// 3. after the path end (worker 0204): event 0x13 of scripts 127 / 128 sets cmd 0x106 timer 0 = 600 (FUN_0054cd70); at
+// its expiry (FUN_0053e868 -> manager event 0xd) event 1 runs: with var 3 and manager short 0 both 0 it would walk path
+// 6 / 7 in mode 0; the run's trigger script 110 (event 0xd: cmd 0x2f short 0 = 1) blocks that, so the game keeps mode 1
+// and only re-arms 200. Trace w204_167 (tools/trace/scripts/w204_167.json, TRACE_EVARS=1): the timers / vars f1400-1679.
+{
+  const tp = path.join(process.env.TRACE_OUT ?? path.join(root, 'tools/trace/out'), 'w204_167.jsonl');
+  if (!existsSync(tp)) skip('trace w204_167 missing (tools/trace/scripts/w204_167.json): part 3');
+  else {
+    const G = new Map(readFileSync(tp, 'utf8').trim().split('\n').slice(1).map(l => JSON.parse(l.replace(/\bNaN\b/g, 'null'))).map(r => [r.frame, r]));
+    const player = { pos: [-1070.03, -146.07, -1105.58], hp: 780, id: 0x16, f118: 0, s64: 0 };
+    const roots = { r_gwk: 17.671875, r_grn: 49.354838 };
+    const W = AI.createEnemyAI({ data, player, rand: () => 0.5, quiet: true, log: () => {}, rootSpeed: (_m, c) => roots[c] ?? null });
+    const acts = WALK.map(w => W.addActor({ rec: w.rec, astate: 1, f118: 0, clip: game(byF.get(WAKE), w.k).motion }));
+    const t95 = W.triggers[95]; t95.script = 110;                                // the run's poke: trigger 95 runs script 110
+    W.runEvent(t95, 0xd, [0, 0]);                                               // short 0 = 1, the n1 wakes (next frame)
+    for (const a of acts) W.runEvent(a, 2, [1, 0]);                             // as part 2 (the later mails are run-once no-ops)
+    const vw = r => [0, 3, 7].map(i => Buffer.from(r, 'hex').readInt16LE(2 * i));
+    let bad = [], n = 0, ev1 = [];
+    for (let f = WAKE; f < 1679; f++) {
+      ev1.push(...W.tick(1.2, player.pos, player.pos).filter(e => / ev 1 /.test(e)).map(e => `${f + 1}:${e.split(' ')[1]}`));
+      const g = G.get(f + 1);
+      if (!g) continue;
+      n++;
+      acts.forEach((a, k) => {
+        const want = { t0: g[`e${k}_a3c`] << 16 >> 16, t1: g[`e${k}_a3c`] >> 16, mode: g[`e${k}_ai_mode`], vars: vw(g[`e${k}_vars`]).join() };
+        const got = { t0: a.t3c[0], t1: a.t3c[1], mode: a.ai.mode, vars: [a.vars[0], a.vars[3], a.vars[7]].join() };
+        if (JSON.stringify(want) !== JSON.stringify(got)) bad.push(`${f + 1} #${WALK[k].rec} ${JSON.stringify(got)} vs ${JSON.stringify(want)}`);
+      });
+    }
+    ok(n > 250 && bad.length === 0, `after the path end, records 1400-1679 (${n}): timers, brain mode, vars 0 / 3 / 7 = the game's` + (bad.length ? `: ${bad.length} off, ${bad.slice(0, 2).join('; ')}` : ''));
+    ok(ev1.join() === '1498:68,1531:69' && acts.every(a => a.ai.mode === 1 && a.C.mover === 0),
+       `the timers' event 1 at ${ev1.join(' ')} (1498 / 1531 = path end + 600); mode 1 kept, no path 6 / 7 (short 0 = 1)`);
+  }
+}
 done();

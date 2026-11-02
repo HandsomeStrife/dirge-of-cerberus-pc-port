@@ -35,13 +35,26 @@ const STEP = 1.2;
 const AWAKE = [44, 45, 46, 47, 48, 49, 66];
 const AWAKE_STATE = { 44: 1, 45: 2, 46: 1, 47: 1, 48: 2, 49: 2, 66: 1 };
 const AWAKE_F118 = { 44: 0, 45: 0x10000200, 46: 0, 47: 0, 48: 0x200, 49: 0x200, 66: 0 };
+// the stage load's statuses (enemies.js loadRecs: placements.json load_flag_records with an event-actor tag, not Vincent)
+const PJpath = path.join(here, 'data/enemies/placements.json');
+const PJ = existsSync(PJpath) ? JSON.parse(readFileSync(PJpath, 'utf8')) : null;
+const LOAD = PJ ? (t => PJ.load_flag_records.filter(r => t.has(r.tag) && r.rec !== 0).map(r => r.rec))(new Set(PJ.event_actors.tags)) : [];
+ok(JSON.stringify(LOAD) === '[41,42,43]', `stage-load records ${JSON.stringify(LOAD)} (41-43: bit 3 + e_Sol_11 / 12 / 13)`);
+// play.js rebuildEnemies: nothing dead, 44 / 66 (active in the reload state), the stage-load pass, then 45-49
+const rebuild = (opts, flags, frame, clock, load = LOAD) => {
+  const W = AI.createEnemyAI({ ...opts, eventFlags: flags, deadRecs: [], now: clock.now, acc: clock.acc }); W.S.frame = frame;
+  for (const k of [44, 66]) W.addActor({ rec: k, astate: AWAKE_STATE[k], f118: AWAKE_F118[k] });
+  W.stageLoad(load);
+  for (const k of [45, 46, 47, 48, 49]) W.addActor({ rec: k, astate: AWAKE_STATE[k], f118: AWAKE_F118[k] });
+  return W;
+};
 
 // a page in miniature: Vincent, his status, the game over, a follow-camera stand-in, the enemy world
 function page() {
   const ctrl = new PL.PlayerController(col, { pos: { x: -1395.63, y: -98.64, z: -1110.51 }, heading: 0.9 });
   const php = { pos: [ctrl.pos.x, ctrl.pos.y, ctrl.pos.z], face: [0, 0, 1], hp: 780, id: 0x16, f118: 0x20209, s64: 0 };
   const sounds = [];
-  const opts = { data: AIdata, player: php, quiet: true, damage: true, deadRecs: [41, 42, 43], walkMesh: col, sound: n => sounds.push(n), rand: () => 0.1 };
+  const opts = { data: AIdata, player: php, quiet: true, damage: true, deadRecs: [41, 42, 43], walkMesh: col, sound: n => sounds.push(n), rand: () => 0.1, log: m => warns.push(m) };
   const P = { ctrl, php, opts, sounds, W: null, flagsSeen: null, cam: [], weaponResets: 0, music: 0, hudResets: 0,
               fx: { emitters: [1, 2], resets: 0, reset() { this.emitters.length = 0; this.resets++; } },
               sfx: { pending: [{ name: 'x' }] }, gameOver: new GameOver(GD), cape: { cloth: { started: true } } };
@@ -50,8 +63,7 @@ function page() {
   P.sys = () => ({ ctrl, php, follow: P.follow, gameOver: P.gameOver, cape: P.cape, fx: P.fx,
     groundY: (x, z, y) => col.groundY(x, z, y), weapon: { reset() { P.weaponResets++; } }, music: () => { P.music++; },
     hud: { reset() { P.hudResets++; } }, sfx: P.sfx,
-    rebuildEnemies: (flags, frame, clock) => { P.flagsSeen = flags; P.W = AI.createEnemyAI({ ...opts, eventFlags: flags, now: clock.now, acc: clock.acc }); P.W.S.frame = frame;
-      for (const k of AWAKE) P.W.addActor({ rec: k, astate: AWAKE_STATE[k], f118: AWAKE_F118[k] }); return P.W; } });
+    rebuildEnemies: (flags, frame, clock) => { P.flagsSeen = flags; P.W = rebuild(opts, flags, frame, clock, P.load ?? LOAD); return P.W; } });
   return P;
 }
 
@@ -90,12 +102,63 @@ function page() {
   ok(P.W.S.frame === CHECKPOINT.frame && CHECKPOINT.frame === 24, `the new world's frame counter ${P.W.S.frame} (24: traced 14 at the reload + 10)`);
   ok(JSON.stringify(P.flagsSeen) === '{}', 'event flags: all 0 (FUN_004039d0)');
   const b44 = P.W.actors.find(a => a.rec === 44);
-  ok(r.enemies === P.W && b44 && b44 !== a44 && b44.hp > 0 && P.W.actors.length === AWAKE.length, `a new enemy world: ${P.W.actors.length} soldiers, 44 alive again (hp ${b44 && b44.hp})`);
-  ok(!P.W.actors.some(a => [41, 42, 43].includes(a.rec)), '41-43 not active (MISSING: stage-start scripts)');
-  ok(warns.some(w => /41-43/.test(w)) && warns.some(w => /Status screen/.test(w)) && warns.some(w => /holstered/.test(w)), 'the left-out parts warn');
+  ok(r.enemies === P.W && b44 && b44 !== a44 && b44.hp > 0 && P.W.actors.length === AWAKE.length + 3, `a new enemy world: ${P.W.actors.length} soldiers, 44 alive again (hp ${b44 && b44.hp})`);
+  // 41-43: the stage-load pass (FUN_00558f68 -> FUN_00559748(1, 1) -> script event 3, then the tail's FUN_0055b8e0(3, 1))
+  const L = [41, 42, 43].map(k => P.W.actors.find(a => a.rec === k));
+  ok(L.every(a => a && a.astate === 3 && (a.flags28 & 1) && !(a.flags28 & 0x100000)), `41-43 active, actor state ${L.map(a => a && a.astate)} (3), event 3 done (+0x28 bit 0x100000 clear)`);
+  ok(L.map(a => a.hp).join() === '10,28,24' && L.map(a => a.ai.mode).join() === '0,1,0', `HP ${L.map(a => a.hp)} (10 / 28 / 24), brain mode ${L.map(a => a.ai.mode)} (0 / 1 / 0: 42's event 3 cmd 0x143(1))`);
+  ok(L.map(a => a.t3c[1]).join() === '80,0,150' && L.map(a => a.vars[7]).join() === '1,0,1', `script timers ${L.map(a => a.t3c[1])} (80 / 0 / 150: cmd 0x106(1, n)), var 7 ${L.map(a => a.vars[7])}`);
+  ok(L.every(a => a.target === P.php), '41-43 target Vincent (cmd 0x193)');
+  ok(L.every(a => a.C.f564 & 0x20000000), 'C+0x564 bit 0x20000000 set by the pass (FUN_00558f68)');
+  ok(L.map(a => a.ai.rounds).join() === '6,6,-1', `rounds ${L.map(a => a.ai.rounds)} (FUN_00360418(ai, 1) with rand 0.1: 6 + 0, 6 + 0, mag -1 -> 0xffff)`);
+  ok(L.every(a => a.pos.every((v, i) => v === AIdata.records[a.rec].pos[i])), '41-43 at their placements (the cutscene hand-off at record 24 is MISSING)');
+  ok(!warns.some(w => /41-43.*not activated/.test(w)) && warns.some(w => /stage-load actors stay at their placements/.test(w))
+     && warns.some(w => /Status screen/.test(w)) && warns.some(w => /holstered/.test(w)), 'the left-out parts warn (the hand-off, the screens, the gun)');
   // play resumes: he walks
+  P.W.tick(STEP, [P.ctrl.pos.x, P.ctrl.pos.y, P.ctrl.pos.z], [P.ctrl.pos.x, P.ctrl.pos.y, P.ctrl.pos.z]);
+  ok(L.every(a => !(a.C.f564 & 0x20000000) && a.C.blendLen === 0), `their first clip after the pass: blend ${L.map(a => a.C.blendLen)} (FUN_00312678 = 0), bit 0x20000000 cleared (FUN_00344608)`);
   const x0 = P.ctrl.pos.x; for (let i = 0; i < 10; i++) P.ctrl.step(WALK());
   ok(P.ctrl.pos.x > x0 + 1, `play resumes: he walks (${(P.ctrl.pos.x - x0).toFixed(2)} u in 10 frames)`);
+}
+
+// ------------------------------------------------ cmd 0x106 / 0x107 (FUN_0054cd70) and the timer list (FUN_0053e868)
+{
+  const P = page(), W = P.W, o = W.objects.get(41 + 22);              // an inactive record object (timers live on any object; script 105 has an event 1)
+  W.t.send(o, -2, 0x106, [0, 5, 0, 0]); W.t.send(o, -2, 0x106, [1, 3, 0, 0]);
+  ok(W.timerList.length === 1 && W.timerList[0] === o.id && W.t.send(o, -2, 0x107, [0]) === 5 && W.t.send(o, -2, 0x107, [1]) === 3, 'cmd 0x106: both timers set, the object listed once; 0x107 reads them');
+  W.t.send(o, -2, 0x106, [0, 9, 0, 0]);
+  ok(o.t3c[0] === 9 && W.timerList.length === 1, `a running timer is set again (${o.t3c[0]}: 9), still listed once`);
+  W.t.send(o, -2, 0x106, [1, 0, 0, 0]);
+  ok(W.timerList.length === 1 && o.t3c[1] === 0, 'r1 < 1 stops timer 1; timer 0 still runs: listed');
+  W.t.send(o, -2, 0x106, [0, -4, 0, 0]);
+  ok(W.timerList.length === 0 && o.t3c[0] === 0, 'both stopped: unlinked (FUN_0053e7a8)');
+  W.t.send(o, -2, 0x106, [2, 9, 0, 0]);
+  ok(W.timerList.length === 0, 'timer 2: ignored (r0 < 2 only)');
+  // step 2.4 counts 2 a frame; at <= 0 manager event 0xd -> script event 1 (r0 = the timer), and the entry goes
+  W.t.send(o, -2, 0x106, [1, 3, 0, 0]);
+  W.tick(2.4, null, null); ok(o.t3c[1] === 1 && W.timerList.length === 1, `step 2.4: timer 3 -> ${o.t3c[1]} (1)`);
+  W.tick(2.4, null, null);
+  // the entry goes only when the int at +0x3c is 0: a timer left at -1 keeps it listed (and never counts again)
+  ok(o.t3c[1] === -1 && W.timerList.length === 1 && W.events.some(e => e === `event ${o.id} script ${o.script} ev 1 r 1,0,0,0`), `timer at ${o.t3c[1]}: event 1 (r0 1) posted and run, the entry stays (+0x3c int != 0)`);
+  W.tick(2.4, null, null);
+  ok(!W.events.some(e => /ev 1 /.test(e)), 'a timer below 0 posts nothing more');
+  const o2 = W.objects.get(43 + 22);
+  W.t.send(o2, -2, 0x106, [0, 2, 0, 0]); W.tick(STEP, null, null); W.tick(STEP, null, null);
+  ok(o2.t3c[0] === 0 && !W.timerList.includes(o2.id) && W.events.some(e => e === `event ${o2.id} script ${o2.script} ev 1 r 0,0,0,0`), 'step 1.2: timer 0 counts 2 -> 0, event 1 (r0 0), the entry goes');
+  // the record object and the activated actor are one object in the game: a timer set before the activation runs on
+  const r50 = W.objects.get(50 + 22);
+  W.t.send(r50, -2, 0x106, [1, 7, 0, 0]); W.setActive(r50, 1);
+  const a50 = W.objects.get(50 + 22);
+  ok(a50.kind === 'actor' && a50.t3c[1] === 7 && W.timerList.includes(a50.id), `a timer set on record 50 before its activation runs on in the actor (${a50.t3c[1]})`);
+}
+// the stage-load pass on an already-active loaded record (not on the page's Restart: its world is new): no +0x144 (no event
+// 3 again), the tail's writes, no state change (FUN_00558f68 with bVar1 false, +0x118 bit 16 clear)
+{
+  const P = page(), W = AI.createEnemyAI({ ...P.opts, deadRecs: [], eventFlags: {} });
+  const a = W.addActor({ rec: 41, astate: 1, f118: 0 });
+  W.stageLoad([41]);
+  ok(a.astate === 1 && a.vars[7] === 0 && W.timerList.length === 0 && (a.C.f564 & 0x20000000) && (a.C.f1c0 & 0x200) && a.C.speed === 0,
+     `already active: state ${a.astate} kept (1), no event 3 (var 7 ${a.vars[7]}, timers ${W.timerList.length}), C+0x564 / +0x1c0 bits set, C+0x1d8 0`);
 }
 
 // ------------------------------------------------ the camera: a Restart from the ladder (FUN_00328368 on the real FollowCamera)
@@ -190,6 +253,60 @@ else {
   ok(worstV < 0.005, `Vincent records 11-110: position within ${worstV.toFixed(4)} u`);
   ok(worstFace < 0.015, `Vincent's facing within ${worstFace.toFixed(4)} rad (the game's turns up to 0.012 with the gun drawn: not on the page)`);
   ok(worstE < 0.005, `soldiers 44 / 66 records 11-110: position within ${worstE.toFixed(4)} u`);
-  ok(hpOk, 'HP: Vincent 780 to record 99 (record 100: 736, a hit from 41-43, not on the page), soldiers equal');
+  ok(hpOk, 'HP: Vincent 780 to record 99 (record 100: 736, a hit from 41, see w204 below), soldiers equal');
+}
+
+// ------------------------------------------------ the trace: 41-43 after the reload (worker 0204)
+// tools/trace/out/w204_reload.jsonl: the same reload state, TRACE_FIELDSET=enemy TRACE_ERECS=41,42,43 TRACE_ENEMIES=3
+// TRACE_EPIN=41:904760:91af00,42:904f80:91b010,43:9057a0:91b120 (their bodies are built at record 10).
+const tp4 = path.join(OUT, 'w204_reload.jsonl');
+if (!existsSync(tp4)) console.log('SKIP w204 part: no ' + tp4);
+else {
+  const recs = readFileSync(tp4, 'utf8').split('\n').filter(Boolean).map(l => JSON.parse(l)).filter(r => r.frame !== undefined);
+  const fp = h => { const b = Buffer.from(h, 'hex'); return [16, 20, 24].map(o => b.readFloatLE(o)); };
+  const g10 = recs[10];
+  ok([0, 1, 2].every(k => (recs[9][`e${k}_flags`] & 1) === 0 && (g10[`e${k}_flags`] & 1) === 1), 'T: 41-43 inactive to record 9, active at record 10 (the placement frame)');
+  const P = page(); restoreCheckpoint(P.sys());
+  const W = P.W, L = [41, 42, 43].map(k => W.actors.find(a => a.rec === k));
+  const st = (n, k) => ({ astate: recs[n][`e${k}_astate`] & 0xff, mode: recs[n][`e${k}_ai_mode`], hp: recs[n][`e${k}_hp`] });
+  const mine = k => ({ astate: L[k].astate, mode: L[k].ai.mode, hp: L[k].hp });
+  ok([0, 1, 2].every(k => JSON.stringify(mine(k)) === JSON.stringify(st(10, k))), `record 10: state / brain mode / HP ${JSON.stringify([0, 1, 2].map(mine))} = the game's`);
+  // the activation's magazine draw FUN_00360418(ai, 1): mag 6 + trunc(4 x rand); the game's 8 / 6 / 0xffff fit draws in
+  // [0.5, 0.75) / [0, 0.25) / none. Fed those draws, the page gives the game's (one draw each for 41 / 42, none for 43)
+  {
+    const seq = [0.6, 0.1, 0.9], used = [];
+    const Wq = AI.createEnemyAI({ ...P.opts, deadRecs: [], eventFlags: {}, rand: () => { const v = seq[used.length]; used.push(v); return v; } });
+    Wq.stageLoad(LOAD);
+    const R = [41, 42, 43].map(k => Wq.actors.find(a => a.rec === k).ai.rounds & 0xffff);
+    ok(R.join() === [0, 1, 2].map(k => g10[`e${k}_ai_ammo`] & 0xffff).join() && used.length === 2,
+       `rounds with draws 0.6 / 0.1: ${R} (T ${[0, 1, 2].map(k => g10[`e${k}_ai_ammo`] & 0xffff)}), ${used.length} draws`);
+  }
+  let bad = [], posBad = 0, shot42 = null, modeAt = { 0: null, 2: null };
+  for (let n = 11; n <= 270; n++) {
+    const g = recs[n], pOld = [P.ctrl.pos.x, P.ctrl.pos.y, P.ctrl.pos.z];
+    P.ctrl.step(IDLE());
+    P.php.pos = [P.ctrl.pos.x, P.ctrl.pos.y, P.ctrl.pos.z];
+    const r42 = L[1].ai.rounds;
+    W.tick(STEP, pOld, P.php.pos);
+    if (shot42 === null && L[1].ai.rounds < r42) shot42 = n;
+    for (const k of [0, 2]) if (modeAt[k] === null && L[k].ai.mode !== 0) modeAt[k] = n;
+    // the brain modes (the timers' event 1) and HP over the whole window; 41's actor state too (42 / 43 crouch later:
+    // their state 5 depends on the positions, see below)
+    for (let k = 0; k < 3; k++) {
+      const m = mine(k), t = st(n, k);
+      if (m.mode !== t.mode || m.hp !== t.hp || (k === 0 && m.astate !== t.astate)) bad.push(`${n} rec ${41 + k} ${JSON.stringify(m)} vs ${JSON.stringify(t)}`);
+    }
+    if (n < 24) for (let k = 0; k < 3; k++) posBad = Math.max(posBad, ...fp(g[`e${k}_face_pos`]).map((v, i) => Math.abs(v - L[k].pos[i])));
+  }
+  ok(bad.length === 0, 'brain modes / HP of 41-43 (and 41\'s actor state) = the game\'s, records 11-270' + (bad.length ? `: ${bad.length} off, ${bad.slice(0, 3).join('; ')}` : ''));
+  ok(modeAt[0] === 90 && modeAt[2] === 160, `timers: 41 -> mode 2 at record ${modeAt[0]} (90 = 10 + 80), 43 -> mode 1 at record ${modeAt[2]} (160 = 10 + 150)`);
+  ok(posBad < 1e-3, `41-43 at their placements, records 11-23: within ${posBad.toFixed(5)} u of the game`);
+  const shotT = recs.findIndex((r, i) => i > 10 && (r.e1_ai_ammo & 0xffff) < (recs[i - 1].e1_ai_ammo & 0xffff));
+  ok(shot42 === shotT && shot42 === 12, `42's first shot at record ${shot42} (T ${shotT})`);
+  // MISSING (reported, not asserted): from record 24 the game holds them at the cutscene's hand-off positions (41 ~9.6 u,
+  // 42 ~8.5 u, 43 ~4.8 u from the placements), and 41's first bullet hits Vincent at record 100 (44); the page's 41 fires
+  // from its placement and misses.
+  const d24 = [0, 1, 2].map(k => Math.hypot(...fp(recs[24][`e${k}_face_pos`]).map((v, i) => v - AIdata.records[41 + k].pos[i])));
+  console.log(`info: record 24 hand-off moves ${d24.map(d => d.toFixed(2)).join(' / ')} u (not on the page); game HP ${recs[99].p_hp} -> ${recs[100].p_hp} at record 100, page ${P.php.hp} at record 270`);
 }
 done();

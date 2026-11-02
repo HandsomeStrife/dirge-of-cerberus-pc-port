@@ -97,6 +97,96 @@ try {
     const dt = (await pg.evaluate(() => window.__menuAt)) - c0;
     ok(dt === 293 * 20, `menu opens 293 game frames after the death (clock +${dt} ms; 5860 expected)`);
     await pg.waitForTimeout(400);                  // the 100 ms open
+    // the letters' glow (type 35, worker 0202): the title has settled (8 looping glows, RGBA 128, 0, 0, 38, ALPHA 0x48);
+    // render with and without the glow meshes: inside their boxes red rises (the previous frame's red x the letter mask,
+    // added) and green / blue stay; the page pass needs output.keepFrame / prevFrame (the game's FBP 112)
+    if (hasTitle) {
+      const Q = await pg.evaluate(() => {
+        const { renderer, output, root, camera, gameOver: G } = window.__play, L = G.titleLayer, gl = renderer.getContext();
+        const W = gl.drawingBufferWidth, H = gl.drawingBufferHeight, V = camera.position.constructor;
+        const glows = L.last.filter(s => s.glow), on = (L.gpool ?? []).filter(g => g.mesh.visible);
+        let x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9;
+        for (const g of on) { const P = g.mesh.geometry.attributes.position.array; for (let j = 0; j < 4; j++) {
+          const q = new V(P[3 * j], P[3 * j + 1], P[3 * j + 2]).project(camera), px = (q.x + 1) / 2 * W, py = (q.y + 1) / 2 * H;
+          x0 = Math.min(x0, px); x1 = Math.max(x1, px); y0 = Math.min(y0, py); y1 = Math.max(y1, py); } }
+        if (!on.length) return { glows: glows.length, on: 0 };
+        x0 = Math.max(0, Math.floor(x0)); y0 = Math.max(0, Math.floor(y0)); x1 = Math.min(W, Math.ceil(x1)); y1 = Math.min(H, Math.ceil(y1));
+        const grab = () => { output.render(root, camera); const b = new Uint8Array((x1 - x0) * (y1 - y0) * 4); gl.readPixels(x0, y0, x1 - x0, y1 - y0, gl.RGBA, gl.UNSIGNED_BYTE, b); return b; };
+        const a = grab(); on.forEach(g => { g.mesh.visible = false; }); const b = grab(); on.forEach(g => { g.mesh.visible = true; });
+        let nR = 0, nGB = 0;
+        for (let i = 0; i < a.length; i += 4) { if (a[i] - b[i] > 4) nR++; if (Math.abs(a[i + 1] - b[i + 1]) + Math.abs(a[i + 2] - b[i + 2]) > 2) nGB++; }
+        return { glows: glows.length, on: on.length, keep: output.keepFrame, prev: !!output.prevFrame, nR, nGB, area: (x1 - x0) * (y1 - y0),
+          rt: on[0].rt.width, alpha: glows.map(s => s.alpha), rgba: glows[0].rgba,
+          // draw order (sortObjects = false: scene-graph order): every title sprite, then the glows (w198 g4)
+          last: L.group.children[L.group.children.length - 1] === L.glowGroup && on.every(g => g.mesh.parent === L.glowGroup),
+          // TEX1 0x61: the title's sprites sample bilinear
+          linear: L.pool.filter(m => m.visible && m.material && m.material.uniforms).every(m => m.material.uniforms.map.value.magFilter === 1006) };
+      });
+      ok(Q.glows === 8 && Q.on === 8 && Q.keep && Q.prev && Q.rt === 64, `the 8 letter glows draw through 64 x 64 pages from the previous frame (${Q.glows} glows, ${Q.on} drawn, keepFrame ${Q.keep}, prevFrame ${Q.prev}, page ${Q.rt})`);
+      // the copy reads the right pixels (worker 0202 review): render once (output.js keeps this frame + its camera), rebuild
+      // the glow pages from it (TitleLayer.glows on the last items: no clock advance), then compare page texels with the kept
+      // frame read where the glow's box lies on screen through the render camera (the box corners, interpolated)
+      const C = await pg.evaluate(async () => {
+        const THREE = await import('three');
+        const { renderer, output, root, camera, gameOver: G } = window.__play, L = G.titleLayer;
+        output.render(root, camera);
+        const Pk = output.prevProj.clone();                               // the kept frame's projection
+        // move both cameras between the kept frame and the glow pass (the game's copy is tied to the screen, not the world)
+        const save = [camera, L.camera].map(c => [c.position.clone(), c.quaternion.clone()]);
+        for (const c of [camera, L.camera]) { c.position.x += 3; c.position.y -= 2; c.rotateY(0.05); c.updateMatrixWorld(); }
+        const items = L.last.filter(s => s.glow);
+        L.glows(items, L.camera);
+        [camera, L.camera].forEach((c, i) => { c.position.copy(save[i][0]); c.quaternion.copy(save[i][1]); c.updateMatrixWorld(); });
+        const prev = output.prevFrame, W = prev.image.width, H = prev.image.height;
+        // the kept frame into a readable target
+        const dst = new THREE.WebGLRenderTarget(W, H), sc = new THREE.Scene();
+        const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.ShaderMaterial({ uniforms: { m: { value: prev } },
+          vertexShader: 'varying vec2 u; void main() { u = position.xy * 0.5 + 0.5; gl_Position = vec4(position.xy, 0.0, 1.0); }',
+          fragmentShader: 'uniform sampler2D m; varying vec2 u; void main() { gl_FragColor = vec4(texture2D(m, u).rgb, 1.0); }', depthTest: false }));
+        quad.frustumCulled = false; sc.add(quad);
+        const rt0 = renderer.getRenderTarget(); renderer.setRenderTarget(dst); renderer.render(sc, new THREE.Camera()); renderer.setRenderTarget(rt0);
+        const all = new Uint8Array(W * H * 4); renderer.readRenderTargetPixels(dst, 0, 0, W, H, all);
+        const bil = (x, y, c) => {                                         // GL linear filtering at texel coords (x, y)
+          const x0 = Math.floor(x - 0.5), y0 = Math.floor(y - 0.5), ax = x - 0.5 - x0, ay = y - 0.5 - y0;
+          const at = (i, j) => all[4 * (Math.min(H - 1, Math.max(0, j)) * W + Math.min(W - 1, Math.max(0, i))) + c];
+          return (at(x0, y0) * (1 - ax) + at(x0 + 1, y0) * ax) * (1 - ay) + (at(x0, y0 + 1) * (1 - ax) + at(x0 + 1, y0 + 1) * ax) * ay;
+        };
+        // the expected pixel from the glow's GS screen box alone: the copy's ST x 512 + the frame's XYOFFSET (1824, 1792) =
+        // GS, the GS point as view space (PROJ, the title's depth) through the kept projection
+        const PR = { fx: 299.972351, fy: 449.958527, cx: 2037, cy: 2048 };   // effects.js PROJ (camera 0)
+        const score = () => {
+          let n = 0, diff = 0, worst = 0;
+          items.forEach((s, gi) => {
+            const g = L.gpool[gi], st = s.copy.st;
+            for (const px of [16, 24, 32, 40, 48]) for (const py of [16, 24, 32, 40, 48]) {
+              const a = new Uint8Array(4); renderer.readRenderTargetPixels(g.rt, px, py, 1, 1, a);
+              const fx = (px + 0.5) / g.rt.width, fy = (py + 0.5) / g.rt.height;   // page texel -> copy fraction (page row y = box Y)
+              const GX = (st[0] + (st[2] - st[0]) * fx) * 512 + 1824, GY = (st[1] + (st[3] - st[1]) * fy) * 512 + 1792;
+              const q = new THREE.Vector3((GX - PR.cx) * s.z / PR.fx, -(GY - PR.cy) * s.z / PR.fy, -s.z).applyMatrix4(Pk);
+              const X = (q.x + 1) / 2 * W, Y = (q.y + 1) / 2 * H;
+              if (X < 1 || Y < 1 || X >= W - 1 || Y >= H - 1) continue;
+              const d = [0, 1, 2].reduce((t, c) => t + Math.abs(a[c] - bil(X, Y, c)), 0);
+              n++; diff += d; worst = Math.max(worst, d);
+            }
+          });
+          return { n, mean: n ? diff / n : null, worst: Math.round(worst) };
+        };
+        const r = score();
+        dst.dispose();
+        return r;
+      }).catch(e => ({ err: e.message }));
+      // report.js's capture renders (R) go through output.render with keep: false: the kept frame stays the displayed one
+      const K = await pg.evaluate(async () => {
+        const THREE = await import('three'); const { output, root, camera } = window.__play;
+        const f0 = output.prevFrame, p0 = output.prevProj, rt = new THREE.WebGLRenderTarget(64, 64);
+        output.render(root, camera, rt, { keep: false }); rt.dispose();
+        return output.prevFrame === f0 && output.prevProj === p0;
+      });
+      ok(K, 'a render with keep: false (report.js captures) leaves the kept frame as it was');
+      ok(C.n >= 100 && C.mean < 6, `the glow pages copy the kept frame at the screen pixels of their GS boxes, with the cameras moved in between (${C.n} page texels: mean |dRGB| ${C.mean?.toFixed?.(1)}, worst ${C.worst}${C.err ? '; ' + C.err : ''})`);
+      ok(Q.last && Q.linear, `the glows draw after every title sprite (their group last: ${Q.last}); the title's sprites sample bilinear (TEX1 0x61: ${Q.linear})`);
+      ok(Q.nR > 0.02 * Q.area && Q.nGB === 0, `the glow adds red only (${Q.nR} of ${Q.area} px redder, ${Q.nGB} with green / blue changed; RGBA ${Q.rgba}, ALPHA ${(Q.alpha || []).map(a => '0x' + a.toString(16))})`);
+    }
     if (process.env.GAMEOVER_SHOT) await pg.screenshot({ path: process.env.GAMEOVER_SHOT });
     // the GAME OVER title (gameover_title.js, worker 0198)
     const T = await pg.evaluate(() => {
@@ -112,7 +202,7 @@ try {
         c.add(new THREE_V(w[0] * x + w[4] * y + w[8] * z + w[12], w[1] * x + w[5] * y + w[9] * z + w[13], w[2] * x + w[6] * y + w[10] * z + w[14]));
       }
       c.multiplyScalar(1 / Math.max(1, 4 * letters.length)).project(cam);
-      return { titleAt: window.__titleAt, beginAt: window.__beginAt, n: L.last.length, vis: vis.length, inRoot: L.group.parent === window.__play.root,
+      return { titleAt: window.__titleAt, beginAt: window.__beginAt, n: L.last.filter(s => !s.glow).length, vis: vis.length, inRoot: L.group.parent === window.__play.root,
         letters: letters.length, ndc: [c.x, c.y] };
     });
     ok(T !== null, 'the title is loaded (data/gameover_title.fed, gameover.json "title")');
@@ -122,15 +212,22 @@ try {
       ok(T.letters === 8 && Math.abs(T.ndc[0]) < 0.1 && T.ndc[1] > 0 && T.ndc[1] < 0.2, `the 8 letters centred, a little above the middle (NDC ${T.ndc.map(x => x.toFixed(3))})`);
     }
     ok(await pg.evaluate(() => window.__play.gameOver.go.menu.focus.id === 3), 'Restart focused (layout 0x477c38)');
-    await pg.evaluate(() => { window.__marker = 1; });
+    // HP read on the new enemy world's first game frame (worker 0204: soldiers 41-43 are active at the checkpoint and
+    // may hit him in the frames after it)
+    await pg.evaluate(() => {
+      window.__marker = 1; window.__firstHp = null;
+      const P = window.__play, E = P.enemies, old = P.enemyAI, tick = E.tick.bind(E);
+      E.tick = W => { if (W && W !== old && window.__firstHp === null) window.__firstHp = P.php.hp; return tick(W); };
+    });
     await pg.keyboard.press('Space');
-    await pg.waitForFunction(() => window.__play.restart.count === 1, null, { timeout: 20000, polling: 100 }).catch(() => {});
-    ok(await pg.evaluate(() => window.__marker === 1 && window.__play.restart.count === 1 && window.__play.php.hp === 780),
+    await pg.waitForFunction(() => window.__play.restart.count === 1 && window.__firstHp !== null, null, { timeout: 20000, polling: 100 }).catch(() => {});
+    ok(await pg.evaluate(() => window.__marker === 1 && window.__play.restart.count === 1 && window.__firstHp === 780),
        '✕ on Restart: the checkpoint, no page reload (checkpoint.js; test_checkpoint_page has the details)');
     // FUN_00534a98 (result 6) -> FUN_002f2098(0x81840000): Restart removes the title
     await pg.waitForTimeout(200);
-    if (hasTitle) ok(await pg.evaluate(() => { const G = window.__play.gameOver; return G.title.fx.emitters.length === 0 && G.titleLayer.last.length === 0 && !G.titleLayer.pool.some(m => m.visible) && !G.titleLayer.depthClear.visible; }),
-       'Restart: the title is gone (0 emitters, 0 sprites, no depth clear)');
+    if (hasTitle) ok(await pg.evaluate(() => { const G = window.__play.gameOver; return G.title.fx.emitters.length === 0 && G.titleLayer.last.length === 0 && !G.titleLayer.pool.some(m => m.visible) && !G.titleLayer.depthClear.visible
+         && !(G.titleLayer.gpool ?? []).some(g => g.mesh.visible) && !window.__play.output.keepFrame && window.__play.output.prevFrame === null; }),
+       'Restart: the title is gone (0 emitters, 0 sprites, no depth clear, no glow, no frame copy, the kept frame freed)');
     ok(errs.length === 0, 'no page errors' + (errs.length ? ': ' + errs.slice(0, 2).join(' | ') : ''));
     await pg.close();
   }

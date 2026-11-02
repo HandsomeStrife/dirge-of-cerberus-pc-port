@@ -143,6 +143,9 @@ const STANCE_1F_FLAGS = 0x872b;   // C+0x808 of stance 0x1f (trace k_enemy_engag
 // evt_key in k_enemy_engage7: only flag 2 = 7 and flag 46 = 1 (notes/enemy-activation.md §1)
 export const SAVE_DIFFICULTY = 1;
 export const SAVE_EVENT_FLAGS = Object.freeze({ 2: 7, 46: 1 });
+// FUN_00312678's value (DAT_0046dd68 + 0x7c; 0 in 0201's reload state): the blend of an actor's first clip after the
+// stage-load pass (C+0x564 bit 0x20000000). GUESS: read from RAM, its writer is not decoded.
+const BLEND_312678 = 0;
 // Vincent's bullets vs the soldiers (notes/enemy-research.md §13). Hit-zone records (status +0xa8
 // -> +0x30 -> 16 B per part, FUN_0055bda8): byte 0 = damage scale (x 0.05, FUN_0055d2c0) and ushort
 // +2 flags (bit 1 no reaction flags, bit 2 no stagger, bit 3 bullet +0x120 |= 0x60000; FUN_0055db50).
@@ -424,13 +427,18 @@ export function createEnemyAI(opts) {
   // drained in order by FUN_0053fde8 at the end of the manager frame FUN_0053b500 (switch on type + 1).
   const mgrQueue = [];
   const postManager = (type, id, arg = 0) => { mgrQueue.push({ type, id, arg }); };
+  // Script-timer list (manager +0x1244 head / +0x1248 tail / +0x124c count): object ids with a running +0x3c / +0x3e
+  // timer. FUN_0053e6e8 appends at the tail, FUN_0053e7a8 unlinks by id, FUN_0053e868 walks it from the head.
+  // L: the node pool (+0x1240, FUN_00548eb0) never runs out on the page (the game's append can fail: cmd 0x106 then
+  // sets nothing).
+  const timerList = [];
   const mailbox = [];           // 0x101 messages posted this frame, delivered next frame (GUESS: FUN_0053e9e0 consumer not decoded)
   const events = [];            // per-frame record of what happened (tests / page debug)
 
   // ------------------------------------------------ objects
   // Trigger volumes = section-8 objects; vars at +0xa0 (cmd 0x104 / 0x105, FUN_0054cd70).
   const triggers = data.triggers.map(t => {
-    const o = { kind: 'trigger', id: 't' + t.idx, t, vars: new Int16Array(8), flags28: 0, script: t.script };
+    const o = { kind: 'trigger', id: 't' + t.idx, t, vars: new Int16Array(8), t3c: new Int16Array(2), flags28: 0, script: t.script };
     // FUN_005503e8 (shapes 0 / 8): flags +0xa4 bit 5 (0x20) -> +0x40 |= 0x10 (FUN_005511e8 runs event
     // 0x12), +0x38 |= 1 (bullets test it, FUN_005442d8) and +0x28 |= 0x100 (see-through: listed, not the
     // closest hit). Shape 3 clears +0x28 bit 8 and sets no +0x38 bit 0.
@@ -458,7 +466,8 @@ export function createEnemyAI(opts) {
   // and reactivation (FUN_00559748 does not reset it).
   data.records.forEach((rec, k) => {
     const id = k + ID_BASE;
-    if (!objects.has(id)) objects.set(id, { kind: 'record', id, rec: k, script: rec.script, vars: new Int16Array(8), flags28: 0, f118: 0, ai: null, hp: deadRecs.has(k) ? 0 : rec.hp ?? 100 });
+    // t3c: the object's two script timers (+0x3c / +0x3e shorts, cmd 0x106 / 0x107; FUN_0053e868 counts them down)
+    if (!objects.has(id)) objects.set(id, { kind: 'record', id, rec: k, script: rec.script, vars: new Int16Array(8), t3c: new Int16Array(2), flags28: 0, f118: 0, ai: null, hp: deadRecs.has(k) ? 0 : rec.hp ?? 100 });
   });
 
   // FUN_00564228 -> FUN_00340ac0(C, n): the record's stance (ai.json records[k].stance, exported by
@@ -494,6 +503,7 @@ export function createEnemyAI(opts) {
       kind: 'actor', id, rec: init.rec, script: init.script ?? rec.script,
       pos: init.pos || rec.pos.slice(), face: init.face || rec.face.slice(),
       vars: prev && prev.kind === 'record' ? prev.vars : new Int16Array(8),
+      t3c: prev && prev.kind === 'record' && prev.t3c ? prev.t3c : new Int16Array(2),   // +0x3c / +0x3e timers (same object in the game)
       flags28: 1,                                // +0x28 bit 0 = active (FUN_00559748 tests it)
       // +0x118: the record object's (cmd 0x14c / 0x14d reach an inactive record too; same object in the game)
       f118: init.f118 ?? (prev && prev.kind === 'record' ? prev.f118 | 0 : 0), target: init.target ?? null, aim120: null,
@@ -720,6 +730,27 @@ export function createEnemyAI(opts) {
         setActive(t, 0);
         postManager(8, t.id);
         return 0;
+      // FUN_0054cd70 case 0x106: script timer r0 (0 / 1 = object +0x3c / +0x3e) = r1 frames. r1 < 1 stops it (and the
+      // object leaves the timer list FUN_0053e7a8 when both are now 0); else the object joins the list (FUN_0053e6e8)
+      // if neither ran. FUN_0053e868 counts them down; at 0 -> manager event 0xd -> script event 1 (r0 = the timer).
+      // Scripts 105 / 107 (records 41 / 43) event 3: timer 1 = 80 / 150 -> event 1 (r0 1) sets their brain mode.
+      // case 0x107: read timer r0.
+      case 0x106: {
+        if (!(r[0] < 2)) return 0;                                                // iVar6 < 2 (signed)
+        if (r[0] < 0) { warnOnce(`enemy_ai: cmd 0x106 timer ${r[0]} (writes before +0x3c) not translated`); return 0; }
+        if (!t.t3c) t.t3c = new Int16Array(2);
+        const running = () => (t.t3c[0] | t.t3c[1]) !== 0;                       // *(int *)(obj + 0x3c) != 0
+        if ((r[1] | 0) < 1) {
+          if (running()) { t.t3c[r[0]] = 0; if (!running()) { const i = timerList.indexOf(t.id); if (i >= 0) timerList.splice(i, 1); } }
+        } else {
+          if (!running()) timerList.push(t.id);                                  // FUN_0053e6e8 (L: never fails)
+          t.t3c[r[0]] = r[1];
+        }
+        return 0;
+      }
+      // 0x107 has no index check in the game: r0 >= 2 reads the short at object +0x3c + 2 x r0 (r0 2 / 3 = +0x40 / +0x42,
+      // the object's +0x40 flags), r0 < 0 below +0x3c. The page returns 0 there (L: no z128 script sends 0x107 at all).
+      case 0x107: return t.t3c && (r[0] >>> 0) < 2 ? t.t3c[r[0]] : 0;
       case 0x104: if (r[0] < 8) { t.vars[r[0]] = r[1]; t.flags28 |= 0x4000; } return 0;
       case 0x105: return t.vars[r[0]];
       case 0x143: if (t.kind === 'actor') cmd143(t, r); return 0;
@@ -762,9 +793,11 @@ export function createEnemyAI(opts) {
     }
   }
 
-  // vtable +0x144(on, 0). Triggers: generic activate (L: the trigger class's +0x144 is not read;
-  // it gates the volume test). Records / actors: FUN_00559748 with param_3 = 0 (no event 3).
-  function setActive(t, on) {
+  // vtable +0x144(on, ev). Triggers: generic activate (L: the trigger class's +0x144 is not read;
+  // it gates the volume test). Records / actors: FUN_00559748; param_3 = ev: 0 from cmd 0x108 / 0x109 / 0x130
+  // (event 3 then comes through manager event 7), 1 from the stage-load pass FUN_00558f68 (stageLoad): FUN_00559748's
+  // tail runs script event 3 itself (vt+0x2f4, zero args) and clears +0x28 bit 0x100000.
+  function setActive(t, on, ev = 0) {
     if (t.kind === 'trigger') { t.active = !!on; events.push(`${on ? 'arm' : 'disarm'} ${t.id}`); return; }
     if (t.kind !== 'record' && t.kind !== 'actor') return;
     if (on === (t.flags28 & 1)) return;                      // FUN_00559748: already in that state
@@ -778,8 +811,20 @@ export function createEnemyAI(opts) {
       let a = null;
       if (buildsActor(rec)) {
         // FUN_0055b8e0(a, 2, 1, 0): actor state 2 for a plain placement (addActor without astate)
+        const f28 = t.flags28 | 0;                           // the object's +0x28 before the activation
         a = addActor({ rec: t.rec, mode });
         a.flags28 |= 0x100000;                               // FUN_00559748; cleared by manager event 7
+        // FUN_00559748 -> FUN_00365c50 (the AI) -> FUN_0035ee08(ai, a, 1) -> FUN_00360418(ai, 1): the magazine plus
+        // trunc(((mag >> 1) + 1) x FUN_0040b5c0()), one draw (worker 0204; T w204_reload: 41 8, 42 6 with mag 6; T w204_t56rng:
+        // records 50 / 51 by trigger 56, the twister word for word). Gate bVar1: no AI at all unless +0x28 bit 2 (4) is
+        // clear and bit 5 (0x20) is clear or the linked object +0xbc has +0x14 bit 0x80 and not 0x100.
+        // GUESS: the gate is taken as open. The page's flags28 is not the game's +0x28 (the constructor's bits are not
+        // modelled: e.g. 0x208400 before activation, 0x20c403 after, in the reload state), so f28 here only carries the
+        // page's own bits; bits 4 / 0x20 are clear for every z128 soldier in the save / reload RAM (notes/fidelity-audit.md
+        // 'GUESS: FUN_00559748 bVar1 gate open'). Should the page ever set them, it warns and skips only the draw (the AI is
+        // already built by addActor; the game would build none).
+        if (f28 & 0x24) warnOnce(`enemy_ai: record ${t.rec} +0x28 bit 4 / 0x20 at activation: the game builds no AI here (FUN_00559748 bVar1); the page keeps its AI and skips only the magazine draw`);
+        else refill(a.ai, 1);
       } else {
         // other models: no AI actor (AI_TYPES); marked active only, enemies.js draws them idle
         t.flags28 |= 1 | 0x100000;
@@ -788,6 +833,11 @@ export function createEnemyAI(opts) {
       events.push(`activate rec ${t.rec}`);
       activated.push(t.rec);
       onActivate(rec, a);
+      if (ev) {
+        const o = objects.get(t.id);
+        runEvent(o, 3);
+        o.flags28 &= ~0x100000;
+      }
       return;
     }
     // Off: FUN_00559748 (param_2 = 0) -> FUN_00558bb8: when the AI index (+0x140) is >= 0,
@@ -813,7 +863,7 @@ export function createEnemyAI(opts) {
         const j = S.q.indexOf(t.ai); if (j >= 0) S.q.splice(j, 1);           // FUN_003659d8 unlink
         stopFire(t.ai);                                                     // FUN_0035e6f8 -> FUN_00360820
       }
-      objects.set(t.id, { kind: 'record', id: t.id, rec: t.rec, script: t.script, vars: t.vars, flags28: 0, f118: t.f118 | 0, ai: null, hp: t.hp,
+      objects.set(t.id, { kind: 'record', id: t.id, rec: t.rec, script: t.script, vars: t.vars, t3c: t.t3c, flags28: 0, f118: t.f118 | 0, ai: null, hp: t.hp,
         p90: t.pos ? Array.from(t.pos) : null });   // +0x90 kept (objPos90, L)
     }
     events.push(`deactivate rec ${t.rec}`);
@@ -1067,9 +1117,12 @@ export function createEnemyAI(opts) {
     const C = a.C;
     if (!keep) { C.loco = null; C.f564 &= ~8; C.rate = null; }
     // FUN_00344608 (bit 0x400 clear: FUN_003456c0 passes 0): the new layer's blend = C+0x591, 0 with
-    // C+0x564 bit 2 (FUN_00340bb8(C, 0, ..)); bit 0x20000000 -> FUN_00312678 (not translated; never set here)
-    if (C.f564 & 0x20000000) warnOnce('enemy_ai: C+0x564 bit 0x20000000 blend (FUN_00312678) not translated');
-    C.blendLen = C.f564 & 2 ? 0 : C.b591;
+    // C+0x564 bit 2 (FUN_00340bb8(C, 0, ..)); bit 0x20000000 (set by the stage-load pass FUN_00558f68) -> the blend is
+    // FUN_00312678() = DAT_0046dd68 ? *(DAT_0046dd68 + 0x7c) : 0, and FUN_00344608 clears the bit after the request
+    // (FUN_005a9678, the MP's skeleton reset, is not translated: the page's body is new). GUESS: BLEND_312678 = 0, the
+    // value in the reload state's RAM (its writer is not decoded).
+    if (C.f564 & 0x20000000) { C.blendLen = BLEND_312678; C.f564 &= ~0x20000000; }
+    else C.blendLen = C.f564 & 2 ? 0 : C.b591;
     C.reqCarry = carry;
     // C.flags: FUN_005a91c8 (enemies.js) drops a request with bit 0x80 whose clip already plays on the top layer
     // the MP head layer the root sample reads (MP+0x448 head, +0x218 frame), kept as enemies.js's tick applies the
@@ -1977,6 +2030,7 @@ export function createEnemyAI(opts) {
   function refill(ai, extra) {                                                // FUN_00360418
     if (!ai.W) return;
     ai.rounds = ai.W.mag;
+    if (ai.W.mag < 0) { ai.rounds = -1; return; }                             // 0xffff, no draw
     if (extra) ai.rounds += Math.trunc(Math.fround(((ai.W.mag >> 1) + 1) * rng()));
   }
   function reload(ai) {                                                       // FUN_00360718
@@ -3674,6 +3728,8 @@ export function createEnemyAI(opts) {
     for (const m of mail) { const o = objects.get(m.to); if (o) runEvent(o, 2, [m.n, 0, m.from, 0]); }
     // 5. trigger volumes (the player's move this frame)
     if (playerOld && playerNew) for (const o of triggers) triggerCheck(o, playerNew, playerOld);
+    // 5b. script timers FUN_0053e868, then FUN_0053f040 (not read), then FUN_0053fde8 (FUN_0053b500's last three calls)
+    timerTick(step);
     // 6. manager events, FUN_0053fde8 (the last call of FUN_0053b500). L: the page's steps 1-5 are not
     // in the game's exact order, but they all run before this.
     drainManager();
@@ -3690,6 +3746,73 @@ export function createEnemyAI(opts) {
     return events.slice();
   }
 
+  // Stage-load activation (worker 0204). FUN_00324e70 -> FUN_00319190 loads the status of every placement whose flags
+  // (section-1 +0x40) have bit 3 and whose tag FUN_00376938 finds among the event actors (placements.json
+  // load_flag_records / event_actors: 41-43 on z128); FUN_003159b8 sets status +0x60 bits 1 / 0x40. Then FUN_005453b0
+  // calls vt+0x36c = FUN_00558f68 for each of the 256 object slots in order (object = record + 22); with +0x60 bit 0x40
+  // and the actor inactive: +0x144(1, 1) (FUN_00559748 with event 3), bit 0x40 cleared, FUN_00558cc0 (the actor at its
+  // status matrix = the placement here; FUN_003157b0's event-model matrix: see below), FUN_0034b4c8, then the tail:
+  //   FUN_0056a790 (status +0x60 bit 2 clear: FUN_00344ec0 / FUN_00340680 only; not translated), C+0x1d8 = 0,
+  //   C+0x564 |= 0x20000000 (the next clip's blend from FUN_00312678, playClip), C+0x1c0 |= 0x200;
+  //   FUN_002419d8(0) (DAT_004b8ac8 bit 0) -> FUN_00347250 / FUN_00341518: GUESS skipped (the bit is 0 in the
+  //   reload state's RAM; its writer is not decoded);
+  //   actor +0x28 bit 2 (clear for these records: T w204_reload +0x28 = 0x20c403 / 0x208403): else branch:
+  //   +0x118 bit 16 -> FUN_0055b8e0(a, 0, 0, 0); status +0x61 bit 0 -> (2, 1) (L: not exported, clear here: status
+  //   +0x60 = 1); newly active: C+0x808 bit 0 or stance 0x2b / 0x2d -> (3, 1), else (2, 1). FUN_0034edf0(C, 0) (the
+  //   body's mover off: a new body's mover is 0 already), +0x154 = 0, +0x118 &= ~0x40000, +0x150 bits 44-47 = 0.
+  // T: w204_reload (from 0201's reload state): 41-43 active at record 10 (Vincent's placement frame), actor state 3,
+  // HP 10 / 28 / 24, timer 1 = 80 / 0 / 150, 42 brain mode 1; 41 mode 2 at record 90.
+  // MISSING (warned): at record 24 the game moves all three (FUN_00558cc0 from FUN_00558f68 again) to their status
+  // matrices, rewritten from the opening cutscene's actor models (FUN_003157b0: the event actor's root transform +
+  // bone offset); without the cutscene runtime the page keeps them at their placements.
+  function stageLoad(recs) {
+    const order = [...new Set(recs)].sort((x, y) => x - y);                    // slot order (record + 22)
+    // Only the loaded statuses get here: FUN_005453b0 calls vt+0x36c for an object with +0x28 bit 0x40 or status +0x60
+    // bit 0. T: in the reload state the already-active 44 / 66 have neither (+0x28 0x208403, status +0x60 0), so the tail
+    // does not touch them. An already-active loaded record (not on the page: the Restart's world is new) gets no +0x144,
+    // FUN_00558cc0 and the tail's writes, and no state unless +0x118 bit 16.
+    for (const k of order) {
+      const t = objects.get(k + ID_BASE);
+      if (!t) continue;
+      const was = t.flags28 & 1;
+      if (!was) setActive(t, 1, 1);                                             // +0x144 only when inactive (bVar1)
+      const a = objects.get(k + ID_BASE);
+      if (!a || a.kind !== 'actor' || !(a.flags28 & 1)) continue;
+      a.C.speed = 0;                                                            // C+0x1d8
+      a.C.f564 |= 0x20000000;
+      a.C.f1c0 |= 0x200;
+      if (a.f118 & 0x10000) setActorState(a, 0, 0);
+      else if (!was && ((a.C.f808 & 1) || a.C.st664 === 0x2b || a.C.st664 === 0x2d)) setActorState(a, 3, 1);
+      else if (!was) setActorState(a, 2, 1);
+      // FUN_0034edf0(C, 0): a running mover is stopped first (FUN_00352a60, not translated; a new body has none)
+      if (a.C.mover !== 0) warnOnce(`enemy_ai: stage-load pass on record ${k} with a moving body (FUN_0034edf0(C, 0) -> FUN_00352a60) not translated`);
+      a.f118 = (a.f118 & ~0x40000) >>> 0;
+    }
+    if (order.length) warnOnce('enemy_ai: stage-load actors stay at their placements (the opening cutscene\'s hand-off, FUN_003157b0 at record 24, is not translated)');
+  }
+
+  // FUN_0053e868: for each listed object (head first; an entry appended meanwhile is reached too): each running timer
+  // (> 0) loses (int) of the frame step DAT_0046e290+4; one that reaches <= 0 (as a short) posts manager event 0xd with
+  // +0xc = the timer index. The entry goes when both timers are 0 (the int at +0x3c) or the object is gone.
+  // T: w204_reload records 10-90 (record 41's timer 1: 80 at the placement, 0 at record 90, mode 2 there).
+  function timerTick(step) {
+    const dec = Math.trunc(step);
+    for (let i = 0; i < timerList.length;) {
+      const o = objects.get(timerList[i]);
+      if (o && o.t3c) {
+        for (let k = 0; k < 2; k++) {
+          if (o.t3c[k] > 0) {
+            const v = (o.t3c[k] & 0xffff) - dec;
+            o.t3c[k] = v;                                                         // stored as a short
+            if ((v << 16) < 1) postManager(0xd, o.id, k);                         // iVar3 * 0x10000 < 1
+          }
+        }
+      }
+      if (!o || !o.t3c || (o.t3c[0] | o.t3c[1]) === 0) timerList.splice(i, 1);
+      else i++;
+    }
+  }
+
   // FUN_0053fde8: up to 0x1000 entries; one posted while draining is handled in the same pass. An entry
   // whose object is gone (FUN_0053e040) is dropped. Types translated: 7 (case 8: script event 3 with
   // zero args (0x4ef400, BSS), then +0x28 &= ~0x100000) and 8 (case 9: script event 4; then, if it is
@@ -3702,6 +3825,7 @@ export function createEnemyAI(opts) {
       if (!o) continue;
       if (e.type === 7) { runEvent(o, 3); objects.get(e.id).flags28 &= ~0x100000; }
       else if (e.type === 8) runEvent(o, 4);
+      else if (e.type === 0xd) runEvent(o, 1, [e.arg, 0]);                     // case 0xe: event 1 (timer index, 0) (FUN_0053e868)
       else if (e.type === 0xf) runEvent(o, 0x13);                              // case 0x10: event 0x13, no args (0x4ef400)
       else if (e.type === 0x11) runEvent(o, 0x26);                             // case 0x12: event 0x26, no args (the node is dropped)
       else if (e.type === 0x12) runEvent(o, 0x27, [e.arg, 0]);                 // case 0x13: event 0x27 (node, 0)
@@ -3712,7 +3836,8 @@ export function createEnemyAI(opts) {
   // boneWorld: (actor) => (bone) => world rows of that bone (the MP's last posed skeleton), set by the
   // page (enemies.js partPose) or a test; the part test needs it. playerShot(muzzle, aim, W): Vincent
   // fired, now; queueShot: the same at this frame's player slot inside the next tick (the page).
-  const world = { S, actors, triggers, bullets, attackObjs, objects, addActor, tick, runEvent, recById, events, activated, setActive,
+  const world = { S, actors, triggers, bullets, attackObjs, objects, addActor, tick, runEvent, recById, events, activated, setActive, stageLoad,
+                  timerList,                              // script-timer list (FUN_0053e6e8; tests)
                   playerShot, queueShot, lockTargets, pushOut, boneWorld: opts.boneWorld || null,
                   eventFlags: EVFLAGS,                    // the world's event flags (FUN_003ff738; tests: checkpoint.js)
                   playerBoneWorld: opts.playerBoneWorld || null,

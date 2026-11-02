@@ -270,3 +270,9 @@ TEST 0x32001, Z 0). The page has this only for the title (layer 5): gameover_tit
   between 0x40c00 and 0x41800, as spawned); the screen rectangle clipped by the scene SCISSOR 0-431 x 0-511 (effects.js
   `screenClip`; native view = 432 x 512); ids.json `feds` (exporter) so play.js requests r0000.fed only when exported.
 
+## Title draw types 20 / 35 / 103 / 119 (worker 0202, 2026-11-02)
+See notes/gameover-research.md "Title draw types". effects.js: T[20] (UV scroll + 6 LCG draws), T[35] (drawGlow: the
+frame-buffer page glow, items { glow } handled by a layer with `glows()`, only TitleLayer), T[103] (strand points: 9 LCG +
+1 VU0 R per point; lines not drawn), 119 simulated (DRAWN_ELSEWHERE); LOOP_NOOP + 11 / 35; `rz` (round toward zero for the
+glow's last steps). EffectLayer.update routes `glow` items to `this.glows` (warned without one). Tools: calllog.py set
+w202lcg (+ VU0 R spans), fields.py TRACE_FXTITLE, title_fixture.py 'vall' / 'pool', dumpfx.py --glow.

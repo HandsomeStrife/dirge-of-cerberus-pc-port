@@ -201,3 +201,66 @@ and the HUD maths (mapA / mapB, FUN_003d2e80) are unchanged.
 - Tests: test_hud_page section 5 (slot 5 left edge / slot 4 right edge (shown for the test) on 1600 x 900 and
   1280 x 720 vs 1200 x 900 / 960 x 720; off = the 4:3 layout + margin; 4:3 and 1000 x 900 unshifted; anchors per
   panel) and 6 (play.html default on, ?widehud=0 off).
+
+## Slide-out at game over, slide-in after Restart (worker 0203, 2026-11-02)
+On the page: hud_core.js `slideStart` / `slideAt` / `HudState.slidePanel` / `move` / `slideFrame` / `hideAll` / `show` /
+`fresh` / `restartedHud`; hud.js `hideAll()` (queued, applied in `tick` after the clock step) and `reset()`; play.js calls
+`gameHud.hideAll()` on gameover.js's 'begin' and `gameHud.reset()` on H. Data: hud.json `slides` (DAT_00471db0 /
+DAT_00471dc0), every element's `rel` (+0x1c / +0x1e) and each top group's `slide` (+0x48): **re-run export_web_hud.py**
+(build_web.sh does; `--state` still 0 differences).
+- Chain: FUN_003fdb48(3) (the stage loop, in the request's frame) -> FUN_003ad5b0 -> FUN_003b01b0(HUD, 0) -> FUN_003aff20:
+  FUN_003afe10 (panel 0), FUN_003afe30 (panel 1, +0xd8 = 1), FUN_003afe60 (panel 2 only with +0xac, +0xdc = 1),
+  FUN_003afec0 (panel 4 only with +0xc59 == 1; FUN_003b4d50: DAT_00471388 stop, FUN_003b4db0: +0xbb0 / +0xbb4 = 0),
+  panels 8, 9, 10, 5, FUN_003b4768 (item list closes if open), FUN_003b03e8 (FUN_003b0440(HUD, 0), FUN_003b0738 kinds
+  5 / 6 / 7 / 4: the hit ring fades out), +0x538's vt+0xa4, FUN_003bc168 in mission mode only.
+- Panel p -> group DAT_00471db0[p] (0xff = root, else slot); DAT_00471dc0[p] = { u8 length / 100 ms, pad, s16 dx, dy }:
+  0 = slot 5 (HP) 0 / -100 500 ms, 1 = slot 6 (weapon) 0 / +100 500 ms, 2 = slot 7 -300 / 0 200 ms, 4 = slot 4 0 / -100,
+  5 = slot 1 +200 / 0, 8 / 9 / 10 = slots 8-10 -512 / +512 / -512 200 ms; 3, 6, 7: length 0.
+- FUN_003afc98 -> FUN_003d5da0: FUN_003d0fd0 (not in state 3 / 4; reversing a running state 1 mirrors the start:
+  start + len 100 >= now -> 2 now - (start + len 100)), state 3, length / d from the table, then FUN_003d5d10 ->
+  FUN_003d0d50 -> FUN_003cb380(g, x, y, 0). FUN_003d0d50: t = now - start (state 1: T - t), angle = (((t << 11) / T +
+  0xc00) << 20) >> 20 (12 bits), f = sinf(angle x 0.0015339808), x = base + (int)(d/2 (f + 1)) in f32 (d/2 toward
+  zero); at the end 1 -> 2 at base, 3 -> 4 at base + d, start 0. A start of 0 means no slide. FUN_003cb380: the group
+  to (x, y), its box with it (FUN_003ca160: rect + the sprite's edges), every child = rel + the parent's (one pass in
+  chain order). Per frame the screen update's FUN_003d5a80 steps each group (only top groups slide). FUN_003d0d38 (the
+  build) writes state, base and start only: length / dx / dy are stale heap bytes until a start (the save read
+  exports them as 0 while the state is 0).
+- Comeback: Restart rebuilds the HUD (FUN_003ad5e0 / FUN_003ad530 -> FUN_003ad618) and the stage loop's state 8
+  (FUN_004012c0 -> FUN_003ad560 -> FUN_003afb10(HUD, 0) + FUN_003b0128) slides panels 0, 1 (when FUN_003e20e0), 8, 9,
+  10 in (FUN_003d0f08, state 1). It is not a snap back.
+- Evidence: the pad scripts tools/trace/scripts/w203_hudslide.json and w203_reload_hud.json are tracked inputs; their outputs below are gitignored. tools/trace/scripts/w203_hudslide.json (w192 route, TRACE_FIELDSET=hud TRACE_LOG_AT=A5000
+  TRACE_POKE=960660=1) -> out/w203_hudslide.jsonl; w203_reload_hud.json from worker 0201's reload state (--state
+  .../w201/reload0.p2s) -> out/w203_reload_hud.jsonl; tools/trace/out/w203: GS dump w203_slide.gs (grab at f882 ->
+  state f883, dump f887; worker 0198's grab_gs_poke copy) + w192_menu.gs + w198_s1.p2s; fixtures data/hud/dump_w203_slide
+  .json, dump_w192_menu.json (`--dump`), tree_w198_s1.json (new `--tree STATE`). New fieldset in tools/trace/fields.py
+  (`hud`: clock, HP, end type, game state, +0xac, root / slots 1 5 6 7 8 9 10 +0 and +0x48).
+- Results: slide-out start = the request's frame (f880, clock 250370 between records 880 / 881); with the game's own
+  clock every record 881-911 is exact (5 panels, x / y / state) and the reload's 1-31 too; page (20 ms frames) same
+  state every frame (8-10 done f890, 5 / 6 f905), largest position error 12 HUD px (slot 8, f884: the game's frames
+  are 18-32 ms of real time); Restart: within 2 HUD px of records 11-35, then the start layout. f887 dump: all 97
+  page HUD primitives where the game drew them at slide time 143 ms (the only match in 0-520 ms); f1240: all 97 off
+  the frame where the game drew them; w198 f906 RAM: rect / box of the 106 elements outside slot 7 equal.
+- The reload's lead (13 frames from the show to the page's first frame after the restore) is MEASURED (GUESS row).
+- Widescreen: the anchors are read once from the tree as built, so a sliding panel keeps its anchor and moves as a
+  unit (test_hud_page 7: slots 5 / 6 at 0-600 ms on 1600 x 900 = the 4:3 picture's pixels shifted by the margin).
+- Not on the page (conditions never hold there): panel 2 (+0xac: slid in the w192 run, whose message panel had been
+  up), panel 4 (+0xc59), the item list close, the reticle kind switch (+0x1b0 0), FUN_003df030(0xf) after the hide.
+- Comparison image: worker 0203's scratchpad w0203_hud_slide_compare.png (game f887 rendered from the dump by
+  gsrender2, no HUD text: the renderer has no font texture for that frame; page at 140 ms). The PCSX2 png saved with a
+  grab is the frame at the key press (here f882-883), not the dump's last frame.
+- Review fixes (worker 0203, manager review, 2026-11-02):
+  - Clocks: FUN_0023c1f0 = EE timer 1 / 0x24000 x fRam0046b08c (1.0; FUN_00242c70 has no caller) added to uRam0046b094
+    (returned, never steps back: real-time ms). DAT_004f58ec is FUN_003e23f8's copy that stops in game state 0x17 (pause),
+    read through FUN_003e2450. The slides (FUN_003d0f08 / 0fd0 / 0d50) read FUN_0023c1f0 -> HudState `mnow`; the ring /
+    item list / CHAIN read FUN_003e2450 -> `now`. Both +20 per page frame (GUESS). The trace's clock_ms (0x46b094) is
+    the slides' clock, as the start 250370 shows.
+  - Pause: the page's pause stops game frames; hud.js `pause(on)` (play.js onPause) adds the real pause length to `mnow`,
+    so a slide-in paused after a Restart / H is done on the first frame after it (test_hud_page 8). GUESS: whether the
+    group step runs under the pause menu (not traced).
+  - show() / hideAll() list what they leave out: FUN_003defd0(0xf, 0) / FUN_003df030(0xf) (not decoded), FUN_003afb10 /
+    FUN_003afbf8 / FUN_003adf28 / FUN_003ae220 (hide flags: hud.json already holds the shown ones). HUD +0xd8 / +0xdc /
+    +0xbb0 are no longer kept: their readers (FUN_003b0288; FUN_003b4aa8 / 4b68 / 4c20 / 4cc8 / 4f28) are not translated.
+  - widehud: the full-frame scissor (frame x 0..431) moved with a shifted panel, so a panel sliding right stopped at
+    canvas x ~1200 on 1600 x 900; for shifted panels its x bounds now go (narrower clips stay). Off: the game's clip.
+  - Tests: slideStart's `t < now` branch (the always-mirror mutant), the two clocks, the scissor (on: drawn past the
+    frame's edge; off: 0 px), the pause. Mutants 5 / 5 killed.

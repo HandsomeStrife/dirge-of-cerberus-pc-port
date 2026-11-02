@@ -56,6 +56,11 @@ def resolve_bases(mem):
         bases["AIQ"] = u32(mem, G_AISCHED)
         bases["PS"] = u32(mem, P + 0x17C)          # player status record (FUN_0055a370)
         bases["EVF"] = u32(mem, 0x47DBB0)        # DAT_0047dbb0: event-flag block (FUN_003ff658 / FUN_003ff738)
+    elif FIELDSET == "hud":
+        # the HUD's top-level groups (worker 0203): root HUD+0x18, slot i HUD+0x38+4i (FUN_003ad618)
+        bases["HGR"] = u32(mem, RET + 0x18)
+        for s in (1, 5, 6, 7, 8, 9, 10):
+            bases["HG%d" % s] = u32(mem, RET + 0x38 + 4 * s)
     else:
         bases.update(find_cape(mem))
     return bases
@@ -66,6 +71,11 @@ ENEMY_MAX = int(__import__("os").environ.get("TRACE_ENEMIES", 7))   # active e02
 
 
 ERECS = [int(x) for x in __import__("os").environ.get("TRACE_ERECS", "").split(",") if x]
+# TRACE_EPIN="41:904760:91af00,..." (worker 0204): record:body:AI (hex) for actors that are still inactive in the state
+# and activated during the run. The run is deterministic, so the body / AI addresses seen in a first run (call log or a
+# later state) are where they will be built again; fields before the activation read whatever is there.
+EPIN = {int(r): (int(c, 16), int(a, 16)) for r, c, a in
+        (x.split(":") for x in __import__("os").environ.get("TRACE_EPIN", "").split(",") if x)}
 
 
 def find_enemies(mem):
@@ -84,6 +94,13 @@ def find_enemies(mem):
         if ERECS and i - 22 not in ERECS:      # TRACE_ERECS: stage records (object index = record + 22)
             continue
         C, ST, AI = u32(mem, o + 0xE8), u32(mem, o + 0x17C), u32(mem, o + 0x184)
+        if i - 22 in EPIN and ST and not u32(mem, o + 0x28) & 1:
+            C, AI = EPIN[i - 22]
+            out.update({"E%d" % n: o, "EC%d" % n: C, "ES%d" % n: ST, "EA%d" % n: AI, "EI%d" % n: i, "EM%d" % n: o, "EL%d" % n: o})
+            n += 1
+            if n == ENEMY_MAX:
+                break
+            continue
         if not (C and ST and AI) or not u32(mem, o + 0x28) & 1:
             continue
         out.update({"E%d" % n: o, "EC%d" % n: C, "ES%d" % n: ST, "EA%d" % n: AI, "EI%d" % n: i,
@@ -263,7 +280,10 @@ def _enemy_fields(k):
         (p + "st64", S, 0x64, "u32", "D", "status +0x64: bits 0/1 = no damage (FUN_0055f0e0 in FUN_0055db50), 0x20 (FUN_00317b68)"),
         (p + "ai_90", I, 0x90, "u32", "D", "AI +0x90 = shooter (+0x4c<<16 | +0x20) by FUN_003608d8; set only on the FUN_0055db50/0055e498 path, not the masked-part path FUN_0055df90"),
         (p + "pmask", C, 0x77C, "bytes:8", "D", "C+0x77c part mask; a hit on a set bit goes to FUN_0055df90 (hit counted, no damage) in FUN_0055bda8"),
-    ]
+    ] + ([  # TRACE_EVARS=1 (worker 0204): the script timers and vars
+        (p + "a3c", A, 0x3C, "u32", "D", "object +0x3c / +0x3e script timers (cmd 0x106, FUN_0053e868)"),
+        (p + "vars", A, 0xA0, "bytes:16", "D", "object +0xa0 script vars 0-7 (cmd 0x104 / 0x105)"),
+    ] if __import__("os").environ.get("TRACE_EVARS") else [])
 
 
 ENEMY_FIELDS = [f for f in FIELDS if f[0] in ("step", "pad_held", "p_state", "matrix", "motion")]
@@ -446,8 +466,23 @@ GAMEOVER_FIELDS = [f for f in FIELDS if f[0] in ("step", "pad_held", "p_state", 
     ("ref_1dc", None, 0x46B1DC, "bytes:8", "D", "DAT_0046b1dc count + DAT_0046b1e0[4] per-kind counts (FUN_00241760)"),
 ]
 
+# Opt-in set for the HUD slides (TRACE_FIELDSET=hud, worker 0203; notes/hud-research.md "Slide-out at game over"):
+# each top-level group's +2 flags / +6 rect (FUN_003cb380) and +0x48 slide state (FUN_003d0d50: state, length / 100 ms,
+# base x y, dx dy, start ms). Group addresses are read from the state (the reload rebuilds the HUD at the same ones).
+HUD_FIELDS = [f for f in FIELDS if f[0] in ("step",)] + [
+    ("clock_ms", None, 0x46B094, "u32", "D", "FUN_0023c1f0: the menu clock in ms"),
+    ("p_hp", None, 0x960660, "u32", "D", "Vincent's HP in the w192 route (status +0x20)"),
+    ("end_type", None, 0x47DB6C, "u32", "D", "PTR_0047db6c: 3 = game over (FUN_003fdb48)"),
+    ("gstate", None, 0x4B8B2C, "u32", "D", "DAT_004b8b2c (FUN_00241d68): game state"),
+    ("hud_ac", "RET", 0xAC, "u32", "D", "HUD +0xac: panel 2 shown (FUN_003afe60 / FUN_003b0050)"),
+] + [((("g%d" % s) if s else "groot") + sfx, ("HG%d" % s) if s else "HGR", o, "bytes:16", "D", d)
+     for s in (0, 1, 5, 6, 7, 8, 9, 10)
+     for o, sfx, d in ((0, "", "group +0: +2 flags, +6 x y w h (s16)"), (0x48, "_slide", "group +0x48 slide state (FUN_003d0d38)"))]
+
 FIELDSET = __import__("os").environ.get("TRACE_FIELDSET")
-if FIELDSET == "gameover":
+if FIELDSET == "hud":
+    FIELDS = HUD_FIELDS
+elif FIELDSET == "gameover":
     FIELDS = GAMEOVER_FIELDS
 elif FIELDSET == "music":
     FIELDS = MUSIC_FIELDS
@@ -469,6 +504,13 @@ elif __import__("os").environ.get("TRACE_FIELDSET") == "pose":
 if __import__("os").environ.get("TRACE_RNG"):
     FIELDS = FIELDS + [("rng_state", None, 0x4FBE00, "bytes:2496", "D", "DAT_004fbe00: MT state (624 u32)"),
                        ("rng_idx", None, 0x4FC7C0, "u32", "D", "DAT_004fc7c0: MT index")]
+
+# TRACE_FXTITLE=d15820 (worker 0202): the GAME OVER title's emitter (DAT_004ee4a0 +0x84 list head; the same heap
+# address in the w198 states 1-5 of w192_gameover): its age +0x1c and step +0x20 (FUN_002ea040), read before the spawn too
+if __import__("os").environ.get("TRACE_FXTITLE"):
+    _e = int(__import__("os").environ["TRACE_FXTITLE"], 16)
+    FIELDS = FIELDS + [("fxt_age", None, _e + 0x1C, "f32", "D", "title emitter +0x1c age"),
+                       ("fxt_dt", None, _e + 0x20, "f32", "D", "title emitter +0x20 dt (FUN_002ea040: step + carry)")]
 
 LAYER_BYTES = 8 * 0x30
 

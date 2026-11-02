@@ -32,7 +32,7 @@ export async function setupGameOver({ output, onRequest = () => {}, blocked = ()
       const r = await fetch(u);
       if (!r.ok) throw new Error(u + ' ' + r.status);
       title = createTitle(await r.arrayBuffer(), { rng: fxRng, id: G.title.id });
-      titleLayer = new TitleLayer(THREE, title);
+      titleLayer = new TitleLayer(THREE, title, { output });   // output: the glow's renderer / previous frame (worker 0202)
       root.add(titleLayer.group);
     } catch (e) { console.warn('game over: the GAME OVER title is not drawn (' + e.message + ')'); title = null; }
   } else if (G && !G.title) console.warn('game over: gameover.json has no "title" (re-run export_web_gameover.py): the GAME OVER title is not drawn');
@@ -66,6 +66,7 @@ export async function setupGameOver({ output, onRequest = () => {}, blocked = ()
     get clock() { return clock; },
     // the frame's pad first (FUN_003de130 / the box's handlers run in the frame, with its clock), then the frame
     frame(dead, step) {
+      // GUESS: the logic step; the game ages the title by its emitter's own +0x20 dt (not decoded; fidelity-audit 'the title's effect step')
       if (title) title.begin(step);                  // FUN_002efc78: every manager ages at the frame start
       clock += 20; for (const a of queued.splice(0)) go.input(a, clock, 0); go.frame(dead, step, clock);
       if (title) title.logic(go.started);            // FUN_00381a08's spawn: stage request 0x18, in the frame's logic

@@ -499,7 +499,7 @@ T[4].loop = (X, t1, t2, a, o) => { const v = X.p.v; for (let i = 0; i < 3; i++) 
 T[7].loop = (X, t1, t2, a, o) => { const v = X.p.v; for (let i = 0; i < 3; i++) v[o + 4 + i] = f(v[o + i] * 100); };   // FUN_002761c8 (0x42c80000)
 T[9].loop = (X, t1, t2, a, o, old) => { loopQuad(X, t1, t2, a, o, old, 3); T[9].eval(X, t1, a, o); };   // FUN_002763b0
 T[17].loop = (X, t1, t2, a, o, old) => { loopQuad(X, t1, t2, a, o, old, 4); T[17].eval(X, t1, a, o); };  // FUN_00272388
-const LOOP_NOOP = new Set([10, 14]);            // FUN_002d5740
+const LOOP_NOOP = new Set([10, 14, 11, 35]);    // FUN_002d5740 (11 / 35: their vtable +0x34, save RAM; worker 0202)
 // type 10, the sprite: FUN_002777b0 init, FUN_002778b8 draw (below)
 T[10] = {
   init(X, a, o) {
@@ -512,6 +512,152 @@ T[10] = {
     I[o + 1] = flip << 16;                                     // u16 frame index +4 = 0, byte +6 = flip
   },
   trans() {}, draw: drawSprite,
+};
+// ---- the GAME OVER title's other channel types (worker 0202; notes/gameover-research.md "Title draw types").
+// Vtables from the save RAM (DAT_0046c398[type], w198 s4): 20 -> 0x49a9b8, 35 -> 0x49a6f8, 103 -> 0x49d1c0,
+// 119 -> 0x49db70 (init +0xc, transition +0x14, eval +0x1c, draw +0x24, destroy +0x2c, loop +0x34).
+// Type 20 (data: +0xc model index into the FED's +0x6c table, +0x10 / +0x14 UV offset base, +0x18 / +0x1c rate,
+// +0x20 / +0x24 acceleration, +0x28..+0x3c random ranges, +0x40 depth offset, +0x45 / +0x48 / +0x49 flags, +0x4a
+// random on): a FED model drawn with a scrolling UV offset. Value (8 words): +0 / +8 = data +0x10, +0x10 = +0x18,
+// +0x18 = +0x20 (FUN_0027b0f8). The transition FUN_0027b120 (asm) re-bases base / rate / acceleration so the curve
+// is continuous, then (particle flag 2 clear, data +0x4a) adds six LCG draws (FUN_002d98c8) of the ranges +0x28..
+// +0x3c to +8..+0x1c. T: w202_lcg call log (TRACE_CALLLOG=w202lcg): 6 draws at 0x27b270..0x27b2d4 per type 20
+// particle, page frames 894 (tag 61) and 904 (tags 58, 59) = log frames 896 / 906.
+// The draw FUN_0027b300 -> FUN_002f2f08 (flag 0x2100 -> FUN_002f93d8, the 35 KB model renderer) is not decoded:
+// simulated, not drawn (warned).
+T[20] = {
+  init(X, a, o) {                                              // FUN_0027b0f8
+    const F = X.F, v = X.p.v;
+    v[o] = v[o + 2] = F.f32(a + 0x10); v[o + 1] = v[o + 3] = F.f32(a + 0x14);
+    v[o + 4] = F.f32(a + 0x18); v[o + 5] = F.f32(a + 0x1c); v[o + 6] = F.f32(a + 0x20); v[o + 7] = F.f32(a + 0x24);
+  },
+  trans(X, t, a, o, old) {                                     // FUN_0027b120 (asm order)
+    const F = X.F, v = X.p.v, N = k => F.f32(a + k), O = k => F.f32(old + k);
+    const h = f(f(t * t) * 0.5);
+    const V8 = v[o + 2], Vc = v[o + 3], V10 = v[o + 4], V14 = v[o + 5], V18 = v[o + 6], V1c = v[o + 7];
+    const f3 = f(f(f(O(0x20) * h) + f(O(0x18) * t)) + O(0x10));
+    const f0 = f(f(f(V18 * h) + f(V10 * t)) + V8);
+    v[o + 2] = f(N(0x10) + f(f0 - f3));
+    const f1 = f(f(f(V1c * h) + f(V14 * t)) + Vc), f2 = f(f(f(O(0x24) * h) + f(O(0x1c) * t)) + O(0x14));
+    v[o + 3] = f(N(0x14) + f(f1 - f2));
+    v[o + 4] = f(N(0x18) + f(f(f(V18 * t) + V10) - f(f(O(0x20) * t) + O(0x18))));
+    v[o + 5] = f(N(0x1c) + f(f(f(V1c * t) + V14) - f(f(O(0x24) * t) + O(0x1c))));
+    v[o + 6] = f(N(0x20) + f(V18 - O(0x20)));
+    v[o + 7] = f(N(0x24) + f(V1c - O(0x24)));
+    if ((X.p.flags & 2) || !F.u8(a + 0x4a)) return;
+    for (let k = 0; k < 6; k++) v[o + 2 + k] = f(v[o + 2 + k] + X.rng.signed(F.f32(a + 0x28 + 4 * k)));
+  },
+  loop(X, t1, t2, a, o, old) {                                 // FUN_0027b680 (t1 = the loop start's segment time, t2 = the end's)
+    const F = X.F, v = X.p.v, N = k => F.f32(a + k), O = k => F.f32(old + k);
+    const V8 = v[o + 2], Vc = v[o + 3], V10 = v[o + 4], V14 = v[o + 5], V18 = v[o + 6], V1c = v[o + 7];
+    const h2 = f(f(t2 * t2) * 0.5), h1 = f(f(t1 * t1) * 0.5);
+    const r10 = f(N(0x18) + f(f(f(V18 * t2) + V10) - f(f(O(0x20) * t2) + O(0x18))));
+    const r14 = f(N(0x1c) + f(f(f(V1c * t2) + V14) - f(f(O(0x24) * t2) + O(0x1c))));
+    const r18 = f(N(0x20) + f(V18 - O(0x20))), r1c = f(N(0x24) + f(V1c - O(0x24)));
+    v[o + 4] = r10; v[o + 5] = r14; v[o + 6] = r18; v[o + 7] = r1c;
+    v[o + 2] = f(f(f(f(V18 * h2) + f(V10 * t2)) + V8) - f(f(r18 * h1) + f(r10 * t1)));
+    v[o + 3] = f(f(f(f(V1c * h2) + f(V14 * t2)) + Vc) - f(f(r1c * h1) + f(r14 * t1)));
+    // FUN_002d9208(x + 4096, 4096): x - 4096 trunc(x / 4096), when outside [0, 4096)
+    const wrap = x => { const y = f(x + 4096); return f(y - f(4096 * Math.trunc(f(y / 4096)))); };
+    if (v[o + 2] < 0 || v[o + 2] >= 4096) v[o + 2] = wrap(v[o + 2]);
+    if (v[o + 3] < 0 || v[o + 3] >= 4096) v[o + 3] = wrap(v[o + 3]);
+  },
+  draw(X) { X.warn('effects: draw type 20 (FUN_0027b300 -> FUN_002f2f08: the FED model renderer FUN_002f93d8) not translated: not drawn'); },
+};
+// Type 35: the glow of a sprite through a frame-buffer page. Data: +0 anim (FED +0x70), +4 speed, +8 scale % (the
+// repeat's growth), +0xc depth offset, bytes +0x10 page size index (DAT_0046c230 / 238 / 240 / 248), +0x11 frame
+// buffer (FUN_002ef560(mgr, +0x11 != 0, 1)), +0x12 GS ALPHA index (DAT_0046c250), +0x13 repeats, +0x14 depth matrix.
+// Value: +0 clock, u16 +4 frame index, s16 +6 the anim's extent. FUN_00278a68 (asm) init: clock = -emitter dt,
+// frame 0; FUN_00278a88 transition: +6 = max |x|, |y| of FUN_00309828's box (the corners of every frame's sprite
+// record, FUN_00309988); eval 0x278b48 is jr ra; loop 0x2d5740 (LOOP_NOOP). Draw FUN_00278b50 (drawGlow below).
+T[35] = {
+  init(X, a, o) { X.p.v[o] = f(-X.em.dt); X.p.i32[o + 1] &= ~0xffff; },
+  trans(X, t, a, o) {
+    const F = X.F, ai = F.s32(a), anim = ai >= 0 ? F.anim(ai) : 0;
+    if (!anim) return;
+    const b = animBox(X, anim);
+    if (!b) return;
+    const e = Math.max(...b.map(Math.abs));
+    X.p.i32[o + 1] = (X.p.i32[o + 1] & 0xffff) | ((e & 0xffff) << 16);
+  },
+  eval() {},
+  draw: drawGlow,
+};
+// FUN_00309828(anim, box): byte +1 == 1: byte +6 frames, record at anim + s16(anim + 8k + 10); else s16 +6 frames,
+// record at anim + s16(anim + 0x10 + 8k). FUN_00309988(record): byte +0xf == 1 (the VIF sprite records): byte +4
+// sprites, from +0x14 per sprite 4 corners (s16 x, y) + 4 s16, 24 bytes. Returns [minx, miny, maxx, maxy] (raw).
+function animBox(X, anim) {
+  const F = X.F;
+  let x0 = 0x10000, y0 = 0x10000, x1 = -0x10000, y1 = -0x10000;
+  const one = F.u8(anim + 1) === 1, n = one ? F.u8(anim + 6) : F.s16(anim + 6);
+  for (let k = 0; k < n; k++) {
+    const rec = anim + F.s16(anim + (one ? 8 * k + 10 : 0x10 + 8 * k));
+    if (F.u8(rec + 0xf) !== 1) { X.warn('effects: sprite record kind != 1 (FUN_00309988) not translated'); return null; }
+    for (let s = 0; s < F.u8(rec + 4); s++) for (let c = 0; c < 4; c++) {
+      const x = F.s16(rec + 0x14 + 24 * s + 4 * c), y = F.s16(rec + 0x16 + 24 * s + 4 * c);
+      x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y);
+    }
+  }
+  return [x0, y0, x1, y1];
+}
+// Type 103: strands. Data: +0 / +0x10 velocity base / range, +0xc length cap, +0x1c rate (points a frame x dt),
+// +0x20 / +0x30 acceleration base / range, u16 +0x2c pool size, u16 +0x2e life, u16 +0x3c life range, byte +0x3e
+// the gap after a spawn (frames x rate), +0x3f GS ALPHA index, +0x40 position range, +0x50 / +0x60 head / tail
+// colours. Value: +0 the pool (0x60-byte points), +4 the spawn accumulator. FUN_002a9bb8 init (pool via
+// FUN_002f3068, FUN_002aa5e0 clears the live words +0x4c), transition 0x2a9d50 and loop 0x2a9d58 do nothing, eval
+// FUN_002a9d60 (asm order): accumulator += rate x dt; at >= 1: n = trunc points, accumulator = frac - rate x gap;
+// each new point (FUN_002aa610: the first free slot) draws 3 position, 3 velocity, 3 acceleration LCG values and a
+// VU0 R span for its life; then every live point ages (life - 1: dead at 0; below half its life the fade +0x44
+// drops by 2 / life), moves (pos += vel, vel += acc, VADD .xyz) and drags its tail: while the length +0x50 is under
+// the cap it is |tail - pos| (VSQRT), else the tail is pulled to cap along tail - pos (VRSQRT). T: w202c call log,
+// page frame 1011 on: 9 LCG + 1 VU0 R per point, the six particles of each schedule step together (log 1013..1047).
+// GUESS: the eval's first test reads the channel context's word 0 bit 0 (a1 = DAT_004ec058-like context, not the
+// particle; not decoded): taken as clear (the log shows the draws every time a point is due).
+// The draw FUN_002aa120 (GS lines, head -> tail) is not translated: in the w198 dump g4 (f1050) its 24 lines come
+// after the HUD (after layer 6's depth clear, seq 57216), so the draw entry's layer (FUN_002e1e40 / FUN_002e2048)
+// would be needed too. Simulated, not drawn (warned).
+T[103] = {
+  init(X, a, o) {
+    const F = X.F, n = F.u16(a + 0x2c);
+    (X.p.ext ??= {})[o] = Array.from({ length: n }, () => ({ live: 0, pos: [0, 0, 0, 1], tail: [0, 0, 0, 1], vel: [0, 0, 0, 0], acc: [0, 0, 0, 0], life: 0, half: 0, fade: 0, rate: 0, len: 0 }));
+    X.p.v[o + 1] = 0;
+  },
+  trans() {},
+  loop() {},
+  eval(X, t, a, o) {
+    const F = X.F, v = X.p.v, pool = valObj(X, o), r = X.rng;
+    if (!pool) return;
+    const rate = F.f32(a + 0x1c);
+    const acc = f(v[o + 1] + f(rate * X.em.dt));
+    let n = 0;
+    if (acc < 1) v[o + 1] = acc;
+    else { n = Math.trunc(acc); v[o + 1] = f(f(acc - n) - f(rate * F.u8(a + 0x3e))); }
+    const rx = f(F.f32(a + 0x40) * 0.5), ry = f(F.f32(a + 0x44) * 0.5), rz = f(F.f32(a + 0x48) * 0.5);
+    for (let i = 0; i < n; i++) {
+      const q = pool.find(p => !p.live);
+      if (!q) break;
+      q.pos = [r.signed(rx), r.signed(ry), r.signed(rz), 1];
+      q.tail = q.pos.slice();
+      q.vel = [0, 1, 2].map(k => f(F.f32(a + 4 * k) + r.signed(F.f32(a + 0x10 + 4 * k)))).concat(q.vel[3]);
+      q.acc = [0, 1, 2].map(k => f(F.f32(a + 0x20 + 4 * k) + r.signed(F.f32(a + 0x30 + 4 * k)))).concat(q.acc[3]);
+      const life = F.u16(a + 0x2e);
+      q.life = (life + r.vrSpan(F.u16(a + 0x3c))) & 0xffff;
+      q.fade = 1; q.half = life >> 1; q.live = 1; q.len = 0; q.rate = f(2 / life);
+    }
+    const cap = F.f32(a + 0xc);
+    for (const q of pool) {
+      if (!q.live) continue;
+      q.life = (q.life - 1) & 0xffff;
+      if (!q.life) { q.live = 0; continue; }
+      if (q.life < q.half) { q.fade = f(q.fade - q.rate); if (q.fade < 0) q.fade = 0; }
+      for (let k = 0; k < 3; k++) { q.pos[k] = f(q.pos[k] + q.vel[k]); q.vel[k] = f(q.vel[k] + q.acc[k]); }
+      const d = [0, 1, 2].map(k => f(q.tail[k] - q.pos[k]));
+      const s2 = f(f(f(d[0] * d[0]) + f(d[1] * d[1])) + f(d[2] * d[2]));   // VMUL .xyz, VADDy.x, VADDz.x
+      if (q.len < cap) q.len = f(Math.sqrt(s2));
+      else { const k = f(1 / Math.sqrt(s2)); for (let j = 0; j < 3; j++) q.tail[j] = f(q.pos[j] + f(f(d[j] * k) * cap)); }
+    }
+  },
+  draw(X) { X.warn('effects: draw type 103 (strand lines FUN_002aa120, drawn after the HUD) not translated: not drawn'); },
 };
 
 // Screen channels of r0000.fed (worker 0200; the hit on Vincent's 0x1000, FUN_00336508). Vtables from the save RAM
@@ -935,7 +1081,12 @@ function drawSparks(X, a, o, view, out, proj) {               // FUN_0027da78
     if (verts && verts.length > 1) out.push({ line: true, verts, alpha, emitter: em.ei, id: em.id, type: 137, tag: p.tag, slot: s });
   }
 }
-const DRAWN_ELSEWHERE = { 11: 'FUN_0027a170', 100: 'FUN_002cb3f0' };
+// 119 (worker 0202): FUN_002b4de0 init picks a sub-object by data bytes +0x34 / +0x35 / +0x36 (FUN_002a49e8 /
+// FUN_002a5268 / 0x49cc68) whose vtable runs its transition / eval; its draw FUN_002b4f70 (a frame-buffer mesh,
+// 72 tris a particle: w198 g2 / g3, TEX0 the displayed frame 0xe00) is not decoded. MEASURED (w202_lcg): its own
+// channel draws no LCG / VU0 R value in 0x270000..0x2e0000, so the particle is simulated without it (its type 24
+// channel draws 1 LCG value at spawn: log 0x275684 at page frames 911..940 + 2).
+const DRAWN_ELSEWHERE = { 11: 'FUN_0027a170', 100: 'FUN_002cb3f0', 119: 'FUN_002b4f70' };
 
 // ---------------------------------------------------------------------------------------------
 // The engine. One manager (DAT_004ee2e0, the FED 0x40000 is linked into it).
@@ -1422,6 +1573,108 @@ function vuSprite(X, rec, rgba, C, Dm, out, tex, proj, em) {
     out.push({ verts, tex: t, alpha: alphaReg, emitter: em.ei, id: em.id, type: D.type(F, X.d), tag: X.p.tag });
   }
 }
+// FUN_00278b50 (type 35's draw; worker 0202), per particle, in the GS dumps' order (w198 g4: four draws a letter):
+//  1. the anim frame as type 10 (clock += emitter dt, x speed +4, loop flag 0x80) -> sprite record rec;
+//     FUN_002e3498(0.1, .., P +0x50, the type 14 bytes) -> C (the main matrix, as type 10, no flip).
+//  2. FUN_002eec78(mgr, FUN_002ef560(mgr, 5, 0), PSMCT32, w = h = DAT_0046c230[+0x10], FBMSK 0, XYOFFSET
+//     DAT_0046c238[+0x10] (12.4)): the frame target is the page (64 x 64 at TBP 0x2a00 here); FUN_002eea80 clears
+//     it (RGBA 0); the record is drawn into it (FUN_00308028, packet colour 0x80808080) through the matrix
+//     diag(s) + (2037 (PAL, DAT_0050b4f0) / 2048, 2048, 400000), s = (size << 3) / extent (value +6).
+//  3. FUN_002eec78 again with FBMSK 0xff000000 (alpha kept); the screen box of (-e/16, -e/16)..(e/16, e/16)
+//     through C (FUN_002d85e8: v . M, / w, VFTOI4) is copied from frame buffer FUN_002ef560(mgr, +0x11 != 0, 1) into
+//     the whole page: FUN_002792f8 sprite, TEX0 | TBW (DAT_004ec41c >> 6) | 0x664000000 (CT32, 512 x 512, TCC),
+//     TEST 0x30003, ALPHA 0x80000000a8 (= Cs), ST = (box - frame XYOFFSET DAT_004ec424 / 428) / 8192.
+//  4. FUN_002ee228(mgr, 0) restores the scene target; the page is drawn at the box (TEX0 page | TBW DAT_0046c240 |
+//     TW = TH DAT_0046c248 | TCC, TEST 0x5000d, ALPHA DAT_0046c250[+0x12], ST 0.01..0.99, colour = the ref-0
+//     colour x emitter colour clamped 0..255, truncated), +0x13 times, the box growing by (scale % x 0.01 - 1) / 2
+//     of its size on each side after each draw. Z: the depth matrix's (FUN_002e3948) with +0x14, else corner 0's.
+// The item lists these pieces in GS units for the page's layer (gameover_title.js renders the page pass).
+// T (w198 dump g4, f1050): see test_gameover ('glow'): page draws, the copy box, ST, colours.
+// The VU / FPU round toward zero (worker 0202): a float32 of x, one ulp toward zero when round-to-nearest went outward.
+// The glow's last steps use it (T: the w198 dumps' page corners / boxes; with round-to-nearest 1/16 px off at some edges).
+function rz(x) {
+  const r = Math.fround(x);
+  if (!isFinite(r) || r === x || Math.abs(r) <= Math.abs(x)) return r;
+  const b = new Float32Array([r]), u = new Uint32Array(b.buffer); u[0] -= 1; return b[0];
+}
+const GLOW = { size: [256, 128, 64, 32], xyoff: [30720, 31744, 32256, 32512], tbw: [4, 2, 1, 1], tw: [8, 7, 6, 5],
+  alpha: [0x48, 0x42, 0x88], cx: 2037, cy: 2048, z: 400000, frame: [1824, 1792] };   // DAT_0046c230..0x46c250 (ELF; ALPHA FIX 0x80)
+function drawGlow(X, a, o, view, out, tex, proj) {
+  const F = X.F, p = X.p, em = X.em, v = p.v, I = p.i32, d = X.d;
+  const ai = F.s32(a), anim = ai >= 0 ? F.anim(ai) : 0;
+  if (!anim) return;
+  const m14 = p.data[D.ref(F, d, 1)], mode = F.u8(m14 + 1);
+  const C = viewMatrix(X, p.m50, mode, view, f(0.1), null);
+  if (!C) return;
+  v[o] = f(v[o] + em.dt);
+  let ft = f(v[o] * F.f32(a + 4));
+  const nfr = F.u8(anim + 7);
+  let k = I[o + 1] & 0xffff;
+  if (nfr <= ft) {
+    if (!(F.u16(anim + 2) & 0x80)) return;
+    v[o] = f(Math.trunc(ft) % Math.trunc(f(nfr)));
+    I[o + 1] &= ~0xffff; k = 0;
+    ft = f(v[o] * F.f32(a + 4));
+  }
+  while (f(F.s16(anim + 8 + 8 * k + 4)) <= ft) k++;
+  I[o + 1] = (I[o + 1] & ~0xffff) | k;
+  const rec = anim + F.s16(anim + 8 + 8 * k + 2);
+  const si = F.u8(a + 0x10), size = GLOW.size[si], ext = (I[o + 1] >>> 16) & 0xffff;
+  if (si > 3) return;
+  // 2. the record into the page (VU1 with the 0x102 packet: no projection, Z from the matrix)
+  const vif = F.vif ??= new Map();
+  let mem = vif.get(rec);
+  if (mem === undefined) { mem = parseVif(F, rec, F.u16(rec + 8), X.warn); vif.set(rec, mem); }
+  if (!mem) return;
+  const s = rz((size << 3) / ext), off = GLOW.xyoff[si] / 16;
+  const page = [];
+  for (let j = 0; j < F.u8(rec + 4); j++) {
+    const q = 0x40 + 6 * j;
+    const ftoi4 = x => Math.trunc(x * 16) / 16;                   // the VU1 program's FTOI4 (GS 12.4)
+    // GUESS (rounding only): the VU1 accumulate taken as rounding toward zero at each step; T: dumps 3-5, 24 / 32 glows' page
+    // rectangles exact, the rest 1/16 px off at the page's bottom edge (2080 vs 2079.9375; round-to-nearest: 8 / 32 exact).
+    // Two attempts, not closed
+    const xs = [0, 1, 2, 3].map(c => ftoi4(rz(rz(rz(mem.i(q + c, 0) / 16) * s) + GLOW.cx)) - off);
+    const ys = [0, 1, 2, 3].map(c => ftoi4(rz(rz(rz(mem.i(q + c, 1) / 16) * s) + GLOW.cy)) - off);
+    const tex0 = [mem.w(0xc0 + j, 0) >>> 0, mem.w(0xc0 + j, 1) >>> 0];
+    const t = tex.get(`${tex0[1].toString(16)}:${tex0[0].toString(16)}`);
+    if (!t) { X.warn('effects: glow sprite TEX0 not in the FED / core_ef.bin'); continue; }
+    page.push({ x: [Math.min(...xs), Math.max(...xs)], y: [Math.min(...ys), Math.max(...ys)],
+      uv0: [f(mem.i(q + 4, 0) / 4096), f(mem.i(q + 4, 1) / 4096)], uv1: [f(mem.i(q + 5, 0) / 4096), f(mem.i(q + 5, 1) / 4096)],
+      rgba: [0, 1, 2, 3].map(i => mem.b(0xa0 + 2 * j, i)), alpha: mem.i(0xa1 + 2 * j, 0) & 0xff, tex: t });
+  }
+  // 3. the box (12.4): the two corners through 0x70003c30 = C . S (S: the camera's view-screen matrix, sceVu0ViewScreenMatrix
+  // layout: x fx, y fy, z row (cx, cy, zB, 1), w row (0, 0, zA, 0)), FUN_002d85e8: VMULA / VMADDA (the corner's x, y, 0, 1),
+  // VDIV Q = 1 / w, VMULq, VFTOI4 (truncation). T: the w198 dumps' draw-back XY, exact (C . S then / w; fx x / z + cx was
+  // a 12.4 unit off at one corner in two dumps)
+  const e16 = f(ext * 0.0625);
+  const S = new Float32Array([proj.fx, 0, 0, 0, 0, proj.fy, 0, 0, proj.cx, proj.cy, proj.zB, 1, 0, 0, proj.zA, 0]);
+  const M = mul44(S, C);
+  const scr = [[-e16, -e16], [e16, e16]].map(([x, y]) => {
+    const pv = [0, 1, 2, 3].map(j => rz(rz(rz(x * M[j]) + rz(y * M[4 + j])) + M[12 + j]));   // ACC = x m0 + y m1 (+ 0 m2) + m3
+    const q = rz(1 / pv[3]);
+    return [Math.trunc(rz(pv[0] * q) * 16), Math.trunc(rz(pv[1] * q) * 16), pv[3]];
+  });
+  if (!(scr[0][2] > 0)) return;
+  let [x0, y0] = scr[0], [x1, y1] = scr[1];
+  const w = x1 - x0, h = y1 - y0;
+  const copy = { box: [x0, y0, w, h], frame: F.u8(a + 0x11) !== 0 ? 1 : 0,
+    st: [f((x0 - GLOW.frame[0] * 16) * 0.00012207031), f((y0 - GLOW.frame[1] * 16) * 0.00012207031),
+         f(f((x0 - GLOW.frame[0] * 16) * 0.00012207031) + f(w * 0.00012207031)), f(f((y0 - GLOW.frame[1] * 16) * 0.00012207031) + f(h * 0.00012207031))] };
+  // 4. the draw-back boxes and the colour
+  const colSlot = D.refSlot(F, d, 0) / 4;
+  const rgba = [0, 1, 2, 3].map(i => Math.trunc(Math.min(255, Math.max(0, f(v[colSlot + i] * em.col[i])))));
+  if (F.u8(a + 0x14)) X.warn('effects: type 35 depth matrix (data +0x14, FUN_002e3948) not translated: corner 0 depth');
+  const grow = f(f(f(F.f32(a + 8) * 0.01) - 1) * 0.5), boxes = [];
+  for (let r = 0; r < F.u8(a + 0x13); r++) {
+    boxes.push([x0, y0, x1, y1]);
+    const dx = Math.trunc(f(w * grow)), dy = Math.trunc(f(h * grow));
+    x1 += dx; x0 -= dx; y1 += dy; y0 -= dy;
+  }
+  const ai2 = F.u8(a + 0x12);
+  out.push({ glow: true, size, page, copy, boxes, rgba, z: scr[0][2], alpha: GLOW.alpha[ai2] ?? -1,
+    tbw: GLOW.tbw[si], tw: GLOW.tw[si], emitter: em.ei, id: em.id, type: 35, tag: p.tag });
+}
 function xform4(m, v) { const o = [0, 0, 0, 0]; for (let j = 0; j < 4; j++) o[j] = f(f(f(v[0] * m[j]) + f(v[1] * m[4 + j])) + f(f(v[2] * m[8 + j]) + f(v[3] * m[12 + j]))); return o; }
 // VIF UNPACK (cmd 0x60-0x7f): vn = (cmd >> 2) & 3, vl = cmd & 3, m = cmd & 0x10, addr = imm & 0x3ff,
 // usn = imm & 0x4000, TOPS-relative = imm & 0x8000 (the record's addresses are all TOPS-relative)
@@ -1522,12 +1775,14 @@ export class EffectLayer {
     };
     const all = this.last = this.fx.sprites({ toView, toViewMatrix });   // .last: the page tests
     const list = [], lines = [];
-    const screens = [];
-    for (const s of all) (s.screen ? screens : s.line ? lines : list).push(s);
+    const screens = [], glows = [];
+    for (const s of all) (s.glow ? glows : s.screen ? screens : s.line ? lines : list).push(s);
     // one draw order over the sprites, lines and screen sprites: the draw pass's (worker 0200 review)
     this.ord = new Map(all.map((s, i) => [s, i]));
     this.lines(lines, w);
     this.screens(screens, all);
+    // type 35 (worker 0202): drawn by a layer with a frame source (gameover_title.js TitleLayer.glows)
+    if (this.glows) this.glows(glows, camera); else if (glows.length) this.fx.warn('effects: type 35 glow needs a layer with the previous frame (TitleLayer): not drawn');
     while (this.pool.length < list.length) {
       const g = new THREE.BufferGeometry();
       g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(12), 3));

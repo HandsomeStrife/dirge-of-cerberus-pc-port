@@ -109,7 +109,7 @@ export function initReport(ctx) {
     renderer.clear();
     // the frame goes through the page's output stage (output.js) so it matches the canvas;
     // ID/pick renders stay raw
-    if (what === root && ctx.output) ctx.output.render(what, camera, rt); else renderer.render(what, camera);
+    if (what === root && ctx.output) ctx.output.render(what, camera, rt, { keep: false }); else renderer.render(what, camera);   // keep: false: not the displayed frame (the GAME OVER glow's copy)
     renderer.setRenderTarget(null);
     renderer.setClearColor(oldColor, oldAlpha);
     return { rt, w, h };

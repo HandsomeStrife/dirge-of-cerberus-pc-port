@@ -1,0 +1,1 @@
+{"name": "w203_reload_hud", "frames": 60, "log_from": 0, "doc": "worker 0203: from worker 0201's reload state (scratch, f3984 of the w201 drive), no input; the HUD groups as the HUD slides in after the stage reload (FUN_004012c0 state 8 -> FUN_003ad560). TRACE_FIELDSET=hud", "events": []}

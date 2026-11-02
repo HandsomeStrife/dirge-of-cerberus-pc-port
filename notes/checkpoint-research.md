@@ -94,9 +94,62 @@ in between, the holstered gun, 41-43.
   records 11-110.
 - Effects: test on the real manager (a live wall impact 0x46400 and the 0x1000 flash, Restart, freed, spawn again).
 
+## 41-43 at the checkpoint (worker 0204, 2026-11-02)
+**Not script 0.** Script 0 event 0x22 never activates 41-43 (it only switches them off at flag0 == 2); script 88 (trigger
+15, far east) sends them 0x10a. They are **stage-load placements**: section-1 +0x40 = 8 (bit 3) and tags e_Sol_11 / 12 /
+13 in the event-actor table (the reload state's table = the save's, plus w_Gun_00), the rule worker 0116 decoded
+(FUN_00319190 / FUN_003159b8 / FUN_005453b0 -> FUN_00558f68; placements.json load_flag_records + event_actors).
+- FUN_00558f68 (newly flagged, inactive): +0x144(1, 1) -> FUN_00559748 with param_3 = 1: builds body + AI (FUN_00365c50,
+  FUN_0035ee08(ai, a, 1) -> FUN_00360418(ai, 1): magazine + trunc(((mag >> 1) + 1) x rand)), and at its end runs script
+  event 3 (vt+0x2f4, zero args) and clears +0x28 bit 0x100000. Then FUN_00558cc0 (placed at the status matrix), and
+  the tail: C+0x1d8 0, C+0x564 |= 0x20000000 (the next clip's blend = FUN_00312678 = DAT_0046dd68+0x7c, 0 here; cleared
+  by FUN_00344608), C+0x1c0 |= 0x200, FUN_0055b8e0(a, 3, 1, 0) (C+0x808 bit 0 set for stance 0x1f), +0x118 &= ~0x40000.
+- Scripts 105 (41) / 107 (43) event 3: 0x193 (target Vincent), var 7 = 1, 0x142(3), **0x106(1, 80 / 150)**; 106 (42):
+  0x193, 0x143(1). Event 1 with r0 = 1 (105 / 107): 0x193, 0x143(2 on normal, 1 on diff 2) / 107's own.
+- **Cmd 0x106** (FUN_0054cd70): object timers +0x3c / +0x3e; FUN_0053e6e8 / FUN_0053e7a8 keep a list (manager
+  +0x1244..+0x124c); **FUN_0053e868** (in FUN_0053b500 just before FUN_0053fde8) subtracts (int) of the frame step and,
+  at <= 0, posts manager event 0xd -> FUN_0053fde8 case 0xe -> **script event 1 (timer index, 0)**. 0x107 reads a timer.
+- T `w204_reload` (TRACE_FIELDSET=enemy TRACE_ERECS=41,42,43 TRACE_ENEMIES=3 TRACE_EPIN=41:904760:91af00,42:904f80:91b010,
+  43:9057a0:91b120, from 0201's reload state; new fields.py TRACE_EPIN pins bodies built during the run): 41-43
+  inactive to record 9, active at record 10 (Vincent's placement frame), state 3, HP 10 / 28 / 24, rounds 8 / 6 / 0xffff,
+  42 brain mode 1; 41 mode 2 at record 90 (= 10 + 80), 43 mode 1 at record 160; 42's first shot record 12; 41's at 96,
+  Vincent hit at record 100 (780 -> 736); 42 / 43 crouch (state 5) at records 184 / 273. Only 44 / 66 are active in the
+  reload state; 45-49 become active at record 10 too, in the save's states (2 / 1 / 1 / 2 / 2).
+- **Record 24: the hand-off.** All three jump (41 9.65 u to x -1394.98, 42 8.58 u to -1404.25, 43 4.84 u to -1386.16;
+  y -141.45; new facings; +0x28 |= 8 by FUN_0054b6c8). Call log (scratch set on vt+0x234 of classes 0x58e1f8 / 0x58f128):
+  both Vincent's placement (frame 10) and theirs (frame 24) come from 0x558d60 = **FUN_00558cc0**, the actor at its
+  status matrix (+0x30 / +0x40 / +0x50). The status matrix is written by **FUN_003157b0** from the loaded event actor's
+  model (status +0x88: its root transform + a bone offset), called from FUN_003159b8 / FUN_00319190: the opening
+  cutscene's final pose. In the reload state the soldiers' status matrices still hold the placements, Vincent's holds
+  facing (0.0008, 0, 1). That is also where Vincent's start position comes from (0201's open question): it needs the
+  cutscene (event) runtime. Two attempts (float search, call log); stopped there.
+- **The drawn gun** is not a stage-start command: in the reload state (before the loop's first frame) P+0x104 is state 3
+  and the clip h_st_a already. The event VM's game interface (FUN_00326660 cases 0x64-0x7a, FUN_003262b8: player placed by
+  FUN_00558cc0 / FUN_0054b1a0, FUN_00578548, FUN_005764d0 = state 2 / 3 by P+0x2a8 bit 0) and the event file's last
+  commands would be needed. Left out (warned).
+- Page: enemy_ai `stageLoad` + timers + the activation magazine; play.js rebuildEnemies (deadRecs [], 44 / 66, the pass,
+  45-49); swapBodies attaches 41-43's bodies before the first frame. 41-43 stay at their placements (warned): records
+  11-23 equal the game's, later they stand 5-10 u off, and their fire differs (the page's 41 fires a frame early and
+  misses in the hooked run; on the real page one of them hit Vincent before +60 frames).
+- **Fresh page load: not changed.** The save state (the page's start) is later than the stage start: 41-43 dead
+  (shot: corpses settled), flags {2: 7, 46: 1}. Running the stage-load pass there would revive them; starting the page
+  from the stage start instead would need the cutscene's hand-off too (positions, the gun). So the page keeps the save.
+
+## Review fixes (worker 0204, manager review)
+- 0x108's magazine draw against the game's twister: new trace w204_t56rng (k_enemy_engage2's run into trigger 56,
+  `TRACE_RNG=1 TRACE_CALLLOG=w204rng TRACE_CALLLOG_FRAMES=158:175 TRACE_FIELDSET=enemy TRACE_ERECS=44 TRACE_ENEMIES=1`):
+  the only draws in 158-174 are FUN_00360418's for 50 / 51 (frame 163, rounds 6 / 21); the page matches word for word.
+  The bVar1 gate of FUN_00559748 translated (bits 4 / 0x20 of +0x28; never set on z128).
+- Timers in normal play: w204_167 (`TRACE_EVARS=1`, new fields.py opt-in) for 46 / 47 past their path ends: timers, modes,
+  vars equal f1400-1679; event 1 re-arms 200 and keeps mode 1 because script 110 set manager short 0 = 1. Impact list
+  in the audit row. Route w204_t56 (50 / 51, `TRACE_EPIN=50:91adc0:930e50,51:91b5e0:930f60`): they stay idle, no timer.
+- stageLoad: only loaded statuses get the pass (44 / 66 don't qualify in the reload state); an already-active one gets
+  the tail without a state change.
+- Tests read HP / state / position on the first tick (after the restore, after H).
+
 ## Open
-- 41-43's stage-start activation (script 0 event 0x22 / 0x23; notes/enemy-activation.md) - with it the restart's
-  ambush; the page start would also gain them if the page started from the stage start instead of the save.
-- The opening cutscene's hand-off (gun drawn, the gun-view camera); the Status / load screens.
+- The opening cutscene's hand-off (41-43's and Vincent's positions via FUN_003157b0, the gun drawn, the gun-view camera);
+  the Status / load screens.
+- What activates 45-49 at record 10 (not bit 3).
 - The start position's source; records 81-86 (not actors on the page).
 - The page's own start uses event flags {2: 7, 46: 1} where the save's RAM has 0 (not changed here).

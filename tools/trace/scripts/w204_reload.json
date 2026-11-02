@@ -1,0 +1,1 @@
+{"name": "w204_reload", "frames": 300, "log_from": 0, "doc": "worker 0204: as w201_reload (from worker 0201's scratch state saved at the stage reload after game over -> Restart, f3984), no input, logging soldiers 41-43. TRACE_FIELDSET=enemy TRACE_ERECS=41,42,43", "events": []}

@@ -213,7 +213,7 @@ function bar(out, data, s, row, R) {
 function hpBar(out, data, st, e) {
   const s = st.hp;
   if (s[1] === 0) return;
-  gaugeTick(s, st.now);
+  gaugeTick(s, st.mnow);                       // FUN_003aec78 reads FUN_0023c1f0 (mnow)
   bar(out, data, s, 0, e.rect);
   if (s[0] < (s[1] >> 2) && s[0] !== 0) warn('hud: low-HP pulse FUN_003af1e0 not translated');
 }
@@ -222,7 +222,7 @@ function mpBar(out, data, st, e) {
   const s = st.mp;
   if (s[1] === 0) return;
   const [x, y, w, h] = e.rect;
-  gaugeTick(s, st.now);
+  gaugeTick(s, st.mnow);                       // FUN_003aec78 reads FUN_0023c1f0 (mnow)
   const cap = st.mpCap;
   const a = [Math.min(s[0], cap), cap, 0, 0, 0];
   a[3] = Math.min(s[3], cap);
@@ -361,6 +361,7 @@ export function hpText(cur, max) { return numberCodes(cur).concat([0x12], number
 // Shown when a bullet hits Vincent: 8 segments on a ring tilted onto the floor around the screen
 // centre, turning with the camera; the segment toward the shooter shows an arrow for 2 s.
 const f32 = Math.fround;
+const s16 = v => (v << 16) >> 16;
 // FUN_00567c08(Vincent, bullet +0xc0) (from FUN_005720c8 when the bullet's +0x140 bit 1 is clear):
 // d = from - P+0x90 (FUN_0054a720: no parent), normalised; FUN_00260e74(d, (1,0,0), (0,1,0)) = the
 // angle from +X to d about +Y (both projected onto the XZ plane; acos FUN_00261040: 0 at >= 1, pi
@@ -529,10 +530,31 @@ export class HudState {
     this.data = { ...data, sprites: JSON.parse(JSON.stringify(data.sprites)) };
     this.sc = FULL;
     this.metrics = hexBytes(data.font.metrics);
-    this.chain = data.chain.map(e => ({ ...e }));
+    // own copies of what the HUD code rewrites (positions, colours, slide states): a reset() builds again from data
+    this.chain = data.chain.map(e => ({ ...e, rect: e.rect.slice(), box: e.box.slice(), rgba: e.rgba.slice(),
+                                        ...(e.slide ? { slide: e.slide.slice() } : {}) }));
     let slot = null, group = -1;
-    // inGroup: the chain index of the element's top-level group (its panel; hud.js's widehud option)
-    this.chain.forEach((e, i) => { if (e.depth === 0) { slot = e.slot ?? null; group = i; } e.inSlot = slot; e.inGroup = group; });
+    const up = [];
+    // inGroup: the chain index of the element's top-level group (its panel; hud.js's widehud option);
+    // parent: the chain index of its parent (+0x20), for FUN_003cb380's children
+    this.chain.forEach((e, i) => {
+      if (e.depth === 0) { slot = e.slot ?? null; group = i; }
+      e.inSlot = slot; e.inGroup = group;
+      up[e.depth] = i; e.parent = e.depth > 0 ? up[e.depth - 1] : -1;
+    });
+    // the panels' slides (hud.json "slides" = DAT_00471db0 / DAT_00471dc0; worker 0203)
+    this.slides = data.slides || null;
+    this.groupOf = {};
+    this.chain.forEach((e, i) => { if (e.depth === 0 && e.slot != null) this.groupOf[e.slot] = i; });
+    if (!this.slides || !this.chain.every(e => e.depth > 0 || e.slide) || !this.chain.every(e => e.rel)) {
+      this.slides = null;
+      warn('hud: hud.json has no slide data (rebuild data/hud with export_web_hud.py): the HUD does not slide');
+    }
+    // two clocks (worker 0203, review): FUN_0023c1f0 = the menu clock uRam0046b094 (EE timer 1 / 0x24000 x the scale
+    // 0046b08c, 1.0: FUN_00242c70 has no caller; real-time ms, never steps back), read by the slides; FUN_003e2450 =
+    // DAT_004f58ec (FUN_003e23f8: the same deltas except in game state 0x17, the pause), read by the ring, the item
+    // list and the CHAIN draw. GUESS: both start at the save's 232753 (RAM: 232755 / 232753)
+    this.mnow = this.now;
     this.hpElem = this.find(5, 5);
     // the hit-direction ring (reticle kind 5; hud.json "ring", the save's HUD +0x230.. in values.ring)
     this.ringData = data.ring || null;
@@ -551,11 +573,85 @@ export class HudState {
     this.ring.update(this.now, this.ringData.len_show);
     this.ring.frame(this.now, camYaw, paused);
   }
+  // ---- the panels' slides (worker 0203; notes/hud-research.md 'Slide-out at game over')
+  // FUN_003afc98(HUD, p) (out) / FUN_003afcf8(HUD, p) (in): panel p's group (DAT_00471db0[p]: 0xff = the root
+  // HUD+0x18, else slot HUD+0x38+4n) -> FUN_003d5da0 / FUN_003d5d68: FUN_003d0fd0 / FUN_003d0f08 with
+  // DAT_00471dc0[p], and when that started a slide, FUN_003d5d10 (the first step). FUN_003afcf8's
+  // FUN_003d46d0 (the screen root hidden) and FUN_003afbf8 (show list p) are not needed: the page's HUD
+  // root is never hidden and hud.json's flags are already the shown ones (the exporter ran the same show).
+  slidePanel(p, out) {
+    if (!this.slides) return;
+    const tab = this.slides[p];
+    const g = this.chain[tab.slot === 'root' ? 0 : this.groupOf[tab.slot]];
+    if (slideStart(g.slide, tab, this.mnow, out)) this.slideStep(g);
+  }
+  // FUN_003d5d10: FUN_003d0d50 on the group's +0x48 and, when it gives a position, FUN_003cb380(g, x, y, 0)
+  slideStep(g) {
+    const xy = slideAt(g.slide, this.mnow);
+    if (xy) this.move(this.chain.indexOf(g), xy[0], xy[1]);
+  }
+  // FUN_003cb380(e, x, y, 0): the element to (x, y) (0x7fff = keep), its box again (vt+0x3c = FUN_003ca160: the box
+  // is the rect plus the sprite's edge widths, which a move doesn't change, so it moves with the rect), then every
+  // child FUN_003cb380(c, 0, 0, 1): +6 / +8 = its +0x1c / +0x1e (rel) + the parent's. The chain lists descendants
+  // after their parent, so one pass in order sees each parent placed first. FUN_003dd768 (the focused widget's
+  // cursor) does nothing here: no HUD element has the focus.
+  move(i, x, y) {
+    const e = this.chain[i];
+    const ox = e.rect[0], oy = e.rect[1];
+    if (x !== 0x7fff) e.rect[0] = s16(x);
+    if (y !== 0x7fff) e.rect[1] = s16(y);
+    e.box[0] = s16(e.box[0] + e.rect[0] - ox); e.box[1] = s16(e.box[1] + e.rect[1] - oy);
+    for (let j = i + 1; j < this.chain.length && this.chain[j].depth > e.depth; j++) {
+      const c = this.chain[j], P = this.chain[c.parent];
+      const cx = c.rect[0], cy = c.rect[1];
+      c.rect[0] = s16(c.rel[0] + P.rect[0]); c.rect[1] = s16(c.rel[1] + P.rect[1]);
+      c.box[0] = s16(c.box[0] + c.rect[0] - cx); c.box[1] = s16(c.box[1] + c.rect[1] - cy);
+    }
+  }
+  // the screen update's FUN_003d5a80 (type 1, every frame): FUN_003d5d10 for each group with a slide running
+  // (+0x54 != 0); only the top-level groups ever slide
+  slideFrame() {
+    if (!this.slides) return;
+    for (const e of this.chain) if (e.depth === 0 && e.slide[6] !== 0) this.slideStep(e);
+  }
+  // FUN_003ad5b0 (HUD off; FUN_003fdb48(3) at the game over request) -> FUN_003b01b0(HUD, 0) -> FUN_003aff20.
+  // Left out: FUN_003df030(0xf) after it (not decoded; nothing on the page reads it).
+  hideAll() {
+    this.slidePanel(0, true);                                  // FUN_003afe10
+    this.slidePanel(1, true);                                  // FUN_003afe30 (+ HUD +0xd8 = 1: read by FUN_003b0288, not translated)
+    // FUN_003afe60: panel 2 (slot 7) and +0xdc = 1 only with HUD +0xac set (FUN_003af860's message panel, not on the page: 0)
+    // FUN_003afec0: panel 4 only with HUD +0xc59 == 1 (0 on the page), then FUN_003b4d50: DAT_00471388 is 0 here
+    // (no sound / effect to stop) -> FUN_003b4db0: +0xbb4 = 0 (the CHAIN draw's) and +0xbb0 = 0 (read by FUN_003b4aa8 /
+    // 003b4b68 / 003b4c20 / 003b4cc8 / 003b4f28, the CHAIN count updates, not translated: not kept)
+    this.chainBB4 = 0;
+    for (const p of [8, 9, 10, 5]) this.slidePanel(p, true);
+    // FUN_003b4768: the item list closes only when open (HUD +0x564; never on the page)
+    // FUN_003b03e8: FUN_003b0440(HUD, 0) (reticle kind +0x1b0 is 0 in this save and on the page's path: nothing),
+    // then FUN_003b0738 for kinds 5, 6, 7, 4: kind 5 = the hit-direction ring's hide (its 100 ms fade); 4 / 6 / 7 are
+    // not on the page (phase 0: nothing to hide)
+    if (this.ringData) this.ring.hide(this.now, this.ringData.len_show);
+    // HUD +0x538 is 0 (no vt+0xa4 call); FUN_002419d8(0) == 0 in story mode (no FUN_003bc168)
+  }
+  // FUN_003ad560 (the stage loop FUN_004012c0 state 8, after a stage (re)load) -> FUN_003b01b0(HUD, 1) -> FUN_003b0128:
+  // panel 0 (FUN_003affe0), 1 when FUN_003e20e0 (no movie: story play), 2 with +0xac (0), panel 4's FUN_003b5378 with
+  // +0xc59 == 1 (0), 8, 9, 10 (FUN_003b00c8). Left out: FUN_003defd0(0xf, 0) (not decoded; the pair of FUN_003df030(0xf)),
+  // FUN_003afb10(HUD, 0) / FUN_003afbf8 (the show lists), FUN_003affe0's FUN_003adf28 (MP icons) and FUN_003b0010's
+  // FUN_003ae220 (ammo marks): hide flags only, and hud.json's flags are already the shown ones (the exporter ran them)
+  show() {
+    for (const p of [0, 1, 8, 9, 10]) this.slidePanel(p, false);
+  }
+  // the groups as a new HUD has them (FUN_003ad618 -> FUN_003d5ce8 -> FUN_003d0d38: state 0, start 0, base = the
+  // built position). hud.json is the start after a settled show, so its slid-in groups (state 2) are at their base
+  // already; a hidden one (state 4, slot 1) keeps its state, as the reload state (w203_reload_hud record 0) shows.
+  fresh() {
+    if (!this.slides) return;
+    for (const e of this.chain) if (e.depth === 0 && e.slide[0] === 2) { e.slide[0] = 0; e.slide[6] = 0; }
+  }
   find(slot, id) { return this.chain.find(e => e.inSlot === slot && e.id === id && e.depth > 0) || null; }
   // FUN_00339988 -> FUN_003adda8(HUD, P+0x20, P+4, 1) when the status HP changes: FUN_003aec10 with the
   // lag, max -> HUD+0x66, FUN_003aed00: text element 5 = FUN_003cbb58(cur, max)
   setHP(cur, max) {
-    gaugeSet(this.hp, cur, 1, this.now);
+    gaugeSet(this.hp, cur, 1, this.mnow);         // FUN_003aec10: lag until FUN_0023c1f0() + 1000 (mnow)
     this.hp[1] = max;
     if (this.hpElem) this.hpElem.text = hpText(this.hp[0], max);
   }
@@ -610,7 +706,7 @@ export class HudState {
   // (0x472958); cur == 0 with HUD +0xbb4 == 0: 0x472948 -> 0x80, 0x472950 (0x29, 0x2a) -> 0, 0x1d -> 0x80
   chainGauge(e, which) {
     const g = this.chainG;
-    gaugeTick(g, this.now);
+    gaugeTick(g, this.mnow);                  // FUN_003aec78 (mnow); the pulse below reads FUN_003e2450 (now)
     const w = e.rect[2];
     let lo, hi;
     if (g[0] < g[3]) { lo = w * g[0]; hi = w * g[3]; } else { lo = w * g[3]; hi = w * g[0]; }
@@ -631,6 +727,66 @@ export class HudState {
   }
 }
 
+// GUESS: game frames from the stage loop's FUN_003ad560 after a reload to the page's first frame after the restore
+// (MEASURED, not decoded: the reload's load frames; see fidelity-audit 'HUD slide-in after Restart'). w203_reload_hud:
+// the show at 316370 ms (logic frame -3), the page's first frame after the restore = logic frame 10 (record 11)
+export const RELOAD_SHOW_LEAD = 13;
+// Restart (checkpoint.js -> hud.js reset): the stage program's end destroys the HUD (FUN_003ad5e0: vt+0xc), game state
+// 0x13 builds a new one (FUN_003ad530 -> FUN_003ad618; GUESS: hud.json's values) and the stage loop's state 8
+// (FUN_004012c0 -> FUN_003ad560) shows it: panels 0 / 1 (HP, weapon) slide in over 500 ms, 8-10 over 200 ms.
+// now / mnow = the HUD's two clocks at the restore (the frame before the page's first frame after it); both run on.
+export function restartedHud(data, now, mnow = now) {
+  const st = new HudState(data);
+  st.now = now >>> 0;
+  st.fresh();
+  st.mnow = (mnow + 20 - RELOAD_SHOW_LEAD * 20) >>> 0;
+  st.show();
+  st.mnow = mnow >>> 0;
+  return st;
+}
+
+// FUN_003d0fd0 (out = true: state 3) / FUN_003d0f08 (out = false: state 1) on a group's +0x48 slide state
+// an = [state, length / 100 ms, base x, base y, dx, dy, start ms] with tab = DAT_00471dc0[p] { len, dx, dy }.
+// Not when already going / gone that way (out: 3 / 4, in: 1 / 2). Reversing a slide that is still running
+// mirrors its start so the position carries on (start + len 100 >= now -> start = 2 now - (start + len 100)).
+export function slideStart(an, tab, now, out) {
+  now >>>= 0;
+  if (((an[0] - (out ? 3 : 1)) & 0xff) < 2) return false;
+  if (an[0] === (out ? 1 : 3)) {
+    const t = (an[6] + tab.len * 100) >>> 0;
+    an[6] = t < now ? now : (now * 2 - t) >>> 0;
+  } else an[6] = now;
+  an[0] = out ? 3 : 1;
+  an[1] = tab.len;                                             // param_3 == 0
+  an[4] = tab.dx; an[5] = tab.dy;
+  return true;
+}
+// FUN_003d0d50: the position on the sine ease, or null (start 0: no slide). While now < start + len 100:
+// t = now - start (state 1: len 100 - t), angle = (((t << 11) / (len 100) + 0xc00) << 20) >> 20 (12 bits, signed),
+// f = FUN_0045b530(angle 0.0015339808) (sinf), x = base x + (int)((d / 2) (f + 1)) (d / 2 toward zero), the same
+// for y: from base at t 0 to base + d at the end, in f32. At the end: state 1 -> 2 at base, 3 -> 4 at base + d;
+// any other state writes no position, so FUN_003d5d10 moves the group to its (0, 0) (unreachable: the starts
+// always set state 1 / 3). The start is cleared.
+export function slideAt(an, now) {
+  now >>>= 0;
+  if (an[6] === 0) return null;
+  const T = an[1] * 100;
+  const half = v => (s16(v) + ((v & 0xffff) >>> 15)) >> 1;
+  if (now < ((an[6] + T) >>> 0)) {
+    let t = (now - an[6]) | 0;
+    if (an[0] === 1) t = T - t;
+    const ang = ((div0(t << 11, T) + 0xc00) << 20) >> 20;
+    const f = f32(Math.sin(f32(ang * f32(0.0015339808))));
+    const k = f32(f + 1);
+    return [s16(an[2] + Math.trunc(f32(half(an[4]) * k))), s16(an[3] + Math.trunc(f32(half(an[5]) * k)))];
+  }
+  let xy;
+  if (an[0] === 1) { an[0] = 2; xy = [an[2], an[3]]; }
+  else if (an[0] === 3) { an[0] = 4; xy = [s16(an[2] + an[4]), s16(an[3] + an[5])]; }
+  else xy = [0, 0];
+  an[6] = 0;
+  return xy;
+}
 // FUN_003d0ad0(t0, half, a, b, now): a triangle wave from a to b and back, `half` ms each way
 export function pulse(t0, half, a, b, now) {
   a &= 0xff; b &= 0xff;

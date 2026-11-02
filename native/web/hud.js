@@ -10,7 +10,7 @@
 // coordinates at the target resolution (TEX1 nearest = crisp texels when scaled up); elements with
 // +2 flag 8 get the GS's bilinear (TEX1 0x60, FUN_003d3830 -> FUN_003d2dc0).
 import * as THREE from 'three';
-import { HudState, hexBytes } from './hud_core.js';
+import { HudState, hexBytes, restartedHud } from './hud_core.js';
 
 // GS stand-in: Cv = Cf Ct >> 7, Av = Af At >> 7 (TFX modulate, TCC 1), then ((Cs - Cd) As >> 7) + Cd
 // with COLCLAMP (0..255). An 8-bit target clamps the blend factor at 1 and the source at 255, so a
@@ -177,9 +177,13 @@ export class HudLayer {
   // then sees exactly what the GS computes at integer x. fbp (the scissor's frame coordinate) moves
   // with it, so floor(fbp) at a fragment is the frame pixel it shows. Checked against a GS-drawn HUD
   // (test_hud_page.mjs).
-  emit(p, n, tx, ty) {
+  emit(p, n, tx, ty, wide = false) {
     const A = this.attr, h = this.pixelCentre;
-    const sc = p.scissor || FULL_SC;
+    let sc = p.scissor || FULL_SC;
+    // OPTION widehud: a shifted panel's full-frame scissor (frame x 0..431) would cut it at the 4:3 picture's edge moved
+    // by the shift (a panel sliding out stops at canvas x ~1200 on 1600 x 900); there the canvas is the frame, so the
+    // x bounds go (narrower clips, e.g. slot 8's rows, stay)
+    if (wide && sc[0] <= FULL_SC[0] && sc[1] >= FULL_SC[1]) sc = [-1e6, 1e6, sc[2], sc[3]];
     const put = (x, y, u, v, c, id, bil, wr) => {
       A.position.set([tx(x + h), ty(y + h), 0], n * 3); A.uv.set([u, v], n * 2); A.color.set(c, n * 4);
       A.tw.set([id, bil, 0, 0], n * 4); A.wr.set(wr, n * 4); A.sc.set(sc, n * 4); A.fbp.set([x + h, y + h], n * 2); n++;
@@ -240,7 +244,7 @@ export class HudLayer {
       const hi = this.overOne(p);
       // OPTION widehud: o.side = the canvas's margin beside the 4:3 picture (0 when off / native)
       const d = o.side ? (this.anchors[p.panel] || 0) * o.side : 0;
-      const m = this.emit(p, n, d ? x => tx(x) + d : tx, ty);
+      const m = this.emit(p, n, d ? x => tx(x) + d : tx, ty, d !== 0);
       b.count += m - n; n = m;
       if (hi) { b.hiBoxes.push(bx); b.hi = Math.max(b.hi, hi); }
     }
@@ -283,6 +287,7 @@ export async function setupHud({ output, player, url = 'data/hud/hud.json', camY
   if (output) output.hud = o => { if (prev) prev(o); layer.draw(o.renderer, o); };
   let lastHp = player ? player.hp : null;
   const hits = [];
+  let hide = false, pausedAt = null;
   if (!camYaw) console.warn('hud: no camera yaw (CAM+0x178) given: the hit-direction ring turns with yaw 0');
   return {
     layer, get state() { return st; },
@@ -292,11 +297,23 @@ export async function setupHud({ output, player, url = 'data/hud/hud.json', camY
     // Restart (checkpoint.js, worker 0201): the stage program's end destroys the HUD (FUN_003ad5e0: vt+0xc) and game
     // state 0x13 builds a new one (FUN_003ad530 -> FUN_003ad618). GUESS: the new HUD's values = hud.json's (the save's
     // RAM; FUN_003ad618's own initial values not translated); the HUD clock (DAT_004f58ec, a system clock: L) runs on.
+    // Then the stage loop's state 8 slides the new HUD in (hud_core restartedHud, worker 0203). The page's H aid does the same.
     reset() {
-      const now = st.now;
-      layer.state = st = new HudState(data); st.now = now;
-      hits.length = 0; lastHp = player ? player.hp : null;
+      layer.state = st = restartedHud(data, st.now, st.mnow);
+      hits.length = 0; hide = false; lastHp = player ? player.hp : null;
       if (player && player.hp !== st.hp[0]) st.setHP(player.hp, st.hp[1]);
+    },
+    // FUN_003fdb48(3) at the game over request -> FUN_003ad5b0 (HUD off): the panels slide out (hud_core hideAll);
+    // applied in tick() with this frame's clock (as the hits). Called by play.js on gameover.js's 'begin'.
+    hideAll() { hide = true; },
+    // the page's pause (play.js onPause): no game frames run, but FUN_0023c1f0 (the slides' clock) is real time and
+    // runs on through the game's pause (state 0x17 stops only DAT_004f58ec, FUN_003e23f8), so the pause's length is
+    // added to mnow when it closes. GUESS: the HUD's group step (FUN_003d5a80) during the pause is not traced; the page
+    // steps on the next game frame (fidelity-audit 'HUD slide-in after Restart').
+    pause(on) {
+      const t = typeof performance !== 'undefined' ? performance.now() : Date.now();
+      if (on) pausedAt = t;
+      else if (pausedAt != null) { st.mnow = (st.mnow + Math.round(t - pausedAt)) >>> 0; pausedAt = null; }
     },
     // once per game frame, after the frame's damage (enemy_ai tick). GUESS: the HUD clock FUN_0023c1f0
     // advances 20 ms per frame (the same stand-in as aim.js's HUD clock; notes/fidelity-audit.md). The
@@ -304,9 +321,13 @@ export async function setupHud({ output, player, url = 'data/hud/hud.json', camY
     // FUN_003add28) and its draw (FUN_003b0ac0: phase step, then the draw's inputs; +0x234 += 1) do.
     // GUESS: the clock advancing before the frame's game logic (not decoded; it moves a hit's 2 s by one frame at most).
     tick() {
-      st.now += 20;
+      st.now += 20; st.mnow += 20;                 // both HUD clocks (hud_core HudState: now / mnow)
       if (player && player.hp !== lastHp) { lastHp = player.hp; st.setHP(player.hp, st.hp[1]); }
       for (const [p, from] of hits.splice(0)) st.hit(p, from);
+      if (hide) { hide = false; st.hideAll(); }
+      // the screen update's group step (FUN_003d5a80 -> FUN_003d5d10); its order against the stage loop's hide is
+      // not decoded but not visible either (both see this frame's clock; at the start t = 0 is the start position)
+      st.slideFrame();
       st.ringFrame(camYaw ? camYaw() : 0);
     },
   };

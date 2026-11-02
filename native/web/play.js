@@ -771,7 +771,7 @@ async function main() {
     // them before the save is not decoded (notes/enemy-activation.md §1), so FUN_00559748 is not rerun.
     const AWAKE_STATE = { 44: 1, 45: 2, 46: 1, 47: 1, 48: 2, 49: 2, 66: 1 };
     const AWAKE_F118 = { 44: 0, 45: 0x10000200, 46: 0, 47: 0, 48: 0x200, 49: 0x200, 66: 0 };
-    wakeSave = ai => { for (const k of AWAKE) ai.addActor({ rec: k, astate: AWAKE_STATE[k], f118: AWAKE_F118[k] }); };
+    wakeSave = (ai, ks = AWAKE) => { for (const k of ks) ai.addActor({ rec: k, astate: AWAKE_STATE[k], f118: AWAKE_F118[k] }); };
     if (enemyAI) wakeSave(enemyAI);
   } catch (e) { console.warn('enemy AI off:', e.message); enemyAI = null; aiOpts = null; }
   // test aids that move him (H, ?ladder=): the cloth restarts from the new pose (cloth.js reset)
@@ -847,7 +847,9 @@ async function main() {
     // page aid (worker 0181): H also puts HP back to the save's 780, so a dead Vincent (state 7, FUN_005786e8's
     // HP gate) can play on. Not the game's retry: that goes game over -> Restart -> 'Calculating Points' -> the
     // stage-result Status screen -> (not traced further); the soldiers keep their target-dead state.
-    if (e.code === 'KeyH') { php.hp = 780; if (gameOver) gameOver.reset(); follow.clearDeath(); ctrl.reset(); if (cape) cape.cloth.started = false; if (weapon) weapon.reset(); follow.reset(ctrl.pos); detached = null; }   // respawn: spawn angles (ctrl.reset cancels the ladder: its exit() clears CAM+0x1c8; the reset FUN_00329f68 -> FUN_003285d0 leaves CAM+0x1c4 / +0x1c8)
+    // H also rebuilds the HUD and slides it in as after a Restart (hud.js reset; page aid, not the game's: even while
+    // Vincent is alive).
+    if (e.code === 'KeyH') { php.hp = 780; if (gameOver) gameOver.reset(); if (gameHud) gameHud.reset(); follow.clearDeath(); ctrl.reset(); if (cape) cape.cloth.started = false; if (weapon) weapon.reset(); follow.reset(ctrl.pos); detached = null; }   // respawn: spawn angles (ctrl.reset cancels the ladder: its exit() clears CAM+0x1c8; the reset FUN_00329f68 -> FUN_003285d0 leaves CAM+0x1c4 / +0x1c8)
     if (e.code === 'KeyR') { e.preventDefault(); report.open(); }
     if (e.code === 'Space' || e.code.startsWith('Arrow')) e.preventDefault();
   });
@@ -973,6 +975,7 @@ async function main() {
       if (gameOver) {
         gameOver.frame(php.hp === 0, STEP);
         if (gameOver.go.events.includes('deathCamera')) follow.startDeath();   // FUN_0032a420(CAM, 1, 0, 0) + FUN_00328720(CAM)
+        if (gameHud && gameOver.go.events.includes('begin')) gameHud.hideAll();  // FUN_003fdb48(3) -> FUN_003ad5b0: the HUD slides out
       }
       // on the ladder the camera reads the ladder's P+0x104 (ladder.js camState) and the facing C+0x20
       follow.tick({ pos: ctrl.pos, want: ctrl.C.dir, state: ctrl.active?.camState ?? ctrl.P.state, facing: ctrl.C.face,
@@ -1046,14 +1049,23 @@ async function main() {
     bodyRecs.clear();
     const adds = [];
     for (const k of startBodies) if (!enemies.actors.some(a => a.rec === k) && aiData.records[k]) adds.push(enemies.add(aiData.records[k]));
+    // the stage load's statuses (41-43, enemies.js loadRecs): the reload loads their models (FUN_00319190) before the
+    // pass activates them (enemy_ai stageLoad in rebuildEnemies; its onActivate add is then a no-op), so their bodies are
+    // attached before the new world's first frame too (worker 0204)
+    if (aiOpts) for (const k of enemies.loadRecs || []) if (aiData.records[k]) adds.push(enemies.add(aiData.records[k]));
     return Promise.all(adds);
   };
   // the new enemy_ai world, built as at the start with the checkpoint's flags and frame counter (bodies: swapBodies)
   const rebuildEnemies = (flags, frame, clock) => {
     if (!aiOpts) return null;
-    enemyAI = createEnemyAI({ ...aiOpts, eventFlags: flags, now: clock.now, acc: clock.acc });
+    // the reload rebuilds every status (FUN_0030f3d8 / the stage load): nothing is dead (T w204_reload: 41-43 HP 10 / 28 / 24)
+    enemyAI = createEnemyAI({ ...aiOpts, eventFlags: flags, deadRecs: [], now: clock.now, acc: clock.acc });
     enemyAI.S.frame = frame;                         // the new world's frame counter at the placement (checkpoint.js)
-    wakeSave(enemyAI);
+    // T w204_reload: 44 / 66 are already active in the reload state; 41-43 (the stage-load pass, FUN_005453b0 in slot
+    // order) and 45-49 become active at record 10. GUESS (0201): 44-49 / 66 still take the save's states (wakeSave)
+    wakeSave(enemyAI, [44, 66]);
+    enemyAI.stageLoad(enemies ? enemies.loadRecs || [] : []);
+    wakeSave(enemyAI, AWAKE.filter(k => k !== 44 && k !== 66));
     if (window.__play) window.__play.enemyAI = enemyAI;
     return enemyAI;
   };
@@ -1070,7 +1082,7 @@ async function main() {
   const pause = await (await import('./pause_layer.js')).setupPause({
     // the kill's own frame: FUN_00576b48 -> FUN_00241760(1, 3, 0); then gameover.js's FUN_00241760 count / the pad given to the menus (FUN_00253fd8(2))
     output, blocked: () => frozen || php.hp === 0 || !!(gameOver && gameOver.go.pauseBlocked), sound: pauseSound,
-    onPause(on) { paused = on; pressed.clear(); mouse.dx = mouse.dy = 0; drag = null; if (!on) { clock.getDelta(); acc = 0; } },
+    onPause(on) { paused = on; if (gameHud) gameHud.pause(on); pressed.clear(); mouse.dx = mouse.dy = 0; drag = null; if (!on) { clock.getDelta(); acc = 0; } },
     // Sent when the confirm box (pause.js openBox, layout 0x472ad8) is answered OK. Restart: FUN_003c0a20 +
     // FUN_003dee40(0xf) -> FUN_004012c0 case 0xf returns 6 -> the checkpoint (restart above). Tempsave / Quit:
     // warn only (pause_layer.js; no memory card / title on the page)

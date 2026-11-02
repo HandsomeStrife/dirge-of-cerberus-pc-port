@@ -70,7 +70,7 @@ const visible = (p) => { const b = box(verts(p)), s = p.scissor || FULL; return 
 // 2. HP: FUN_00339988 -> FUN_003adda8 (lag on) -> FUN_003aec10 / FUN_003aed00; the drain FUN_003aec78
 {
   const st = new HudState(data);
-  st.now = 100000;
+  st.now = st.mnow = 100000;                         // the gauge reads FUN_0023c1f0 (mnow)
   st.setHP(500, 780);
   ok(JSON.stringify(st.hpElem.text) === JSON.stringify(hpText(500, 780)) && hpText(500, 780).join() === [0x18, 0x13, 0x13, 0x12, 0x1a, 0x1b, 0x13].join(),
     `HP text = FUN_003cbb58 codes ${hpText(500, 780).map(c => c.toString(16))}`);
@@ -82,12 +82,18 @@ const visible = (p) => { const b = box(verts(p)), s = p.scissor || FULL; return 
   const lagA = st2 => lag(st2).filter(q => q.v[1][0] > q.v[0][0]).length;     // a strip with width
   const want0 = mapA((69 + Math.trunc(122 * 500 / 780)) * 16, 30 * 16)[0] / 16;
   ok(barX(st) === want0 && lagA(st) === 1, `hit to 500: the bar ends at cur (${barX(st)} px, want ${want0}), lag segment (alpha 0x4e - 0x20) drawn`);
-  st.now = 100500;
+  st.now = st.mnow = 100500;
   st.prims();
   ok(st.hp[3] === 640, `500 ms later the shown value drains to 780 - 280 x 500 / 1000 = 640 (FUN_003aec78): ${st.hp[3]}`);
-  st.now = 101001;
+  st.now = st.mnow = 101001;
   st.prims();
   ok(st.hp[3] === 500 && st.hp[4] === 0 && lagA(st) === 0 && lag(st).length === 1, `after 1000 ms: shown = cur, timer cleared, the lag strip has no width (still drawn, as FUN_003aed60 does while min < max) (${st.hp[3]}, ${st.hp[4]})`);
+  { // the lag runs on FUN_0023c1f0 (FUN_003aec10 / FUN_003aec78): a hit, then a 2 s pause (only the real-time clock moves)
+    const sp = new HudState(data); sp.now = sp.mnow = 100000; sp.setHP(500, 780); sp.mnow += 2000; sp.prims();
+    ok(sp.hp[3] === 500 && sp.hp[4] === 0, `hit, 2 s pause (mnow only): the lag has drained, as in the game (${sp.hp[3]}, ${sp.hp[4]})`);
+    const sq = new HudState(data); sq.now = 50000; sq.mnow = 100000; sq.setHP(500, 780); sq.mnow += 500; sq.prims();
+    ok(sq.hp[3] === 640, `the lag's start and drain both on mnow (now 50000 apart): 500 ms later 640 (${sq.hp[3]})`);
+  }
   const st3 = new HudState(data);
   st3.setHP(0, 780);
   ok(st3.prims().filter(q => q.kind === 'strip' && q.tex == null && q.c[0][0] === 224 && q.c[0][3] === 78).length === 1 && !st3.prims().some(q => q.kind === 'line' && q.v.some(v => v[1] > 33.5)),
@@ -201,6 +207,149 @@ ok(scissorFb(16, 402, 37, 11).join() === '13,43,459,470' && scissorFb(16, 370, 0
   ok(s8.ring.phase === 2 && ringOf(s8).length === 16, `a sector-8 hit: shown with no arrow, still up 4 s later (phase ${s8.ring.phase}, ${ringOf(s8).length} strips)`);
   ok(ringOf(s8).every(p => p.bilinear && p.tex === 'menu1'), 'kinds >= 5 draw bilinear (FUN_003d3830(1)) from menu1 (DAT_004727f0[10]); TEX1 is not in the GS parser, so code only');
   sts.ring.on = 0; sts.ring.phase = 0; ok(sts.ring.hit(0, 0, 100) === -1 && sts.ring.phase === 0, 'HUD +0x230 off: nothing');
+}
+// 7. the panels' slides (worker 0203): FUN_003ad5b0 -> FUN_003aff20 at the game over request, FUN_003ad560 after a
+// reload; FUN_003d0fd0 / FUN_003d0f08 / FUN_003d0d50 / FUN_003cb380. Traces (gitignored, TRACE_FIELDSET=hud):
+// tools/trace/out/w203_hudslide.jsonl (w192 death route, request f880) and w203_reload_hud.jsonl (worker 0201's reload
+// state); GS dumps (export_web_hud.py --dump tools/trace/out/w203/w203_slide.gs / w192_menu.gs -> data/hud/dump_*.json).
+{
+  const { slideStart, slideAt, restartedHud, RELOAD_SHOW_LEAD } = await import('./hud_core.js');
+  ok(data.slides && data.slides.length === 11 && data.chain.every(e => e.rel) && data.chain.filter(e => e.depth === 0).every(e => e.slide),
+     'hud.json: the slide table (DAT_00471db0 / DAT_00471dc0), each element\'s +0x1c / +0x1e and each group\'s +0x48');
+  const T = data.slides;
+  ok(T[0].slot === 5 && T[0].len === 5 && T[0].dy === -100 && T[1].slot === 6 && T[1].len === 5 && T[1].dy === 100 &&
+     T[8].slot === 8 && T[8].dx === -512 && T[9].dx === 512 && T[10].dx === -512 && T[8].len === 2 && T[5].slot === 1,
+     'panels: 0 = slot 5 (HP) up 100 / 500 ms, 1 = slot 6 (weapon) down 100 / 500 ms, 8 / 9 / 10 = slots 8-10 -512 / +512 / -512 / 200 ms');
+  // unit: the ease's ends and a reversal (FUN_003d0f08 from a running state 3 mirrors the start)
+  const an = [2, 5, 0, 0, 0, -100, 0];
+  ok(slideStart(an, T[0], 1000, true) && an[0] === 3 && an[6] === 1000 && slideAt(an, 1000)[1] === 0, 'start: state 3, start = now, t 0 = the base');
+  ok(!slideStart(an, T[0], 1100, true), 'out again while going out: nothing (FUN_003d0fd0 states 3 / 4)');
+  const mid = slideAt(an, 1250)[1];
+  ok(mid === -50 && slideAt(an, 1499)[1] === -99 && an[0] === 3, `the sine ease: t 250 -> -50, t 499 -> -99 (${mid})`);
+  const rv = an.slice(); slideStart(rv, T[0], 1100, false);
+  ok(rv[0] === 1 && rv[6] === 700 && slideAt(rv, 1100)[1] === slideAt(an.slice(), 1100)[1], 'in while going out: start mirrored (2 now - (start + 500)), same position');
+  const odd = [2, 5, 0, 0, 0, -101, 0]; slideStart(odd, { len: 5, dx: 0, dy: -101 }, 1000, true);
+  ok(slideAt(odd.slice(), 1499)[1] === -99 && slideAt(odd.slice(), 1250)[1] === -50, 'an odd negative d halves toward zero ((d + sign bit) >> 1 = -50, not -51)');
+  const late = [3, 5, 0, 0, 0, -100, 1000]; slideStart(late, T[0], 1600, false);
+  ok(late[0] === 1 && late[6] === 1600, 'in after an out whose time ran out (start + 500 < now, not yet stepped): start = now (FUN_003d0f08 t < now), not mirrored');
+  const two = new HudState(data); two.now = 7000; two.mnow = 9000; two.ring.phase = 2; two.hideAll();
+  ok(two.chain[two.groupOf[5]].slide[6] === 9000 && two.ring.end === 7000 + data.ring.len_show,
+     'two clocks: the slides read FUN_0023c1f0 (mnow, 0046b094), the ring FUN_003e2450 (now, DAT_004f58ec)');
+  const e1 = slideAt(an, 1500);
+  ok(e1[1] === -100 && an[0] === 4 && an[6] === 0, 'end: state 4 at base + d, start cleared');
+
+  const TR = path.join(here, '../../tools/trace/out/w203_hudslide.jsonl'), TR2 = path.join(here, '../../tools/trace/out/w203_reload_hud.jsonl');
+  const G = [5, 6, 8, 9, 10];
+  const hexS = (h, o) => { const b = Buffer.from(h, 'hex'); return b.readInt16LE(o); };
+  const recOf = r => Object.fromEntries(G.map(g => [g, { x: hexS(r['g' + g], 6), y: hexS(r['g' + g], 8), st: Buffer.from(r['g' + g + '_slide'], 'hex')[0],
+                                                         t0: Buffer.from(r['g' + g + '_slide'], 'hex').readUInt32LE(12) }]));
+  const groupsOf = st => Object.fromEntries(G.map(g => { const e = st.chain[st.groupOf[g]]; return [g, { x: e.rect[0], y: e.rect[1], st: e.slide[0] }]; }));
+  const load = f => { const R = {}; for (const l of readFileSync(f, 'utf8').split('\n')) { if (!l) continue; const r = JSON.parse(l); if (r.frame != null) R[r.frame] = r; } return R; };
+  // the game's own clock per logic frame is not logged: logic k reads it between records k and k + 1 (f880: 250370
+  // between 250355 / 250376), so record k + 1's positions must come from one integer t in that window
+  const exact = (R, k0, k1, t0, build) => {
+    const bad = [];
+    for (let k = k0; k <= k1; k++) {
+      const want = recOf(R[k + 1]);
+      let hit = false;
+      for (let c = R[k].clock_ms; c <= R[k + 1].clock_ms && !hit; c++) {
+        const st = build(t0); st.mnow = c; st.slideFrame();
+        const got = groupsOf(st);
+        hit = G.every(g => got[g].x === want[g].x && got[g].y === want[g].y && got[g].st === want[g].st);
+      }
+      if (!hit) bad.push(k + 1);
+    }
+    return bad;
+  };
+  if (!existsSync(TR)) console.log('SKIP slides vs the game: tools/trace/out/w203_hudslide.jsonl missing (TRACE_FIELDSET=hud trace.py w203_hudslide.json)');
+  else {
+    const R = load(TR);
+    const t0 = recOf(R[881])[5].t0;
+    const startOut = c => { const st = new HudState(data); st.mnow = c; st.hideAll(); return st; };
+    ok(G.every(g => recOf(R[880])[g].st === 2 && recOf(R[881])[g].st === 3 && recOf(R[881])[g].t0 === t0) && t0 > R[880].clock_ms && t0 < R[881].clock_ms,
+       `the slide-out starts in the request's frame (f880, clock ${t0}): states 2 -> 3 in record 881`);
+    const bad = exact(R, 880, 910, t0, startOut);
+    ok(bad.length === 0, `FUN_003d0d50 with the game's clock: records 881-911, all five panels exact (x, y, state)${bad.length ? ': not ' + bad.join(' ') : ''}`);
+    // the page: hud.js tick (clock + 20, the queued hide, the step) from the request's frame on
+    const st = new HudState(data); st.mnow = R[880].clock_ms - 5;
+    let worst = 0, wAt = '', stBad = [];
+    for (let f = 880; f <= 920; f++) {
+      st.mnow += 20; if (f === 880) st.hideAll(); st.slideFrame();
+      const got = groupsOf(st), want = recOf(R[f + 1]);
+      for (const g of G) {
+        const d = Math.max(Math.abs(got[g].x - want[g].x), Math.abs(got[g].y - want[g].y));
+        if (d > worst) { worst = d; wAt = `slot ${g} f${f}`; }
+        if (got[g].st !== want[g].st) stBad.push(`slot ${g} f${f}`);
+      }
+    }
+    ok(stBad.length === 0, `page (20 ms frames) vs the game: the same state each frame (start f880, 8-10 done f890, 5 / 6 done f905)${stBad.length ? ': ' + stBad.slice(0, 4).join(', ') : ''}`);
+    ok(worst <= 12, `page vs the game, positions: worst ${worst} HUD px (${wAt}; the game's clock is not 20 ms a frame: PCSX2 frames 18-32 ms)`);
+    // the GS dump of f887 (state f883 + 4): every HUD primitive at one slide time only, 143 ms (the dump's logic clock)
+    const DS = path.join(here, 'data/hud/dump_w203_slide.json'), DM = path.join(here, 'data/hud/dump_w192_menu.json');
+    const pos = vs => vs.map(v => v[0].toFixed(4) + ',' + v[1].toFixed(4)).sort().join(' ');
+    const vpos = p => pos(verts(p));
+    if (!existsSync(DS) || !existsSync(DM)) console.log('SKIP slides vs GS dumps: data/hud/dump_w203_slide.json / dump_w192_menu.json missing');
+    else {
+      const ds = new Set(JSON.parse(readFileSync(DS, 'utf8')).map(r => pos(r.v))), dm = new Set(JSON.parse(readFileSync(DM, 'utf8')).map(r => pos(r.v)));
+      const at = t => { const s = new HudState(data); s.now = s.mnow = 100000; s.setHP(0, 780); s.now += 2000; s.mnow += 2000; s.hideAll(); s.mnow += t; s.slideFrame(); return s.prims().filter(p => p.kind !== 'line'); };
+      const full = [];
+      for (let t = 0; t <= 520; t++) { const ps = at(t); if (ps.every(p => ds.has(vpos(p)))) full.push(t); }
+      ok(full.length === 1 && full[0] === 143 && at(143).length === 97, `f887 dump: all 97 HUD primitives where the game drew them, at slide time ${full.join(' / ')} ms only`);
+      const end = at(600);
+      ok(end.every(p => dm.has(vpos(p))) && end.every(p => { const ys = verts(p).map(v => v[1]), xs = verts(p).map(v => v[0]); return Math.min(...ys) >= 512 || Math.max(...ys) <= 0 || Math.max(...xs) <= 0 || Math.min(...xs) >= 432; }),
+         'f1240 dump (the menu up): all 97 where the game drew them, every one off the 432 x 512 frame');
+    }
+  }
+  // back after a reload: the rebuilt HUD slides in (FUN_003ad560); the page restores at record 10 (Vincent's placement)
+  if (!existsSync(TR2)) console.log('SKIP slide-in vs the game: tools/trace/out/w203_reload_hud.jsonl missing');
+  else {
+    const R = load(TR2);
+    const t0 = recOf(R[0])[5].t0;
+    const startIn = c => { const st = new HudState(data); st.fresh(); st.mnow = c; st.show(); return st; };
+    const bad = exact(R, 0, 30, t0, startIn);
+    ok(G.every(g => recOf(R[0])[g].st === 1 && recOf(R[0])[g].t0 === t0) && bad.length === 0,
+       `slide-in after the reload (start ${t0}, before record 0): records 1-31 exact with the game's clock${bad.length ? ': not ' + bad.join(' ') : ''}`);
+    let st = restartedHud(data, R[10].clock_ms - 5);
+    let worst = 0, stBad = [];
+    for (let n = 1; n <= 25; n++) {
+      st.mnow += 20; st.slideFrame();
+      const got = groupsOf(st), want = recOf(R[10 + n]);
+      for (const g of G) {
+        worst = Math.max(worst, Math.abs(got[g].x - want[g].x), Math.abs(got[g].y - want[g].y));
+        if (got[g].st !== want[g].st) stBad.push(`slot ${g} n${n}`);
+      }
+    }
+    ok(RELOAD_SHOW_LEAD === 13 && stBad.length === 0 && worst <= 2, `page Restart vs the game, records 11-35: same states (5 / 6 in until record 23), positions within ${worst} HUD px`);
+    const same = (a, b) => a.chain.every((e, i) => e.rect.join() === b.chain[i].rect.join() && e.box.join() === b.chain[i].box.join() && e.flags === b.chain[i].flags &&
+                                                  (!e.slide || e.slide[0] === b.chain[i].slide[0]));
+    ok(same(st, new HudState(data)), 'after the slide-in: every element\'s rect / box / flags and the slide states = the start layout');
+  }
+  // the whole tree after the slide vs the game's RAM (w198 state f906, slid out: tree_w198_s1.json from
+  // export_web_hud.py --tree): every element's rect and box (FUN_003cb380 moves the boxes too). Slot 7 slid in that run
+  // only (its message panel had been up: HUD +0xac), so its elements are left out.
+  const TW = path.join(here, 'data/hud/tree_w198_s1.json');
+  if (!existsSync(TW)) console.log('SKIP slid tree vs the game: data/hud/tree_w198_s1.json missing (export_web_hud.py --tree)');
+  else {
+    const tw = JSON.parse(readFileSync(TW, 'utf8')).slice(0, data.chain.length);
+    const st = new HudState(data); st.mnow = 9000; st.hideAll(); st.mnow += 600; st.slideFrame();
+    const bad = st.chain.filter((e, i) => e.inSlot !== 7 && (e.rect.join() !== tw[i].rect.join() || e.box.join() !== tw[i].box.join()));
+    ok(tw.length === st.chain.length && bad.length === 0 && st.chain.filter(e => e.inSlot !== 7).length === 106,
+       `after the slide-out: all 106 elements outside slot 7 at the game's rect and box (w198 f906 RAM)${bad.length ? ': ' + bad.slice(0, 3).map(e => e.inSlot + '/' + e.id).join(' ') : ''}`);
+  }
+  // a Restart during or after the slide-out ends at the start layout too (hud.js reset = restartedHud)
+  for (const k of [3, 40]) {
+    const s0 = new HudState(data); s0.mnow = 5000; s0.hideAll();
+    for (let i = 0; i < k; i++) { s0.mnow += 20; s0.slideFrame(); }
+    const st = restartedHud(data, s0.now, s0.mnow);
+    const first = (st.mnow += 20, st.slideFrame(), st.chain[st.groupOf[5]].rect[1]);
+    for (let i = 0; i < 40; i++) { st.mnow += 20; st.slideFrame(); }
+    const ref = new HudState(data);
+    ok(first < 0 && first > -100 && st.chain.every((e, i) => e.rect.join() === ref.chain[i].rect.join() && e.box.join() === ref.chain[i].box.join()),
+       `Restart ${k} frames into the slide-out: the HP panel comes back in (first frame y ${first}), then the start layout`);
+  }
+  // the ring's hide is part of FUN_003aff20 (FUN_003b03e8 -> FUN_003b0738(5))
+  const sr = new HudState(data); sr.ring.phase = 2; sr.now = 3000; sr.chainBB4 = 1; sr.hideAll();
+  ok(sr.ring.phase === 3 && sr.ring.end === 3000 + data.ring.len_show && sr.chainBB4 === 0, 'FUN_003aff20 also hides the hit ring (kind 5, 100 ms) and zeroes +0xbb4 (FUN_003b4db0)');
 }
 ok(!warnings.some(w => /tiled|selectable|multi-frame|not exported/.test(w)), `no untranslated path hit by the drawn panels (${warnings.filter(w => !/FUN_003cd7e8/.test(w)).join('; ') || 'only the off-screen FUN_003cd7e8 text'})`);
 done();

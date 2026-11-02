@@ -759,9 +759,12 @@ class Setup:
 
         def elem(e, depth):
             d = {'id': e.id, 'type': VT_TYPE[e.op], 'depth': depth, 'flags': e.flags,
-                 'rect': list(e.rect), 'box': list(e.box), 'rgba': list(e.rgba), 'sprite': e.sprite}
+                 'rect': list(e.rect), 'box': list(e.box), 'rgba': list(e.rgba), 'sprite': e.sprite,
+                 'rel': [e.rx, e.ry]}                   # +0x1c / +0x1e: the position in the parent (FUN_003cb380)
             if e.op == 1:
                 d['g3c'] = e.g3c; d['g3d'] = e.g3d
+                if depth == 0:                          # +0x48 slide state (FUN_003d0d50; worker 0203)
+                    d['slide'] = [e.anim[0], e.anim[1], e.anim[2], e.anim[3], e.anim[4], e.anim[5], e.anim[6]]
             if e.op == 13:
                 d['corners'] = [list(struct.pack('<I', e.cw[i])) for i in range(4)]
             if e.op == 2:
@@ -1100,9 +1103,14 @@ def read_tree(mem):
              'rect': [s16(e + o) for o in (6, 8, 10, 12)],      # absolute x, y, w, h (HUD px)
              'box': [s16(e + o) for o in (14, 16, 18, 20)],     # +0xe..: inner box (FUN_003ca160)
              'rgba': list(mem[e + 0x16:e + 0x1a]),
-             'sprite': s16(e + 0x1a)}
+             'sprite': s16(e + 0x1a),
+             'rel': [s16(e + 0x1c), s16(e + 0x1e)]}             # position in the parent (FUN_003cb380)
         if d['type'] == 1:                                      # FUN_003d5ac0: +0x3c bit 0 = clip children to the box
             d['g3c'] = mem[e + 0x3c]; d['g3d'] = mem[e + 0x3d]
+            if depth == 0:                                      # +0x48 slide state: state, length / 100 ms, base x y, dx dy, start
+                d['slide'] = [mem[e + 0x48], mem[e + 0x49]] + [s16(e + o) for o in (0x4a, 0x4c, 0x4e, 0x50)] + [u32(e + 0x54)]
+                if d['slide'][0] == 0:                          # FUN_003d0d38 leaves length / dx / dy unset (stale heap bytes)
+                    d['slide'][1] = d['slide'][4] = d['slide'][5] = 0   # until a slide start (FUN_003d0f08 / 0fd0) writes them
         if d['type'] == 13:                                     # FUN_003d5f68: corner colours at +0x3c
             d['corners'] = [list(mem[e + 0x3c + 4 * i:e + 0x40 + 4 * i]) for i in range(4)]
         if d['type'] == 2:                                      # text (FUN_003d7040 -> FUN_003cc0a8)
@@ -1189,6 +1197,18 @@ def sprite_table(elf, ids):
         if cp:
             s['corners'] = [list(elf.read(cp + 4 * i, 4)) for i in range(4)]
         out[sid] = s
+    return out
+
+
+def slides_json(elf):
+    """The HUD panels' slides (worker 0203; FUN_003afc98 / FUN_003afcf8): panel p -> group DAT_00471db0[p] (0xff = the
+    root HUD+0x18, else slot HUD+0x38+4n) and DAT_00471dc0[p] = { u8 length / 100 ms, pad, s16 dx, s16 dy }."""
+    out = []
+    for p in range(11):
+        s = elf.u8(0x471db0 + p)
+        r = 0x471dc0 + 6 * p
+        out.append({'slot': 'root' if s == 0xff else s, 'len': elf.u8(r),
+                    'dx': struct.unpack('<h', elf.read(r + 2, 2))[0], 'dy': struct.unpack('<h', elf.read(r + 4, 2))[0]})
     return out
 
 
@@ -1330,7 +1350,18 @@ def main():
     ap.add_argument('--ring-dump', nargs=2, metavar=('DUMP', 'STATE'),
                     help='also write OUT/ring_<name>.json: the hit-direction ring\'s draws in this (decompressed) GS dump '
                          'and the ring state / camera yaw of the save state grabbed with it (test reference)')
+    ap.add_argument('--tree', metavar='STATE',
+                    help='also write OUT/tree_<name>.json: the HUD element tree (rect, box, slide state) of this save state '
+                         '(test reference: the slid-out HUD at game over, worker 0203)')
     a = ap.parse_args()
+    if a.tree:
+        sys.path.insert(0, os.path.join(ROOT, 'tools/trace'))
+        from p2s import read_p2s  # noqa: E402
+        os.makedirs(a.out, exist_ok=True)
+        name = os.path.splitext(os.path.basename(a.tree))[0].replace(' ', '_')
+        with open(os.path.join(a.out, 'tree_%s.json' % name), 'w') as fh:
+            json.dump([{k: d[k] for k in ('id', 'depth', 'slot', 'rect', 'box', 'slide', 'flags') if k in d}
+                       for d in read_tree(read_p2s(a.tree)['eeMemory.bin'])[0]], fh)
     if a.ring_dump:
         os.makedirs(a.out, exist_ok=True)
         name = os.path.splitext(os.path.basename(a.ring_dump[0]))[0].replace(' ', '_')
@@ -1390,7 +1421,7 @@ def main():
         'chain': chain, 'values': values,
         'layout': {str(k): v for k, v in layout.items()},
         'sprites': {str(k): v for k, v in sprite_table(elf, ids).items()}, 'kinds': kinds, 'bars': bars,
-        'textures': textures, 'ring': ring_json(elf),
+        'textures': textures, 'ring': ring_json(elf), 'slides': slides_json(elf),
         'font': {'w': w, 'h': h, 'atlas': atlas.hex(), 'cluts': {str(k): v for k, v in cluts.items()},
                  'metrics': metrics.hex()},
     }

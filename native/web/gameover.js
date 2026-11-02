@@ -125,8 +125,7 @@ export class GameOver {
   // FUN_003fdb48(type)
   begin(type, now) {
     this.endType = type; this.endState = 0;
-    this.events.push('begin');
-    warnOnce('hud', 'game over: FUN_003ad5b0 (HUD off) is not on the page; the HUD stays');
+    this.events.push('begin');                     // play.js: FUN_003ad5b0 (HUD off) -> hud.js hideAll (worker 0203)
     warnOnce('voice', 'game over: the voice se_0347..se_0349 (FUN_003eb250, an ATRAC stream row) is not played');
     this.ref(1, 0);                                // FUN_00241760(1, 0, 0)
     this.db80 = this.bit2000 ? 1 : 0;              // DAT_0047db80 = FUN_003e0d00()
