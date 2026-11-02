@@ -47,18 +47,24 @@ def pools(p, fed):
         data.append(u32(u32(p + 0x48) + 4 * i) - fed)
         ty, slot = u16(d), u16(d + 4)
         q = u32(vr + slot)
+        if ty in (107, 109) and q:             # worker 0200: r0000's value objects (+4 value, +8 base, +0xc rate, +0x10 acc)
+            res[str(i)] = {'type': ty, 'addr': q, 'f': [f32(q + 4 * k) for k in range(5)]}
+            continue
         if ty not in (21, 137) or not q:
             continue
         size = 0x30 + s16(q + 0x1c) * 0x90 if ty == 21 else u32(q + 0x30)
         res[str(i)] = {'type': ty, 'addr': q, 'hex': EE[a(q):a(q) + size].hex()}
     return res, data
+# worker 0200: optional 3rd argument, the FED FileCodes whose emitters are written (default 0x40000; '0,0x40000' adds
+# r0000's): each emitter gets 'code'
+CODES = {int(x, 0) for x in (sys.argv[3] if len(sys.argv) > 3 else '0x40000').split(',')}
 c = u32(0x50b4f8)
 for nm, o in (('view', 0x150), ('proj', 0x110)):
     out['cam'][nm] = [f32(c + o + 4 * i) for i in range(16)]
 o = u32(0x4ee2e0 + 0x84)
 while o:
-    if u32(u32(o + 0x70) + 4) == 0x40000:
-        em = {'addr': o, 'ei': u16(o + 8), 'p80': vec(o + 0x80), 'r90': vec(o + 0x90), 'd4': u8(o + 0xd4),
+    if u32(u32(o + 0x70) + 4) in CODES:
+        em = {'addr': o, **({'code': u32(u32(o + 0x70) + 4)} if len(sys.argv) > 3 else {}), 'ei': u16(o + 8), 'p80': vec(o + 0x80), 'r90': vec(o + 0x90), 'd4': u8(o + 0xd4),
               'age': f32(o + 0x1c), 'dt': f32(o + 0x20), 'p120': vec(o + 0x120),
               'm': [f32(o + 0xe0 + 4 * i) for i in range(16)], 'col': vec(o + 0xb0), 'scale': vec(o + 0xa0), 'parts': []}
         for L in (0, 1):

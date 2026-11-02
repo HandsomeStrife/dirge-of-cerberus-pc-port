@@ -294,6 +294,22 @@ SETS["fxsrc"] = [
          copy=[cp("a0", 0, 4), cp("a1", 0, 4)]),                                                 # end, normal (+0x100)
 ]
 
+# worker 0200: every effect-LCG draw (FUN_002d98c8 signed / FUN_002d9938 unit: one range-scanned stub each over the
+# effect channel code 0x270000..0x2e0000) with its caller, the per-frame reseed (FUN_002efc78 -> FUN_002d97f8) and the
+# effect spawns (fxsrc's FUN_003366b8 sites): which code draws between the hit's 0x40c00 and 0x41800 (w188 'State C').
+SETS["w200lcg"] = [SETS["fxsrc"][2],
+    dict(id=140, kind="site", where=(0x270000, 0x2E0000, 0x2D98C8), name="lcg_signed", copy=[cpr("ra")]),
+    dict(id=141, kind="site", where=(0x270000, 0x2E0000, 0x2D9938), name="lcg_unit", copy=[cpr("ra")]),
+    dict(id=142, kind="site", where=(0x2EFC78, 0x2EFE00, 0x2D97F8), name="fx_reseed", copy=[cpr("ra")]),
+]
+
+# worker 0200: who calls FUN_00580410 (FUN_003365e0(0x4800) at FUN_0054a720's position of its object a0)
+SETS["w200_4800"] = [SETS["fxsrc"][3],
+    dict(id=143, kind="site", where=(0x518838, 0x518a00, 0x580410), name="c580410_518838", copy=[cpr("a0"), cpr("ra")]),
+    dict(id=144, kind="site", where=(0x545b20, 0x547800, 0x580410), name="c580410_545b20", copy=[cpr("a0"), cpr("ra")]),
+    dict(id=145, kind="site", where=(0x55cac8, 0x55d2c0, 0x580410), name="c580410_55cac8", copy=[cpr("a0"), cpr("ra")]),
+]
+
 # worker 0194: menu sounds and the pause volume (notes/audio-research.md "Menu sounds"). FUN_003e1d90 (once a frame) plays
 # the latched id: FUN_003e9e60(name 0x47d5c8[id], x, y); FUN_003e9ed0 sends it as FUN_003e7850(_, id, pan, 0x7f);
 # FUN_00241f40 (pause / resume) calls FUN_003e86e0(mgr, paused) and FUN_003ed7d0(vol); FUN_003ed8e0 then sends

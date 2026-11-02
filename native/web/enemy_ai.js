@@ -123,6 +123,9 @@ const DEFLECT_TICKS = 8;
 // P+0x27c, the deflect window's start: FUN_00571ee8 (player constructor) sets -40; only Vincent's own melee
 // (FUN_00569dc0 -> FUN_00573360, combo FUN_0056de80 / FUN_0056ec08) moves it, and the page has no melee for him.
 const P27C_INIT = -40;
+// P+0x280 (worker 0200): FUN_00571ee8 sets -DAT_0046ee28 = -15 (ELF word 15; the save RAM holds -15 at frame counter
+// 1575, the page's S.frame 0), so the first hit always passes FUN_005720c8's gate
+const HIT_FX_GAP = 15, P280_INIT = -HIT_FX_GAP - 1575;
 // FUN_00348fe8 (FUN_00323128, after the object update) runs FUN_00343160 on each C object in the list *(DAT_0046f0e0
 // + 8) -> C+0x550. The save's list (RAM): #66 (record 44), #88 (record 66), Vincent, 0x919d80, #67..#71 (records
 // 45-49). Records listed here update before Vincent. GUESS: a record activated after the save joins after him (the
@@ -372,6 +375,7 @@ export function createEnemyAI(opts) {
   const spreadRand = opts.spreadRand || rng;
   let pStart = null;                                                          // Vincent's start-of-frame position (tick)
   if (P) P.t27c ??= P27C_INIT;                                                // P+0x27c (FUN_00571ee8)
+  if (P) P.t280 ??= P280_INIT;                                                // P+0x280 (FUN_00571ee8): the hit flash gate
   // P+0x148 / +0x150 / +0x152 / +0x150 bits 40-43: the stagger time and sums (save RAM: -120 / 0 / 0 / phase 0;
   // the frame counter DAT_0046e938+0x20 is 1575 there, so the first gap is >= 60 either way; as P+0x27c's -40)
   if (P) { P.s148 ??= -120; P.s150 ??= 0; P.s152 ??= 0; P.sphase ??= 0; }
@@ -2531,13 +2535,15 @@ export function createEnemyAI(opts) {
   // FUN_005ad508 -> FUN_0030bef8: T(marker xyz) x bone palette, then x diag(1,-1,-1) (FUN_00342fa8) and
   // the owner's world). The page's boneWorld (bone x model, the part test's) stands for the last three.
   // Local row 3 = record +0x20 (the rows' rotation does not move a sphere's centre).
+  // why world.boneWorld gave no pose: unset (no page / test hook), or set but this actor has no posed body (still loading)
+  const noPose = a => world.boneWorld ? `record ${a.rec} has no posed body yet` : 'boneWorld unset';
   function attackCentre(o) {
     if (o.fixed) return o.fixed;
     const a = o.owner, mk = data.markers && data.markers[recModel(a)];
     const m = mk && mk[o.marker];
     if (!m) { warnOnce(`enemy_ai: no marker ${o.marker} for ${recModel(a)} (old ai.json: rebuild data/enemies)`); return null; }
     const bw = world.boneWorld ? world.boneWorld(a) : null;
-    if (!bw || m[3] < 0) { warnOnce('enemy_ai: no pose for the melee hit volume (boneWorld unset)'); return null; }
+    if (!bw || m[3] < 0) { warnOnce('enemy_ai: no pose for the melee hit volume (' + noPose(a) + ')'); return null; }
     const B = bw(m[3]);
     const p = [0, 1, 2].map(k => f(m[k] + o.local[k]));
     return [0, 1, 2].map(k => f(f(f(f(p[0] * B[0][k]) + f(p[1] * B[1][k])) + f(p[2] * B[2][k])) + B[3][k]));
@@ -2619,9 +2625,13 @@ export function createEnemyAI(opts) {
   }
   // FUN_0057a830: target vt+0x1e4 (Vincent: FUN_005725d8 -> FUN_0055eac8), +0xc1 |= 0x20, the owner's hit
   // count FUN_00568e48 -> FUN_00360990 (AI +0x7a += 1, +0x60 = now). Effects FUN_00541b08 / +0x130 / +0x134
-  // and FUN_00336508 (= FUN_003366b8(0x1000), an effect: the effect system is not decoded) are not on the page.
+  // are not on the page. FUN_005725d8 calls FUN_00336508 (= FUN_003366b8(0x1000), FED r0000) after FUN_0055eac8
+  // with no gate and no P+0x280 stamp (worker 0200).
   function attackApply(o, c, A, B) {
-    if (!((P.f118 | 0) & 0x20)) attackDamagePlayer(o, c, A, B);                 // FUN_005725d8: P+0x118 bit 5
+    if (!((P.f118 | 0) & 0x20)) {                                               // FUN_005725d8: P+0x118 bit 5
+      attackDamagePlayer(o, c, A, B);
+      if (opts.effect && opts.effect.spawn) opts.effect.spawn(0x1000, [0, 0, 0]);
+    }
     o.c1 |= 0x20;
     const ai = o.owner.ai;
     if (ai) { ai.f7a = short((ai.f7a | 0) + 1); ai.f60 = S.now; }
@@ -2976,16 +2986,24 @@ export function createEnemyAI(opts) {
       if (b.f120 & 2) warnOnce('enemy_ai: bullet +0x120 bit 2 (FUN_003361b8 gate FUN_003354b8) not translated: hit effect spawned');
       opts.effect.hit(0, (b.from?.ai?.W?.cls ?? 0) & 3, hit.point);
     }
-    // FUN_005720c8: FUN_00336508 = FUN_003366b8(0x1000) when now - P+0x280 > DAT_0046ee28 (15): FED r0000, not on the page
-    // (its LCG draws precede the bullet-end effect in the game's end pass; notes/effects-research.md 'Bullet end')
-    if (opts.effect) warnOnce('enemy_ai: FUN_00336508 effect 0x1000 (FED r0000) on a hit on Vincent not translated'); // FUN_0055db50 -> FUN_003361b8(param_3 = the hit point, kind: P+0x19c = 0): bullet +0x150 = W+0x14 >> 2 & 3
+    // FUN_0055db50 -> FUN_003361b8(param_3 = the hit point, kind: P+0x19c = 0): bullet +0x150 = W+0x14 >> 2 & 3
     if (DAMAGE) damagePlayer(b);
     else events.push('hit player (damage off)');
     // FUN_00567c08(P, bullet +0xc0 = b.start) unless bullet +0x140 bit 1 (never set on the page's soldier bullets):
     // the HUD's hit-direction ring (hud_core.js HitRing). Also with ?enemydmg=0 (the hit itself is the game's)
     // P+0x90 during the bullet pass = the frame's start position (pStart; P.pos can move in the hit-reaction redo)
     if (opts.hudHit) opts.hudHit((pStart || P.pos).slice(), b.start.slice());
+    hitFlashGate();
     return 1;
+  }
+  // FUN_005720c8, after FUN_0055db50 and FUN_00567c08 (worker 0200): DAT_0046ee28 (15) < now - P+0x280 ->
+  // FUN_00336508, P+0x280 = now (DAT_0046e938+0x20 = S.frame). FUN_00336508 = FUN_003366b8(0x1000) alone (no
+  // FUN_002e7660): the emitter keeps the spawn's position 0 (FED r0000 emitter 7: the screen flash, type 107, and the
+  // frame-buffer zoom, type 110). T: w193_fxsrc f789 / f1011: 0x40c00, 0x1000, 0x41800 in that order.
+  function hitFlashGate() {
+    if (!(HIT_FX_GAP < S.frame - P.t280)) return;
+    if (opts.effect && opts.effect.spawn) opts.effect.spawn(0x1000, [0, 0, 0]);
+    P.t280 = S.frame;
   }
   // FUN_00554ea8 (the bullet's end), bullet +0x120 bit 0x80 clear (never set here): the shooter (+0x128,
   // FUN_0053b978) with an AI counts it: nothing hit (+0x14c == -1) -> FUN_00568e20 -> FUN_00360920 (AI
@@ -3184,7 +3202,7 @@ export function createEnemyAI(opts) {
       const cyl = cylinderHit(a.size.r, b.prev, b.pos, A, B);
       if (!cyl) continue;
       const bw = world.boneWorld ? world.boneWorld(a) : null;                 // the MP's posed skeleton
-      if (!bw) { warnOnce('enemy_ai: no pose for the part test (boneWorld unset); soldiers not hit'); continue; }
+      if (!bw) { warnOnce('enemy_ai: no pose for the part test (' + noPose(a) + '); not hit'); continue; }
       const part = partTest(boxes, bw, b.prev, b.pos);
       if (part < 0) { aiHit(a, 0, 0); events.push(`near miss ${a.id}`); continue; }   // FUN_0055df90 (no part mask on the page: C+0x77c 0, trace pmask)
       const dist = len3(sub3(b.prev, cyl.point));
@@ -3305,7 +3323,7 @@ export function createEnemyAI(opts) {
       if (lb != null && lb >= 0) {
         const bw = world.boneWorld ? world.boneWorld(a) : null;
         if (bw) point = bw(lb)[3].slice(0, 3);
-        else warnOnce('enemy_ai: no pose for the lock point (boneWorld unset); lock-on aims at the body top');
+        else warnOnce('enemy_ai: no pose for the lock point (' + noPose(a) + '); lock-on aims at the body top');
       }
       const alive = !dead(a), bits = alive ? PROBE_BITS : PROBE_BITS_DEAD;
       out.push({ id: a.id, alive, lockable: alive && !!(bits & 4), probeBits: bits, point,
@@ -3387,9 +3405,6 @@ export function createEnemyAI(opts) {
       if (a.f19c && a.f19c.fx == null) warnOnce('enemy_ai: ai.json zones have no fx nibble (old export: rebuild data/enemies); kind 0 used');
       if (b.f120 & 2) warnOnce('enemy_ai: bullet +0x120 bit 2 (FUN_003361b8 gate FUN_003354b8) not translated: hit effect spawned');
       opts.effect.hit(a.f19c ? a.f19c.fx ?? 0 : 0, b.cls ?? 0, hitpos);
-      // T: w193_fxhits f871 (Vincent's second hit on #67): FUN_00580410 -> FUN_003365e0(0x4800) (FED r0000; its
-      // source object and condition not followed)
-      warnOnce('enemy_ai: FUN_00580410 effect 0x4800 (FED r0000) at some soldier hits (condition not decoded) not translated');
     }
     // FUN_00567f10 (actor +0x28 bit 0x20 clear): not on the page
     events.push(`hit ${a.id} part ${a.part} dmg ${dmg} hp ${a.hp}`);
@@ -3413,7 +3428,12 @@ export function createEnemyAI(opts) {
   // FUN_0055cac8: cue (sound), script event 0x17, FUN_005435a8 (manager: not decoded), the AI's
   // modes 0 (FUN_0035f728 = FUN_0035f268 / FUN_0035f540 / FUN_0035f9a0 with 0: the fire timer stops)
   // and the item drop. GUESS: the item drop (FUN_00316d70 / FUN_00541688) is left out (no items on the page).
+  // The drop's effect (worker 0200): FUN_0055cac8 places the new item (FUN_00541688, FUN_0054b1d8) and calls
+  // FUN_00580410(item) = FUN_003365e0(0x4800, FUN_0054a720(item): its position): FED r0000 emitter 18, a type 21
+  // burst. T: w193_fxhits f871 (#67 killed by Vincent's second shot; w200_4800 call log: the jal at 0x55ce58).
+  // It needs the item, so it is left out with the drop (warned).
   function enemyDeath(a) {
+    if (opts.effect) warnOnce('enemy_ai: soldier death item drop (FUN_00316d70 / FUN_00541688) and its effect 0x4800 (FUN_00580410) not translated');
     runEvent(a, 0x17);
     if (a.ai) { setMode(a.ai, 0); setActionLayer(a.ai, 0); setCombatLayer(a.ai, 0); }
     events.push(`dead ${a.id}`);
@@ -3694,12 +3714,13 @@ export function createEnemyAI(opts) {
   // fired, now; queueShot: the same at this frame's player slot inside the next tick (the page).
   const world = { S, actors, triggers, bullets, attackObjs, objects, addActor, tick, runEvent, recById, events, activated, setActive,
                   playerShot, queueShot, lockTargets, pushOut, boneWorld: opts.boneWorld || null,
+                  eventFlags: EVFLAGS,                    // the world's event flags (FUN_003ff738; tests: checkpoint.js)
                   playerBoneWorld: opts.playerBoneWorld || null,
                   attackPick: a => attackPick(a.ai),     // FUN_0035ff98 on an actor's AI (tests)
                   // single translated functions, for the tests' direct state checks
                   stageRec, t: { brain5, brain6, stateMotion, setActorState, bulletEnd, target, send, setMode, setTarget, setActionLayer, action2, action3, action56, flinch, die, navOf,
                        makeAttack, attackObjUpdate, attackCentre, sphereCapsule, offence,
                        spreadAim, roomProbe, enemyBulletHit, playerPartTest, targetPoint, damagePlayer, attackDamagePlayer,
-                       endEffect, bulletUpdate, hitEnemy } };
+                       endEffect, bulletUpdate, hitEnemy, playerHandler, attackApply } };
   return world;
 }

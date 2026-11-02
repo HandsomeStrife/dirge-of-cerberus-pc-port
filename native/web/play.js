@@ -25,9 +25,10 @@ import { createOutputStage } from './output.js';
 import { setupAim } from './aim.js';
 import { setupHud } from './hud.js';
 import { setupEnemies } from './enemies.js';
-import { createEnemyAI } from './enemy_ai.js';
+import { createEnemyAI, GameRandom } from './enemy_ai.js';
 import { createEffects, EffectLayer, wallImpactId, hitImpactId } from './effects.js';
 import { boneRows } from './enemy_hit.js';
+import { restoreCheckpoint } from './checkpoint.js';
 
 const params = new URLSearchParams(location.search);
 const hud = document.getElementById('hud');
@@ -640,6 +641,9 @@ async function main() {
     console.warn('enemy AI off: data/enemies/ai.json is out of date (rebuild data/enemies)');
     aiData = null;
   }
+  // the game's twister (DAT_004fbe00), one for every enemy_ai world: seeded only at boot (FUN_00248528 from the entry;
+  // FUN_00248a70), never on the stage reload path, so it runs on through a Restart (GUESS: seed 0, as enemy_ai's default)
+  const aiRng = new GameRandom(0);
   const enemies = ENEMIES ? await setupEnemies({ root, litPatch, light, extra: aiData ? AWAKE.map(k => aiData.records[k]) : [] })
     .catch(e => { console.warn('enemies off:', e.message); return null; }) : null;
   // Vincent's status for the enemy AI: HP 780 = P status +0x20 in the save state (k_enemy_engage8 p_hp)
@@ -653,6 +657,7 @@ async function main() {
   // until the zone's SE data has loaded. snd(name, pos, range): the game's FUN_0033cc48 / FUN_0033ce10; pos null =
   // FUN_0033cbd8 (at the sound camera = the listener position when sent).
   let sfx = null;
+  let musicRestart = null;                         // checkpoint.js: the zone music / ambience again (set below)
   const pauseSound = { audio: null, music: null };   // pause_layer.js: menu sounds + the pause's SE hold / BGM volume
   const snd = (name, pos, range = 400.0) => { if (sfx) sfx.play(name, pos, range); };
   if (SOUND) import('./audio.js').then(({ GameAudio, SoundEmitters }) => {
@@ -673,6 +678,9 @@ async function main() {
         if (!muOn && mu.meta) { muOn = true; mu.playMusic3('bgm_001', 0, 4000).catch((e) => console.warn('music:', e)); }
       };
       mu.load(128).then(go, (e) => console.warn('music: no BGM data (tools/audio/bgm.py)', String(e))); au.ready.then(go, () => {});
+      // Restart (checkpoint.js). GUESS: the stage reload stops the BGM / ambience and its ev0100 / ev0101 start them again
+      // (the teardown is not decoded)
+      musicRestart = () => { mu.stopMusic(); area.stop(); areaOn = muOn = false; go(); };
       ['keydown', 'pointerdown'].forEach((e) => addEventListener(e, () => setTimeout(go, 0)));
     });
   }).catch((e) => console.warn('audio: off', e));
@@ -692,15 +700,21 @@ async function main() {
   if (FX && scene.effects) try {
     const get = n => fetch('data/' + scene.effects + '/' + n).then(r => { if (!r.ok) throw new Error(`${n}: HTTP ${r.status}`); return n.endsWith('.json') ? r.json() : r.arrayBuffer(); });
     const [fed, core, ids] = await Promise.all(['r0001.fed', 'core_ef.bin', 'ids.json'].map(get));
-    fx = createEffects({ fed, core, warn: m => console.warn(m), twister: ids.twister, rand: ids.rand }); fxIds = ids;
+    // r0000.fed (FileCode 0, worker 0200): the hit on Vincent's 0x1000; fetched only when ids.json lists it (an older
+    // export has no "feds": warned, left out, no 404)
+    const fed0 = (ids.feds || []).includes('r0000.fed') ? await get('r0000.fed')
+      : (console.warn('effects: data/effects has no r0000.fed (re-run export_web_effects.py): effect 0x1000 left out'), null);
+    fx = createEffects({ fed, fed0, core, warn: m => console.warn(m), twister: ids.twister, rand: ids.rand }); fxIds = ids;
     fxLayer = new EffectLayer(THREE, fx); root.add(fxLayer.group);
     window.__fx = { fx, layer: fxLayer, ids };   // for the page tests
   } catch (e) { console.warn(`effects: off (${e.message}; run export_web_effects.py)`); fx = null; }
-  let enemyAI = null;
+  let enemyAI = null, aiOpts = null, wakeSave = null;
+  const bodyRecs = new Set();                        // records the AI activated (onActivate): their bodies go at a Restart
+  const startBodies = new Set(enemies ? enemies.actors.map(a => a.rec) : []);   // the bodies drawn at the start   // aiOpts / wakeSave: rebuilt by the Restart (checkpoint.js)
   let gameHud = null;                                // the game's HUD (hud.js), set up below; enemyAI's hudHit reads it
   try {
     if (enemies) enemies.mpHead = vin.body;            // newer actors draw before older ones (enemies.js add)
-    enemyAI = ENEMY_AI && aiData && enemies ? createEnemyAI({ data: aiData, player: php, log: m => console.log(m), damage: ENEMY_DMG,
+    aiOpts = ENEMY_AI && aiData && enemies ? { data: aiData, player: php, rand: () => aiRng.rand(), log: m => console.log(m), damage: ENEMY_DMG,
       sound: snd,
       // FUN_00335f40 / FUN_003361b8: the impact and hit effects (effects.js)
       effect: fx ? { wall: (mat, n, p) => { const id = wallImpactId(fxIds, mat, n, fx.warn); if (id >= 0) fx.spawn(id, p); },
@@ -713,7 +727,7 @@ async function main() {
       // the save's dead records (41-43): FUN_00559748 refuses to activate them
       deadRecs: enemies.deadRecs,
       // cmd 0x108 / 0x109 / 0x130 on a section-1 record: its body appears / goes (enemies.js add / remove)
-      onActivate: rec => { enemies.add(rec); },
+      onActivate: rec => { bodyRecs.add(rec.rec); enemies.add(rec); },
       onDeactivate: rec => { enemies.remove(rec); },
       // the locomotion table's root speeds (FUN_00345e58, motion state 8; enemies.js rootSpeed)
       rootSpeed: (model, clip) => enemies.rootSpeed(model, clip),
@@ -747,7 +761,8 @@ async function main() {
           const q = j.quaternion, sc = j.scale, t = j.position;
           return boneRows([q.x, q.y, q.z, q.w], [sc.x, sc.y, sc.z], [t.x, t.y, t.z], pos, [Math.sin(h), 0, Math.cos(h)]);
         };
-      } }) : null;
+      } } : null;
+    enemyAI = aiOpts ? createEnemyAI(aiOpts) : null;
     // The save's soldiers, as stored in sea-of-flames.p2s (object table *(DAT_0046e880+0x1164)[rec + 22]):
     // actor state +0x104 (also T: k_enemy_engage8 f760) and +0x118. Their script vars +0xa0 are all 0
     // there (the page's default), and +0x28 = 0x208403 (bit 0x100000 clear: their activation's script
@@ -756,8 +771,9 @@ async function main() {
     // them before the save is not decoded (notes/enemy-activation.md §1), so FUN_00559748 is not rerun.
     const AWAKE_STATE = { 44: 1, 45: 2, 46: 1, 47: 1, 48: 2, 49: 2, 66: 1 };
     const AWAKE_F118 = { 44: 0, 45: 0x10000200, 46: 0, 47: 0, 48: 0x200, 49: 0x200, 66: 0 };
-    if (enemyAI) for (const k of AWAKE) enemyAI.addActor({ rec: k, astate: AWAKE_STATE[k], f118: AWAKE_F118[k] });
-  } catch (e) { console.warn('enemy AI off:', e.message); enemyAI = null; }
+    wakeSave = ai => { for (const k of AWAKE) ai.addActor({ rec: k, astate: AWAKE_STATE[k], f118: AWAKE_F118[k] }); };
+    if (enemyAI) wakeSave(enemyAI);
+  } catch (e) { console.warn('enemy AI off:', e.message); enemyAI = null; aiOpts = null; }
   // test aids that move him (H, ?ladder=): the cloth restarts from the new pose (cloth.js reset)
   // and the camera resets as at spawn (player.js reset(): FUN_003285d0's snap; GUESS: the
   // angles are CAM_SPAWN, and whether the game resets the camera on a warp is not decoded)
@@ -831,7 +847,7 @@ async function main() {
     // page aid (worker 0181): H also puts HP back to the save's 780, so a dead Vincent (state 7, FUN_005786e8's
     // HP gate) can play on. Not the game's retry: that goes game over -> Restart -> 'Calculating Points' -> the
     // stage-result Status screen -> (not traced further); the soldiers keep their target-dead state.
-    if (e.code === 'KeyH') { php.hp = 780; if (gameOver) gameOver.reset(); ctrl.reset(); if (cape) cape.cloth.started = false; if (weapon) weapon.reset(); follow.reset(ctrl.pos); detached = null; }   // respawn: spawn angles (ctrl.reset cancels the ladder: its exit() clears CAM+0x1c8; the reset FUN_00329f68 -> FUN_003285d0 leaves CAM+0x1c4 / +0x1c8)
+    if (e.code === 'KeyH') { php.hp = 780; if (gameOver) gameOver.reset(); follow.clearDeath(); ctrl.reset(); if (cape) cape.cloth.started = false; if (weapon) weapon.reset(); follow.reset(ctrl.pos); detached = null; }   // respawn: spawn angles (ctrl.reset cancels the ladder: its exit() clears CAM+0x1c8; the reset FUN_00329f68 -> FUN_003285d0 leaves CAM+0x1c4 / +0x1c8)
     if (e.code === 'KeyR') { e.preventDefault(); report.open(); }
     if (e.code === 'Space' || e.code.startsWith('Arrow')) e.preventDefault();
   });
@@ -931,9 +947,16 @@ async function main() {
     const dt = (frozen || paused) ? 0 : Math.min(clock.getDelta(), 8 * TICK);   // GUESS: same cap as below (port convenience)
     acc += dt;
     if (!packsDone) { acc = 0; pressed.clear(); mouse.dx = mouse.dy = 0; }   // clip packs still loading: draw only, no game frame (no mouse banked)
+    // Restart: rebuild the bodies first; no game frame runs until they are attached (the new world never ticks without them)
+    if (restartPending && !restartHold) {
+      restartPending = false;
+      restartHold = swapBodies().catch(e => console.warn('restart: bodies:', e && e.message)).then(() => { restartHold = null; restartReady = true; });
+    }
+    if (restartHold) { acc = 0; pressed.clear(); mouse.dx = mouse.dy = 0; }
     let n = 0;
     const due = Math.min(Math.floor(acc / TICK), 8);   // game frames this rendered frame runs (MouseFeed)
     while (acc >= TICK && n < 8) {
+      if (restartReady) { restartReady = false; restart(); }   // Restart: the checkpoint, before this game frame (bodies attached)
       mouse.feed(follow, due - n);                 // this game frame's share of the mouse counts
       // FUN_003e9ed0: last frame's sound requests go out with the listener of two frames back (sndHist)
       if (sfx && follow.eye && follow.M) {
@@ -944,6 +967,13 @@ async function main() {
       // left him, and this frame's stick-to-world uses its new matrix (player.js camera notes)
       const inp = readInput();
       const moving = Math.hypot(inp.x, inp.z) > 1e-6;
+      // gameover.js: FUN_003fdf00 / FUN_00334590 / FUN_004012c0 on last frame's HP (worker 0192). Before the camera:
+      // FUN_00334590 case 2 starts the death camera and FUN_0032ace0 looks down in the same frame (T: w199_deathcam
+      // f789 -> record f790, worker 0199)
+      if (gameOver) {
+        gameOver.frame(php.hp === 0, STEP);
+        if (gameOver.go.events.includes('deathCamera')) follow.startDeath();   // FUN_0032a420(CAM, 1, 0, 0) + FUN_00328720(CAM)
+      }
       // on the ladder the camera reads the ladder's P+0x104 (ladder.js camState) and the facing C+0x20
       follow.tick({ pos: ctrl.pos, want: ctrl.C.dir, state: ctrl.active?.camState ?? ctrl.P.state, facing: ctrl.C.face,
                     stick: moving ? (inp.run ? KEY_RUN : KEY_WALK) : 0, pad: null });
@@ -953,8 +983,6 @@ async function main() {
       // FUN_0053b500 -> FUN_00542ab8 (actor push-out) runs before the actors move (T: k_push16, the push of
       // frame f comes from the positions it starts with and moves Vincent in the same frame)
       if (fx) fx.begin(STEP);                      // FUN_002efc78 / FUN_002efe00 (before the game logic)
-      // gameover.js: FUN_003fdf00 / FUN_00334590 / FUN_004012c0 on last frame's HP (worker 0192)
-      if (gameOver) gameOver.frame(php.hp === 0, STEP);
       ctrl.push = enemyAI ? enemyAI.pushOut(pOld) : null;
       ctrl.step(aim(inp, b));
       pressed.clear();                             // an edge is seen by one tick only
@@ -966,6 +994,7 @@ async function main() {
       // FUN_002efe98, then the effect draw pass (once a game frame) with this frame's camera: follow.tick ran at
       // the start of this game frame, as the game's camera does before the draw (the render camera lags a frame)
       if (fx) { fx.end(); fxLayer.update(fxCamera()); }
+      if (gameOver) gameOver.endFrame(fxCamera());   // the GAME OVER title's manager DAT_004ee4a0 (gameover_title.js)
       if (gameHud) gameHud.tick();
       if (enemies) enemies.tick(enemyAI);
       acc -= TICK; n++; stats.ticks++;
@@ -998,26 +1027,62 @@ async function main() {
       (weapon ? `   weapon ${weapon.core.P.drawn ? 'out' : 'away'} st ${weapon.core.P.st} T ${weapon.core.P.T}  cam 0x${weapon.core.cam.type.toString(16)}` : '') + '\n' +
       `click: mouse look (drag works too)   WASD move (walk)   Shift run   ${actionHelp.join('   ')}   H respawn   R report`;
   }
+  // ---- Restart -> the checkpoint (checkpoint.js, worker 0201): both Restarts (game over, pause OK) make the stage loop
+  // return 6 and the game reloads the stage from its start (FUN_00247508 0x15 -> 0x13 FUN_003ff0c0 -> 0x14 -> 0x15). The
+  // page resets its systems in place at the next game frame's start (the request comes inside a frame).
+  // restartPending: a Restart was answered (inside a game frame); restartHold: the bodies are being rebuilt (no game frame
+  // runs, as while the clip packs load: the game is loading the stage); restartReady: run the restore at the next frame start
+  let restartPending = false, restartHold = null, restartReady = false, restarts = 0;
+  // the stage reload frees every actor and builds the stage's again. GUESS (the actor teardown / rebuild order is not
+  // decoded): every body the new world doesn't own goes (the save's soldiers, every record activated since, with or
+  // without an AI, loading or drawn), then every start body that is gone is built again (the save's soldiers 44-49 / 66:
+  // T w201_reload, equal to the save; with ?enemies=all also a start body a script had activated); the start's other
+  // placements stay. Resolves when the new bodies are attached (L: they draw in the newer-actor order, enemies.js add).
+  const swapBodies = () => {
+    if (!enemies || !aiData) return Promise.resolve();
+    const recs = new Set([...AWAKE, ...bodyRecs, ...(enemyAI ? enemyAI.actors.map(a => a.rec) : [])]);
+    for (const a of [...enemies.actors]) if (recs.has(a.rec) || !startBodies.has(a.rec)) enemies.remove({ rec: a.rec });
+    for (const k of bodyRecs) enemies.remove({ rec: k });   // still loading: never drawn (enemies.js remove clears pending)
+    bodyRecs.clear();
+    const adds = [];
+    for (const k of startBodies) if (!enemies.actors.some(a => a.rec === k) && aiData.records[k]) adds.push(enemies.add(aiData.records[k]));
+    return Promise.all(adds);
+  };
+  // the new enemy_ai world, built as at the start with the checkpoint's flags and frame counter (bodies: swapBodies)
+  const rebuildEnemies = (flags, frame, clock) => {
+    if (!aiOpts) return null;
+    enemyAI = createEnemyAI({ ...aiOpts, eventFlags: flags, now: clock.now, acc: clock.acc });
+    enemyAI.S.frame = frame;                         // the new world's frame counter at the placement (checkpoint.js)
+    wakeSave(enemyAI);
+    if (window.__play) window.__play.enemyAI = enemyAI;
+    return enemyAI;
+  };
+  const restart = () => {
+    restarts++;
+    restoreCheckpoint({ ctrl, groundY: (x, z, y) => col.groundY(x, z, y), follow, php, gameOver, weapon, cape, fx,
+                        hud: gameHud, sfx, rebuildEnemies, music: () => { if (musicRestart) musicRestart(); } });
+    detached = null; pressed.clear(); mouse.dx = mouse.dy = 0;
+  };
+
   // ---- pause menu (pause_layer.js / pause.js; Start = Esc or Enter). While it is open the world is frozen
-  // (FUN_00241f40: game state 0x17) and the game sees no input; Restart reloads the zone start.
+  // (FUN_00241f40: game state 0x17) and the game sees no input; Restart goes to the checkpoint (checkpoint.js).
   let paused = false;
   const pause = await (await import('./pause_layer.js')).setupPause({
     // the kill's own frame: FUN_00576b48 -> FUN_00241760(1, 3, 0); then gameover.js's FUN_00241760 count / the pad given to the menus (FUN_00253fd8(2))
     output, blocked: () => frozen || php.hp === 0 || !!(gameOver && gameOver.go.pauseBlocked), sound: pauseSound,
     onPause(on) { paused = on; pressed.clear(); mouse.dx = mouse.dy = 0; drag = null; if (!on) { clock.getDelta(); acc = 0; } },
-    // Sent when the confirm box (pause.js openBox, layout 0x472ad8) is answered OK. GUESS: Restart reloads
-    // the page (its save start, the page's only checkpoint); the game sets the checkpoint flag
-    // (FUN_003c0a20 -> FUN_00380b00) and hands menu result 0xf to its caller (FUN_003dee40), whose
-    // checkpoint restore is not translated; see fidelity-audit "Menus". Tempsave / Quit: warn only
-    // (pause_layer.js; no memory card / title on the page)
-    onRequest(r) { if (r === 'restart') location.reload(); },
+    // Sent when the confirm box (pause.js openBox, layout 0x472ad8) is answered OK. Restart: FUN_003c0a20 +
+    // FUN_003dee40(0xf) -> FUN_004012c0 case 0xf returns 6 -> the checkpoint (restart above). Tempsave / Quit:
+    // warn only (pause_layer.js; no memory card / title on the page)
+    onRequest(r) { if (r === 'restart') restartPending = true; },
   });
   actionHelp.push('Enter pause (Esc too, but with the pointer locked the browser takes Esc to unlock it)');
-  // game over (gameover_layer.js): GUESS: Restart reloads the page, as the pause's Restart; Quit warns (no title)
-  gameOver = await (await import('./gameover_layer.js')).setupGameOver({ output, blocked: () => frozen,
-    onRequest(r) { if (r === 'restart') location.reload(); } });
+  // game over (gameover_layer.js): Restart (result 6) -> the checkpoint (restart above); Quit warns (no title)
+  gameOver = await (await import('./gameover_layer.js')).setupGameOver({ output, blocked: () => frozen, THREE, root, fxRng: fx ? fx.rng : null,
+    onRequest(r) { if (r === 'restart') restartPending = true; } });
   window.__play = { ctrl, anim, follow, aim: weapon, col, stats, camera, renderer, output, root, vin, light, spawnY: gy,
-                    playerState, camView, report, keys, pressed, motions, packsReady, actionHelp, cape, enemies, enemyAI, php, pause, gameHud, pauseSound, gameOver };
+                    playerState, camView, report, keys, pressed, motions, packsReady, actionHelp, cape, enemies, enemyAI, php, pause, gameHud, pauseSound, gameOver,
+                    restart: { get count() { return restarts; }, get pending() { return restartPending || !!restartHold || restartReady; } } };
   requestAnimationFrame(frame);
 }
 

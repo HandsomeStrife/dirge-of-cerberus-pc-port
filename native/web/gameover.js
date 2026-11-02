@@ -4,7 +4,7 @@
 // Chain (decoded; notes/gameover-research.md, traces w192_gameover / w192_quit):
 //   FUN_00334590 (world-mode object, vtable 0x4a0a78; +0x2c state, +0x2e timer, s16), once a game frame:
 //     case 2: FUN_00316cf8 (P status +0x20 HP == 0) nonzero = dead -> FUN_0032a420(CAM, 1, 0, 0) +
-//             FUN_00328720(CAM) (the death camera, not on the page), timer 0xb4, state 3. With FUN_0055f0e0(P, 3) /
+//             FUN_00328720(CAM) (the death camera: FollowCamera.startDeath), timer 0xb4, state 3. With FUN_0055f0e0(P, 3) /
 //             (P, 2) or FUN_00326068(0x14) the *state* becomes 5 / 7 instead (P flags the page never sets).
 //     case 3: timer < 0 -> FUN_00241760(0, 3, 0), FUN_00324ab0(1) (DAT_0046e290 + 0x4c = 1: P+0x2b0 bit 0 clear),
 //             FUN_00324a40(e290, 1) (e290+0x48 |= 2: no reader on the page), state 9; else timer -= max(1, (int)step)
@@ -16,7 +16,7 @@
 //     stream row, FUN_003eb088: not ported), DAT_0047db84 = clock
 //   FUN_003fdf00 (the mode machine FUN_00247508 runs it first in every frame), type 3: volume 0x7f - min((clock -
 //     DAT_0047db84) >> 5, 0x78) to FUN_003ea1d0 / FUN_003ed7d0 / FUN_003e62d0 (SE / BGM / ambience: not applied,
-//     see fidelity-audit), the title file 0x31000fc .. (FED 0x81840000 via FUN_0037f2f0: not drawn), then the box
+//     see fidelity-audit), the title file 0x31000fc .. (FED 0x81840000 via FUN_0037f2f0: gameover_title.js), then the box
 //     of kind DAT_004a8250[3] = 6 (FUN_003b66c0 -> FUN_003c52b0 -> FUN_003c5358, the sequence screen)
 //   FUN_003c6050 (sequence screen), table 0x47a130 (FUN_003c54f8 case 6): t 0: command 0xfd (FUN_003c6600 case
 //     0x1a: layout 0x479190 + its text widget, empty for kind 6: nothing visible), t 4000 ms: command 0xf0 (case
@@ -105,7 +105,7 @@ export class GameOver {
     switch (this.wm) {
       case 2:
         if (dead) {                                // FUN_00316cf8 != 0 (HP == 0)
-          this.events.push('deathCamera');         // FUN_0032a420(CAM, 1, 0, 0) + FUN_00328720(CAM): not on the page
+          this.events.push('deathCamera');         // FUN_0032a420(CAM, 1, 0, 0) + FUN_00328720(CAM): play.js -> player.js FollowCamera.startDeath
           this.t = DEATH_WAIT; this.wm = 3;
         }
         break;
@@ -148,10 +148,10 @@ export class GameOver {
     if (this.endType === END_GAMEOVER) this.volume = endVolume(now, this.t0);
     if (this.endState === 0) {
       // states 0 -> 1 -> 2 -> 3: the title file (0x31000fc / dd..e1 by language) is read and its FED
-      // (0x81840000, FUN_0037f2f0 slot 0x61) started; the title itself is not drawn (2D FED runtime missing).
+      // (0x81840000, FUN_0037f2f0 slot 0x61) started; the title is gameover_title.js's (worker 0198), spawned
+      // 14 game frames after the request's frame there.
       // GUESS: the file read finishes at once (not decoded; see fidelity-audit "Game over"): the game polls
       // the emulated disc read in state 3 (end_state 3 at f882-890) and opens the box at f890; the page at f881
-      warnOnce('title', 'game over: the GAME OVER title (FED 0x81840000, file 0x31000f5) is not drawn (no 2D FED runtime)');
       // state 4: type 3 -> FUN_00241760(0, 0, 0) (traced: count 0, 0x100 clear at f890), then FUN_003b66c0(DAT_00472a80, DAT_004a8250[type], ...)
       if (this.endType === END_GAMEOVER) this.ref(0, 0);
       const kind = this.D && this.D.endKinds ? this.D.endKinds[this.endType] : 6;
@@ -180,7 +180,8 @@ export class GameOver {
       if (r === 6) {
         // story mode (FUN_002419d8(0xc / 10 / 0x11) == 0, stage +0x1558 bits 47-48 != 1): the menu box goes
         // (FUN_003b6978) and the sequence goes on with FUN_003c72f8 (the stage result screens, not decoded).
-        // GUESS (stand-in): the page restarts here (play.js reloads, as the pause's Restart)
+        // The page goes to the checkpoint here (play.js -> checkpoint.js, worker 0201): the result screens, the load
+        // title and the opening cutscenes in between are left out (warned)
         this.menu.close(now);
         q.mode = 0;
         this.request = 'restart';

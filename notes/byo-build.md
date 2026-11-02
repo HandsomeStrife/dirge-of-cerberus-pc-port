@@ -19,7 +19,7 @@ Worker 0191, 2026-11-01. Scripts: `tools/byo/build_web.sh`, `tools/byo/disc.py`.
 | enemies/placements.json | enemies.js | export_web_placements.py | noPath 06800001 |
 | enemies/ai.json | play.js / enemy_ai.js | export_web_triggers.py **+ ELF (sound names)** | noPath 06800001, 06800009, ELF |
 | aim/weapon.json, reticle.json | aim.js | export_web_aim.py --iso | data/bgd/bgd.bin, data/etc/menudata.bin, ELF |
-| effects/r0001.fed, core_ef.bin, ids.json | play.js -> effects.js | export_web_effects.py (effects) | data/effect/resident/r0000/r0001/fer/r0001.fed, data/effect/core/core_ef.bin, ELF; twister + rand from --state (without them all effects are left out) |
+| effects/r0001.fed, r0000.fed, core_ef.bin, ids.json | play.js -> effects.js | export_web_effects.py (effects) | data/effect/resident/r0000/r0001/fer/r0001.fed, .../r0000/fer/r0000.fed (worker 0200), data/effect/core/core_ef.bin, ELF; twister + rand from --state (without them all effects are left out) |
 | pause.json | pause_layer.js | export_web_pause.py (pause) | ELF, data/etc/locale/uk/{menudata,fontdata1,kelstr}.bin |
 | gameover.json | gameover_layer.js (with pause.json) | export_web_gameover.py (gameover; worker 0192) | ELF, data/etc/locale/uk/kelstr.bin |
 | menu.json | tests only (test_menu_layout) | export_web_menu.py (menu) | ELF |

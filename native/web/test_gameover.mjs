@@ -184,6 +184,110 @@ else {
   const ys = R.slice(at[1], at[1] + at[2]).flatMap(d => d.v.map(v => v.y >> 4));
   ok(Math.min(...ys) >= 300 && Math.max(...ys) <= 460, 'that run is the box region (y ' + Math.min(...ys) + '..' + Math.max(...ys) + ')');
 }
+// ---- the GAME OVER title (gameover_title.js, worker 0198): FED 0x81840000 on the 2D manager DAT_004ee4a0.
+// Needs data/gameover_title.fed (export_web_gameover.py); with tools/trace/out/w198/ (grab_gs.py with the HP poke on
+// w192_gameover: states 906 / 965 / 1046 / 1147 -> ramN.json via tools/trace/title_fixture.py; GS dumps 969 / 1050 /
+// 1151 -> dumpN.json via tools/trace/dumpfx.py --fed) it checks the spawn time, every particle and every sprite.
+{
+  const { createTitle, TITLE_DELAY } = await import('./gameover_title.js');
+  const { EffectRng } = await import('./effects.js');
+  const tf = path.join(here, 'data/gameover_title.fed'), W = path.join(root, 'tools/trace/out/w198');
+  const gj = fs.existsSync(dg) ? JSON.parse(fs.readFileSync(dg)) : null;
+  if (!fs.existsSync(tf) || !gj || !gj.title) console.log('SKIP title: no data/gameover_title.fed (run export_web_gameover.py)');
+  else {
+    eq([gj.title.fed, gj.title.id], ['gameover_title.fed', 0x81840000], 'gameover.json declares the title FED 0x81840000');
+    const b = fs.readFileSync(tf), fed = () => b.buffer.slice(b.byteOffset, b.byteOffset + b.length);
+    eq(TITLE_DELAY, 14, 'title spawn 14 frames after the request frame (MEASURED: page frame 880 -> 894)');
+    // the RNG: the translated title draws nothing from the effect LCG / VU0 R / twister (so sharing the 3D one is safe)
+    {
+      const rng = new EffectRng(); let calls = 0;
+      for (const k of ['next', 'signed', 'unit', 'vrInt', 'vrSpan', 'mtNext', 'mtSigned']) { const o = rng[k].bind(rng); rng[k] = (...a) => { calls++; return o(...a); }; }
+      const t = createTitle(fed(), { rng, warn: () => {} });
+      t.begin(1.2); t.logic(true); for (let i = 0; i < 400; i++) { t.begin(1.2); t.logic(true); t.end(); t.sprites(); }
+      ok(t.emitter && calls === 0, `the title's translated part draws no RNG (${calls} calls over 400 frames)`);
+    }
+    // the FED's own textures (FUN_002eba88 -> FUN_00309f28): every CLUT = the game's GS memory at its CBP (dump f1050;
+    // tools/trace/dumpfx.py --fed .. --clut-out), which fixes where the image and CLUT start in each TIM2
+    {
+      const cp = path.join(W, 'clut4.json');
+      if (!fs.existsSync(cp)) console.log('SKIP title textures: no tools/trace/out/w198/clut4.json');
+      else {
+        const { parseFed, parseFedTextures } = await import('./effects.js');
+        const GS = JSON.parse(fs.readFileSync(cp)), tx = [...parseFedTextures(parseFed(fed())).values()];
+        const same = tx.map(t => { const g = GS['0x' + ((BigInt(t.tex0[1]) << 32n) | BigInt(t.tex0[0])).toString(16)]; return g ? t.clut.every((c, k) => c === g[k]) : false; });
+        ok(tx.length === 3 && same.every(Boolean), `the title's 3 TIM2 CLUTs = GS memory at their CBP, 256 / 256 entries each (${same})`);
+      }
+    }
+    // closed loop on the traced HP (as run() above): the page frame k, the title alongside
+    const states = { 905: 'ram1', 964: 'ram3', 1045: 'ram4', 1146: 'ram5' };   // state counter S = after frame S - 1
+    const dumps = { 968: 'dump3', 1049: 'dump4', 1150: 'dump5' };              // GS dump = its state + 4 frames
+    const have = rg && Object.values(states).concat(Object.values(dumps)).every(f => fs.existsSync(path.join(W, f + '.json')));
+    if (!have) console.log('SKIP title vs the game: no w192_gameover trace or tools/trace/out/w198/ fixtures');
+    else {
+      const t = createTitle(fed(), { warn: () => {} });
+      const g = new GameOver(null);
+      let spawnAt = -1;
+      const res = {};
+      for (let k = 781; k <= 1150; k++) {
+        t.begin(rg[k].step);
+        g.frame(rg[k].p_hp === 0, rg[k].step, rg[k + 1].clock_ms);
+        t.logic(g.started);
+        if (t.emitter && spawnAt < 0) spawnAt = k;
+        t.end();
+        const sp = t.sprites();
+        if (states[k]) res[states[k]] = t.emitter ? { age: t.emitter.age, parts: t.emitter.lists[1].map(p => ({ tag: p.tag, age: p.age, ev: p.ev, skip: p.skip, noDraw: p.noDraw, v: p.v.slice(), m50: p.m50.slice() })) } : null;
+        if (dumps[k]) res[dumps[k]] = sp;
+      }
+      eq(spawnAt, 894, 'title spawned in page frame 894 (request 880 + 14; RAM: age 13.2 at state counter 906 .. 302.4 at 1147)');
+      // particles against RAM: tag, age, event index, the value region (w lanes of the type 4 / 7 outputs at
+      // indices 11 / 19 are never written by the game: pool leftovers), matrix +0x50
+      for (const [k, name] of Object.entries(states)) {
+        const R = JSON.parse(fs.readFileSync(path.join(W, name + '.json'))).emitters[0], P = res[name];
+        ok(P && Math.abs(P.age - R.age) < 1e-3, `${name} (f${+k + 1}): emitter age ${P && P.age.toFixed(2)} = RAM ${R.age.toFixed(2)}`);
+        const tags = ps => ps.map(p => `${p.tag}:${p.age.toFixed(1)}`).sort().join(' ');
+        eq(tags(P.parts), tags(R.parts), `${name}: the ${R.parts.length} live particles (tag : age; the loop wraps) = RAM`);
+        let worst = 0, evBad = 0, mBad = 0, nv = 0;
+        for (const rp of R.parts) {
+          const p = P.parts.find(q => q.tag === rp.tag);
+          if (!p) continue;
+          if (p.ev !== rp.ev) evBad++;
+          if (p.skip || p.noDraw) continue;                       // channels of the untranslated draw types
+          rp.v.forEach((x, i) => { if (x === null || i === 11 || i === 19) return; nv++; worst = Math.max(worst, Math.abs(p.v[i] - x) / Math.max(1, Math.abs(x))); });
+          if (rp.m50 && rp.m50.some((x, i) => Math.abs(p.m50[i] - x) > 1e-4 * Math.max(1, Math.abs(x)))) mBad++;
+        }
+        // 2e-6: a type 17 colour mid-fade (ram3 tag 16: 85.18585 vs 85.18575, both 85 as RGBA): the PS2 FPU / VU0 truncate
+        const any = R.parts.some(rp => { const p = P.parts.find(q => q.tag === rp.tag); return p && !p.skip && !p.noDraw; });
+        ok(evBad === 0 && mBad === 0 && worst < 2e-6 && (nv > 0 || !any), `${name}: event indices, matrices and ${nv} values = RAM (worst rel ${worst.toExponential(2)} < 2e-6)`);
+      }
+      // sprites against the dumps: TEX0, ALPHA, vertex RGBA exact, corners < 0.15 px; every FED-textured draw of the
+      // dump that is not one of type 35's frame-buffer passes (or type 11's texture 0 mesh) is one of ours
+      const blendOf = a => [a & 3, (a >> 2) & 3, (a >> 4) & 3, (a >> 6) & 3];
+      for (const [k, name] of Object.entries(dumps)) {
+        const sp = res[name], T = JSON.parse(fs.readFileSync(path.join(W, name + '.json')));
+        // ours: the tex2 sprites and the letters (tex1, ALPHA 0x44); type 35's tex1 passes go through its 64 x 64 page
+        const own = T.filter(r => r.tex0 === '0x4006388621313000' || (r.tex0 === '0x4006380621312e00' && r.blend.slice(0, 4).join() === '0,1,0,1' && !r.v.some(v => v[0] === 2016 || v[0] === 2080)));
+        let worst = 0, bad = 0;
+        const used = new Set();
+        for (const s of sp) {
+          const key = '0x' + s.tex.tex0[1].toString(16) + s.tex.tex0[0].toString(16).padStart(8, '0');
+          const dist = r => Math.max(...r.v.map(v => Math.min(...s.verts.map(q => Math.hypot(q.gs[0] - v[0], q.gs[1] - v[1])))));
+          const mine = own.map((r, i) => [r, i]).filter(([r, i]) => !used.has(i) && r.tex0 === key && dist(r) < 0.5);
+          if (mine.length !== 2) { bad++; continue; }
+          for (const [r, i] of mine) {
+            used.add(i); worst = Math.max(worst, dist(r));
+            for (const v of r.v) {
+              const q = s.verts.reduce((a, c) => Math.hypot(c.gs[0] - v[0], c.gs[1] - v[1]) < Math.hypot(a.gs[0] - v[0], a.gs[1] - v[1]) ? c : a);
+              if (q.rgba.join() !== v[6].join()) bad++;
+            }
+            if (blendOf(s.alpha).join() !== r.blend.slice(0, 4).join()) bad++;
+          }
+        }
+        ok(sp.length > 0 && bad === 0 && worst < 0.15 && used.size === own.length,
+          `${name} (f${k}): our ${sp.length} sprites = the dump's ${own.length / 2} type-10 sprites (${used.size} / ${own.length} triangles; corners ${worst.toFixed(3)} px; RGBA / ALPHA / TEX0 exact; ${T.length - own.length} triangles of untranslated types not drawn)`);
+      }
+    }
+  }
+}
 console.warn = origWarn;
 console.log(`${n - fails} / ${n} passed`);
 process.exit(fails ? 1 : 0);

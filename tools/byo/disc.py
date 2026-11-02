@@ -260,7 +260,10 @@ INPUTS = {
     '../data/zone/z128/sound/bgm_001.at3': '5c0e50d546d728590f4c974247401624d123df2d32abf2510da27ffd80555138',
     # outside noPath: resident effect file + effect texture pack (export_web_effects.py)
     '../data/effect/resident/r0000/r0001/fer/r0001.fed': '5faf7fdfd9f3a8c8f07de02cd4551711c544e531c8f9c602acf05e005fc0726b',
+    '../data/effect/resident/r0000/r0000/fer/r0000.fed': 'b10188567af8d5f5d23be74b1e411672f1a259a9e5ee6672ee95ebff0fc60675',
     '../data/effect/core/core_ef.bin': 'dedce36b3decd8218c77ba28fa02e49dbc61a012f7269cef83653f131ed271a1',
+    # outside noPath: the GAME OVER title FED (file 0x31000f5, export_web_gameover.py)
+    '../data/effect/anything/a0050/a0097/fer/a0097.fed': '655c15f2919c0aa9be5921ccd7039896c1eb681c3cf394ea660794d7eb91f6d4',
     # outside noPath: the UK locale's menu textures, font and strings (export_web_hud.py, export_web_pause.py)
     '../data/etc/locale/uk/menudata.bin': '5a4d8679077abd937d5938417db218dd80e368dd0e5dc8e7734da26c8a3ba740',
     '../data/etc/locale/uk/fontdata1.bin': 'd9d46539391478cdbb9a8b7d517c2b3fe278c9a2da5c805f7c2105092675cdaf',

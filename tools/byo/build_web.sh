@@ -308,12 +308,12 @@ run aim $PY export_web_aim.py --iso "$ISO" -o "$DATA/aim"
 tail -n 1 "$LOGS/aim.log"
 
 
-step "effects: resident effect file r0001.fed + texture pack core_ef.bin, id tables from the ELF -> data/effects"
+step "effects: resident effect files r0001.fed / r0000.fed + texture pack core_ef.bin, id tables from the ELF -> data/effects"
 # export_web_effects.py also declares "effects" in scene.json (play.js loads the effects only then).
 # It takes the effect random generator's state from --state (the type 137 sparks); an empty
 # --state (none given) leaves it out, so the sparks are off.
 run effects $PY export_web_effects.py --extract "$KEL" --elf "$ELF" -o "$DATA/effects" --state "$STATE"
-for f in r0001.fed core_ef.bin ids.json; do
+for f in r0001.fed r0000.fed core_ef.bin ids.json; do
   [ -s "$DATA/effects/$f" ] || fail "data/effects/$f missing after the effects export (log: $LOGS/effects.log)"
 done
 tail -n 1 "$LOGS/effects.log" | cut -c1-160
@@ -323,9 +323,10 @@ run pause $PY export_web_pause.py --elf "$ELF" --disc "$KEL" -o "$DATA/pause.jso
 [ -s "$DATA/pause.json" ] || fail "data/pause.json missing (log: $LOGS/pause.log)"
 tail -n 1 "$LOGS/pause.log" | cut -c1-160
 
-step "game over menu: layout 0x477c38, sequence table, messages (ELF + locale uk kelstr) -> data/gameover.json"
+step "game over menu: layout 0x477c38, sequence table, messages (ELF + locale uk kelstr), title FED a0097 -> data/gameover.json + gameover_title.fed"
 run gameover $PY export_web_gameover.py --elf "$ELF" --disc "$KEL" -o "$DATA/gameover.json"
 [ -s "$DATA/gameover.json" ] || fail "data/gameover.json missing (log: $LOGS/gameover.log)"
+[ -s "$DATA/gameover_title.fed" ] || fail "data/gameover_title.fed missing (log: $LOGS/gameover.log)"
 echo "ok"
 
 step "menu layout scripts (ELF) -> data/menu.json (read by the menu layout tests)"

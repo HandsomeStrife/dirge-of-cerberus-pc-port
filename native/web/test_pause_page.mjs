@@ -3,7 +3,7 @@
 //      fires (aim.js isFrozen covers `paused`); the same click unpaused does fire (counterfactual);
 //   2. a present but malformed data/pause.json: the page runs without the pause menu (a warning,
 //      no page error, __play.pause null).
-//   3. the confirm box: ✕ opens it, ○ cancels, OK on Quit warns, OK on Restart reloads (PAUSE_SHOT=<png> saves the open box).
+//   3. the confirm box: ✕ opens it, ○ cancels, OK on Quit warns, OK on Restart goes to the checkpoint (PAUSE_SHOT=<png> saves the open box).
 //   node native/web/test_pause_page.mjs            (needs playwright and data/pause.json; else SKIP, exit 0)
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
@@ -71,7 +71,7 @@ try {
     await pg.close();
   }
   { // 3. the confirm box (worker 0189): ✕ on Restart opens it, ○ cancels it, OK on Quit only warns,
-    // OK on Restart reloads the page
+    // OK on Restart goes to the checkpoint (no reload)
     const { pg, errs, warns } = await open();
     const st = () => pg.evaluate(() => { const f = window.__play.pause.flow; return { active: f.active, box: f.box ? f.box.boxId : null, focus: f.box ? f.box.focus.id : f.screen && f.screen.focus.id }; });
     // wait on the flow's state, not on time (the machine may be loaded): box present / gone
@@ -100,9 +100,10 @@ try {
     await pg.keyboard.press('Space'); await boxOpen();
     await pg.keyboard.press('ArrowLeft');
     await until(() => window.__play.pause.flow.box.focus.id === 6);
-    const nav = pg.waitForNavigation({ timeout: 20000 }).then(() => true, () => false);
+    await pg.evaluate(() => { window.__marker = 1; });
     await pg.keyboard.press('Space');
-    ok(await nav, 'OK on Restart reloads the page');
+    await until(() => window.__play.restart.count === 1 && !window.__play.pause.active);
+    ok(await pg.evaluate(() => window.__marker === 1), 'OK on Restart: the checkpoint, no page reload (checkpoint.js)');
     ok(errs.length === 0, 'box: no console / page errors' + (errs.length ? ': ' + errs.slice(0, 3).join(' | ') : ''));
     await pg.close();
   }

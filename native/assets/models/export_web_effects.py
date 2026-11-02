@@ -10,6 +10,12 @@ gitignored native/web/data/effects/. Nothing from the game is stored in this scr
                0x40000 (FUN_002e5c60 finds it for every effect id 0x40000..0x7ffff: the bullet
                wall impacts 0x43400.. (table 0x4a0c68, FUN_00336040) and the hits on Vincent
                0x40c00 / 0x41800 / 0x41c00 (table 0x4a0cd8, FUN_003363d0)).
+  r0000.fed    data/effect/resident/r0000/r0000/fer/r0000.fed (worker 0200): the resident FED with FileCode 0
+               (ids 0x0..0x3ffff: FUN_00336508's 0x1000 at a hit on Vincent, FUN_00580410's 0x4800 at an item
+               drop). Boot FUN_00244db0 -> FUN_002449e8 -> FUN_002448a0(0) loads the three files of table
+               0x4985e0 row 0 (files 0x3100038 / 0x3100039 / 0x310003a = r0000.fed / r0001.fed / r0002.fez;
+               row 1 = the _on variants 0x3300000..2) and links each FED into the effect manager (FUN_002f0ff0);
+               the z128 save's RAM holds r0000.fed (not r0000_on.fed) next to r0001.fed in that list.
   core_ef.bin  data/effect/core/core_ef.bin: the effect texture pack resident in GS memory.
                27 texture records of 0x20 bytes at +0x70 (u64 GS TEX0, +0xc u16 width, +0xe u16
                height, +0x10 u32 byte size), 27 CLUT records of 0x10 bytes at +0x3d0 (u32 CBP),
@@ -21,7 +27,8 @@ gitignored native/web/data/effects/. Nothing from the game is stored in this scr
 
   scene.json   adds "effects": "effects" to the page's data/scene.json (play.js loads the effects only
                when it is declared).
-  ids.json     from the ELF (elf/SLES_541.85): the effect id tables at the call sites,
+  ids.json     'feds': the FED files written here (play.js fetches r0000.fed only when listed); and
+               from the ELF (elf/SLES_541.85): the effect id tables at the call sites,
                wall 0x4a0c68 (28 words, FUN_00336040: [material * 2 + floor]) and
                hit 0x4a0cd8 (4 words, FUN_003363d0: [(C+0x150 >> 16) & 3]).
                + twister (worker 0188): the effect Mersenne twister FUN_002d9b18 (624 words at
@@ -42,15 +49,19 @@ import sys
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
 SRC = {
     'r0001.fed': 'data/effect/resident/r0000/r0001/fer/r0001.fed',
+    'r0000.fed': 'data/effect/resident/r0000/r0000/fer/r0000.fed',
     'core_ef.bin': 'data/effect/core/core_ef.bin',
 }
 
 
-def check_fed(b):
+CODE = {'r0001.fed': 0x40000, 'r0000.fed': 0}     # FUN_002e5c60 finds a FED by id & 0xfffc0000 == its FileCode
+
+
+def check_fed(b, name):
     if b[:4] != b'FED\x08':                       # FUN_002df140 / FUN_002e4418 (byte +3 == 8)
         return 'not a FED v8'
-    if struct.unpack_from('<I', b, 4)[0] != 0x40000:
-        return 'FileCode is not 0x40000'
+    if struct.unpack_from('<I', b, 4)[0] != CODE[name]:
+        return 'FileCode is not %#x' % CODE[name]
     return None
 
 
@@ -96,12 +107,13 @@ def main():
     for name, rel in SRC.items():
         src = os.path.join(a.extract, rel)
         b = open(src, 'rb').read()
-        err = (check_fed if name.endswith('.fed') else check_core)(b)
+        err = check_fed(b, name) if name.endswith('.fed') else check_core(b)
         if err:
             sys.exit('%s: %s' % (src, err))
         shutil.copyfile(src, os.path.join(a.out, name))
         print('wrote', os.path.join(a.out, name), len(b), 'bytes')
     ids = {'wall': elf_words(a.elf, 0x4a0c68, 28), 'hit': elf_words(a.elf, 0x4a0cd8, 4)}
+    ids['feds'] = sorted(n for n in SRC if n.endswith('.fed'))   # worker 0200: play.js fetches only the listed FEDs (no 404)
     if any((x & 0xfffc0000) != 0x40000 for x in ids['wall'] + ids['hit']):
         sys.exit('effect id tables: an id outside FED 0x40000')
     if a.state:

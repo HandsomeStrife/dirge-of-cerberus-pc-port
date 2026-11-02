@@ -3,10 +3,11 @@
 //
 // Data (gitignored, from the user's disc): python3 -I native/assets/models/export_web_effects.py
 //   data/effects/r0001.fed    the resident FED, FileCode 0x40000 (wall impacts, hits on Vincent)
+//   data/effects/r0000.fed    the resident FED, FileCode 0 (the hit on Vincent's screen flash 0x1000; worker 0200)
 //   data/effects/core_ef.bin  the effect texture pack resident in GS memory
 //
 // API
-//   const fx = createEffects({ fed, core, warn })     fed / core: ArrayBuffer
+//   const fx = createEffects({ fed, fed0, core, warn })   fed / fed0 (r0000, optional) / core: ArrayBuffer
 //   fx.spawn(id, pos)          FUN_002e6290(0, 0x4ee2e0, id) + FUN_002e7660(flag 1, pos): an effect
 //                              id (e.g. 0x43400) at a game-world point; returns the emitter or null
 //   fx.begin(step), fx.end()   one game frame, split around the game logic as FUN_00248110 does:
@@ -21,8 +22,10 @@
 // types 1 2 4 7 9 14 15 16 17 22 23 24 (init / transition / eval), the sprite draw type 10 with its
 // billboard / depth matrices (FUN_002e3498 / FUN_002e3948) and the VU1 sprite program at MSCAL 4
 // (micro memory instr 298-531: corners, ST, colour x near fade, guard-band culling).
-// Also the burst (type 21) and the sparks (type 137, VU1 line strips), worker 0188.
-// Not on the page (warned once, listed in notes/fidelity-audit.md): draw types 11 / 100,
+// Also the burst (type 21) and the sparks (type 137, VU1 line strips), worker 0188; the screen sprite
+// (type 107, items with `screen: true`) and the values of types 107 / 109, worker 0200.
+// Not on the page (warned once, listed in notes/fidelity-audit.md): draw types 11 / 100 / 110 (frame-buffer
+// filter), type 107's frame-buffer mode,
 // channel types 3 / 5 / 6 / 8 / 26, render categories 2 / 7 / 9, rotation orders 1-5, emitter
 // param +0x1d >= 2, the emitter fade (those are simulated but not drawn), the emitter frustum cull
 // (FUN_002da928), the draw buckets (FUN_002e1d88: depth-sorted order), looping particles.
@@ -218,6 +221,56 @@ export function parseCore(buf) {
   return out;
 }
 
+// A FED's own textures (worker 0198): the header +0x68 table (count +0x44) of embedded TIM2 images, which
+// FUN_002eba88 hands to the texture system (FUN_00309f28). Keyed by the picture header's GsTex0 (+0x18): the
+// title FED a0097's sprites draw with exactly these TEX0 words in the GS dumps (MEASURED, w198 dumps). Only the
+// formats the FEDs use here: PSMT8 (image type 5) with a 256 x CT32 CLUT (type 3, CSM1 order as core_ef.bin).
+export function parseFedTextures(F) {
+  const out = new Map(), t = F.u32(0x68), n = F.u16(0x44);
+  for (let i = 0; i < n; i++) {
+    const s = F.u32(t + 4 * i);
+    if (!s) continue;
+    const o = t + s, h = o + 0x10;
+    if (F.u32(o) !== 0x324d4954) continue;                         // 'TIM2'
+    const isz = F.u32(h + 8), ct = F.u8(h + 0x12), it = F.u8(h + 0x13);
+    const w = F.u16(h + 0x14), hh = F.u16(h + 0x16), lo = F.u32(h + 0x18), hi = F.u32(h + 0x1c);
+    if (it !== 5 || ct !== 3) { console.warn(`effects: FED texture ${i} type ${it} / CLUT ${ct} not translated`); continue; }
+    // FUN_00309f28: the image at +0x40, or +0x60 when byte +0xc is 2 (a name block at +0x50, e.g. 'gmovr_01');
+    // the CLUT right after the image (+ the image size +0x18). MEASURED: the CLUTs equal GS memory at their CBP (w198 f1050)
+    const img = o + (F.u8(o + 0xc) === 2 ? 0x60 : 0x40), clutAt = img + isz;
+    const tw = (lo >>> 26) & 0xf, th = ((lo >>> 30) | (hi << 2)) & 0xf, W = 1 << tw, H = 1 << th;
+    const clut = new Uint32Array(256);
+    for (let k = 0; k < 256; k++) clut[k] = F.u32(clutAt + 4 * ((k & 0xe7) | ((k & 0x08) << 1) | ((k & 0x10) >> 1)));
+    const rgba = new Uint8Array(W * H * 4);
+    for (let y = 0; y < Math.min(hh, H); y++) for (let x = 0; x < Math.min(w, W); x++) {
+      const c = clut[F.u8(img + y * w + x)], p = 4 * (y * W + x);
+      rgba[p] = c & 0xff; rgba[p + 1] = (c >>> 8) & 0xff; rgba[p + 2] = (c >>> 16) & 0xff; rgba[p + 3] = c >>> 24;
+    }
+    out.set(`${hi.toString(16)}:${lo.toString(16)}`, { k: `fed${F.code.toString(16)}:${i}`, W, H, rgba, tex0: [lo, hi], clut });
+  }
+  return out;
+}
+
+// Camera 1 (DAT_0050b4f8[1] = 0x4ea080, the 2D camera of the screen effects; worker 0198): FUN_002d9ec8(cam, PAL)
+// + FUN_002da038 + FUN_002da5d0 -> sceVu0ViewScreenMatrix(scrz +0x30 = 512, ax = +0x34, ay = ax x 1.575, cx +0x38,
+// cy +0x3c, zmin 1, zmax 0x4b7fffff, nearz 1, farz 65536) with the PAL flag (FUN_002413c0(0x1e) = 1 in this save,
+// DAT_0050b4f0): +0x10 = 426, +0x14 = 512, ax = 426 / 512, cx 2037, cy 2048. Its view (+0x150) is the
+// identity with z + 128 (RAM, w198 states 1-5: unchanged). FUN_002e3300 adds the emitter's +0x40 / +0x44 to
+// the projection's centre, x 0.83203125 / 1.1428572 with the PAL flag.
+const CAM2D = (() => {
+  const ax = f(426 / 512), ay = f(ax * f(1.575));
+  const zmin = 1, zmax = 16777215, nearz = 1, farz = 65536;
+  return { fx: f(512 * ax), fy: f(512 * ay), cx: 2037, cy: 2048,
+    zA: f(farz * nearz * (zmax - zmin) / (farz - nearz)), zB: f((zmin * farz - zmax * nearz) / (farz - nearz)) };
+})();
+export const CAM2D_VIEW = {
+  toView: p => [p[0], p[1], f(p[2] + 128)],
+  toViewMatrix: () => new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 128, 1]),
+};
+export function cam2dProj(p40) {
+  return { ...CAM2D, cx: f(CAM2D.cx + f(p40[0] * 0.83203125)), cy: f(CAM2D.cy + f(p40[1] * f(1.1428572))) };
+}
+
 // ---------------------------------------------------------------------------------------------
 // Channel evaluators (DAT_0046c398[type] -> vtable; slot +0xc init, +0x14 transition, +0x1c eval,
 // +0x24 draw, +0x3c once). Each gets the context X = { F, em, p, d (descriptor), rng, warn } plus
@@ -409,6 +462,44 @@ function buildMatrix(X, a) {
   X.p.m50 = m;
 }
 T[14] = { init(X, a) { buildMatrix(X, a); }, trans() {}, eval(X, t, a) { buildMatrix(X, a); }, once() {} };
+// type 3 position, quadratic (worker 0198): FUN_00274558 init (asm: rows +0 / +0x10 / +0x20 -> value +0x10 /
+// +0x20 / +0x30, out = base; the spawn parameter mgr +0xb4 is 0 on these paths), FUN_002745f0 -> FUN_002ecf18
+// transition, FUN_00274680 eval (byte-identical to type 17's FUN_00272348)
+T[3] = {
+  init(X, a, o) { const v = X.p.v; put(v, o + 4, rd4(X.F, a)); put(v, o + 8, rd4(X.F, a + 16)); put(v, o + 12, rd4(X.F, a + 32)); put(v, o, v.slice(o + 4, o + 8)); },
+  trans(X, t, a, o, old) { quadTrans(X, t, a, o, old); },
+  eval(X, t, a, o) { quadEval(X.p.v, o, t, 1); },
+};
+// Loop methods (vtable +0x34; worker 0198), called by FUN_002eb6b8 kind 5 when a looping particle wraps:
+// (t1 = loop start - the new segment's start, t2 = loop end - the old segment's start, new data, out slot,
+// old data); each re-bases its channel so the curve is continuous across the wrap, then (2 / 3 / 9 / 17)
+// runs its eval at t1. Types 10 / 14 have the no-op FUN_002d5740.
+function loopQuad(X, t1, t2, a, o, old, lanes) {   // FUN_002ed3f8 (lanes 3) / FUN_002ed1e8 (lanes 4)
+  const F = X.F, v = X.p.v, h2 = f(f(t2 * t2) * 0.5), h1 = f(f(t1 * t1) * 0.5);
+  for (let i = 0; i < lanes; i++) {
+    const b = v[o + 4 + i], r = v[o + 8 + i], ac = v[o + 12 + i];
+    const r2 = f(F.f32(a + 16 + 4 * i) + f(f(f(ac * t2) + r) - f(f(F.f32(old + 32 + 4 * i) * t2) + F.f32(old + 16 + 4 * i))));
+    const a2 = f(F.f32(a + 32 + 4 * i) + f(ac - F.f32(old + 32 + 4 * i)));
+    v[o + 8 + i] = r2; v[o + 12 + i] = a2;
+    v[o + 4 + i] = f(f(f(f(ac * h2) + f(r * t2)) + b) - f(f(a2 * h1) + f(r2 * t1)));
+  }
+}
+T[1].loop = (X, t1, t2, a, o) => { const v = X.p.v; put(v, o + 4, v.slice(o, o + 4)); };          // FUN_00274548: base = out
+T[2].loop = (X, t1, t2, a, o, old) => {                                                            // FUN_00274948
+  const F = X.F, v = X.p.v;
+  for (let i = 0; i < 3; i++) {
+    const r = v[o + 8 + i], r2 = f(F.f32(a + 16 + 4 * i) + f(r - F.f32(old + 16 + 4 * i)));
+    v[o + 8 + i] = r2;
+    v[o + 4 + i] = f(f(f(r * t2) + v[o + 4 + i]) - f(r2 * t1));
+  }
+  T[2].eval(X, t1, a, o);
+};
+T[3].loop = (X, t1, t2, a, o, old) => { loopQuad(X, t1, t2, a, o, old, 3); T[3].eval(X, t1, a, o); };   // FUN_002746c0
+T[4].loop = (X, t1, t2, a, o) => { const v = X.p.v; for (let i = 0; i < 3; i++) v[o + 4 + i] = f(v[o + i] * f(0.087890625)); };   // FUN_00275940 (0x3db40000)
+T[7].loop = (X, t1, t2, a, o) => { const v = X.p.v; for (let i = 0; i < 3; i++) v[o + 4 + i] = f(v[o + i] * 100); };   // FUN_002761c8 (0x42c80000)
+T[9].loop = (X, t1, t2, a, o, old) => { loopQuad(X, t1, t2, a, o, old, 3); T[9].eval(X, t1, a, o); };   // FUN_002763b0
+T[17].loop = (X, t1, t2, a, o, old) => { loopQuad(X, t1, t2, a, o, old, 4); T[17].eval(X, t1, a, o); };  // FUN_00272388
+const LOOP_NOOP = new Set([10, 14]);            // FUN_002d5740
 // type 10, the sprite: FUN_002777b0 init, FUN_002778b8 draw (below)
 T[10] = {
   init(X, a, o) {
@@ -422,6 +513,82 @@ T[10] = {
   },
   trans() {}, draw: drawSprite,
 };
+
+// Screen channels of r0000.fed (worker 0200; the hit on Vincent's 0x1000, FUN_00336508). Vtables from the save RAM
+// (DAT_0046c398): 107 -> 0x49def8, 109 -> 0x49d798, 110 -> 0x49da80. Types 107 / 109 keep a 0x14-byte object at their
+// value slot (FUN_002a7fd0(0x14)): +4 value, +8 base, +0xc rate, +0x10 acceleration; the acceleration is read from
+// DAT_0046c350 (107, FUN_002a3850) / DAT_0046c34c (109, FUN_002a2600), static .data words that are 0.0 in the ELF
+// and in the save RAM. The page keeps the object in p.ext[slot]. T: w188 state C, emitter 7 of r0000 (age 1.2):
+// 107's object (+4, +8, +0xc, +0x10) = (128, 128, 0, 0), 109's = (1.12, 1.0, 0.1, 0).
+const ACC107 = 0, ACC109 = 0;
+const valObj = (X, o) => ((X.p.ext ??= {})[o]);
+// FUN_002a3258 (107) / FUN_002a21f8 (109): the transition; base / rate / acceleration re-based so the curve is
+// continuous (new block n = {base, rate}, old block q = {base, rate}, acceleration constant k)
+function valTrans(Q, t, nb, nr, qb, qr, k) {
+  const h = f(f(t * t) * 0.5);
+  const b = f(nb + f(f(f(f(Q.acc * h) + f(Q.rate * t)) + Q.base) - f(f(f(k * h) + f(qr * t)) + qb)));
+  Q.rate = f(nr + f(f(f(Q.acc * t) + Q.rate) - f(f(k * t) + qr)));
+  Q.acc = f(k + f(Q.acc - k));
+  Q.base = b;
+}
+// FUN_002a35f0 (107) / FUN_002a2560 (109): value = acc t^2 / 2 + (the data block's rate) t + base
+const valEval = (Q, t, r) => { Q.v = f(f(f(Q.acc * f(f(t * t) * 0.5)) + f(r * t)) + Q.base); };
+// type 107 (data: +0x10 base, +0x14 rate, byte +0x18 GS ALPHA index, +0x19 own rectangle, +0x1a frame-buffer mode,
+// +0x1b): FUN_002c1af0 -> FUN_002a3178 init, FUN_002c1b68 -> FUN_002a3258 transition (only when the new or the old
+// block has +0x1a), FUN_002c1bb8 -> FUN_002a35f0 eval (only with +0x1a), FUN_002c1bd8 -> FUN_002a3690 draw
+T[107] = {
+  init(X, a, o) { const F = X.F; (X.p.ext ??= {})[o] = { v: F.f32(a + 0x10), base: F.f32(a + 0x10), rate: F.f32(a + 0x14), acc: ACC107 }; },
+  trans(X, t, a, o, old) {
+    const F = X.F, Q = valObj(X, o);
+    if (Q && (F.u8(a + 0x1a) || F.u8(old + 0x1a))) valTrans(Q, t, F.f32(a + 0x10), F.f32(a + 0x14), F.f32(old + 0x10), F.f32(old + 0x14), ACC107);
+  },
+  eval(X, t, a, o) { const F = X.F, Q = valObj(X, o); if (Q && F.u8(a + 0x1a)) valEval(Q, t, F.f32(a + 0x14)); },
+  draw: drawScreen,
+};
+// type 109 (data: +0 base, +4 rate): FUN_002b2910 -> FUN_002a2120 init, FUN_002b2988 -> FUN_002a21f8 transition,
+// FUN_002b29d8 -> FUN_002a2560 eval; draw slot FUN_002d5730 (nothing). Its value drives type 110.
+T[109] = {
+  init(X, a, o) { const F = X.F; (X.p.ext ??= {})[o] = { v: F.f32(a), base: F.f32(a), rate: F.f32(a + 4), acc: ACC109 }; },
+  trans(X, t, a, o, old) { const F = X.F, Q = valObj(X, o); if (Q) valTrans(Q, t, F.f32(a), F.f32(a + 4), F.f32(old), F.f32(old + 4), ACC109); },
+  eval(X, t, a, o) { const F = X.F, Q = valObj(X, o); if (Q) valEval(Q, t, F.f32(a + 4)); },
+};
+// type 110: init 0x2b4ab8 (asm) = "the ref-2 channel's (type 109) object exists"; transition 0x2b4af0 / eval
+// 0x2b4b00 are jr ra. Its draw FUN_002b4b08 -> FUN_002a2610(data, the 109 object) is a frame-buffer filter
+// (the frame copied and redrawn scaled about a centre by the 109 value, iterated; FUN_00285d38 / FUN_002a2c40):
+// not translated, the particle is simulated but not drawn (warned).
+T[110] = { init() {}, trans() {}, eval() {},
+  draw(X) { X.warn('effects: draw type 110 (frame-buffer zoom filter FUN_002a2610) not translated: not drawn'); } };
+
+// FUN_002a3690 (type 107's draw, data +0x1a == 0): one untextured GS SPRITE through the 2D layer (FUN_00286870
+// prim record, FUN_002868d0 -> FUN_002849a8 packet): the rectangle (0, 0, width, height) of display buffer 0
+// (FUN_00285568(0) / FUN_002855d8(0)), or data +0 / +4 / +8 / +0xc (x, y, w, h) with +0x19; colour = the ref-0
+// channel's value (FUN_002a44f8(.., 0) -> FUN_002a4510: particle +0x60 + ref slot 0) clamped to 0..255 and
+// truncated (VMAX / VMINI I = 255 / VFTOI0; the record's +0x70 flag is 0, so no emitter colour); GS ALPHA
+// FUN_00284d30(FUN_00284e20(data +0x18, 0, 1, 2)) = 0x44 / 0x48 / 0x42 (any other byte -> 0x44); TEST
+// FUN_00284c98(4) = 0x3000d (ATE GREATER AREF 0, ZTE ZTST ALWAYS); Z 0. T: w188 dump C (f793, the hit + 4 frames):
+// the sprite (1823.5, 1791.5)-(2271.5, 2303.5) = 448 x 512 (BUF0, MEASURED), RGBA (128, 30, 7, 24) = tag 0's type 17
+// colour at age 6.0 truncated, ALPHA 0x48, TEST 0x3000d, drawn right after the hit's sprites.
+// data +0x1a != 0 (FUN_00285d38 / FUN_00286248: the frame buffer blended with itself) is not translated (warned).
+const BUF0 = { w: 448, h: 512 };
+const SCISSOR = { w: 432, h: 512 };     // the scene's GS SCISSOR 0-431 x 0-511 (output.js FB_W / FB_H, every gameplay dump)
+// A screen rectangle (display buffer 0's pixels, 448 wide) clipped by that SCISSOR as the GS does, in the view's clip
+// space (the native view is the 432 x 512 target; full mode maps it onto its whole view): [X0, Y0, X1, Y1] or null
+export function screenClip([x, y, w, h]) {
+  const cl = (v, n) => Math.min(Math.max(v, 0), n);
+  const x0 = cl(x, SCISSOR.w), x1 = cl(x + w, SCISSOR.w), y0 = cl(y, SCISSOR.h), y1 = cl(y + h, SCISSOR.h);
+  if (!(x1 > x0 && y1 > y0)) return null;
+  return [2 * x0 / SCISSOR.w - 1, 1 - 2 * y0 / SCISSOR.h, 2 * x1 / SCISSOR.w - 1, 1 - 2 * y1 / SCISSOR.h];
+}
+const ALPHA_IDX = [0x44, 0x48, 0x42];
+function drawScreen(X, a, o, view, out) {
+  const F = X.F, p = X.p, v = p.v;
+  if (F.u8(a + 0x1a)) { X.warn('effects: type 107 frame-buffer mode (data +0x1a, FUN_00285d38 / FUN_00286248) not translated: not drawn'); return; }
+  const c = D.refSlot(F, X.d, 0) / 4;
+  const rgba = [0, 1, 2, 3].map(i => Math.trunc(Math.min(255, Math.max(0, v[c + i]))));
+  const r = F.u8(a + 0x19) ? [F.s32(a), F.s32(a + 4), F.s32(a + 8), F.s32(a + 0xc)] : [0, 0, BUF0.w, BUF0.h];
+  out.push({ screen: true, rect: r, buf: BUF0, rgba, alpha: ALPHA_IDX[F.u8(a + 0x18)] ?? 0x44, test: 0x3000d,
+    emitter: X.em.ei, id: X.em.id, type: D.type(F, X.d), tag: p.tag });
+}
 
 // type 21, the burst: a ring of sub-sprites owned by the channel (vtable 0x49aa78: FUN_0027baa0 init,
 // FUN_0027bba0 transition, FUN_0027bda0 eval, FUN_0027cd68 draw, FUN_0027bd70 destroy). The value
@@ -772,11 +939,21 @@ const DRAWN_ELSEWHERE = { 11: 'FUN_0027a170', 100: 'FUN_002cb3f0' };
 
 // ---------------------------------------------------------------------------------------------
 // The engine. One manager (DAT_004ee2e0, the FED 0x40000 is linked into it).
-export function createEffects({ fed, core, warn = console.warn, twister = null, rand = null, rng = null, proj = PROJ } = {}) {
+// reseed (worker 0198): FUN_002efc78 reseeds once a frame (FUN_002d97f8) before every manager's FUN_002e9f98;
+// a second manager sharing the rng (the 2D one, DAT_004ee4a0, runs after DAT_004ee2e0) passes false.
+// fed0 (worker 0200): a second FED linked into the same manager, r0000.fed (FileCode 0: the ids 0x0..0x3ffff,
+// FUN_00336508's 0x1000, FUN_003365e0's 0x4800). FUN_002e62b0 -> FUN_002e5c60 picks the FED by id & 0xfffc0000
+// from the manager's +0x78 list; the emitters of both share the +0x84 list. `F` is the FED of the emitter being
+// run: set from em.F where each pass enters an emitter (spawn, begin, end, sprites), so the code below reads it.
+export function createEffects({ fed, fed0 = null, core, warn = console.warn, twister = null, rand = null, rng = null, proj = PROJ, reseed = true } = {}) {
   const rngGiven = !!rng;
   rng ??= new EffectRng(undefined, undefined, twister, rand);
-  const F = parseFed(fed);
+  const F0 = parseFed(fed);
+  let F = F0;
+  const feds = new Map([[F0.code, F0]]);
+  if (fed0) { const F1 = parseFed(fed0); feds.set(F1.code, F1); }
   const tex = core ? parseCore(core) : new Map();
+  for (const [k, t] of parseFedTextures(F)) tex.set(k, t);    // FUN_002eba88: the FED's own TIM2 images
   const warned = new Set();
   const warnOnce = m => { if (!warned.has(m)) { warned.add(m); warn(m); } };
   // Without rand() the frame reseed (FUN_002d97f8) cannot run: every LCG / VU0 R draw would diverge from the
@@ -790,13 +967,14 @@ export function createEffects({ fed, core, warn = console.warn, twister = null, 
   let phase = 0xc;                            // mgr +0xb0 (0xc after the draw, 5 in the logic, 9 after FUN_002efe98)
   // one context object, refilled per channel call (no handler keeps it or calls back into ctx)
   const X0 = { F, em: null, p: null, d: 0, rng, warn: warnOnce };
-  const ctx = (em, p, d) => { X0.em = em; X0.p = p; X0.d = d; return X0; };
+  const ctx = (em, p, d) => { X0.F = F; X0.em = em; X0.p = p; X0.d = d; return X0; };
 
   // FUN_002e62b0 (via FUN_002e6290, param_3 = id): FED by id & 0xfffc0000, group (id >> 10) & 0x7f,
   // entry id & 0x1ff -> FUN_002e63d0(age 0, mgr, fedobj, group +8, entry param record, 0)
   function spawn(id, pos) {
     if (noRand && !rngGiven) return null;                      // no rand(): left out (warned at load)
-    if ((id & 0xfffc0000) >>> 0 !== F.code) { warnOnce(`effects: no FED for id 0x${id.toString(16)}`); return null; }
+    F = feds.get((id & 0xfffc0000) >>> 0) ?? null;                // FUN_002e5c60
+    if (!F) { F = F0; warnOnce(`effects: no FED for id 0x${id.toString(16)}`); return null; }
     if (id & 0x200) { warnOnce('effects: id bit 0x200 (FUN_002e8830) not translated'); return null; }
     const g = F.groupOf((id >> 10) & 0x7f);
     if (!g || (id & 0x1ff) >= F.u16(g + 6)) return null;      // -2 / -3
@@ -808,7 +986,7 @@ export function createEffects({ fed, core, warn = console.warn, twister = null, 
     if (0 >= F.s32(E + 4)) return null;
     const cat = F.u8(E + 0xe);
     const em = {
-      E, ei, param, id, cat: (cat < 5) ? 0 : (cat < 9 || cat === 0xb) ? 1 : 0,
+      F, E, ei, param, id, cat: (cat < 5) ? 0 : (cat < 9 || cat === 0xb) ? 1 : 0,
       flags: 0, f0a: 0, age: f(-F.s16(param + 0x2c)), dt: 0, carry: 0, fade: -1, d0: 1,
       sched: 0, n58: 0x8000, lists: [[], []],
       p120: [0, 0, 0, 0], p130: [0, 0, 0, 0], p140: [1, 1, 1, 1], p150: [1, 1, 1, 1], d4: 0,
@@ -841,7 +1019,7 @@ export function createEffects({ fed, core, warn = console.warn, twister = null, 
     const size = (F.s16(P + 2) + 99) & ~3;                      // value region (+0x60) length
     const buf = new ArrayBuffer(Math.max(size, 16));
     const p = {
-      P, tag: tag & 0xfff, flags: (tag & 0x2000) ? 0x40 : 0, list: (F.u8(P + 9) & 1) ^ 1, age: f(age),
+      P, tag: tag & 0xfff, pid: F.u16(P), flags: (tag & 0x2000) ? 0x40 : 0, list: (F.u8(P + 9) & 1) ^ 1, age: f(age),
       life: F.u16(P + 6), ev: F.u8(P + 0x21) ? 0 : -1, cat: F.u8(P + 0xb), parent: null,
       v: new Float32Array(buf), i32: new Int32Array(buf), data: [], entry: [], m50: ident(), skip: null,
     };
@@ -860,10 +1038,13 @@ export function createEffects({ fed, core, warn = console.warn, twister = null, 
       const d = F.desc(P, idx), ty = D.type(F, d);
       p.data[idx] = a;
       const ev = T[ty];
-      // an untranslated draw type (11 / 100: their init / transition / eval draw no RNG: 0x27a160 / 0x27a168 are
-      // jr ra, 0x2cb300 / 0x2cb3b8 call no RNG function) leaves the particle simulated, so its other channels
-      // draw the RNGs as in the game (worker 0188 review: tag 5's type 23 / 24 transitions are 6 LCG draws before
-      // tag 3's type 21 eval), but not drawn; an untranslated channel type still skips the particle
+      // an untranslated draw type (11 / 100) leaves the particle simulated, so its other channels draw the RNGs
+      // as in the game (worker 0188 review: tag 5's type 23 / 24 transitions are 6 LCG draws before tag 3's type 21
+      // eval), but not drawn; an untranslated channel type still skips the particle. Type 11's init / transition
+      // (0x27a160 / 0x27a168) are jr ra. CORRECTION (worker 0200, MEASURED w200_lcg): type 100's eval 0x2cb3b8 ->
+      // FUN_0029e630 -> FUN_0029e688 DOES draw: per new trail point 4 signed + 1 unit LCG values and a VU0 R span
+      // (FUN_002d9828). w172_sound3 f789: the hit's emitter 3 tag 4 draws 25 LCG values after its type 21 eval
+      // (the 25 that emitter 6 is early by on the page). Not translated (the page runs no eval for type 100).
       if (!ev) { if (!DRAWN_ELSEWHERE[ty]) p.skip = p.skip ?? `channel type ${ty}`; else p.noDraw = p.noDraw ?? `draw type ${ty} (${DRAWN_ELSEWHERE[ty]})`; continue; }
       ev.init(ctx(em, p, d), a, D.slot(F, d) / 4);
     }
@@ -913,15 +1094,25 @@ export function createEffects({ fed, core, warn = console.warn, twister = null, 
   function ageEmitter(em, step) {
     if (em.flags & 0x20) return false;
     if (em.f0a & 0xfc7f) return true;
+    const E = em.E, loopE = !!(F.u16(E) & 2), Ec = F.u16(E + 0xc);   // emitter +4 = E id: bit 1 = looping
+    if (loopE && em.fade < 0 && step > 10) step = 1;              // (FUN_002ea040: +0x0a & 0x380 == 0 path)
     let dt = f(step + em.carry); em.carry = 0;
     em.age = f(em.age + dt); em.dt = dt;
     if (!(em.fade < 0)) em.noDraw = 'emitter fade (+0x28)';       // not translated (nothing on the page sets it)
+    if (loopE && Ec) warnOnce('effects: looping emitter with E +0xc (fade start) not translated');
     for (const L of em.lists) for (const p of L.slice()) {
       p.age = f(p.age + dt);
-      if (Math.trunc(p.age) >= p.life) kill(em, p);   // particle +4 bit 2 clear (P id) for these defs
+      // worker 0198: a looping particle (particle +4 = P id, bit 1) of a looping emitter is not killed at its
+      // life: at P +0x12 it gets flag 0x10 and FUN_002eb1d0 wraps it (list1 below). Emitter +2 bit 0x10 is
+      // never set on the page; E +0xc != 0 (fade mode 3) is warned above.
+      if ((p.pid & 2) && loopE && !(em.flags & 0x10) && !(Ec && F.u8(E + 0x1f) === 3 && f(Ec) <= em.age)) {
+        if (!(p.age < F.u16(p.P + 0x12))) p.flags |= 0x10;
+        continue;
+      }
+      if (Math.trunc(p.age) >= p.life) kill(em, p);
     }
     if (em.age < 0) return true;
-    const E = em.E, dur = F.s32(E + 4);
+    const dur = F.s32(E + 4);
     if (em.age < dur) {
       let k = em.sched;
       if (k >= 0) {
@@ -937,7 +1128,9 @@ export function createEffects({ fed, core, warn = console.warn, twister = null, 
       }
       return true;
     }
-    if (F.u16(E) & 2) { warnOnce('effects: emitter id bit 2 (looping emitter) not translated'); return true; }
+    // looping emitter (E id bit 1; worker 0198): stays while +2 bit 0x10 is clear and E +0xc is 0 or not reached
+    if (loopE && !(em.flags & 0x10) && (Ec === 0 || em.age < Ec)) return true;
+    if (loopE) return em.lists[0].length + em.lists[1].length > 0;
     // bit 0 clear: FUN_002e6920 removes the emitter (and its particles) at its duration; bit 0 set:
     // it stays while either particle list is non-empty
     return !!(F.u16(E) & 1) && (em.lists[0].length + em.lists[1].length > 0);
@@ -950,6 +1143,20 @@ export function createEffects({ fed, core, warn = console.warn, twister = null, 
     // (FUN_002e7660, FUN_00335f40 / FUN_003361b8) never sets it, so mode 1 falls through to the
     // mode-0 code below (0x2e7cd0 asm: bVar1 == 1 && +0x30 == 0 -> the iVar2 != 0 path).
     // Mode 2 (a bone matrix, FUN_00269530) and > 2 (the matrix is not updated) are not translated.
+    if (em.cat === 1) {
+      // emitter byte +1 == 1 (categories 5-8 / 0xb: camera DAT_0050b4f8[1], worker 0198): +0x80 = 0, the position
+      // goes to the screen offset +0x40 / +0x44 = +0x120 / +0x124 + param +0x10 / +0x14 (FUN_002e3300 adds it to
+      // the projection's centre); +0x90 / +0xa0 as below; FUN_002d84f0 + FUN_002d82d0(+0xe0, +0x90, +0x80, +0xd4).
+      // Param +0x1d == 1 takes FUN_002e80e0 (attached): not translated.
+      if (mode === 1) { em.noDraw = 'screen emitter with param +0x1d == 1 (FUN_002e80e0)'; return; }
+      em.p40 = [f(em.p120[0] + F.f32(r + 0x10)), f(em.p120[1] + F.f32(r + 0x14))];
+      const r90 = [0, 1, 2].map(i => f(em.p130[i] + F.f32(r + 0x20 + 4 * i)));
+      em.scale = [0, 1, 2].map(i => f(em.p140[i] * F.f32(r + 0x30 + 4 * i)));
+      em.m = eulerT(scaleM(em.scale), r90, [0, 0, 0], em.d4);
+      if (!em.m) { em.noDraw = `emitter rotation order ${em.d4} (FUN_002d82d0)`; em.m = ident(); }
+      em.col = em.p150.slice();
+      return;
+    }
     if (mode >= 2) { em.noDraw = `param record mode +0x1d = ${mode} (FUN_002e7cd0)`; return; }
     const p80 = [0, 1, 2].map(i => f(em.p120[i] + F.f32(r + 0x10 + 4 * i)));
     const r90 = [0, 1, 2].map(i => f(em.p130[i] + F.f32(r + 0x20 + 4 * i)));
@@ -963,14 +1170,77 @@ export function createEffects({ fed, core, warn = console.warn, twister = null, 
   // kind 2 (the eval list +0x38)
   function list1(em) {
     for (const p of em.lists[1]) { if (p.flags & 4) continue; p.flags |= 4; runList(em, p, 7, 0x27, 'once'); }
-    for (const p of em.lists[1]) events(em, p, Math.trunc(p.age));
+    for (const p of em.lists[1]) {
+      let ia = Math.trunc(p.age);
+      if (p.flags & 0x10) {                                    // FUN_002eb1d0: the wrap of a looping particle
+        const P = p.P, p12 = F.u16(P + 0x12), p10 = F.u16(P + 0x10);
+        events(em, p, p12 - 1);
+        loopList(em, p, f(p12));
+        p.flags = (p.flags & ~0x10) | 2;
+        p.age = f(f(f((ia - p12) % (p12 - p10)) + f(p10)) + f(p.age - ia));
+        ia = Math.trunc(p.age);
+      }
+      events(em, p, ia);
+    }
     for (const p of em.lists[1]) runList(em, p, 2, 0x22, 'eval');
+  }
+  // FUN_002e9b38(t = P +0x10, P, channel type): the data block (and its entry, event index) a channel of this
+  // type has at time t: the last keyframe event with time <= t that has an entry of this type (its first
+  // such entry), else the init list's entry (data offset 0xffff = none). The entry returned is the last one
+  // the search looked at (later events without a match overwrite it, as in the game's loop)
+  function loopData(P, ty, t) {
+    let entry = 0, data = 0, k = 0;
+    for (let i = 0; i < F.u8(P + 0x21); i++) {
+      const ev = F.event(P, i);
+      if (t < F.s16(ev)) break;
+      for (let j = 0; j < F.u8(ev + 4); j++) {
+        const e = ev + 8 + 8 * j;
+        entry = e;
+        if (D.type(F, F.desc(P, F.u8(e))) === ty) { data = ev + F.u16(e + 2); k = i; break; }
+      }
+    }
+    if (!data) {
+      const blk = F.list(P, 0);
+      k = 0;
+      for (let j = 0; j < F.u8(blk + 4); j++) {
+        const e = blk + 8 + 8 * j;
+        entry = e;
+        if (D.type(F, F.desc(P, F.u8(e))) === ty) { data = F.u16(e + 2) !== 0xffff ? blk + F.u16(e + 2) : 0; break; }
+      }
+    }
+    return { data, entry, k };
+  }
+  // FUN_002eb6b8 kind 5 (the loop list +0x44, count +0x25) at time tEnd = P +0x12: each channel takes the data
+  // it has at the loop start P +0x10 and its loop method (vtable +0x34) re-bases it; the event index +0x36 restarts
+  function loopList(em, p, tEnd) {
+    if (p.skip) return;
+    const P = p.P, L = F.list(P, 5), p10 = F.u16(P + 0x10);
+    p.ev = 0;
+    for (let j = 0; j < F.u8(P + 0x25); j++) {
+      const idx = F.u16(L + 2 * j), d = F.desc(P, idx), ty = D.type(F, d), h = T[ty];
+      const oldE = p.entry[idx], old = p.data[idx];
+      const t2 = oldE ? f(tEnd - F.s16(oldE + 4)) : tEnd;
+      const r = loopData(P, ty, p10);
+      let k;
+      if (!r.data) k = -1;
+      else {
+        const t1 = r.entry ? f(p10 - F.s16(r.entry + 4)) : 0;
+        p.data[idx] = r.data; p.entry[idx] = r.entry;
+        if (h && h.loop) h.loop(ctx(em, p, d), t1, t2, r.data, D.slot(F, d) / 4, old);
+        else if (!LOOP_NOOP.has(ty)) warnOnce(`effects: loop method of channel type ${ty} not translated`);
+        k = r.k + 1;
+        if (F.u8(P + 0x21) <= k) k = -1;
+        else if (k < p.ev) k = p.ev;
+      }
+      p.ev = k;
+    }
   }
   // The frame (FUN_00248110): begin() before the game logic, end() after it, then the draw.
   function begin(step = 1.2) {
-    rng.frame();                                               // FUN_002efc78 -> FUN_002d97f8: LCG and VU0 R from rand()
+    if (reseed) rng.frame();                                   // FUN_002efc78 -> FUN_002d97f8: LCG and VU0 R from rand()
     // FUN_002efc78 -> FUN_002e9f98: dt = step (emitter +0xc is 0), FUN_002ea040 per emitter
     for (const em of emitters.slice()) {
+      F = em.F;
       const keep = ageEmitter(em, f(step));
       if (!keep) emitters.splice(emitters.indexOf(em), 1);
     }
@@ -983,6 +1253,7 @@ export function createEffects({ fed, core, warn = console.warn, twister = null, 
     // GUESS: the emitter frustum cull (FUN_002da928 with param +0x40) is not decoded: never culled
     for (const em of emitters) {
       if (em.age < 0) continue;
+      F = em.F;
       emitterMatrix(em);
       list1(em);
     }
@@ -995,20 +1266,28 @@ export function createEffects({ fed, core, warn = console.warn, twister = null, 
     const out = [];
     for (const em of emitters) {
       if (em.age < 0) continue;
+      F = em.F;
       if (em.noDraw) { warnOnce(`effects: emitter ${em.ei} with ${em.noDraw} not translated: not drawn`); continue; }
       for (const L of em.lists) for (const p of L) {
         if (p.skip) continue;
         if (p.noDraw) { warnOnce(`effects: particle with ${p.noDraw} not translated (emitter ${em.ei}): not drawn`); continue; }
         const P = p.P, Ld = F.list(P, 3);
+        // FUN_002e3300: emitter byte +1 picks the camera; camera 1 (2D) with the emitter's +0x40 / +0x44 added to
+        // the projection's centre (worker 0198)
+        const [V, Pj] = em.cat === 1 ? [CAM2D_VIEW, cam2dProj(em.p40 ?? [0, 0])] : [view, proj];
         for (let j = 0; j < F.u8(P + 0x23); j++) {
           const idx = F.u16(Ld + 2 * j), d = F.desc(P, idx), h = T[D.type(F, d)];
-          if (h && h.draw) h.draw(ctx(em, p, d), p.data[idx], D.slot(F, d) / 4, view, out, tex, proj);
+          if (h && h.draw) h.draw(ctx(em, p, d), p.data[idx], D.slot(F, d) / 4, V, out, tex, Pj);
+          else if (!h) warnOnce(`effects: draw type ${D.type(F, d)} not translated: not drawn`);
         }
       }
     }
     return out;
   }
-  return { spawn, begin, end, update, sprites, emitters, rng, fed: F, tex, warn: warnOnce };
+  // Restart (checkpoint.js, worker 0201). GUESS: the stage reload frees every emitter and zeroes mgr +0x8c (the manager's
+  // teardown / rebuild across a reload is not decoded); the RNGs run on (no reseed found on the reload path)
+  const reset = () => { emitters.length = 0; counter = 0; };
+  return { spawn, begin, end, update, sprites, emitters, rng, fed: F0, feds, tex, warn: warnOnce, reset };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1243,8 +1522,12 @@ export class EffectLayer {
     };
     const all = this.last = this.fx.sprites({ toView, toViewMatrix });   // .last: the page tests
     const list = [], lines = [];
-    for (const s of all) (s.line ? lines : list).push(s);
+    const screens = [];
+    for (const s of all) (s.screen ? screens : s.line ? lines : list).push(s);
+    // one draw order over the sprites, lines and screen sprites: the draw pass's (worker 0200 review)
+    this.ord = new Map(all.map((s, i) => [s, i]));
     this.lines(lines, w);
+    this.screens(screens, all);
     while (this.pool.length < list.length) {
       const g = new THREE.BufferGeometry();
       g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(12), 3));
@@ -1270,7 +1553,7 @@ export class EffectLayer {
       const mat = this.material(s.tex, s.alpha);
       if (!mat) { mesh.visible = false; return; }
       mesh.material = mat;
-      mesh.renderOrder = 1000 + i;                                    // GUESS: draw buckets (FUN_002e1d88) not decoded: spawn order
+      mesh.renderOrder = 1000 + (this.ord?.get(s) ?? i);              // GUESS: draw buckets (FUN_002e1d88) not decoded: spawn order
     });
   }
   // the type 137 sparks: GS LINE STRIPs, gouraud, untextured: the vertex colour as is (alpha 0x80 = 1.0;
@@ -1294,6 +1577,52 @@ export class EffectLayer {
     });
     this.lmats.set(alpha, m);
     return m;
+  }
+  // type 107's screen sprites (worker 0200): flat colour over the rectangle of display buffer 0 (the game's whole
+  // frame = the page's whole 3D view), TEST ATE GREATER AREF 0 (alpha 0 not drawn), ZTST ALWAYS (no depth test),
+  // ALPHA as the lines (premultiplied, factor 1). Drawn in clip space.
+  screenMaterial(alpha) {
+    const THREE = this.THREE;
+    this.smats ??= new Map();
+    let m = this.smats.get(alpha);
+    if (m !== undefined) return m;
+    const l = this.lineMaterial(alpha);
+    if (!l) { this.smats.set(alpha, null); return null; }
+    m = new THREE.ShaderMaterial({
+      uniforms: { rgba: { value: new THREE.Vector4() } },
+      vertexShader: 'void main() { gl_Position = vec4(position.xy, 0.0, 1.0); }',
+      fragmentShader: 'uniform vec4 rgba; void main() { float a = rgba.a / 128.0; gl_FragColor = vec4(rgba.rgb / 255.0 * a, min(a, 1.0)); }',
+      transparent: true, depthWrite: false, depthTest: false, side: THREE.DoubleSide,   // the GS has no culling
+      blending: THREE.CustomBlending, blendEquation: l.blendEquation, blendSrc: l.blendSrc, blendDst: l.blendDst,
+    });
+    this.smats.set(alpha, m);
+    return m;
+  }
+  screens(list, all) {
+    const THREE = this.THREE;
+    this.spool ??= [];
+    while (this.spool.length < list.length) {
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(12), 3));
+      g.setIndex([0, 1, 2, 2, 1, 3]);
+      const mesh = new THREE.Mesh(g); mesh.frustumCulled = false;
+      this.spool.push(mesh); this.group.add(mesh);
+    }
+    this.spool.forEach((m, i) => { m.visible = i < list.length; });
+    list.forEach((s, i) => {
+      const mesh = this.spool[i], P = mesh.geometry.attributes.position.array;
+      const c = screenClip(s.rect);
+      if (!c) { mesh.visible = false; return; }
+      const [X0, Y0, X1, Y1] = c;
+      P.set([X0, Y0, 0, X1, Y0, 0, X0, Y1, 0, X1, Y1, 0]);
+      mesh.geometry.attributes.position.needsUpdate = true;
+      const proto = this.screenMaterial(s.alpha);
+      if (!proto || !(s.rgba[3] > 0)) { mesh.visible = false; return; }    // ATE GREATER AREF 0
+      mesh.material = mesh.userData.alpha === s.alpha ? mesh.material : proto.clone();
+      mesh.userData.alpha = s.alpha;
+      mesh.material.uniforms.rgba.value.set(...s.rgba);
+      mesh.renderOrder = 1000 + (this.ord?.get(s) ?? i);              // GUESS: draw buckets not decoded (as the sprites)
+    });
   }
   lines(list, w) {
     const THREE = this.THREE;
@@ -1321,7 +1650,7 @@ export class EffectLayer {
       const mat = this.lineMaterial(s.alpha);
       if (!mat) { line.visible = false; return; }
       line.material = mat;
-      line.renderOrder = 1000 + i;                                     // GUESS: draw buckets not decoded (as the sprites)
+      line.renderOrder = 1000 + (this.ord?.get(s) ?? i);              // GUESS: draw buckets not decoded (as the sprites)
     });
   }
 }

@@ -10,6 +10,10 @@ so this file only adds what the game over has of its own:
     up to the 0xff command
   - the end-screen box kinds DAT_004a8250 (FUN_003fdf00: kind = table[type], type 3 = game over)
   - messages 0x4c01 / 0x4c02 (the two buttons' text, kelstr.bin)
+  - (worker 0198) the GAME OVER title: file 0x31000f5 = data/effect/anything/a0050/a0097/fer/a0097.fed (FILELIST),
+    loaded and spawned by FUN_003fdf00 -> FUN_0037f2f0(stage, 0x61, 0x31000f5, 0x81840000, 0) -> request 0x18
+    FUN_00381a08 (FUN_002f1990 registers it, FUN_002e6290(0, mgr, 0x81840000) spawns it), copied byte for byte
+    to gameover_title.fed beside gameover.json, which then declares "title" (the page fetches it only then)
 With --menu-dump GS: also data/gameover_ref.json, the menu's draws in that dump's last frame (test reference,
 game-derived, gitignored).
 
@@ -35,6 +39,8 @@ LAYOUTS = {'gameover': 0x477c38, 'gameover_flag11': 0x477cb0, 'seq6': 0x479190}
 SEQ6_AT = 0x47a130          # FUN_003c54f8 case 6: screen +0x488 = &DAT_0047a130
 END_KINDS_AT = 0x4a8250     # FUN_003fdf00: uStack_80 = DAT_004a8250..56 (7 bytes)
 MESSAGES = [0x4c01, 0x4c02]
+TITLE_FED = 'data/effect/anything/a0050/a0097/fer/a0097.fed'   # FileCode 0x31000f5 (FUN_003fdf00)
+TITLE_ID = 0x81840000        # FUN_003fdf00's FUN_0037f2f0 argument: the FED's FileCode and the spawned effect id
 MENU_PAGES = (10828, 10960)  # 'menu3' / 'menu4' TBPs (pause_layer.js notes)
 
 
@@ -123,6 +129,13 @@ def main():
         'messages': {'%#x' % m: kelstr_message(kelstr, m).hex() for m in MESSAGES},
     }
     os.makedirs(os.path.dirname(a.o), exist_ok=True)
+    fed = open(os.path.join(a.disc, TITLE_FED), 'rb').read()
+    if fed[:4] != b'FED\x08' or struct.unpack_from('<I', fed, 4)[0] != TITLE_ID:
+        print('export_web_gameover: %s is not the FED %#x' % (TITLE_FED, TITLE_ID), file=sys.stderr)
+        return 1
+    with open(os.path.join(os.path.dirname(a.o), 'gameover_title.fed'), 'wb') as f:
+        f.write(fed)
+    doc['title'] = {'fed': 'gameover_title.fed', 'id': TITLE_ID}
     with open(a.o, 'w') as f:
         json.dump(doc, f)
     print('wrote', a.o, 'seq6', doc['seq6'], 'endKinds', doc['endKinds'],

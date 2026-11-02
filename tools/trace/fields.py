@@ -209,6 +209,11 @@ CAM_FIELDS = [f for f in FIELDS if f[0] in (
     ("c_564", "C", 0x564, "u32", "D", "FUN_003422f0: C+0x564 & 0x18000000 picks the camera base (MP path vs C+0x54c vtable+0x24)"),
     # worker 0107 (jump camera): P+0x2a8 bit 0 gates FUN_00575768's FUN_0032a0f8(CAM, 1, 0)
     ("p_2a8", "P", 0x2A8, "u32", "D", "FUN_00574808 bits; FUN_00575768 bit 0 -> FUN_0032a0f8(CAM, 1, 0)"),
+    # worker 0199 (death camera): FUN_00328790 writes CAM+0x230 phase / +0x234 clock; HP and the world-mode
+    # object's state / timer at this state's addresses (as the gameover set)
+    ("cam_230", "CAM", 0x230, "bytes:16", "D", "FUN_00328790: CAM+0x230 phase, +0x234 = DAT_0046e880+0x20 at the set"),
+    ("p_hp", None, 0x960660, "u32", "D", "Vincent's HP (status P+0x17c + 0x20; gameover set)"),
+    ("wmode", None, 0x94D58C, "u32", "D", "FUN_00334590 +0x2c state (lo16), +0x2e timer (hi16)"),
 ]
 
 # Opt-in set for the jump (TRACE_FIELDSET=jump, worker 0095): no cape; the whole physics

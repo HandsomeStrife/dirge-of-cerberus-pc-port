@@ -32,7 +32,7 @@ Test: `node native/web/test_effects.mjs` (146 checks; the game comparisons need
   (emitter 3; T: w174_pain_a / _m spawn 0x40c00, worker 0174). The page passes playerHandler's hit.point
   (the capsule contact, FUN_005442d8), as param_3. On the page the hit draws nothing yet: emitters 3 / 7 have param +0x1d = 1
   (FUN_002e7cd0's +0x1d != 0 path not decoded), so they simulate but are skipped by the draw guard. Also FUN_00336508 (id 0x1000, FED
-  r0000, every 15 frames): MISSING.
+  r0000, every 15 frames): see 'r0000 (worker 0200)'.
 - Ids: FED by id & 0xfffc0000 (FUN_002e5c60; 0x40000 = resident r0001), table A (+0x60) index
   (id >> 10) & 0x7f, entry id & 0x1ff -> param record; group +8 = emitter index.
 
@@ -220,3 +220,53 @@ VU0 macro fields decoded by hand: normalise = xyz, w = 0; cross = a x b).
   T: w193_fxhits f843 / f870 / f871. Also f871: FUN_00580410 -> FUN_003365e0(0x4800) (r0000; not followed).
 - Tests: test_effects_hooks.mjs (new, hooked: 16 checks incl. the w193_floor impacts), test_effects 207, test_bullet_hit
   44 (bullet frame: hit effect then 0x41800 at one point), test_effects_page + the floor shot.
+
+## Screen effects, looping, FED textures (worker 0198, 2026-11-02)
+The GAME OVER title (notes/gameover-research.md "Title FED") brought: the emitter byte +1 == 1 path (category 5-8 / 0xb:
+camera 1, FUN_002e7cd0's screen offset +0x40 / +0x44, FUN_002e3300), looping emitters and particles (FUN_002ea040,
+FUN_002eb1d0, FUN_002eb6b8 kind 5, FUN_002e9b38, loop methods of types 1 2 3 4 7 9 17), channel type 3 (init FUN_00274558
+asm, eval = FUN_00272348's bytes), a FED's own TIM2 textures (FUN_00309f28 offsets), `createEffects({ reseed })` for a
+second manager. effects.js now warns on an untranslated draw type in the draw pass. Checked on the title only (the 3D
+effects' tests unchanged).
+Draw layers (review fix): the frame loop FUN_00248110 draws effect layers through FUN_002f00c0 (3, 4), FUN_002f0250 (5)
+and FUN_002f0428 (6), each FUN_002e20f0(n) over DAT_004eb680 slots (layer 5: 0x12a..0x131). Before layers 4, 5 and 6 it
+clears the depth buffer when FUN_002e2398(n) finds an entry: FUN_002ee990(0x4ec060, 0) -> FUN_002ee5c0 (8 SPRITEs,
+TEST 0x32001, Z 0). The page has this only for the title (layer 5): gameover_title.js `TitleLayer.depthClear`.
+
+## r0000 (worker 0200, 2026-11-02)
+- **Load**: boot FUN_00244db0 -> FUN_002449e8 -> FUN_002448a0(0): table 0x4985e0 row 0 = files 0x3100038 / 0x3100039 /
+  0x310003a (FILELIST: r0000.fed / r0001.fed / r0002.fez; row 1 = the _on files 0x3300000..2), each FUN_0024fe88 ->
+  FUN_002f0ff0 into the manager's +0x78 FED list. MEASURED: z128 RAM holds r0000.fed (code 0) next to r0001.fed.
+  FUN_002e5c60 matches id & 0xfffc0000 = FileCode, so ids 0..0x3ffff are r0000's.
+- **FUN_00336508** = FUN_003366b8(0x1000) only (no FUN_002e7660): emitter 7 at position 0. Callers: FUN_005720c8 (a
+  bullet hits Vincent; after FUN_0055db50 and FUN_00567c08: `DAT_0046ee28 (15) < DAT_0046e938+0x20 - P+0x280` ->
+  spawn, P+0x280 = now; FUN_00571ee8 sets P+0x280 = -15), FUN_005725d8 (melee, no gate), FUN_00572418 (player
+  vt+0x1cc: another damage path, b_dmg_2 / _3 vibration, FUN_00336338 effect; spawns when it did damage, no gate; not
+  reachable on the page) and FUN_00570eb8 (FUN_005712c8's HP-loss branch; not on the page; never fired at the traced
+  bullet hits: one 0x1000 per hit).
+- **FUN_003365e0(id, pos)** = FUN_003366b8(id) + FUN_002e7660(flag 1, pos). FUN_00580410(obj) = FUN_003365e0(0x4800,
+  FUN_0054a720(obj)); at f871 its caller is FUN_0055cac8 (site 0x55ce58, call log w200_4800): a soldier's death
+  dropping an item (FUN_00316d70 / FUN_00541688), the effect at the item. Not on the page (no items).
+- **Emitter 7 (0x1000)**: dur 11; tag 0: 1 4 7 17 14 107 (colour 128, 59.2, 15.9, 8.5 -> events), tag 1: 1 4 7 17 14 109 110.
+  Vtables (save RAM): 107 0x49def8, 109 0x49d798, 110 0x49da80. 107 / 109 keep a 0x14 object (+4 value, +8 base, +0xc
+  rate, +0x10 acc = DAT_0046c350 / DAT_0046c34c = 0.0). 110's init 0x2b4ab8 = "ref 2's object exists", trans / eval jr ra.
+- **107 draw** (FUN_002c1bd8 -> FUN_002a3690, data +0x1a == 0): FUN_00286870 prim record, rect (0, 0, FUN_00285568(0),
+  FUN_002855d8(0)) (or data +0..+0xc with +0x19), colour = FUN_002a4510 = particle +0x60 + ref slot 0, ALPHA index
+  FUN_00284e20(data +0x18, 0, 1, 2) -> FUN_00284d30 (0x44 / 0x48 / 0x42), TEST FUN_00284c98(4) = 0x3000d; FUN_002849a8
+  writes the GIF packet: x0 = ((x + 0x800) - w / 2) x 16 - 8, colour VMAX 0 / VMINI 255 / VFTOI0 (record +0x70 = 0: no
+  emitter colour). T: dump C (f793): (1823.5, 1791.5)-(2271.5, 2303.5), RGBA (128, 30, 7, 24), 0x48, TEST 0x3000d.
+- **110 draw** FUN_002b4b08 -> FUN_002a2610: frame-buffer zoom (MISSING, warned).
+- **The 25 LCG draws of 'State C'** (call log w200_lcg: every jal to FUN_002d98c8 / FUN_002d9938 in 0x270000-0x2e0000
+  with its caller, w172_sound3 f786-791): f789's order is 0x2a1998 x3, types 22 / 23 / 24, type 21 eval (emitter 3),
+  **FUN_0029e688 x25** (type 100 eval 0x2cb3b8 -> FUN_0029e630, emitter 3 tag 4: 5 trail points x 5 draws), then
+  emitter 6's 23 / 24 / 21. No draw inside the three spawns and none from r0000. So the r0000 work does not move
+  emitter 6; translating type 100's eval would.
+- Fixtures: `fx_fixture.py STATE OUT 0,0x40000` (3rd arg: FileCodes; adds 'code' and the 107 / 109 objects) ->
+  tools/trace/out/w200_fx/stateC.json; `dumpfx.py DUMP OUT --flat FLAT.json` (untextured >= 400 px tris) ->
+  w200_fx/dumpC_flat.json. Both from 0188's capC files (scratchpad 5b965574.../capC).
+- Tests: test_effects (+17: r0000 ids, screen sprite, state C vs RAM, dump C), test_effects_hooks (+4: the gate, melee),
+  test_effects_page (+3: page wiring, WebGL pixel of the screen sprite).
+- Review fixes (worker 0200): one draw order over sprites / lines / screen sprites (EffectLayer `ord`: the flash draws
+  between 0x40c00 and 0x41800, as spawned); the screen rectangle clipped by the scene SCISSOR 0-431 x 0-511 (effects.js
+  `screenClip`; native view = 432 x 512); ids.json `feds` (exporter) so play.js requests r0000.fed only when exported.
+

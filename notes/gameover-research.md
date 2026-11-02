@@ -73,8 +73,43 @@ f1370 does nothing, but that is the game leaving the stage for the title (not on
 test the page's pause after Quit (the page keeps HP 0 and blocks on it; only H gives the pause back, test_gameover_page).
 Page clock: menu keys are queued and applied in the next game frame with its clock (as the pad poll).
 
+## Title FED (worker 0198, 2026-11-02)
+The GAME OVER title and its backdrop are one effect on the ordinary FED engine (effects.js), not a separate 2D runtime.
+- Start: FUN_003fdf00 (after reading file 0x31000fc, a0093.fed = FileCode 0x81740000, registered by FUN_002f1ae8; nothing
+  of it is spawned here) -> FUN_0037f2f0(stage, 0x61, 0x31000f5, 0x81840000, 0): a stage request (FUN_00376040 slot,
+  type 0x18; +0x20 = 0x61 file number, +0x2c file 0x31000f5, +0x30 id) -> FUN_00381a08 (from FUN_00377c68 / FUN_003753e0):
+  FUN_0024fe88 reads the file, FUN_002f1990 registers the FED, FUN_002e6290(0, FUN_002f0878(), 0x81840000).
+  File 0x31000f5 = data/effect/anything/a0050/a0097/fer/a0097.fed (FILELIST.BIN; dd..e1 = a0277 / a0265 / a0253 / a0224).
+- Manager: FUN_002f0878(id): id >> 28 == 8, (id >> 18) & 0x3ff = 0x61 -> DAT_004ee4a0 (list DAT_004ee8c0: 4ec7f0, 4ee2e0,
+  4ee3c0, 4ee4a0, 4ee580, 4ee660; same step, same RNG reseed FUN_002d97f8 once a frame).
+- One group, one emitter (E id 2: looping; duration 240; category 5 -> emitter byte +1 = 1), 91 particle defs, 3 TIM2
+  textures (letters / grid ornaments / a caustic sheet). Camera 1 = DAT_0050b4f8[1] = 0x4ea080: FUN_002d9ec8(cam, PAL 1)
+  + FUN_002da038 + FUN_002da5d0 -> sceVu0ViewScreenMatrix(512, 426/512, x1.575, 2037, 2048, 1, 0x4b7fffff, 1, 65536);
+  view = identity, z + 128 (RAM). FUN_002e3300 adds emitter +0x40 / +0x44 (x 0.83203125 / 1.1428572 with PAL) to the
+  projection centre; FUN_002e7cd0's byte-1 path puts the position there (+0x80 = 0).
+- Loops: FUN_002ea040: emitter +4 bit 1 (E id) and particle +4 bit 1 (P id): no death at the life; at P +0x12 flag 0x10;
+  FUN_002eb1d0 runs events to P+0x12 - 1, the loop list (FUN_002eb6b8 kind 5: list +0x44, count +0x25; FUN_002e9b38 data
+  at P+0x10; vtable +0x34 re-bases), flags = (flags & ~0x10) | 2, age = (ia - P12) % (P12 - P10) + P10 + frac.
+  Looping emitter stays (E +0xc == 0).
+- Textures: FUN_002eba88 -> FUN_00309f28: image at TIM2 +0x40, or +0x60 when byte +0xc == 2 (a0097's: name 'gmovr_01'
+  at +0x50; HeaderSize 0x30 does not count it), CLUT after the image; GsTex0 used as is.
+- Draws (GS dumps w198, f969 / 1050 / 1151): after the scene and the 3D effects, before the HUD; depth-tested (TEST
+  0x5000d, Z 130818 = camera-0 view depth 128), but after a depth clear (review fix, 2026-11-02): the title is in effect
+  layer 5, and the frame loop FUN_00248110 -> FUN_002f0250 runs, when FUN_002e2398(5) finds a draw entry in
+  DAT_004eb680 slots 0x12a..0x131, FUN_002ee990(0x4ec060, 0) -> FUN_002ee5c0 (8 SPRITEs over 448 x 512, TEST 0x32001 =
+  alpha NEVER + AFAIL ZB_ONLY + ZTST ALWAYS, Z 0) before FUN_002e20f0(5). In every w198 dump (g4: draws 13402-13417,
+  letters from 13418), in no gameplay dump. So every title draw passes; the page clears depth before the title group
+  (gameover_title.js `TitleLayer.depthClear`). FUN_002f00c0 (layer 4) and FUN_002f0428 (layer 6) do the same. Draw type 10 = the letters (tex 1, ALPHA 0x44) and the grid / ornaments
+  (tex 2, 0x44 / 0x48): on the page. Not: type 11 (tex 0 mesh, 588 tris early, 44 settled), the dim quad (untextured,
+  RGBA 24,8,8,64, 0x44; likely type 20), type 35's letter glow (per letter: tex 1 into a 64 x 64 page at 2016..2080, a
+  copy from frame page 0x1ce00 (ALPHA FIX), the page drawn back red additive at the letter, a clear), types 103 / 119.
+- Timing: spawn in page frame 894 = the request's (880) + 14 (state ages 13.2 @906, 84.0 @965, 181.2 @1046, 302.4 @1147).
+- Captures: grab_gs.py + TRACE_POKE (scratch copy) on w192_gameover, TRACE_LOG_AT=A5000, grabs 905,925,956,1046,1146 ->
+  tools/trace/out/w198 (g1-5.gs, s1-5.p2s, grab_log.json); fixtures: tools/trace/title_fixture.py sN.p2s ramN.json,
+  tools/trace/dumpfx.py gN.gs dumpN.json --fed a0097.fed [--clut-out clutN.json].
+
 ## Open
-- GAME OVER title / backdrop (FED 2D runtime), the death camera (FUN_0032ace0's CAM+0x1e8 0x400000 branch, CAM+0x230
+- GAME OVER title: draw types 11 / 20 / 35 / 103 / 119 (above); the death camera (FUN_0032ace0's CAM+0x1e8 0x400000 branch, CAM+0x230
   phases), HUD slide-out (FUN_003aff20), the voice (stream SE), the volume ramp hooks, the world stop after the
-  answer, menu sounds through audio.js MenuSound, the Restart path (FUN_003c72f8 -> results -> checkpoint), Quit ->
+  answer, menu sounds through audio.js MenuSound, the Restart path (done: worker 0201, notes/checkpoint-research.md), Quit ->
   title.

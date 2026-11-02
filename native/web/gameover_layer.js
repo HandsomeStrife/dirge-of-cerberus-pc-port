@@ -1,18 +1,23 @@
 // Game over on the page (worker 0192): runs gameover.js once a game frame and draws its Restart / Quit box with
 // pause_layer.js's PauseLayer (the same widget kit, textures and font: the box is layout 0x477c38 of the pause's
 // menu system). Keys as the pause (pause_layer.js PAUSE_KEYS): ✕ Space, ○ Backspace, up / down.
-// Not drawn: the GAME OVER title and its backdrop (FED 0x81840000; warned in gameover.js).
+// The GAME OVER title (FED 0x81840000): gameover_title.js (worker 0198), when gameover.json declares "title" and
+// play.js passes THREE / root: begin at the frame start, spawn in the frame's logic, end + draw via endFrame(camera).
 import { PauseLayer, PAUSE_KEYS } from './pause_layer.js';
 import { GameOver, mergeData } from './gameover.js';
+import { createTitle, TitleLayer } from './gameover_title.js';
 
 // setupGameOver({ output, onRequest, blocked }): returns { go, frame(dead, step), reset() }.
 // frame() runs one game frame; its clock is 20 ms a game frame (GUESS: the HUD's clock stand-in, hud.js).
 // onRequest('restart' | 'quit').
+// THREE / root / fxRng (worker 0198): the title's EffectLayer goes into root; fxRng = the 3D effects' EffectRng.
 export async function setupGameOver({ output, onRequest = () => {}, blocked = () => false,
-                                      pauseUrl = 'data/pause.json', url = 'data/gameover.json' }) {
-  let D = null, layer = null;
+                                      pauseUrl = 'data/pause.json', url = 'data/gameover.json',
+                                      THREE = null, root = null, fxRng = null }) {
+  let D = null, layer = null, G = null;
   try {
     const [p, g] = await Promise.all([pauseUrl, url].map(u => fetch(u).then(r => { if (!r.ok) throw new Error(u + ' ' + r.status); return r.json(); })));
+    G = g;
     D = mergeData(p, g);
     layer = new PauseLayer(D);
   } catch (e) {
@@ -20,12 +25,24 @@ export async function setupGameOver({ output, onRequest = () => {}, blocked = ()
     D = null;
   }
   const go = new GameOver(D);
+  let title = null, titleLayer = null;
+  if (G && G.title && THREE && root) {
+    try {
+      const u = url.replace(/[^/]*$/, '') + G.title.fed;
+      const r = await fetch(u);
+      if (!r.ok) throw new Error(u + ' ' + r.status);
+      title = createTitle(await r.arrayBuffer(), { rng: fxRng, id: G.title.id });
+      titleLayer = new TitleLayer(THREE, title);
+      root.add(titleLayer.group);
+    } catch (e) { console.warn('game over: the GAME OVER title is not drawn (' + e.message + ')'); title = null; }
+  } else if (G && !G.title) console.warn('game over: gameover.json has no "title" (re-run export_web_gameover.py): the GAME OVER title is not drawn');
   let clock = 0;
   const queued = [];                               // pad actions, seen by the next game frame (as the pad poll)
   const send = () => {
     if (!go.request) return;
     const r = go.request; go.request = null;
     if (r === 'quit') console.warn('game over: Quit; the page has no title screen (nothing done)');
+    if (r === 'restart' && title) title.kill();     // FUN_00534a98 (result 6): FUN_002f2098(0x81840000)
     onRequest(r);
   };
   const has = (k, code) => PAUSE_KEYS[k].includes(code);
@@ -48,7 +65,15 @@ export async function setupGameOver({ output, onRequest = () => {}, blocked = ()
     go,
     get clock() { return clock; },
     // the frame's pad first (FUN_003de130 / the box's handlers run in the frame, with its clock), then the frame
-    frame(dead, step) { clock += 20; for (const a of queued.splice(0)) go.input(a, clock, 0); go.frame(dead, step, clock); send(); },
-    reset() { queued.length = 0; go.reset(); },
+    frame(dead, step) {
+      if (title) title.begin(step);                  // FUN_002efc78: every manager ages at the frame start
+      clock += 20; for (const a of queued.splice(0)) go.input(a, clock, 0); go.frame(dead, step, clock);
+      if (title) title.logic(go.started);            // FUN_00381a08's spawn: stage request 0x18, in the frame's logic
+      send();
+    },
+    // after the frame's logic (play.js, with the 3D effects' end): FUN_002efe98, then the draw pass
+    endFrame(camera) { if (title) { title.end(); titleLayer.update(camera); } },
+    title, titleLayer,
+    reset() { queued.length = 0; go.reset(); if (title) title.reset(); },
   };
 }

@@ -1,0 +1,1 @@
+{"name": "w201_reload", "frames": 270, "log_from": 0, "doc": "worker 0201: from the state saved at the stage reload after game over -> Restart (scratch state, f3984 of the w201 drive), no input. TRACE_FIELDSET=enemy TRACE_ERECS=44,66", "events": []}

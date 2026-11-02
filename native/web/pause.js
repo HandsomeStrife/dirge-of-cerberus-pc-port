@@ -765,7 +765,7 @@ export class PauseFlow {
       const script = BOX_SCRIPT[r.event];
       if (!script) return r;
       const box = openBox(this.D, script, now, this.pulseBase);
-      // old pause.json: the pre-0189 behaviour (the request at once, no box; play.js reloads on Restart)
+      // old pause.json: the pre-0189 behaviour (the request at once, no box; play.js goes to the checkpoint on Restart)
       if (!box && boxDataMissing(this.D)) return { request: ({ 3: 'restart', 4: 'tempsave', 5: 'quit' })[r.event], id: r.event };
       if (!box) return r;
       this.box = box; s.hasFocus = false; this.lastSE = box.se; this.lastSEW = null;

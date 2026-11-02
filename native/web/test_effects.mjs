@@ -9,7 +9,7 @@
 import { readFileSync, existsSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createEffects, EffectRng, wallImpactId, parseFed, parseCore, _internals } from './effects.js';
+import { createEffects, EffectRng, wallImpactId, parseFed, parseCore, _internals, screenClip } from './effects.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const rd = p => { const b = readFileSync(p); return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength); };
@@ -502,17 +502,17 @@ if (existsSync(join(w188, 'stateD.json'))) {
     ok('w188 state C: emitter 3 same particle tags', JSON.stringify(m3.lists[1].map(p => p.tag)) === JSON.stringify(e3.parts.map(p => p.tag)));
     const { nv, worstV, at } = valErr(m3, e3);
     ok(`w188 state C: the hit's (emitter 3) particle values within 1e-5 (${nv}, incl. its render category 6 tag 0; worst ${worstV.toExponential(2)})`, nv > 20 && worstV < 1e-5, at);
-    // the bullet-end effect 0x41800 (emitter 6). Between the two spawns the game spawns FUN_00336508's 0x1000 (FED
-    // r0000: not on the page), so the emitter list is 8, 3, 0x1000, 6 and in the end pass (FUN_002efe98) 0x1000's
-    // channels draw the LCG between emitter 3's draws and emitter 6's (the page's spawns draw nothing at the spawn:
-    // every frame-1 draw is in the end pass). k6 = draws given to emitter 6 first (searched 0-64; emitter 3 then
-    // no longer matches, so this replay checks emitter 6 alone): MEASURED 25. The page leaves 0x1000 out, so its
-    // emitter 6 draws 25 values early (notes/effects-research.md 'Bullet end'); the dump replay below has k6 = 0.
+    // the bullet-end effect 0x41800 (emitter 6). The emitter list is 8, 3, 0x1000 (r0000), 6. k6 = draws given to
+    // emitter 6 first (searched 0-64; emitter 3 then no longer matches, so this replay checks emitter 6 alone):
+    // MEASURED 25. Worker 0200 (call log w200_lcg, every LCG call with its caller): they are NOT r0000's (its
+    // channels draw nothing) but emitter 3 tag 4's type 100 eval (0x2cb3b8 -> FUN_0029e630 -> FUN_0029e688, 5 trail
+    // points x 5 draws) right after its type 21 eval; the page runs no type 100 eval, so emitter 6 draws 25 values
+    // early. The dump replay below has k6 = 0.
     let k6 = -1; for (let k = 0; k <= 64 && k6 < 0; k++) { const r = replay(Math.max(k8, 0), k); const v = valErr(r.m6, e6); if (v.nv > 0 && v.worstV < 1e-5) k6 = k; }
     const r6 = replay(Math.max(k8, 0), Math.max(k6, 0)), v6 = valErr(r6.m6, e6);
     console.log(`  w188 hit: emitter 6 (0x41800) matches RAM with k6 = ${k6} LCG draws after emitter 3's spawn; ${v6.nv} values, worst ${v6.worstV.toExponential(2)} ${v6.at}`);
     ok('w188 state C: emitter 6 (0x41800, FUN_00554ea8 -> FUN_00335918) same particle tags', JSON.stringify(r6.m6.lists[1].map(p => p.tag)) === JSON.stringify(e6.parts.map(p => p.tag)), `${r6.m6.lists[1].map(p => p.tag)} vs ${e6.parts.map(p => p.tag)}`);
-    ok(`w188 state C: emitter 6's particle values within 1e-5 (${v6.nv}) after r0000 0x1000's ${k6} draws`, k6 === 25 && v6.nv > 20 && v6.worstV < 1e-5, `k6 ${k6} ${v6.at}`);
+    ok(`w188 state C: emitter 6's particle values within 1e-5 (${v6.nv}) after emitter 3's type 100's ${k6} draws (FUN_0029e688)`, k6 === 25 && v6.nv > 20 && v6.worstV < 1e-5, `k6 ${k6} ${v6.at}`);
     // the dump (C+4: the frame whose sprites fit best; C+3 / C+5 are worse): frames 3-4 are reseeded from rand()
     // like frame 2, but not checked against RAM (no state there)
     const dC = JSON.parse(readFileSync(join(w188, 'dumpC.json'), 'utf8'));
@@ -525,13 +525,140 @@ if (existsSync(join(w188, 'stateD.json'))) {
     // Reported: the other sprites (no game sprite with their RGBA) and their distance to the nearest game sprite
     const rC = compareDump('C+4 (asserted)', dC, drC, 111);
     console.log(`  w188 dump C+4: unmatched sprites (no game sprite with their RGBA), nearest game sprite: ${rC.unmatchedS.map(u => `emitter ${u.emitter} type ${u.type} tag ${u.tag} ${u.d.toFixed(2)} px`).join(', ')}`);
-    // emitter 6 (0x41800, the bullet-end effect): its tag 1 sprites draw from the LCG 25 values early (r0000 0x1000 is
-    // not on the page, see k6 above); the others must still match a game sprite's RGBA
+    // emitter 6 (0x41800, the bullet-end effect): its tag 1 sprites draw from the LCG 25 values early (type 100's eval
+    // is not on the page, see k6 above); the others must still match a game sprite's RGBA
     const n6 = drC.filter(s => s.emitter === 6 && !s.line).length, u6 = rC.unmatchedS.filter(u => u.emitter === 6).length;
-    ok(`w188 dump C (C+4): emitter 6 (0x41800) draws ${n6} sprites, ${n6 - u6} with a game sprite's exact RGBA; unmatched only its tag 1 (the missing r0000 draws)`,
+    ok(`w188 dump C (C+4): emitter 6 (0x41800) draws ${n6} sprites, ${n6 - u6} with a game sprite's exact RGBA; unmatched only its tag 1 (the missing type 100 draws)`,
       n6 >= 4 && n6 - u6 >= 1 && rC.unmatchedS.filter(u => u.emitter === 6).every(u => u.tag === 1), `${n6} ${u6}`);
     ok(`w188 dump C (C+4): ${rC.exS} / ${rC.sps} of the hit's sprites have a game sprite's exact RGBA, within ${rC.worstSame.toFixed(2)} px (fitted on those)`, rC.exS >= 12 && rC.worstSame < 2.5, JSON.stringify(rC));
   }
 } else console.log('  (no tools/trace/out/w188_fx: the type 21 / 137 RAM and line checks are skipped)');
+
+// --- r0000.fed (worker 0200): FileCode 0, FUN_00336508's 0x1000 (the hit on Vincent's screen flash, emitter 7:
+// tag 0 type 107, tag 1 types 109 + 110) and FUN_00580410's 0x4800 (emitter 18, the item drop's burst)
+if (existsSync(join(dataDir, 'r0000.fed'))) {
+  const fed0 = rd(join(dataDir, 'r0000.fed'));
+  const F0 = parseFed(fed0);
+  ok('r0000: FileCode 0', F0.code === 0);
+  const mk = (o = {}) => createEffects({ fed, fed0, core, warn: () => {}, rng: new EffectRng(1, undefined, null, null), ...o });
+  {
+    const fx = mk(); fx.begin(f(1.2));
+    const m = fx.spawn(0x1000, [0, 0, 0]), m48 = fx.spawn(0x4800, [1, 2, 3]), m4 = fx.spawn(0x40c00, [0, 0, 0]);
+    ok('r0000: 0x1000 -> its emitter 7 (FUN_002e5c60 by id & 0xfffc0000), 0x4800 -> emitter 18, 0x40c00 still r0001 emitter 3',
+      m && m.ei === 7 && m.F === fx.feds.get(0) && m48 && m48.ei === 18 && m4 && m4.ei === 3 && m4.F === fx.fed);
+    const w = []; const fxNo = createEffects({ fed, core, warn: x => w.push(x), rng: new EffectRng(1, undefined, null, null) });
+    fxNo.begin(f(1.2));
+    ok('r0000: without fed0, 0x1000 is not spawned (warned)', fxNo.spawn(0x1000, [0, 0, 0]) === null && w.some(x => x.includes('no FED for id 0x1000')));
+  }
+  // the screen sprite of type 107 against the decode: whole buffer 0 (448 x 512), colour = the type 17 value truncated,
+  // ALPHA byte +0x18 = 1 -> 0x48, TEST 0x3000d; type 110 is not drawn
+  const run = (frames, o) => { const fx = mk(o); fx.begin(f(1.2)); const m = fx.spawn(0x1000, [0, 0, 0]); fx.end(); let dr = fx.sprites({ toView: p => p }); for (let k = 0; k < frames; k++) { fx.begin(f(1.2)); fx.end(); dr = fx.sprites({ toView: p => p }); } return { fx, m, dr }; };
+  {
+    const { m, dr } = run(4);
+    const sc = dr.filter(s => s.screen);
+    const p0 = m.lists[1].find(p => p.tag === 0), c = p0.v.slice(24, 28);
+    ok('r0000 0x1000: one screen sprite per frame (tag 0, type 107), none for type 110', sc.length === 1 && sc[0].type === 107 && sc[0].tag === 0 && !dr.some(s => s.type === 110), JSON.stringify(dr));
+    ok('r0000 0x1000: its rectangle is display buffer 0 (0, 0, 448, 512)', sc[0] && JSON.stringify(sc[0].rect) === '[0,0,448,512]');
+    ok('r0000 0x1000: RGBA = the type 17 colour (slot 96) clamped and truncated, no emitter colour', sc[0] && JSON.stringify(sc[0].rgba) === JSON.stringify([...c].map(x => Math.trunc(Math.min(255, Math.max(0, x))))), `${sc[0]?.rgba} ${[...c]}`);
+    ok('r0000 0x1000: ALPHA 0x48 (data +0x18 = 1), TEST 0x3000d', sc[0] && sc[0].alpha === 0x48 && sc[0].test === 0x3000d);
+    // FUN_002849a8's colour with the prim record's +0x70 = 0 (FUN_00286870): the emitter colour (+0xb0) is not applied
+    const fxc = mk(); fxc.begin(f(1.2)); const mc = fxc.spawn(0x1000, [0, 0, 0]); mc.p150 = [0.5, 0.5, 0.5, 0.5]; fxc.end();
+    const p0c = mc.lists[1].find(p => p.tag === 0), sc2 = fxc.sprites({ toView: p => p }).find(s => s.screen);
+    ok('r0000 0x1000: the screen colour ignores the emitter colour (0.5 here)', mc.col[0] === 0.5 && sc2 && sc2.rgba[1] === Math.trunc(p0c.v[25]) && sc2.rgba[1] > 40, `${sc2?.rgba}`);
+    // review (worker 0200): FUN_002849a8's VMAX 0 / VMINI 255 / VFTOI0 on an out-of-range colour, hand-written values
+    const fxh = mk(); fxh.begin(f(1.2)); const mh = fxh.spawn(0x1000, [0, 0, 0]); fxh.end();
+    mh.lists[1].find(p => p.tag === 0).v.set([300, -5, 12.9, 128.7], 24);
+    const sh = fxh.sprites({ toView: p => p }).find(s => s.screen);
+    ok('r0000 0x1000: colour (300, -5, 12.9, 128.7) -> RGBA (255, 0, 12, 128)', sh && JSON.stringify(sh.rgba) === '[255,0,12,128]', `${sh?.rgba}`);
+    const { dr: drEnd } = run(11);
+    ok('r0000 0x1000: gone at its life (11)', !drEnd.some(s => s.screen));
+  }
+  // review (worker 0200): synthetic type 107 blocks (r0000 never sets +0x1a / +0x19). A fake FED view over one buffer:
+  // block A at 0 (+0x10 base, +0x14 rate, byte +0x18 ALPHA index, +0x19 own rectangle at +0..+0xc, +0x1a mode),
+  // block B at 0x40, a descriptor at 0x100 (type 107, nref 2, out slot 0, ref slots: colour at value slot 0)
+  {
+    const buf = new ArrayBuffer(0x200), dv = new DataView(buf);
+    const Fk = { u8: o => dv.getUint8(o), u16: o => dv.getUint16(o, true), s16: o => dv.getInt16(o, true), s32: o => dv.getInt32(o, true),
+      u32: o => dv.getUint32(o, true), f32: o => dv.getFloat32(o, true) };
+    const blk = (o, base, rate, a18, a19, a1a, rect = [0, 0, 0, 0]) => { rect.forEach((v, i) => dv.setInt32(o + 4 * i, v, true)); dv.setFloat32(o + 0x10, base, true); dv.setFloat32(o + 0x14, rate, true); dv.setUint8(o + 0x18, a18); dv.setUint8(o + 0x19, a19); dv.setUint8(o + 0x1a, a1a); };
+    dv.setUint16(0x100, 107, true); dv.setUint8(0x102, 2); dv.setUint16(0x104, 0, true); dv.setUint16(0x10a, 0, true);
+    const T107 = _internals.T[107], warns = [];
+    const X = { F: Fk, d: 0x100, p: { v: new Float32Array(8), tag: 0 }, em: { ei: 7, id: 0x1000 }, warn: m => warns.push(m) };
+    blk(0, 10, 2, 1, 0, 1); blk(0x40, 4, 1, 0, 0, 0);
+    T107.init(X, 0, 0); const Q = X.p.ext[0];
+    ok('type 107 init (FUN_002a3178): value = base = data +0x10, rate = data +0x14, acc 0', Q.v === 10 && Q.base === 10 && Q.rate === 2 && Q.acc === 0);
+    T107.eval(X, 3, 0, 0);
+    ok('type 107 eval with +0x1a (FUN_002a35f0): value = 2 x 3 + 10 = 16', Q.v === 16, `${Q.v}`);
+    T107.eval(X, 5, 0x40, 0);
+    ok('type 107 eval without +0x1a: value kept', Q.v === 16);
+    Q.base = 11; Q.rate = 3;
+    blk(0x80, 20, 5, 1, 0, 0);
+    T107.trans(X, 2, 0x80, 0, 0x40);          // neither block has +0x1a: nothing
+    ok('type 107 transition, neither block with +0x1a: unchanged', Q.base === 11 && Q.rate === 3);
+    blk(0x80, 20, 5, 1, 0, 1);
+    T107.trans(X, 2, 0x80, 0, 0x40);          // FUN_002a3258: base 20 + ((3 x 2 + 11) - (1 x 2 + 4)) = 31, rate 5 + (3 - 1) = 7
+    ok('type 107 transition with +0x1a (FUN_002a3258): base 31, rate 7, acc 0', Q.base === 31 && Q.rate === 7 && Q.acc === 0, `${Q.base} ${Q.rate}`);
+    const out = []; X.p.v.set([128, 64, 32, 16], 0);
+    T107.draw(X, 0, 0, null, out);
+    ok('type 107 draw with +0x1a (frame-buffer mode): not drawn, warned', out.length === 0 && warns.some(w => w.includes('frame-buffer mode')));
+    blk(0, 10, 2, 2, 1, 0, [100, 20, 50, 60]);
+    T107.draw(X, 0, 0, null, out);
+    ok('type 107 draw with +0x19: the rectangle from data +0..+0xc (100, 20, 50, 60), ALPHA index 2 -> 0x42', out.length === 1 && JSON.stringify(out[0].rect) === '[100,20,50,60]' && out[0].alpha === 0x42, JSON.stringify(out[0]));
+    blk(0, 10, 2, 7, 0, 0); out.length = 0;
+    T107.draw(X, 0, 0, null, out);
+    ok('type 107 draw: ALPHA index byte 7 -> FUN_00284e20 0 -> 0x44; rect = buffer 0 (0, 0, 448, 512)', out[0] && out[0].alpha === 0x44 && JSON.stringify(out[0].rect) === '[0,0,448,512]');
+    // the SCISSOR clip (0-431 x 0-511) of the screen rectangle in the view's clip space
+    const near = (a, b) => a && a.every((v, i) => Math.abs(v - b[i]) < 1e-9);
+    ok('screenClip: buffer 0 (448 wide) -> the whole 432 x 512 view', near(screenClip([0, 0, 448, 512]), [-1, 1, 1, -1]));
+    ok('screenClip: (0, 0, 216, 512) -> the left half (x 216 / 432)', near(screenClip([0, 0, 216, 512]), [-1, 1, 0, -1]));
+    ok('screenClip: (400, 10, 100, 600) clipped at 432 / 512', near(screenClip([400, 10, 100, 600]), [2 * 400 / 432 - 1, 1 - 20 / 512, 1, -1]));
+    ok('screenClip: (440, 0, 8, 512) wholly past the scissor -> null', screenClip([440, 0, 8, 512]) === null);
+  }
+  // the game: w188 state C (f789, one frame after the hit) with r0000's emitters (fx_fixture.py STATE OUT 0,0x40000)
+  // and the hit dump's screen sprites (dumpfx.py --flat), both under tools/trace/out/w200_fx/
+  const w200 = join(here, '../../tools/trace/out/w200_fx');
+  if (existsSync(join(w200, 'stateC.json'))) {
+    const C = JSON.parse(readFileSync(join(w200, 'stateC.json'), 'utf8'));
+    const e7 = C.emitters.find(e => e.code === 0 && e.ei === 7), e3 = C.emitters.find(e => e.code === 0x40000 && e.ei === 3);
+    ok('w200 state C: the hit spawned r0000 emitter 7 at position 0, same age as emitter 3', e7 && e3 && e7.age === e3.age && e7.p120.every(x => x === 0));
+    // the game's order (w193_fxsrc f789): 0x40c00 (r0001), 0x1000 (r0000), 0x41800 (r0001) in one emitter list
+    const e6 = C.emitters.find(e => e.code === 0x40000 && e.ei === 6);
+    const fx = mk(); fx.begin(f(1.2)); fx.spawn(0x40c00, e3.p120); const m = fx.spawn(0x1000, [0, 0, 0]); fx.spawn(0x41800, e6.p120); fx.end(); fx.begin(f(e7.dt)); fx.end();
+    ok('w200 state C: same particle tags', JSON.stringify(m.lists[1].map(p => p.tag)) === JSON.stringify(e7.parts.map(p => p.tag)));
+    let nv = 0, worst = 0, at = '', objs = 0, objBad = '';
+    for (const pr of e7.parts) {
+      const pj = m.lists[1].find(p => p.tag === pr.tag);
+      for (let c = 0; c < F0.u8(pj.P + 8); c++) {
+        const d = F0.desc(pj.P, c), ty = F0.u16(d), o = F0.u16(d + 4) / 4;
+        // the lanes each type writes (type 7's w is never written by FUN_002760d8: heap garbage in RAM)
+        for (const k of { 1: [0, 1, 2, 4, 5, 6], 4: [0, 1, 2, 4, 5, 6], 7: [0, 1, 2, 4, 5, 6], 17: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15] }[ty] ?? []) {
+          nv++; const er = relErr(pj.v[o + k], pr.v[o + k]); if (er > worst) { worst = er; at = `tag ${pr.tag} type ${ty} [${k}] ${pj.v[o + k]} vs ${pr.v[o + k]}`; }
+        }
+        const R = pr.pools[String(c)];
+        if (ty === 107 || ty === 109) {
+          objs++; const Q = pj.ext?.[o];
+          const mine = Q ? [Q.v, Q.base, Q.rate, Q.acc] : [];
+          if (!R || mine.length !== 4 || mine.some((x, i) => relErr(x, R.f[1 + i]) > 1e-6)) objBad += `tag ${pr.tag} type ${ty}: ${mine} vs ${R?.f.slice(1)}; `;
+        }
+      }
+    }
+    ok(`w200 state C: r0000 emitter 7's channel values equal RAM (${nv} values, worst ${worst.toExponential(2)})`, nv >= 60 && worst < 1e-6, at);
+    ok('w200 state C: the type 107 / 109 value objects (+4 value, +8 base, +0xc rate, +0x10 acceleration) equal RAM', objs === 2 && !objBad, objBad);
+    if (existsSync(join(w200, 'dumpC_flat.json'))) {
+      // dump C = state C + 4 frames: the screen sprite (two triangles) right after the hit's sprites
+      const flat = JSON.parse(readFileSync(join(w200, 'dumpC_flat.json'), 'utf8')).filter(t => t.v[0][2] === 0);
+      for (let k = 0; k < 4; k++) { fx.begin(f(1.2)); fx.end(); }
+      const sc = fx.sprites({ toView: p => p }).filter(s => s.screen);
+      const xs = flat.flatMap(t => t.v.map(v => v[0])), ys = flat.flatMap(t => t.v.map(v => v[1]));
+      const s0 = sc[0];
+      // FUN_002849a8: x0 = ((x + 0x800) - w / 2) x 16 - 8 (1/16 px), y the same with the height
+      const gx0 = s0 ? s0.rect[0] + 2048 - s0.buf.w / 2 - 0.5 : NaN, gy0 = s0 ? s0.rect[1] + 2048 - s0.buf.h / 2 - 0.5 : NaN;
+      ok('w200 dump C+4: one screen sprite in the game and on the page', flat.length === 2 && sc.length === 1, `${flat.length} ${sc.length}`);
+      ok('w200 dump C+4: the page\'s rectangle = the game\'s (1823.5, 1791.5)-(2271.5, 2303.5)', s0 && Math.min(...xs) === gx0 && Math.max(...xs) === gx0 + s0.rect[2] && Math.min(...ys) === gy0 && Math.max(...ys) === gy0 + s0.rect[3], `${gx0} ${gy0} vs ${Math.min(...xs)} ${Math.min(...ys)}`);
+      ok('w200 dump C+4: RGBA exact (game 128, 30, 7, 24)', s0 && flat.every(t => t.v.every(v => JSON.stringify(v[3]) === JSON.stringify(s0.rgba))), `${s0?.rgba} vs ${JSON.stringify(flat[0]?.v[0][3])}`);
+      ok('w200 dump C+4: ALPHA 0x48 = blend (A Cs, B 0, C As, D Cd), TEST 0x3000d', s0 && s0.alpha === 0x48 && flat.every(t => JSON.stringify(t.blend.slice(0, 4)) === '[0,2,0,1]' && t.test === s0.test));
+    } else console.log('  (no w200_fx/dumpC_flat.json: the screen sprite vs the dump is skipped)');
+  } else console.log('  (no tools/trace/out/w200_fx: the r0000 RAM / dump checks are skipped)');
+} else console.log('  (no data/effects/r0000.fed: the r0000 checks are skipped; re-run export_web_effects.py)');
 console.log(`${checks - fails}/${checks} checks passed`);
 process.exit(fails ? 1 : 0);

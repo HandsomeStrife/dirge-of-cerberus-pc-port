@@ -278,17 +278,26 @@ export async function setupHud({ output, player, url = 'data/hud/hud.json', camY
   }
   if (!data.chain) { console.warn('hud: old hud.json (no draw chain): rebuild data/hud'); return null; }
   const layer = new HudLayer(data);
-  const st = layer.state;
+  let st = layer.state;
   const prev = output ? output.hud : null;
   if (output) output.hud = o => { if (prev) prev(o); layer.draw(o.renderer, o); };
   let lastHp = player ? player.hp : null;
   const hits = [];
   if (!camYaw) console.warn('hud: no camera yaw (CAM+0x178) given: the hit-direction ring turns with yaw 0');
   return {
-    layer, state: st,
+    layer, get state() { return st; },
     // a soldier's bullet hit Vincent this game frame (enemy_ai playerHandler -> FUN_00567c08): his P+0x90 and
     // the bullet's +0xc0 (where it was fired from); applied in tick()
     hit(vpos, from) { hits.push([vpos, from]); },
+    // Restart (checkpoint.js, worker 0201): the stage program's end destroys the HUD (FUN_003ad5e0: vt+0xc) and game
+    // state 0x13 builds a new one (FUN_003ad530 -> FUN_003ad618). GUESS: the new HUD's values = hud.json's (the save's
+    // RAM; FUN_003ad618's own initial values not translated); the HUD clock (DAT_004f58ec, a system clock: L) runs on.
+    reset() {
+      const now = st.now;
+      layer.state = st = new HudState(data); st.now = now;
+      hits.length = 0; lastHp = player ? player.hp : null;
+      if (player && player.hp !== st.hp[0]) st.setHP(player.hp, st.hp[1]);
+    },
     // once per game frame, after the frame's damage (enemy_ai tick). GUESS: the HUD clock FUN_0023c1f0
     // advances 20 ms per frame (the same stand-in as aim.js's HUD clock; notes/fidelity-audit.md). The
     // frame's hits (FUN_003af6b8) see this frame's clock, as the ring's update (FUN_003af740, HUD update

@@ -866,8 +866,18 @@ export class PlayerController {
   enterDead(f118) {
     if ((f118 & 0x8000) || (f118 & 0x10000)) return false;
     if (!this.jump.enter(this, DEAD_STATE)) return false;
-    this.P.stance = 2;
+    this.setStance(2);
     return true;
+  }
+
+  // FUN_00565bd0(P, s): P+0x100 bits 40-41 = s (P.stance; the capsule height P+0x30 is not read on the page), then its
+  // tail vt+0x34c = FUN_00573608 (Vincent's vtable 0x58f128): stance 1 / 2 -> CAM+0x1e8 |= 2 unless FUN_00326500() and
+  // FUN_00317630(status) == 2 (0 in this save: no such weapon); stance 0 / 3 -> CAM+0x1e8 &= ~2. The camera then
+  // lowers its look point by the type's +0x40 (FollowCamera.low / d0; T w199_deathcam: set at the kill f788)
+  setStance(s) {
+    this.P.stance = s;
+    const cam = this.ctx.cam;
+    if (cam) cam.low = s === 1 || s === 2;
   }
 
   // FUN_00562898(P, dir, 0): the big hit. Script event 0x29 (vt+0x2f4): Vincent has no script here.
@@ -895,9 +905,10 @@ export class PlayerController {
     // state and changes nothing (no state write, no FUN_005641c0: the hit motion runs on, not restarted); its
     // tail FUN_00565df8(P, 0) still runs (0x18 is not an air state). The turn, the ground bit and the slide
     // above restart either way.
-    if (!this.jump.enter(this, HIT_STATE)) this.P.jumpBits = 0;
     // state 0x18's enter (FUN_005738d0 -> class 0x58a9e0 +0xc FUN_00539b20): FUN_00565bd0(P, 0), stance 0
-    // (already 0 on the page)
+    // (already 0 on the page); only when the state is entered
+    if (!this.jump.enter(this, HIT_STATE)) this.P.jumpBits = 0;
+    else this.setStance(0);
     const W = this.weapon;
     if (W && W.cam && W.cam.view === 4 && W.setView) W.setView(2);
   }
@@ -1472,6 +1483,7 @@ export const CAM_TYPE_C = {                       // type 0xc object (FUN_003301
   offset: [0, 1.25, -38],                         // +0x20: eye offset (camera space)
   rate: [0.05, 0.05],                             // +0x30 / +0x34: look-stick yaw / pitch rate
   fov: 73.5,                                      // +0x50
+  low: [0, 4.6, 0],                               // +0x40: CAM+0xe0 while CAM+0x1e8 bit 2 (FUN_0032ace0 l.1733; z128 RAM)
 };
 // The weapon views' type objects (DAT_004eed98[type]; runtime values traced in z128,
 // TRACE_FIELDSET=aim camtype_d / camtype_e). FUN_0032a420 maps view mode CAM+0x21c to a type:
@@ -1479,8 +1491,9 @@ export const CAM_TYPE_C = {                       // type 0xc object (FUN_003301
 // 0xd: its update FUN_00330980 writes pivot x = CAM+0x1a0 every frame; CAM+0x1a0 eases to
 // DAT_0046e348 = 5 at FUN_00323318(0.25) (FUN_0032ace0) and is 5 in the state, so 5 here.
 // 0xe: the values after its enter FUN_00330d18 (FOV = DAT_0046e3f0).
-export const CAM_TYPE_D = { pivot: [5, -16.25, 0], offset: [0, 0, -35], rate: [0.05, 0.05], fov: 73.5 };
-export const CAM_TYPE_E = { pivot: [0, -16.25, -0.1], offset: [0, 0, -0.1], rate: [0.05, 0.05], fov: 73.5 };
+export const CAM_TYPE_D = { pivot: [5, -16.25, 0], offset: [0, 0, -35], rate: [0.05, 0.05], fov: 73.5, low: [0, 4.05, 0] };
+export const CAM_TYPE_E = { pivot: [0, -16.25, -0.1], offset: [0, 0, -0.1], rate: [0.05, 0.05], fov: 73.5, low: [0, 6.0, 0] };
+const DAT_0046E4BC = 0.15;                        // CAM+0xd0's ease toward CAM+0xe0, x step (ELF and trace)
 export const CAM_TYPES = { 0xc: CAM_TYPE_C, 0xd: CAM_TYPE_D, 0xe: CAM_TYPE_E };
 const LOOK_TABLE = 1.0;                           // DAT_004a0650[DAT_004e1058 = 8] (view mode 1; option value in the state)
 const LOOK_TABLE_W = 0.66;                        // DAT_004a0608[DAT_004e1060 = 8] (view modes 2-4)
@@ -1653,8 +1666,38 @@ export class FollowCamera {
     // CAM+0x1c4 / +0x1c8: base pulled back along the player's facing (the ladder; FUN_00328640).
     // FUN_003285d0 (reset) leaves both as they are
     this.back = 0; this.backTarget = 0;
+    // the death camera (worker 0199): CAM+0x1e8 bit 0x400000 and CAM+0x230 (FUN_00328790's phase). The
+    // camera init FUN_00328368 writes CAM+0x1e8 = 0x2004 and +0x230 / +0x234 = 0; FUN_003285d0 (reset()) keeps them
+    this.death = false; this.phase230 = 0;
+    // CAM+0x1e8 bit 2 (FUN_00573608: the player's stance 1 / 2, PlayerController.setStance) and CAM+0xd0 (the look
+    // point's offset, eased to CAM+0xe0 = the type's +0x40 while the bit is set); FUN_00328368 zeroes both
+    this.low = false; this.d0 = [0, 0, 0];
     this.reset({ x: 0, y: 0, z: 0 });
   }
+
+  // FUN_00334590 case 2 (gameover.js event 'deathCamera', the frame he is first seen dead): FUN_0032a420(CAM, 1, 0, 0)
+  // (view mode 1; with view 1 already and params 0 it returns at once: aim_core setView's same-mode return),
+  // then FUN_00328720(CAM): CAM+0x1e8 |= 0x400000, FUN_00328790(CAM, 1): CAM+0x230 = 1 and CAM+0x234 =
+  // DAT_0046e880+0x20 (a world clock; read only by the event camera 0x200000's phases, not kept here).
+  // FUN_0032ace0 then looks down at him: tick() below. T: w199_deathcam (test_death_camera.mjs)
+  startDeath() {
+    if (this.weapon && this.weapon.setView) this.weapon.setView(1);
+    this.death = true; this.phase230 = 1;
+  }
+  // Restart (the stage reload) out of the death camera, then reset(pos). The reload builds a new camera object
+  // (traced: worker 0201's reload state has CAM at 0x9491a0, was 0x95efe0): FUN_003387f8 kind 0xe -> FUN_00328010 ->
+  // FUN_00328368 (CAM+0x1e8 = 0x2004, so bits 0x400000 and 2 clear; CAM+0xd0 = 0; +0x230 = +0x234 = 0); then the new
+  // world-mode object's case 1 runs endDeath() (FUN_00328750; its +0x234 = 10 in that state). Traced there: CAM+0x1e8
+  // 0x2c, CAM+0xd0 0, CAM+0x230 0. Only these death fields are reset here (the other FUN_00328368 fields: reset()).
+  clearDeath() {
+    this.low = false; this.d0 = [0, 0, 0];        // FUN_00328368: CAM+0x1e8 bit 2, CAM+0xd0
+    this.death = false; this.phase230 = 0;        // FUN_00328368 (0x2004, +0x230 = 0)
+    this.endDeath();                              // FUN_00334590 case 1 -> FUN_00328750
+  }
+  // FUN_00328750 (FUN_00334590 cases 1 / 4 / the 6 / 8 tail): CAM+0x1e8 &= 0xff3fffff (0x400000, 0x800000),
+  // FUN_00328790(CAM, 0): CAM+0x230 = 0 (+0x234 = the world clock, not kept). Bit 2 and CAM+0xd0 stay: CAM+0xd0 then
+  // eases back to 0 only once the stance clears the bit. Cases 4 / 6 / 8 are not on the page.
+  endDeath() { this.death = false; this.phase230 = 0; }
 
   // FUN_00328640(CAM, on): CAM+0x1c8 = on ? DAT_0046e400 (4.0 in RAM) : 0. The ladder sets it
   // (mount FUN_00576c88, each ladder-state frame FUN_00576f08 / 576f98 / 577038) and clears it
@@ -1757,7 +1800,7 @@ export class FollowCamera {
     // x|x|) clears it; the sum is clamped to +-1
     let sx = 0, sy = 0;
     const MD = this.mouseDirect;                  // OPTION mouselook: the mouse bypasses the stick
-    const dmx = MD ? this.look[0] : 0, dmy = MD ? this.look[1] : 0;
+    let dmx = MD ? this.look[0] : 0, dmy = MD ? this.look[1] : 0;
     if (MD) this.look = [0, 0];
     const fx = this.look[0] * MOUSE_SCALE, fy = this.look[1] * MOUSE_SCALE;
     if (fx !== 0.0 || fy !== 0.0) this.mouseActive = true;
@@ -1768,7 +1811,23 @@ export class FollowCamera {
     this.look = [0, 0];
     sx = mx; sy = -my;
     if (this.mouseActive) { sx /= S; sy /= S; }
+    // the death camera (CAM+0x1e8 0x400000, startDeath): FUN_0032ace0 l.573 zeroes the left stick (fStack_1d0 /
+    // 1cc: fVar31 = 0 for the nudge and the distance ease below; FUN_00330478's gain reads its own) and the
+    // look stick is replaced after FUN_003256d8 read it (so the mouse latch above still updates): not
+    // LAB_0032b950 (no ramp CAM+0x1ec, no deadzone bit), and with CAM+0x1e8 0x200000 clear (l.787: the event
+    // camera's CAM+0x230 phases, l.849, are not on the page) look = (0, -0.3) (l.810-811), then caseD_0 ->
+    // l.1144: below DAT_0046e3fc (-54 deg) CAM+0x1ac -= (0.9424779 - pitch) x 0.1; last frame's pitch was
+    // clamped to -54 deg = -0.9424779 (same f32), so it never fires: CAM+0x1ac stays 0 (traced). l.747: the
+    // P+0x28 bit 0x20 test is clear for Vincent (0x20901f). l.758: player state P+0x104 0x16 keeps the read
+    // look stick unramped (and CAM+0x1ac = 0). OPTION mouselook=direct: the game takes no look input here
+    const dead = this.death;
+    let Lc = L;                                   // fVar31 (l.1150): |left stick| as FUN_0032ace0 uses it
+    if (dead) {
+      Lc = 0; dmx = 0; dmy = 0;
+      if (p.state !== 0x16) { sx = 0.0; sy = -0.3; }
+    }
     // ramp CAM+0x1ec toward |(sx, sy)| (FUN_0032ace0, LAB_0032b950)
+    if (!dead) {
     const m = Math.hypot(sx, sy);
     let c = this.ramp;
     if (c < m) {
@@ -1781,6 +1840,7 @@ export class FollowCamera {
     if (m > 0) this.rampDir = [sx, sy];
     const dl = Math.hypot(this.rampDir[0], this.rampDir[1]);
     if (dl > 0) { sx = this.rampDir[0] / dl * c; sy = this.rampDir[1] / dl * c; } else { sx = 0; sy = 0; }
+    }
     const smag = Math.hypot(sx, sy);
     this.look190 = [sx, sy];                      // CAM+0x190 / +0x194 (l.2486: the look values; read by FUN_00328968's 0x10 / 0x20 bits)
     // look-stick deadzone DAT_0046e464: past it on either axis the update calls
@@ -1788,14 +1848,15 @@ export class FollowCamera {
     // GUESS: its FUN_00326068(7) gate is taken as open (not decoded); nothing in the port
     // reads the bit yet (FUN_00324530 / FUN_00324598 do in the game)
     this.flags14 = 0;
-    if (!(Math.abs(sx) <= LOOK_DEADZONE && Math.abs(sy) <= LOOK_DEADZONE)) this.flags14 |= 1 << 10;
+    if (!dead && !(Math.abs(sx) <= LOOK_DEADZONE && Math.abs(sy) <= LOOK_DEADZONE)) this.flags14 |= 1 << 10;
     // stick-idle counter CAM+0x1e2: -20 while turning, then +1 per frame to 30
     if (sx === 0 && dmx === 0 && dmy === 0) this.idle = this.idle > 29 ? 30 : Math.min(30, this.idle + Math.trunc(S));
     else this.idle = -20;
     const f30 = this.idle * 0.033333335, f29 = f30 * 0.0025;
     // auto turn-behind: yaw toward the wanted move direction (C+0xc0) by the gain;
     // past 110 deg it slows to 0 at 140, beyond 140 it turns toward the front instead
-    if (sx === 0 && this.gain > 0.1 && this.idle >= 1 && !fun253f50()) {
+    // (l.1161-1163: not with CAM+0x1e8 0x400000)
+    if (sx === 0 && !dead && this.gain > 0.1 && this.idle >= 1 && !fun253f50()) {
       const fw = this.M[2], camYaw = Math.atan2(fw[0], fw[2]);
       // l.1194: FUN_0055a410(P) (player states 10-14, 0x15, 0x17: the ladder) turns toward the
       // base matrix's row 2 (C+0x20), else FUN_0034b088 (C+0xc0)
@@ -1822,7 +1883,7 @@ export class FollowCamera {
     // The bit is set by type 0xc's enter FUN_00330240 (0x330368) and cleared by 0xd's
     // FUN_00330748 (0x330938) and 0xe's FUN_00330d18 (traced: set exactly while the type is 0xc)
     if (f8000 && this.idle > 0 && smag === 0 && !fun253f50()) {   // (OPTION mouselook: idle is -20 after a mouse turn)
-      this.yaw += clampf((L * 0.2 + 0.8) * f30 * 1.0 * e2[1], -ry, ry);
+      this.yaw += clampf((Lc * 0.2 + 0.8) * f30 * 1.0 * e2[1], -ry, ry);
       this.pitch += clampf(f30 * 0.25 * e2[0], -rp, rp);
     }
     // FUN_0032ace0 l.1509: a switch between views 2-4 (CAM+0x1e8 0x800, FUN_0032a420) adds the
@@ -1830,13 +1891,18 @@ export class FollowCamera {
     // view) the switch ramp CAM+0x17c is set to 1 here, so it ends this frame
     if (wc) { const a = W.switchAngles(); this.pitch += a.pitch; this.yaw += a.yaw; }
     this.pitch = clampf(this.pitch, PITCH_MIN, PITCH_MAX);
+    // l.1733-1745: CAM+0xe0 = the type's +0x40 while CAM+0x1e8 bit 2 is set (or C+0x45c bit 17: not set on the page),
+    // else 0; CAM+0xd0 eases toward it by DAT_0046e4bc x step (FUN_002611f4, a lerp). place() adds it to the pivot
+    // for the look-at (l.1806) and the distance reference (l.2264) only
+    const e0 = this.low ? (T.low || [0, 0, 0]) : [0, 0, 0], kd = DAT_0046E4BC * S;
+    this.d0 = [0, 1, 2].map(j => this.d0[j] + (e0[j] - this.d0[j]) * kd);
     // l.1748: CAM+0x1c4 += (CAM+0x1c8 - CAM+0x1c4) x DAT_0046e4c0 (0.2) x step
     this.back = (this.backTarget - this.back) * DAT_0046E4C0 * S + this.back;
     // l.1687-1762: the reticle offset, switch ramp, fade, FOV and recoil (aim_core.js cameraFrame)
     if (W) W.cameraFrame(this.pitch);
     if (wc) FollowCamera.shoulderPre(wc);
     // place the eye: offset, collision, switch lerp, distance ease, eye kick
-    const g = this.place(base, old, { recede, state: p.state, L, smag, view1,
+    const g = this.place(base, old, { recede, state: p.state, L: Lc, smag, view1,
                                       fast: !!wc && (wc.flags & 0x100000) !== 0,
                                       e: wc ? wc.e : 1,
                                       recoil: wc ? DAT_0046E4CC * wc.k198 * (wc.fov / BASE_FOV) : 0,
@@ -1882,7 +1948,9 @@ export class FollowCamera {
     const eoff = vm(off, M);
     // l.1812: pivot y + CAM+0x1a4 (0 except the frame after leaving first person, FUN_00331160)
     const a4 = this.weapon ? this.weapon.cam.a1a4 : 0;
-    const piv = [T.pivot[0], T.pivot[1] + a4, T.pivot[2] + (pf > 0 ? -4.0 : -3.0) * pf];   // DAT_0046e4dc / 0x46e4d8
+    // l.1806: + CAM+0xd0 (the stance offset, tick())
+    const d0 = this.d0 || [0, 0, 0];
+    const piv = [T.pivot[0] + d0[0], T.pivot[1] + d0[1] + a4, T.pivot[2] + d0[2] + (pf > 0 ? -4.0 : -3.0) * pf];   // DAT_0046e4dc / 0x46e4d8
     const pr = vm(piv, RY);
     const at = [base[0] + pr[0], base[1] + pr[1], base[2] + pr[2]];                    // CAM+0xf0
     let eye = [at[0] + eoff[0], at[1] + eoff[1], at[2] + eoff[2]];
@@ -1932,7 +2000,7 @@ export class FollowCamera {
     // x0.1 while the base moves away from the eye in the on-foot states (view mode 1),
     // else x (|left stick| x 0.9 + 0.1); plus the recede term x (dist - 25) / (60 - 25)
     // (DAT_0046e504 / DAT_0046e500 = 60 in RAM)
-    const pv = vm(T.pivot, rotY(this.yaw));
+    const pv = vm([0, 1, 2].map(j => T.pivot[j] + d0[j]), rotY(this.yaw));   // l.2264: type pivot + CAM+0xd0
     const ref = [base[0] + pv[0], base[1] + pv[1], base[2] + pv[2]];
     const u = [eye[0] - ref[0], eye[1] - ref[1], eye[2] - ref[2]];
     const dist = len3(u);
