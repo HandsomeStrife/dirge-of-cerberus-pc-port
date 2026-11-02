@@ -35,7 +35,12 @@ const char *cf_cp_utf(const cf_img *m, uint16_t i, size_t *len);
 const char *cf_cp_class(const cf_img *m, uint16_t i, size_t *len);
 const char *cf_class_at_ptr(const cf_img *m, uint32_t p, size_t *len);
 
-/* Decrypt in place (TTTT -> SSSS, cipher body). Returns 0 on success. */
+/* Read the cipher's constants and table from the user's ELF (SLES_541.85);
+ * must succeed before cf_decrypt / cf_load. Returns 0, or -1 with *err set. */
+int cf_set_elf(const char *elf_path, const char **err);
+
+/* Decrypt in place (TTTT -> SSSS, cipher body). Returns 0 on success
+ * (-3: no ELF loaded, see cf_set_elf). */
 int cf_decrypt(uint8_t *buf, size_t len);
 
 /* ---- resolved (flat) representation the interpreter consumes ------------ */

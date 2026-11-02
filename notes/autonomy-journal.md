@@ -148,8 +148,8 @@ INFRA:
   Engine = math+vu0+scene-graph+object-list+state-spine+material+frame-loop(DocEngine).
   Launched engine #5: INPUT (pad FUN_00254638) native.
 - ~00:50 SCRIPT DECRYPT done: native/script/dcc.c — cipher is GAME-CUSTOM (NOT DES):
-  key=first 8 bytes, schedule FUN_0041bb38 (sub[i+1]=sub[i]*5), per-block CFB byte stage
-  + u64 word stage, S-box DAT_0047eb50 = (i+120)&0xff (extracted @file 0x37ec50). Decrypted
+  key=first 8 bytes, schedule FUN_0041bb38 (sub[i+1]=sub[i]*const), per-block CFB byte stage
+  + u64 word stage, S-box DAT_0047eb50 (constants + table now read from the ELF, --elf). Decrypted
   file = serialized relocatable image (TTTT->SSSS, LE scalars, file-rel offset "pointers",
   bytecode operands BE). Tool decrypts+parses+disassembles to JVM mnemonics. 270/270
   scripts PASS (100% readable UTF8); names install/KerberosIntermissionCalc/ev####/mm_z###.
@@ -227,7 +227,7 @@ INFRA:
   CONSTANTS are runtime VuMem uploads (need oracle dump); exact GIFtag bits. Launched: GPU
   shading upgrade (native/gpu: wire the real shader model, synthetic lit/textured test).
 - ~03:05 TEXT/FONT done: native/text/ (doctext.c decrypt, docfont.c, docrender.c, FORMAT.md).
-  Cipher cross-checked vs game FUN_0041bbf8 (0xA1652347 etc). 400/400 text-bins decrypt;
+  Cipher cross-checked vs game FUN_0041bbf8 (constants now read from the ELF). 400/400 text-bins decrypt;
   real JP/EN dialogue ("Suspend save data:Kalm town","Find Reeve!"). Encoding Shift-JIS
   (JP build). Fonts = RFD fontdata1.bin/fontdata2.rfd archives (kelfnt0-4, PSMT4 16-col CLUT
   16x16 cell grid); kelfnt4 decodes clean KANJI. Render composites real glyphs -> shared
@@ -335,7 +335,7 @@ INFRA:
 - ~06:10 EFFECTS COMPLETE: typed-channel curve system (desc array @P+0xc, INIT/UPDATE/AUX
   role lists; apply flags 0x1 pos/0x2 vel/0x4 accel/0x8 RGBA/0x10 orient/0x20 billboard,
   scale _vmul; FUN_002eb038/eadc0/e7660). Blend = render-category byte -> preset (FUN_002e84a8).
-  FEZ INFLATED bit-exact (8-byte cipher seed 7, S-box (x+0x78), +0xA1652347 + zlib -> FED).
+  FEZ INFLATED bit-exact (8-byte cipher, fixed key FUN_0023c3f0, S-box DAT_0047eb50 + zlib -> FED).
   313/313 parse 0 fail, valgrind-clean; channels 133787 (0 neg scale, 98.5% alpha in[0,128]).
   GAP: type-code->evaluator + interp mode = C++ vtables built at boot in .bss (not static).
   Launched: DASHBOARD REFRESH (add GPU char/scene, cutscene, animation, dialogue, audio; update status).

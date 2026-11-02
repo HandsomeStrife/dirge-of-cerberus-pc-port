@@ -8,8 +8,8 @@ BINS := doctext docfont docrender
 
 all: $(BINS)
 
-doctext: doctext.c
-	$(CC) $(CFLAGS) -o $@ $< $(LDLIBS)
+doctext: doctext.c ../common/doc_cipher.c ../common/doc_cipher.h
+	$(CC) $(CFLAGS) -o $@ doctext.c ../common/doc_cipher.c $(LDLIBS)
 
 docfont: docfont.c
 	$(CC) $(CFLAGS) -o $@ $< $(LDLIBS)
@@ -20,12 +20,14 @@ docrender: docrender.c
 # --- demo / validation targets --------------------------------------------
 EXTRACT := ../../extract/_KEL
 ETC     := $(EXTRACT)/data/etc
+# the text-bin cipher is read from the user's ELF at run time
+ELF     ?= ../../elf/SLES_541.85
 
 # decrypt a Japanese save-label and an English/Japanese tutorial file
 demo-text: doctext
-	./doctext $(EXTRACT)/noPath/06800020.bin   # JP save labels (Shift-JIS)
-	./doctext $(EXTRACT)/noPath/0c7ee100.bin   # EN tutorial
-	./doctext $(EXTRACT)/noPath/0c7ee1c8.bin   # JP tutorial
+	./doctext $(EXTRACT)/noPath/06800020.bin --elf $(ELF)   # JP save labels (Shift-JIS)
+	./doctext $(EXTRACT)/noPath/0c7ee100.bin --elf $(ELF)   # EN tutorial
+	./doctext $(EXTRACT)/noPath/0c7ee1c8.bin --elf $(ELF)   # JP tutorial
 
 # decode the font atlases (kelfnt0..4) to fonttex/
 demo-font: docfont

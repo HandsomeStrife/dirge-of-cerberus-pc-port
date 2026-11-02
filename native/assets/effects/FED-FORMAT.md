@@ -287,14 +287,18 @@ The pipeline (reversed from the game's own decompressor) is, to *read* one:
 
 1. **Decrypt** — a fixed-key 8-byte-block cipher (`FUN_0023c418` →
    `FUN_0041c1d8` → `FUN_0041c0d8` → per-block `FUN_0041bf78`/`FUN_0041bf08`).
-   * Seed is the **constant `7`** (`FUN_0023c3f0` fills it); there is no
-     per-file key.
-   * Key schedule (`FUN_0041bb38`): `key[0]` is derived from the seed with a
-     byte-diffusion pass; `key[i] = key[i-1] * 5` (mod 2⁶⁴), 32 u64 words.
-   * Each 8-byte block: a byte-substitution + chaining stage using the S-box
-     `DAT_0047eb50[x] = (x + 0x78) & 0xFF`, then a 64-bit mix with the block's
-     key word and a running-counter constant
-     `(c | c<<30 | c<<20 | c<<10) + 0xA1652347` (counter `c` is 64-bit).
+   * The key is a fixed constant (`FUN_0023c3f0` fills it, one `addiu`);
+     there is no per-file key.
+   * Key schedule (`FUN_0041bb38`): `key[0]` is derived from the key with a
+     byte-diffusion pass (add / shift / xor constants); `key[i] = key[i-1]`
+     times a constant (mod 2⁶⁴), 32 u64 words.
+   * Each 8-byte block: a byte-substitution + chaining stage through the
+     ELF's byte table `DAT_0047eb50`, then a 64-bit mix with the block's
+     key word and a running-counter term (the counter OR-ed with three shifted
+     copies of itself, plus a constant; counter `c` is 64-bit).
+   * The key, every constant and the table are **read from the user's ELF**
+     at run time (`fez_set_elf`, `native/common/doc_cipher.c`: each
+     instruction's opcode / registers checked first); `fed` takes `--elf`.
 2. **Inflate** — the result is a standard zlib stream (`78 9C …`). `FUN_0042b810`
    is the textbook zlib `inflate()` state machine (method-8 check, CMF/FLG %31
    header check, "incorrect data check", etc.), i.e. plain DEFLATE.

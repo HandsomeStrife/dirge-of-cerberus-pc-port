@@ -299,7 +299,7 @@ that the purist pivot made central (**AUDIO / SCRIPTS / CONTENT**).
 
 ### SCRIPTS — RUNS natively
 - **DONE:** The custom class cipher (NOT DES — game-specific CFB + S-box
-  `(i+120)&0xff`) was cracked; **270/270** scripts decrypt and parse (100%
+  `DAT_0047eb50`; constants read from the ELF) was cracked; **270/270** scripts decrypt and parse (100%
   readable). A native **JVM subset** (`native/script/jvm.c`) runs real scripts:
   `KerberosIntermissionCalc.calc()` to completion, `install.hdd_error_proc`, etc.
   Full int/float/ref opcode set, all invoke forms, 99 opcodes exercised. Batch

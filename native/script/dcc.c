@@ -11,7 +11,9 @@
  *   keysched FUN_0041bb38   32 x u64 subkeys + per-block counter/checksum
  *   block    FUN_0041c010 -> FUN_0041bf78 (sbox/subkey + CFB-style feedback)
  *                            FUN_0041bf08 (u64 subtract/xor/rotate stage)
- *   sbox     DAT_0047eb50   = (i + 120) & 0xff   (verified permutation)
+ *   sbox     DAT_0047eb50   (a byte table in the ELF)
+ *   Every cipher constant and the table are read from the user's ELF at run
+ *   time (--elf; native/common/doc_cipher.c); none is kept in this file.
  *
  * CONTAINER (after decrypt the engine rewrites magic TTTT->SSSS and, via
  * FUN_003a71c0, relocates embedded file-offset "pointers"): the decrypted file
@@ -53,19 +55,21 @@
  *   Bytecode operands inside the Code array are standard JVM BIG-ENDIAN.
  *
  * Usage:
+ *   (every form takes --elf <SLES_541.85>: the cipher is read from it)
  *   dcc <file.class>            parse + disassemble (stdout)
  *   dcc -d <file.class> [out]   decrypt only; write raw image (default <in>.dec)
  *   dcc -p <file.class>         parse summary only (no bytecode)
  *   dcc -q <file.class>         quiet: one PASS/FAIL validation line (for batch)
  *
  * Reads bytes only; never executes the input.
- * Build: cc -O2 -std=c11 -o dcc dcc.c
+ * Build: cc -O2 -std=c11 -o dcc dcc.c ../common/doc_cipher.c
  */
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include "../common/doc_cipher.h"
 
 /* ---- raw readers (file buffer is little-endian for structure) -------- */
 static uint64_t rd_u64_le(const uint8_t *p){
@@ -79,7 +83,10 @@ static void wr_u32_le(uint8_t *p,uint32_t v){ p[0]=(uint8_t)v;p[1]=(uint8_t)(v>>
 static uint16_t be16(const uint8_t *p){ return (uint16_t)((p[0]<<8)|p[1]); }
 static uint32_t be32(const uint8_t *p){ return ((uint32_t)p[0]<<24)|((uint32_t)p[1]<<16)|((uint32_t)p[2]<<8)|p[3]; }
 
-static inline uint8_t sbox(uint8_t i){ return (uint8_t)(i+120); } /* DAT_0047eb50 */
+/* The cipher's constants and byte table (DAT_0047eb50) are read from the user's
+ * ELF (native/common/doc_cipher.c); none is kept here. */
+static doc_cipher C;
+static inline uint8_t sbox(uint8_t i){ return C.table[i]; } /* DAT_0047eb50 */
 
 /* ====================================================================== */
 /* CIPHER                                                                  */
@@ -95,17 +102,17 @@ static void key_schedule(keybuf_t *K,uint64_t keyval){
     uint32_t hi=(uint32_t)(keyval>>32), lo=(uint32_t)keyval;
     uint64_t s0=((uint64_t)((lo<<8)|(lo>>24))<<32)|(uint64_t)((hi>>16)|(hi<<16));
     wr_u64_le(K->b,s0);
-    K->b[0]=(uint8_t)(K->b[0]+0x45);
+    K->b[0]=(uint8_t)(K->b[0]+C.k_add0);
     for(int pos=1;pos<8;pos++){
         uint8_t b=K->b[pos], prev=K->b[pos-1];
-        K->b[pos]=(uint8_t)(((uint8_t)(prev+(uint8_t)(b-0x2c)))^(uint8_t)(prev<<2)^0x45);
+        K->b[pos]=(uint8_t)(((uint8_t)(prev+(uint8_t)(b+C.k_add)))^(uint8_t)(prev<<C.k_shl)^C.k_xor);
     }
-    for(int i=0;i<31;i++) wr_u64_le(K->b+(i+1)*8, rd_u64_le(K->b+i*8)*5ull);
+    for(int i=0;i<31;i++) wr_u64_le(K->b+(i+1)*8, rd_u64_le(K->b+i*8)*((1ull<<C.k_mul)+1));
     wr_u32_le(K->b+CTR_OFF,0); wr_u32_le(K->b+CSUM_OFF,0);
 }
 static void stage_byte(keybuf_t *K,const uint8_t *src,uint8_t *dst){
     uint32_t ctr=rd_u32_le(K->b+CTR_OFF);
-    uint8_t fb=(uint8_t)((ctr>>3)^0x45);
+    uint8_t fb=(uint8_t)((ctr>>3)^C.b_xor);
     uint32_t subbase=(uint32_t)(K->b[CTR_OFF]>>3)*8u;
     for(int i=0;i<8;i++){
         uint8_t c=src[i]; uint8_t t=(uint8_t)(fb^c);
@@ -116,7 +123,7 @@ static void stage_byte(keybuf_t *K,const uint8_t *src,uint8_t *dst){
 static void stage_word(keybuf_t *K,uint8_t *dst){
     uint32_t ctr=rd_u32_le(K->b+CTR_OFF); uint64_t u=(uint64_t)ctr;
     uint64_t v=rd_u64_le(dst); uint32_t sidx=ctr&0xf8; uint64_t sk=rd_u64_le(K->b+sidx);
-    uint64_t mask=(u|(u<<30)|(u<<20)|(u<<10))+0xa1652347ull;
+    uint64_t mask=(u|(u<<C.m_s3)|(u<<C.m_s2)|(u<<C.m_s1))+C.mix;
     v=(v-sk)^mask; v=v^sk; v=(v<<32)|(v>>32); wr_u64_le(dst,v);
 }
 static void decrypt_block(keybuf_t *K,const uint8_t *src,uint8_t *dst){
@@ -345,14 +352,17 @@ static int readable_run(const char *s,size_t l){
 }
 
 int main(int argc,char**argv){
-    const char *mode="full",*in=NULL,*out=NULL;
+    const char *mode="full",*in=NULL,*out=NULL,*elf=NULL;
     for(int i=1;i<argc;i++){
-        if(!strcmp(argv[i],"-d")) mode="decrypt";
+        if(!strcmp(argv[i],"--elf")&&i+1<argc) elf=argv[++i];
+        else if(!strcmp(argv[i],"-d")) mode="decrypt";
         else if(!strcmp(argv[i],"-p")) mode="parse";
         else if(!strcmp(argv[i],"-q")) mode="quiet";
         else if(!in) in=argv[i]; else if(!out) out=argv[i];
     }
-    if(!in){ fprintf(stderr,"usage: %s [-d|-p|-q] <file.class> [out]\n",argv[0]); return 2; }
+    if(!in||!elf){ fprintf(stderr,"usage: %s --elf <SLES_541.85> [-d|-p|-q] <file.class> [out]\n",argv[0]); return 2; }
+    char cerr[160];
+    if(doc_cipher_load(elf,&C,cerr,sizeof cerr)){ fprintf(stderr,"%s\n",cerr); return 2; }
 
     FILE *f=fopen(in,"rb"); if(!f){ fprintf(stderr,"cannot open %s\n",in); return 2; }
     fseek(f,0,SEEK_END); long sz=ftell(f); fseek(f,0,SEEK_SET);

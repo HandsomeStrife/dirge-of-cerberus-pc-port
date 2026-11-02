@@ -288,7 +288,7 @@ int fed_load(const uint8_t *data, size_t size, FedFile *out,
     out->compressed = (out->flags & 0x8000u) != 0;
 
     if (out->compressed){
-        /* FEZ: fixed-key block-cipher over a zlib DEFLATE stream (see fez.c).
+        /* FEZ: block cipher over a zlib DEFLATE stream (see fez.c; the cipher is read from the ELF).
          * Inflate it, then parse the resulting plain FED image in place. */
         rd_u8 (out, 0x10, &out->comp_type);
         rd_u32(out, 0x14, &out->comp_size);

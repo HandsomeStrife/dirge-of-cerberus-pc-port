@@ -1,6 +1,7 @@
 /* classfile.c - see classfile.h. Decrypt + container parse ported 1:1 from
  * dcc.c (which cites the EE function addresses), plus a flat resolver. */
 #include "classfile.h"
+#include "../common/doc_cipher.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -15,7 +16,10 @@ static void wr_u32_le(uint8_t *p,uint32_t v){ p[0]=(uint8_t)v;p[1]=(uint8_t)(v>>
 uint16_t cf_be16(const uint8_t *p){ return (uint16_t)((p[0]<<8)|p[1]); }
 uint32_t cf_be32(const uint8_t *p){ return ((uint32_t)p[0]<<24)|((uint32_t)p[1]<<16)|((uint32_t)p[2]<<8)|p[3]; }
 
-static inline uint8_t sbox(uint8_t i){ return (uint8_t)(i+120); } /* DAT_0047eb50 */
+/* The cipher's constants and byte table (DAT_0047eb50) are read from the user's
+ * ELF (native/common/doc_cipher.c); none is kept here. */
+static doc_cipher C;
+static inline uint8_t sbox(uint8_t i){ return C.table[i]; } /* DAT_0047eb50 */
 
 /* ====================================================================== */
 /* CIPHER (game-custom block transform; FUN_003a8320/0041bb38/0041c010)    */
@@ -30,17 +34,17 @@ static void key_schedule(keybuf_t *K,uint64_t keyval){
     uint32_t hi=(uint32_t)(keyval>>32), lo=(uint32_t)keyval;
     uint64_t s0=((uint64_t)((lo<<8)|(lo>>24))<<32)|(uint64_t)((hi>>16)|(hi<<16));
     wr_u64_le(K->b,s0);
-    K->b[0]=(uint8_t)(K->b[0]+0x45);
+    K->b[0]=(uint8_t)(K->b[0]+C.k_add0);
     for(int pos=1;pos<8;pos++){
         uint8_t b=K->b[pos], prev=K->b[pos-1];
-        K->b[pos]=(uint8_t)(((uint8_t)(prev+(uint8_t)(b-0x2c)))^(uint8_t)(prev<<2)^0x45);
+        K->b[pos]=(uint8_t)(((uint8_t)(prev+(uint8_t)(b+C.k_add)))^(uint8_t)(prev<<C.k_shl)^C.k_xor);
     }
-    for(int i=0;i<31;i++) wr_u64_le(K->b+(i+1)*8, cf_rd_u64_le(K->b+i*8)*5ull);
+    for(int i=0;i<31;i++) wr_u64_le(K->b+(i+1)*8, cf_rd_u64_le(K->b+i*8)*((1ull<<C.k_mul)+1));
     wr_u32_le(K->b+CTR_OFF,0); wr_u32_le(K->b+CSUM_OFF,0);
 }
 static void stage_byte(keybuf_t *K,const uint8_t *src,uint8_t *dst){
     uint32_t ctr=cf_rd_u32_le(K->b+CTR_OFF);
-    uint8_t fb=(uint8_t)((ctr>>3)^0x45);
+    uint8_t fb=(uint8_t)((ctr>>3)^C.b_xor);
     uint32_t subbase=(uint32_t)(K->b[CTR_OFF]>>3)*8u;
     for(int i=0;i<8;i++){
         uint8_t c=src[i]; uint8_t t=(uint8_t)(fb^c);
@@ -51,7 +55,7 @@ static void stage_byte(keybuf_t *K,const uint8_t *src,uint8_t *dst){
 static void stage_word(keybuf_t *K,uint8_t *dst){
     uint32_t ctr=cf_rd_u32_le(K->b+CTR_OFF); uint64_t u=(uint64_t)ctr;
     uint64_t v=cf_rd_u64_le(dst); uint32_t sidx=ctr&0xf8; uint64_t sk=cf_rd_u64_le(K->b+sidx);
-    uint64_t mask=(u|(u<<30)|(u<<20)|(u<<10))+0xa1652347ull;
+    uint64_t mask=(u|(u<<C.m_s3)|(u<<C.m_s2)|(u<<C.m_s1))+C.mix;
     v=(v-sk)^mask; v=v^sk; v=(v<<32)|(v>>32); wr_u64_le(dst,v);
 }
 static void decrypt_block(keybuf_t *K,const uint8_t *src,uint8_t *dst){
@@ -60,7 +64,15 @@ static void decrypt_block(keybuf_t *K,const uint8_t *src,uint8_t *dst){
     uint32_t cs=cf_rd_u32_le(K->b+CSUM_OFF)+dst[0]+dst[4];
     wr_u32_le(K->b+CTR_OFF,ctr); wr_u32_le(K->b+CSUM_OFF,cs);
 }
+static int have_elf;
+int cf_set_elf(const char *elf_path,const char **err){
+    static char msg[160];
+    have_elf=doc_cipher_load(elf_path,&C,msg,sizeof msg)==0;
+    if(!have_elf&&err) *err=msg;
+    return have_elf?0:-1;
+}
 int cf_decrypt(uint8_t *buf,size_t len){
+    if(!have_elf) return -3;
     if(len<16) return -1;
     size_t body=len-8; if(body%8) return -2;
     keybuf_t K; key_schedule(&K,build_key(buf));
@@ -129,7 +141,8 @@ int cf_load(const char *path, cf_class *out, const char **err){
     fclose(f);
     size_t len=(size_t)sz;
 
-    if(cf_decrypt(buf,len)!=0){ free(buf); *err="decrypt failed"; return -2; }
+    { int rc=cf_decrypt(buf,len);
+      if(rc!=0){ free(buf); *err=rc==-3?"no ELF (--elf <SLES_541.85>: the class cipher is read from it)":"decrypt failed"; return -2; } }
 
     cf_img m={buf,len};
     if(!(buf[0]==0x53&&buf[1]==0x53&&buf[2]==0x53&&buf[3]==0x53)){ free(buf); *err="bad magic (not SSSS)"; return -3; }

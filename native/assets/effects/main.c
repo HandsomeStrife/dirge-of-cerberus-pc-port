@@ -1,11 +1,14 @@
 /* main.c — CLI for the FED/FEZ effect-definition parser.
  *
- *   fed <file.fed|file.fez> [--json|--text]
+ *   fed <file.fed|file.fez> [--json|--text] [--elf SLES_541.85]
+ *
+ * A .fez needs --elf: its cipher is read from the user's ELF (fez_set_elf).
  *
  * Loads the file as untrusted data, parses it, and prints a dump.  Exit code
  * is 0 on a clean parse, 1 on error. */
 
 #include "fed.h"
+#include "fez.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -26,13 +29,17 @@ static uint8_t *read_file(const char *path, size_t *n){
 
 int main(int argc, char **argv){
     if (argc < 2){
-        fprintf(stderr, "usage: %s <file.fed|file.fez> [--json|--text]\n", argv[0]);
+        fprintf(stderr, "usage: %s <file.fed|file.fez> [--json|--text] [--elf SLES_541.85]\n", argv[0]);
         return 2;
     }
     int json = 0;
     for (int i = 2; i < argc; i++){
         if      (!strcmp(argv[i], "--json")) json = 1;
         else if (!strcmp(argv[i], "--text")) json = 0;
+        else if (!strcmp(argv[i], "--elf") && i + 1 < argc){
+            char e[160];
+            if (fez_set_elf(argv[++i], e, sizeof e) != 0){ fprintf(stderr, "error: %s\n", e); return 1; }
+        }
     }
 
     size_t n = 0;

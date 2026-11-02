@@ -2,7 +2,7 @@
  * jvmrun.c - load a decrypted Dirge .class and RUN a method on the native VM.
  *
  * Usage:
- *   jvmrun [--trace[=N]] [--method NAME] [--seed] <file.class>
+ *   jvmrun --elf <SLES_541.85> [--trace[=N]] [--method NAME] [--seed] <file.class>
  *     --trace[=N]   print the first N instructions executed (default 80)
  *     --method NAME entry method (default: calc, else main, else first real)
  *     --seed        seed engine flag/stat arrays with a deterministic pattern
@@ -31,10 +31,12 @@ int main(int argc,char**argv){
         else if(!strcmp(argv[i],"--method")&&i+1<argc) method=argv[++i];
         else if(!strcmp(argv[i],"--limit")&&i+1<argc) limit=strtol(argv[++i],NULL,10);
         else if(!strcmp(argv[i],"--seed")) seed=1;
+        else if(!strcmp(argv[i],"--elf")&&i+1<argc){ const char *e="";
+            if(cf_set_elf(argv[++i],&e)){ fprintf(stderr,"%s\n",e); return 2; } }
         else if((!strcmp(argv[i],"--eflag")||!strcmp(argv[i],"--zflag"))&&i+1<argc) i++; /* 2nd pass */
         else if(!path) path=argv[i];
     }
-    if(!path){ fprintf(stderr,"usage: %s [--trace[=N]] [--method NAME] [--seed] <file.class>\n",argv[0]); return 2; }
+    if(!path){ fprintf(stderr,"usage: %s --elf <SLES_541.85> [--trace[=N]] [--method NAME] [--seed] <file.class>\n",argv[0]); return 2; }
 
     cf_class cls; const char *err=NULL;
     if(cf_load(path,&cls,&err)!=0){ fprintf(stderr,"load failed: %s\n",err); return 1; }

@@ -15,6 +15,8 @@ LDLIBS  ?= -lm
 SCRIPT_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 CALC := $(SCRIPT_DIR)../../extract/_KEL/data/etc/KerberosIntermissionCalc.class
 INSTALL := $(SCRIPT_DIR)../../extract/_KEL/install/install.class
+# the class cipher is read from the user's ELF at run time (native/common/doc_cipher.c)
+ELF ?= $(SCRIPT_DIR)../../elf/SLES_541.85
 
 # ---- native engine (read-only dependency) --------------------------------
 # The bridge's engine-backed handlers call the stable native/engine subsystems.
@@ -30,14 +32,17 @@ ENGINE_HDRS := $(ENGINE_DIR)/scene/actor.h $(ENGINE_DIR)/scene/camera.h \
 CFLAGS += $(ENGINE_INC)
 
 # Core VM objects that do NOT need the engine (the JVM self-test links only these).
-CORE_OBJS := classfile.o jvm.o
+CORE_OBJS := classfile.o jvm.o doc_cipher.o
 # Full bridge objects (pull in the native engine).
 VM_OBJS   := $(CORE_OBJS) bridge.o bridge_engine.o
 
 all: dcc jvmrun jvmtest jvmbatch bridge_test
 
-dcc: dcc.c
-	$(CC) $(CFLAGS) -o $@ $<
+dcc: dcc.c ../common/doc_cipher.c ../common/doc_cipher.h
+	$(CC) $(CFLAGS) -o $@ dcc.c ../common/doc_cipher.c
+
+doc_cipher.o: ../common/doc_cipher.c ../common/doc_cipher.h
+	$(CC) $(CFLAGS) -c -o $@ $<
 
 classfile.o: classfile.c classfile.h
 jvm.o:       jvm.c jvm.h classfile.h
@@ -87,7 +92,7 @@ btest: bridge_test
 	./bridge_test
 
 run: jvmrun
-	./jvmrun --trace=60 --seed "$(CALC)"
+	./jvmrun --elf "$(ELF)" --trace=60 --seed "$(CALC)"
 
 clean:
 	rm -f dcc jvmrun jvmtest jvmbatch bridge_test $(VM_OBJS)

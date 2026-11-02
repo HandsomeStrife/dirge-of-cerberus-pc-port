@@ -3,6 +3,7 @@
  * untrusted: every access is bounds-checked and the output size is capped. */
 
 #include "fez.h"
+#include "../../common/doc_cipher.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -15,8 +16,17 @@ static uint32_t rd_u32(const uint8_t *d, size_t o){
          | ((uint32_t)d[o+2]<<16) | ((uint32_t)d[o+3]<<24);
 }
 
-/* DAT_0047eb50: SBOX_DEC[x] == (x + 0x78) & 0xff (verified against the ELF). */
-static inline uint8_t sbox_dec(uint8_t x){ return (uint8_t)(x + 0x78u); }
+/* The cipher's constants and byte table (DAT_0047eb50) and the key, read from
+ * the ELF by fez_set_elf (native/common/doc_cipher.c); none is kept here. */
+static doc_cipher C;
+static uint64_t fez_key;
+static int have_elf;
+
+int fez_set_elf(const char *elf_path, char *errbuf, size_t errlen){
+    have_elf = doc_cipher_load(elf_path, &C, errbuf, errlen) == 0
+            && doc_fez_key(elf_path, &fez_key, errbuf, errlen) == 0;
+    return have_elf ? 0 : -1;
+}
 
 /* FUN_0041bb38: build the 0x20-word u64 key schedule from the 8-byte seed. */
 static void build_key(uint64_t seed, uint64_t key[32]){
@@ -27,16 +37,16 @@ static void build_key(uint64_t seed, uint64_t key[32]){
     uint64_t k0 = ((uint64_t)hi << 32) | lo;
     uint8_t b[8];
     for (int i = 0; i < 8; i++) b[i] = (uint8_t)(k0 >> (8*i));   /* little-endian */
-    b[0] = (uint8_t)(b[0] + 0x45u);
+    b[0] = (uint8_t)(b[0] + C.k_add0);
     for (int i = 1; i < 8; i++){
         uint8_t prev = b[i-1], orig = b[i];
-        b[i] = (uint8_t)(((uint8_t)(prev + (uint8_t)(orig - 0x2cu)))
-                         ^ (uint8_t)(prev << 2) ^ 0x45u);
+        b[i] = (uint8_t)(((uint8_t)(prev + (uint8_t)(orig + C.k_add)))
+                         ^ (uint8_t)(prev << C.k_shl) ^ C.k_xor);
     }
     uint64_t v = 0;
     for (int i = 0; i < 8; i++) v |= (uint64_t)b[i] << (8*i);
     key[0] = v;
-    for (int i = 1; i < 32; i++) key[i] = key[i-1] * 5u;
+    for (int i = 1; i < 32; i++) key[i] = key[i-1] * ((1u << C.k_mul) + 1u);
 }
 
 /* FUN_0041c010 over 'len' bytes (multiple of 8): per-block FUN_0041bf78 (byte
@@ -53,13 +63,13 @@ static void decrypt(const uint8_t *src, uint8_t *dst, size_t len,
     for (size_t pos = 0; pos + 8 <= len; pos += 8){
         /* FUN_0041bf78: byte stage src[pos..] -> tmp */
         uint8_t tmp[8];
-        uint8_t uV7 = (uint8_t)((count >> 3) ^ 0x45u);
+        uint8_t uV7 = (uint8_t)((count >> 3) ^ C.b_xor);
         uint32_t ki = ((count >> 3) & 0x1f) * 8u;
         for (int i = 0; i < 8; i++){
             uint8_t bb = src[pos+i];
             uint8_t v = (uint8_t)(uV7 ^ bb);
             for (int j = 0; j < 8; j++)
-                v = (uint8_t)(sbox_dec(v) - keyb[ki+j]);
+                v = (uint8_t)(C.table[v] - keyb[ki+j]);
             tmp[i] = v;
             uV7 = bb;
         }
@@ -68,7 +78,7 @@ static void decrypt(const uint8_t *src, uint8_t *dst, size_t len,
         for (int i = 0; i < 8; i++) inq |= (uint64_t)tmp[i] << (8*i);
         uint64_t keyq = key[(count >> 3) & 0x1f];
         uint64_t u = count;   /* the decomp's uVar3 is 64-bit (shifts exceed 32) */
-        uint64_t rot = (u | (u << 0x1e) | (u << 0x14) | (u << 0xa)) + 0xa1652347u;
+        uint64_t rot = (u | (u << C.m_s3) | (u << C.m_s2) | (u << C.m_s1)) + C.mix;
         uint64_t x = (inq - keyq) ^ rot;
         x ^= keyq;
         x = (x << 32) | (x >> 32);
@@ -82,6 +92,7 @@ int fez_inflate(const uint8_t *data, size_t size,
                 char *errbuf, size_t errlen){
     #define FAIL(m) do{ if(errbuf&&errlen) snprintf(errbuf,errlen,"%s",m); return -1; }while(0)
     *out_buf = NULL; *out_size = 0;
+    if (!have_elf) FAIL("fez: no ELF (call fez_set_elf; the cipher is read from SLES_541.85)");
     if (size < 0x30) FAIL("fez too small");
     if (data[0x10] != 2) FAIL("fez: unexpected compression type (byte@0x10 != 2)");
 
@@ -99,7 +110,7 @@ int fez_inflate(const uint8_t *data, size_t size,
     uint8_t *plain = (uint8_t*)malloc(declen ? declen : 1);
     if (!plain) FAIL("fez: out of memory (stream)");
     uint64_t key[32];
-    build_key(7u, key);                           /* seed is the constant 7 */
+    build_key(fez_key, key);                      /* FUN_0023c3f0's key */
     decrypt(data + 0x28, plain, declen, key);
 
     uint8_t *out = (uint8_t*)malloc(dec_size);

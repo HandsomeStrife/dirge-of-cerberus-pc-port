@@ -21,6 +21,7 @@
  *   jvmbatch <file.class> ...            # explicit files
  *   jvmbatch < list.txt                  # newline-separated paths on stdin
  *   jvmbatch --limit N ...               # per-method step cap (default 2000000)
+ *   --elf <SLES_541.85> is required: the class cipher is read from it
  */
 #define _POSIX_C_SOURCE 200809L   /* strdup / getline / ssize_t */
 #include "classfile.h"
@@ -76,6 +77,8 @@ int main(int argc,char**argv){
     const char **files=calloc((size_t)argc,sizeof(char*)); int nf=0;
     for(int i=1;i<argc;i++){
         if(!strcmp(argv[i],"--limit")&&i+1<argc){ limit=strtol(argv[++i],NULL,10); continue; }
+        if(!strcmp(argv[i],"--elf")&&i+1<argc){ const char *e="";
+            if(cf_set_elf(argv[++i],&e)){ fprintf(stderr,"%s\n",e); return 2; } continue; }
         files[nf++]=argv[i];
     }
     /* stdin list when no explicit files */

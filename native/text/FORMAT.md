@@ -21,22 +21,29 @@ Build: `make` (needs zlib). Demo: `make demo-text demo-font demo-render`.
 ### Cipher
 Transcribed from the community algorithm (Shademp, as implemented in **DoCCryptTool**,
 `CryptoClasses/*`) and **cross-checked against the game's own decompiled routine
-`FUN_0041bbf8`** in `analysis/decomp/` — which carries the identical magic constant
-`0xA1652347`, the keyblock index `counter & 0xF8`, the block-counter expansion
-`c | c<<30 | c<<20 | c<<10`, and the 64-bit half-swap. That is the decisive
-confirmation the transcription matches the shipped code.
+`FUN_0041bbf8`** in `analysis/decomp/` — which carries the same mixing constant,
+the keyblock index `counter & 0xF8`, the block-counter expansion (the counter OR-ed
+with three shifted copies), and the 64-bit half-swap — and against the text-bin
+reader **`FUN_003a6520`** (header key, then body key = the decrypted header's first
+8 bytes) and the key schedule **`FUN_0041bb38`**.
 
-Two 256-byte keyblock tables are generated from 8-byte seeds — header seed
-`{88 56 31 95 F1 A3 89 57}`, body seed `{01 00 …}` (the `seedA=1,seedB=0` header) — by:
-rotate halves (A<<<8, B<<<16), prepend `+0x45`, a per-byte `+0xD4 ^ (<<2) ^ 0x45`
-diffusion (block 0), then 31 more blocks each `= prev*5` (64-bit). Decryption works on
-8-byte blocks:
-1. per-byte XOR chain `d1 = (blockId^0x45)^c0`, `dk = c[k-2]^c[k-1]`;
-2. each `dk` passed 8× through `b = ((b+120) - keyblock[off+i]) & 0xFF`
-   (DoCCryptTool `Integers[x] = (x+120)&0xFF`, `LoopAByte`);
+**The constants are read from the user's ELF at run time** (`doctext --elf`,
+`native/common/doc_cipher.c`: the immediates and shift amounts of FUN_0041bb38 /
+FUN_0041bf78 / FUN_0041bf08, the byte table `DAT_0047eb50` from its `lui` / `addiu`
+pair, and the header key from FUN_003a6520's `ori` / `dsll` chain; each instruction's
+opcode and registers are checked first). None is written here.
+
+Two 256-byte keyblock tables are generated from 8-byte keys — the header key
+(FUN_003a6520) and the body key (the decrypted header's first 8 bytes: `seedA=1,seedB=0`)
+— by: rotate halves (A<<<8, B<<<16), add a constant to byte 0, a per-byte add / shift /
+xor diffusion (block 0), then 31 more blocks each `= prev` times a constant (64-bit).
+Decryption works on 8-byte blocks:
+1. per-byte XOR chain `d1 = (blockId^K)^c0`, `dk = c[k-2]^c[k-1]` (K a constant);
+2. each `dk` passed 8× through `b = (table[b] - keyblock[off+i]) & 0xFF`
+   (DoCCryptTool `Integers[]` = the ELF's byte table, `LoopAByte`);
 3. reassemble as two u32 halves, subtract keyblock (with borrow), XOR a special key
-   `Eval+0xA1652347 / Fval+carry` (Eval/Fval = the block-counter expansion), XOR
-   keyblock back. Output halves written big-half-first.
+   `Eval+mix / Fval+carry` (Eval/Fval = the block-counter expansion, mix the
+   constant), XOR keyblock back. Output halves written big-half-first.
 
 File layout (decrypted): `[0x00 header 32B][0x20 body …][tail: plaintext snippet]`.
 Header @0x00: `u32 seedA=1, u32 seedB=0, u16 lineCount, u8 _, u8 compFlag,

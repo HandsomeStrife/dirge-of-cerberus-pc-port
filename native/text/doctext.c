@@ -5,10 +5,13 @@
  *
  * Cipher: transcribed from the Shademp / DoCCryptTool algorithm
  *   (https://github.com/Surihix/DoCCryptTool, CryptoClasses) and cross-checked
- *   against the game's own decompiled routine FUN_0041bbf8 in
- *   /srv/games/dirge-port/analysis/decomp/ which carries the same magic constant
- *   0xA1652347, the same keyblock index (counter & 0xF8) and the same
- *   (c | c<<30 | c<<20 | c<<10) block-counter expansion, confirming the transcription.
+ *   against the game's own routines: the text-bin reader FUN_003a6520 (header
+ *   key built in its own instructions; the body key = the decrypted header's
+ *   first 8 bytes), the key schedule FUN_0041bb38 and the block stages
+ *   FUN_0041bf78 / FUN_0041bf08 (keyblock index counter & 0xF8, a shifted-OR
+ *   block-counter expansion plus a constant).
+ *   Every cipher constant, the byte table and the header key are read from the
+ *   user's ELF at run time (--elf; native/common/doc_cipher.c); none is kept here.
  *
  * File layout (encrypted, magic 45 90 AF F9 B7 47 F6 94 == encrypted seed {1,0}):
  *   [0x00 .. 0x1F]  Header section (4 blocks, 32 bytes) - encrypted w/ header key
@@ -25,7 +28,7 @@
  *   lineCount entries; then NUL-terminated line strings, then NUL-terminated line-id
  *   strings. Strings are Shift-JIS (with a few game-specific control bytes).
  *
- * Usage: doctext <encrypted.bin> [--dec out.dec] [--body out.body] [--json]
+ * Usage: doctext <encrypted.bin> --elf <SLES_541.85> [--dec out.dec] [--body out.body] [--json]
  *        default: prints decoded lines as UTF-8.
  */
 #include <stdio.h>
@@ -33,9 +36,13 @@
 #include <stdint.h>
 #include <string.h>
 #include <zlib.h>
+#include "../common/doc_cipher.h"
 
-/* ---- Integers[] lookup from DoCCryptTool: Integers[x] = (x + 120) & 0xFF ---- */
-static inline uint8_t integ(uint8_t x) { return (uint8_t)(x + 120); }
+/* The cipher's constants, the byte table (DAT_0047eb50, DoCCryptTool's
+ * Integers[]) and FUN_003a6520's header key, read from the ELF in main. */
+static doc_cipher C;
+static uint64_t header_key;
+static inline uint8_t integ(uint8_t x) { return C.table[x]; }
 
 /* rotate helpers */
 static inline uint32_t rotl32(uint32_t v, int n){ return (v << n) | (v >> (32 - n)); }
@@ -51,12 +58,12 @@ static void gen_keyblocks(const uint8_t seed[8], uint8_t table[256])
     /* keyblock = bytes(b) ++ bytes(a), little-endian */
     kb[0] = b & 0xFF; kb[1] = (b>>8)&0xFF; kb[2] = (b>>16)&0xFF; kb[3] = (b>>24)&0xFF;
     kb[4] = a & 0xFF; kb[5] = (a>>8)&0xFF; kb[6] = (a>>16)&0xFF; kb[7] = (a>>24)&0xFF;
-    kb[0] = (uint8_t)(kb[0] + 0x45);
+    kb[0] = (uint8_t)(kb[0] + C.k_add0);
     /* Loop 1 */
     for (int i = 1; i < 8; i++) {
-        int tmp = kb[i] + 0xD4 + kb[i-1];
-        tmp ^= (kb[i-1]) << 2;
-        tmp ^= 0x45;
+        int tmp = kb[i] + C.k_add + kb[i-1];
+        tmp ^= (kb[i-1]) << C.k_shl;
+        tmp ^= C.k_xor;
         kb[i] = (uint8_t)tmp;
     }
     memcpy(table, kb, 8);
@@ -65,7 +72,7 @@ static void gen_keyblocks(const uint8_t seed[8], uint8_t table[256])
     for (int i = 0; i < 8; i++) prev |= (uint64_t)kb[i] << (8*i);
     int copy = 8;
     for (int i = 1; i < 0x20; i++) {
-        uint64_t cur = (prev << 2) + prev;   /* 64-bit add, matches split halves + carry */
+        uint64_t cur = (prev << C.k_mul) + prev;   /* 64-bit add, matches split halves + carry */
         for (int j = 0; j < 8; j++) table[copy + j] = (uint8_t)(cur >> (8*j));
         prev = cur;
         copy += 8;
@@ -98,7 +105,7 @@ static void decrypt_blocks(const uint8_t *table, uint32_t blocks,
         /* tableOffset = ((blockCounter & 0xFFFF) >> 3 << 3) & 0xF8 */
         uint32_t tableOffset = (uint32_t)(((uint16_t)(blockCounter & 0xFFFF) >> 3) << 3) & 0xF8;
 
-        uint8_t d1 = loop_a_byte((uint8_t)(((currentBlockId ^ 69) & 255) ^ c[0]), table, tableOffset);
+        uint8_t d1 = loop_a_byte((uint8_t)(((currentBlockId ^ C.b_xor) & 255) ^ c[0]), table, tableOffset);
         uint8_t d2 = loop_a_byte((uint8_t)(c[0] ^ c[1]), table, tableOffset);
         uint8_t d3 = loop_a_byte((uint8_t)(c[1] ^ c[2]), table, tableOffset);
         uint8_t d4 = loop_a_byte((uint8_t)(c[2] ^ c[3]), table, tableOffset);
@@ -116,16 +123,16 @@ static void decrypt_blocks(const uint8_t *table, uint32_t blocks,
         uint32_t kHigh = (uint32_t)table[tableOffset+4] | (table[tableOffset+5]<<8) |
                          (table[tableOffset+6]<<16) | ((uint32_t)table[tableOffset+7]<<24);
 
-        /* BlockCounterEval/Fval = 64-bit ( bc | bc<<10 | bc<<20 | bc<<30 ) */
+        /* BlockCounterEval/Fval = 64-bit ( bc | bc<<s1 | bc<<s2 | bc<<s3 ) */
         uint64_t ev64 = (uint64_t)blockCounter;
-        ev64 |= (uint64_t)blockCounter << 10;
-        ev64 |= (uint64_t)blockCounter << 20;
-        ev64 |= (uint64_t)blockCounter << 30;
+        ev64 |= (uint64_t)blockCounter << C.m_s1;
+        ev64 |= (uint64_t)blockCounter << C.m_s2;
+        ev64 |= (uint64_t)blockCounter << C.m_s3;
         uint32_t Eval = (uint32_t)(ev64 & 0xFFFFFFFF);
         uint32_t Fval = (uint32_t)(ev64 >> 32);
 
-        uint32_t carry = (Eval > 0x5E9ADCB8u) ? 1u : 0u;   /* ~0xA1652347 */
-        int64_t specialKey1 = (int64_t)Eval + 0xA1652347LL;
+        uint32_t carry = (Eval > (uint32_t)~C.mix) ? 1u : 0u;   /* Eval + mix carries */
+        int64_t specialKey1 = (int64_t)Eval + (int64_t)C.mix;
         int64_t specialKey2 = (int64_t)Fval + carry;
 
         int64_t lo = (int64_t)lower;
@@ -159,13 +166,12 @@ static uint16_t rd_u16(const uint8_t *p){ return (uint16_t)(p[0]|(p[1]<<8)); }
 /* Public API: decrypt a whole text-bin into a malloc'd buffer (same size as input). */
 uint8_t *doctext_decrypt(const uint8_t *data, size_t len, size_t *out_len)
 {
-    static const uint8_t headerSeed[8] = {136, 86, 49, 149, 241, 163, 137, 87};
-    static const uint8_t bodySeed[8]   = {1, 0, 0, 0, 0, 0, 0, 0};
+    uint8_t headerSeed[8];
+    for (int i = 0; i < 8; i++) headerSeed[i] = (uint8_t)(header_key >> (8*i));   /* u64, little-endian */
     if (len < 32) return NULL;
 
     uint8_t htab[256], btab[256];
     gen_keyblocks(headerSeed, htab);
-    gen_keyblocks(bodySeed, btab);
 
     uint8_t *out = (uint8_t*)malloc(len);
     if (!out) return NULL;
@@ -173,6 +179,8 @@ uint8_t *doctext_decrypt(const uint8_t *data, size_t len, size_t *out_len)
 
     /* header: 4 blocks @ 0 */
     decrypt_blocks(htab, 4, data, 0, out, 0);
+    /* FUN_003a6520: the body key is the decrypted header's first 8 bytes */
+    gen_keyblocks(out, btab);
 
     uint32_t txtSnippetSize = rd_u32(out + 0x0C);
     if ((uint64_t)txtSnippetSize + 32 > len) { free(out); return NULL; }
@@ -245,13 +253,19 @@ static char *sjis_to_utf8(const uint8_t *s, size_t n)
 
 int main(int argc, char **argv)
 {
-    if (argc < 2) { fprintf(stderr, "usage: %s <file.bin> [--dec out] [--body out] [--raw]\n", argv[0]); return 2; }
+    if (argc < 2) { fprintf(stderr, "usage: %s <file.bin> --elf <SLES_541.85> [--dec out] [--body out] [--raw]\n", argv[0]); return 2; }
     const char *path = argv[1];
-    const char *decOut = NULL, *bodyOut = NULL; int raw = 0;
+    const char *decOut = NULL, *bodyOut = NULL, *elf = NULL; int raw = 0;
     for (int i = 2; i < argc; i++) {
-        if (!strcmp(argv[i], "--dec") && i+1 < argc) decOut = argv[++i];
+        if (!strcmp(argv[i], "--elf") && i+1 < argc) elf = argv[++i];
+        else if (!strcmp(argv[i], "--dec") && i+1 < argc) decOut = argv[++i];
         else if (!strcmp(argv[i], "--body") && i+1 < argc) bodyOut = argv[++i];
         else if (!strcmp(argv[i], "--raw")) raw = 1;
+    }
+
+    char cerr[160];
+    if (doc_cipher_load(elf, &C, cerr, sizeof cerr) || doc_textbin_key(elf, &header_key, cerr, sizeof cerr)) {
+        fprintf(stderr, "%s\n", cerr); return 2;
     }
 
     FILE *f = fopen(path, "rb");

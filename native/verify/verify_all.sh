@@ -23,6 +23,7 @@ set -u
 BASE=/srv/games/dirge-port/native
 PORT=/srv/games/dirge-port/port           # the kel.c loader actually lives here
 EXTRACT=/srv/games/dirge-port/extract/_KEL
+ELF=/srv/games/dirge-port/elf/SLES_541.85         # the user's ELF: the class / fez / text ciphers are read from it
 SHARED=/srv/shared/dirge-port
 VERIFY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOGDIR="$VERIFY/logs"
@@ -197,7 +198,7 @@ echo "# --- functional batch over extracted .class files ---" >> "$TLOG"
 CLASSES=$(find "$EXTRACT" -name '*.class' 2>/dev/null)
 if [ -n "$CLASSES" ]; then
     # shellcheck disable=SC2086
-    ( cd "$BASE/script" && ./jvmbatch $CLASSES ) >> "$TLOG" 2>&1
+    ( cd "$BASE/script" && ./jvmbatch --elf "$ELF" $CLASSES ) >> "$TLOG" 2>&1
 fi
 # jvmtest prints "SELF-TEST OK" / "SELF-TEST FAILED (n)" and [PASS]/[FAIL] lines
 NPASS=$(grep -c '\[PASS\]' "$TLOG" 2>/dev/null); NPASS=${NPASS:-0}
