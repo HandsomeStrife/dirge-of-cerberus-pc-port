@@ -268,6 +268,15 @@ INPUTS = {
     '../data/etc/locale/uk/menudata.bin': '5a4d8679077abd937d5938417db218dd80e368dd0e5dc8e7734da26c8a3ba740',
     '../data/etc/locale/uk/fontdata1.bin': 'd9d46539391478cdbb9a8b7d517c2b3fe278c9a2da5c805f7c2105092675cdaf',
     '../data/etc/locale/uk/kelstr.bin': '26256ce641be079a56c7cee4a5ddd3b1c5702c39f18a946b090db3bbbf5b5305',
+    # the opening event ev0100: its script class scr001 and the motion files searched for the battle clips
+    # (export_web_checkpoint.py, worker 0205)
+    '0c064001.bin': '5dd916bd71766dae09682eccdec6adfebafce057190ec9f42cc0e310d37a9393',
+    '0c064400.bin': 'c74099cba44ad1eecaf611e8615415a41aeeadaa5ef563b86f5b606e52b0039a',
+    '0c064401.bin': 'e128959c63fbd3640d03629bec059e7ec39e68e3eb9b6571a6395a9380fb67bf',
+    '0c064402.bin': 'a716f42197442e7328dd7b38991fc09b09ff34f3f23fa7fb14a96f4e31ad4de6',
+    '0c064403.bin': '7a0335a29ce376a2b8d1629a554b0514f5ff8928d13bdfacd800d1ac42f6042e',
+    '0c064404.bin': 'c7852a87b94be09d779c6e5a3346bdbb6ecfb5e2a2000ef9a4ed8b29665a03ef',
+    '0c064405.bin': '86c2e2c2df92db05099572113ed1476329cfcb8c6eb808c0773318fa94d02514',
 }
 
 

@@ -17,7 +17,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 let fail = 0;
 const ok = (c, m) => { console.log((c ? 'ok   ' : 'FAIL ') + m); if (!c) fail++; };
 const done = () => { console.log(fail ? `${fail} FAILED` : 'all ok'); process.exit(fail ? 1 : 0); };
-for (const f of ['pause.json', 'gameover.json', 'enemies/ai.json'])
+for (const f of ['pause.json', 'gameover.json', 'enemies/ai.json', 'checkpoint.json'])
   if (!fs.existsSync(path.join(here, 'data', f))) { console.log('SKIP: no data/' + f); done(); }
 let chromium;
 try {
@@ -78,7 +78,19 @@ const after = pg => pg.evaluate(() => {
 function hudCheck(h, how) {
   ok(h === null || (h[0] === 780 && h[3] === 780 && h[4] === 0), `${how}: the HUD rebuilt: HP gauge ${JSON.stringify(h)} (780 shown, no 0 -> 780 drain)`);
 }
-const CHK = [-1395.151611328125, -98.64443969726562, -1111.014892578125];
+// the opening event's hand-off (worker 0205; data/checkpoint.json, checkpoint.js handOff): Vincent's start (y on the
+// ground: T record 11 -98.6444) and 41-43's places from S.frame 38 (24 + SOLDIER_RELEASE)
+const CK = await import(new URL('./checkpoint.js', import.meta.url).href);
+const HO = JSON.parse(fs.readFileSync(path.join(here, 'data/checkpoint.json'), 'utf8'));
+const VS = CK.handOff(HO.actors.p_Vin);
+const CHK = [VS.pos[0], -98.64443969726562, VS.pos[2]];
+const HAND = ['e_Sol_11', 'e_Sol_12', 'e_Sol_13'].map(t => CK.handOff(HO.actors[t]).pos);
+const handCheck = async (pg, how) => {
+  await until(pg, () => window.__play.enemyAI.S.frame >= 40, null, 60000);
+  const l = await pg.evaluate(() => [41, 42, 43].map(k => window.__play.enemyAI.actors.find(x => x.rec === k)).map(a => a && a.pos.slice()));
+  const d = Math.max(...l.map((p, i) => p ? Math.max(...p.map((v, j) => Math.abs(v - HAND[i][j]))) : Infinity));
+  ok(d < 1e-3, `${how}: 41-43 at the hand-off after S.frame 38 (within ${d.toFixed(5)} u)`);
+};
 const SAVE44 = -1038.98;
 // 41-43's section-1 placements (ai.json records)
 const PLACE = (j => [41, 42, 43].map(k => j.records[k].pos))(JSON.parse(fs.readFileSync(path.join(here, 'data/enemies/ai.json'), 'utf8')));
@@ -93,14 +105,14 @@ function check(s, how, n, f) {
   ok(s.count === n && s.instance !== undefined, `${how}: restored in the same page instance (restart count ${s.count}, no reload)`);
   // HP at the new world's first tick (41-43 shoot from then on)
   ok(f && f.hp === 780 && f.state === 2, `${how}: HP ${f && f.hp} (780), state ${f && f.state} (2) at the first tick`);
-  ok(f && Math.abs(f.pos[0] - CHK[0]) < 0.01 && Math.abs(f.pos[2] - CHK[2]) < 0.01 && Math.abs(f.pos[1] - CHK[1]) < 0.05,
-     `${how}: Vincent at the checkpoint at the first tick ${f && f.pos.map(v => v.toFixed(3))}`);
+  ok(f && f.pos[0] === CHK[0] && f.pos[2] === CHK[2] && Math.abs(f.pos[1] - CHK[1]) < 1e-3,
+     `${how}: Vincent at the hand-off at the first tick ${f && f.pos.map(v => v.toFixed(4))}`);
   ok(s.newWorld && JSON.stringify(s.recs) === JSON.stringify([41, 42, 43, 44, 45, 46, 47, 48, 49, 66]), `${how}: __play.enemyAI is a new world with the save's soldiers and 41-43 (${s.recs})`);
   // 41-43 at the first tick: the stage-load pass (FUN_00558f68 -> FUN_00559748(1, 1) -> event 3; T w204_reload record 10)
   const l = f && f.l;
   ok(l && l.every(Boolean) && l.map(a => a.astate).join() === '3,3,3' && l.map(a => a.mode).join() === '0,1,0' && l.map(a => a.hp).join() === '10,28,24',
      `${how}: 41-43 active at the first tick: state ${l && l.map(a => a && a.astate)}, brain mode ${l && l.map(a => a && a.mode)}, HP ${l && l.map(a => a && a.hp)}`);
-  ok(l && l.every((a, i) => a && a.pos.every((v, j) => Math.abs(v - PLACE[i][j]) < 1e-3)), `${how}: 41-43 at their placements (the record-24 hand-off is not on the page)`);
+  ok(l && l.every((a, i) => a && a.pos.every((v, j) => Math.abs(v - PLACE[i][j]) < 1e-3)), `${how}: 41-43 at their placements at the first tick (their hand-off comes at S.frame 38)`);
   ok(l && l.map(a => a && a.t).join() === '79,0,149', `${how}: their script timers after the first tick ${l && l.map(a => a && a.t)} (80 / 0 / 150 set by event 3, minus one frame)`);
   ok(s.flags === '{}', `${how}: the new world's event flags ${s.flags} ({}: FUN_004039d0)`);
   ok(s.frame >= 24 && s.frame < 24 + 200, `${how}: its frame counter started at the placement's 24 (now ${s.frame})`);
@@ -132,8 +144,9 @@ try {
       check(await after(pg), 'game over', 1, f);
       ok(f && f.bodies === START_PLUS(start) && f.frame === 25, `game over: the new world's first tick (S.frame ${f && f.frame}) has every start body and 41-43 attached (${f && f.bodies})`); }
     ok(await bodies(pg) === START_PLUS(start), `game over: the drawn bodies are the start's again plus 41-43 (${await bodies(pg)})`);
-    ok(warns.some(w => /restart: the stage-result Status screen/.test(w)) && warns.some(w => /stage-load actors stay at their placements/.test(w))
-       && !warns.some(w => /41-43.*not activated/.test(w)), 'game over: the left-out screens and the hand-off warn');
+    ok(warns.some(w => /restart: the stage-result Status screen/.test(w)) && !warns.some(w => /stay at their placements|checkpoint.json.*missing/.test(w))
+       && !warns.some(w => /41-43.*not activated/.test(w)), 'game over: the left-out screens warn; the hand-off is on the page');
+    await handCheck(pg, 'game over');
     await timerCheck(pg, 'game over');
     const x0 = await pg.evaluate(() => ({ t: window.__play.stats.ticks, z: window.__play.ctrl.pos.z }));
     await pg.keyboard.down('KeyW'); await pg.waitForTimeout(1500); await pg.keyboard.up('KeyW');
@@ -160,6 +173,7 @@ try {
       check(await after(pg), 'pause (second Restart)', 2, f);
       ok(f && f.bodies === START_PLUS(start) && f.frame === 25, `pause: the new world's first tick (S.frame ${f && f.frame}) has every start body and 41-43 attached (${f && f.bodies})`); }
     ok(await bodies(pg) === START_PLUS(start), `pause: the drawn bodies are the start's again plus 41-43 (${await bodies(pg)})`);
+    await handCheck(pg, 'pause');
   }
   { // 3. H after a Restart: the page's own spawn, HP 780, play goes on
     // read on the first game frame after H (41-43 keep shooting): HP is lowered first, the first tick whose HP is no

@@ -312,6 +312,32 @@ SETS["w204rng"] = [
     dict(id=151, kind="site", where=(0x35EE08, 0x35EF50, 0x360418), name="refill", copy=[cpr("ra"), cp("a0", 0x7C, 1)]),
 ]
 
+# worker 0205: the opening event's end (FUN_0037cf30 -> FUN_00324e70) after a Restart: the actors' hand-off
+# (FUN_00319190 -> FUN_003157b0, a0 = status; +0x30.. after = the matrix it wrote), the stage-load pass, Vincent's
+# placement / state calls and the camera calls in FUN_00324e70, and every FUN_005764d0 (player state 2 / 3).
+_E = (0x324E70, 0x325188)
+SETS["w205"] = [
+    dict(id=160, kind="site", where=(0x37CF30, 0x37D540, 0x324E70), name="event_end", copy=[cpr("a0")]),
+    dict(id=161, kind="site", where=_E + (0x319190,), name="actor_handoff", copy=[]),
+    dict(id=162, kind="site", where=(0x319190, 0x3192A0, 0x3157B0), name="status_from_model",
+         copy=[cpr("a0"), cp("a0", 0x30, 12), cp("a0", 0x44, 2)]),
+    dict(id=163, kind="site", where=_E + (0x5453B0,), name="stage_pass", copy=[]),
+    dict(id=164, kind="site", where=_E + (0x54A5E8,), name="player_mat", copy=[cpr("a0"), cp("a1", 0, 16)]),
+    dict(id=165, kind="site", where=_E + (0x578548,), name="c578548", copy=[cpr("a0")]),
+    dict(id=166, kind="site", where=_E + (0x574928,), name="c574928", copy=[cpr("a0"), cpr("a1")]),
+    dict(id=167, kind="site", where=_E + (0x34B2C8,), name="c34b2c8", copy=[cp("a1", 0, 4)]),
+    dict(id=168, kind="site", where=_E + (0x328640,), name="cam_328640", copy=[cpr("a0"), cpr("a1")]),
+    dict(id=169, kind="site", where=_E + (0x33C060,), name="cam_33c060", copy=[]),
+    dict(id=170, kind="site", where=(0x100000, 0x5B0000, 0x5764D0), name="c5764d0", copy=[cpr("a0"), cpr("a1"), cpr("ra")]),
+    dict(id=171, kind="site", where=(0x100000, 0x5B0000, 0x558CC0), name="c558cc0", copy=[cpr("a0"), cpr("ra")]),
+]
+# review fix (0205): every FUN_003157b0 call (a0 = status, a1 = param, ra = caller; status +0x88 / +0x60 and the matrix
+# +0x30..+0x5f after the call) -> which write brings the battle clip's bone 1 into the status matrix
+SETS["w205b"] = SETS["w205"][-1:] + [
+    dict(id=172, kind="site", where=(0x100000, 0x5B0000, 0x3157B0), name="c3157b0",
+         copy=[cpr("a0"), cpr("a1"), cpr("ra"), cp("a0", 0x88, 1), cp("a0", 0x60, 1), cp("a0", 0x30, 12)]),
+]
+
 SETS["w202lcg"] = SETS["w200lcg"][1:] + [
     dict(id=146, kind="site", where=(0x270000, 0x2E0000, 0x2D9828), name="vr_span", copy=[cpr("ra")]),
     dict(id=147, kind="site", where=(0x270000, 0x2E0000, 0x2D9880), name="vr_flip", copy=[cpr("ra")]),

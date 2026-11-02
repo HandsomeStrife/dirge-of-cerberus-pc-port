@@ -153,3 +153,44 @@ in between, the holstered gun, 41-43.
 - What activates 45-49 at record 10 (not bit 3).
 - The start position's source; records 81-86 (not actors on the page).
 - The page's own start uses event flags {2: 7, 46: 1} where the save's RAM has 0 (not changed here).
+
+## The opening cutscene's hand-off (worker 0205, 2026-11-02)
+The positions are the opening event's battle clips' last frames (not cutscene keyframes on the page).
+- The event script: ev0100's class scr001 (FileCode 0x0c064001 = 0x0c000000 | event << 12 | script). Classes are
+  encrypted ("TTTT"): FUN_003a7700 -> FUN_003a8320 -> FUN_0041c1d8 (key schedule FUN_0041bb38; per block FUN_0041c010
+  -> FUN_0041bf78 (byte chain through an ELF table) + FUN_0041bf08 (u64 mix); a checksum block last). Python:
+  `native/assets/models/kel_class.py` (decrypt + class reader; every constant and the table are read from the user's
+  ELF instructions at run time; layout FUN_003a71c0: constant table of 16-byte cells, method table, Code attribute;
+  the code is standard JVM bytecode). Checked: equal to the recompiled FUN_003a8320 run on port/oracle
+  (`oracle-cli --call 0x3a8320`) for all 268 "TTTT" files of the disc, all checksums pass. T: scr001's image sits in
+  RAM in 0201's reload state.
+- The shape of first_event()'s end: per actor (Vincent and the three soldiers) setpos / setdir / setmotionofbattle
+  (clips km01vnw2, km01daw / km01dbw / km01dcw), then setbattlename (the event-actor tags p_Vin, e_Sol_11-13, which
+  answers worker 0116's question of what fills that table) and set_battlemode. The setpos points are the event-actor
+  models' roots in the reload state (identity rotation).
+- The release (T w205_reload, call-log set `w205`): FUN_00324e70 / FUN_00319190 do NOT run after the reload; all four
+  placements (Vincent record 10, 41-43 record 24) come from **FUN_00344d68** (ra 0x344e60): the body's update
+  FUN_00343de8 sees C+0x564 bit 0x10000000 (the battle clip) and FUN_00346150() == 0 (it ended) -> C+0x564 &=
+  ~0x18000000, FUN_003157b0(status, 1), FUN_00558cc0.
+- **Composition GUESS (matches T):** FUN_00344d68 passes param 1 (root only) and FUN_003157b0 returns early when status
+  +0x88 is 0, as it is for the soldiers in the reload state; so the bone-1 offset gets into the status matrix some
+  other way. Pinned further (T w205_3157b0, call-log set `w205b`): at frame 10 FUN_003159b8 (ra 0x315ab0) calls
+  FUN_003157b0(status, 0), setting +0x88 = the event model (matrix at the mid-clip pose); at the release FUN_00344d68's
+  param-1 call copies the model root, which by then equals origin x the last frame's bone 1 (Vincent's too). So the
+  bone-1 offset is moved into the model root at the clip's end; that writer is not found. The page uses FUN_003157b0's param-0 form (root x bone 1 of the clip's last frame, bone y
+  zeroed; +0x30 = row 3, +0x40 = -row 2): it gives Vincent's record-10 position bit for bit (facing 4.9e-5 rad off)
+  and 41-43's record-24 positions to the float.
+- Page: `export_web_checkpoint.py` -> data/checkpoint.json (build step `checkpoint`; disc.py INPUTS + 0c064001,
+  0c064400-05); checkpoint.js `handOff` (FUN_003157b0's param-0 form + FUN_00558cc0's rows), Vincent placed there at
+  the restore (CHECKPOINT.pos / face removed), 41-43 scheduled at S.frame 24 + 14 (enemy_ai `scheduleHandOff`, tick
+  step 3b, after the turn: T record 24 holds the hand-off facing).
+- **GUESS rows:** the composition (above); setdir's value = identity root (natives unknown; T: identity in the reload
+  RAM); SOLDIER_RELEASE = 14 (T; a fixed frame stands in for the whole clip-end condition); the stage start's class =
+  ev0100 scr001 (T); the exporter's straight-line pass over first_event.
+- **Not decoded (two attempts, stopped):** the drawn gun (state 3, h_st_a) and the gun-view camera. FUN_005764d0 acts
+  only from states >= 8; FUN_00326660 cases 0x78 / 0x79 and FUN_003262b8 are not called in the hand-off (T w205); the
+  event natives (set_battlemode, setmotionofbattle) are not bound by name in the ELF (FUN_003a9c58's method+0x0c binding
+  not followed). Page: holstered + start camera (GUESS rows).
+- **First hit (T w205_rng, TRACE_RNG=1):** the game's 41 fires at record 96 and hits Vincent at 100 (44 damage). The
+  page's 41 fires from the hand-off at record 95 (worker 0204's one-frame-early fire); its twister is off by then and
+  the hooked run has no body poses, so the shot misses there (even with the game's words forced). Not reproduced.

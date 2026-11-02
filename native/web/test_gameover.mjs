@@ -313,6 +313,20 @@ else {
         if (states[k]) res[states[k]] = t.emitter ? { age: t.emitter.age, parts: t.emitter.lists[1].map(p => ({ tag: p.tag, age: p.age, ev: p.ev, skip: p.skip, noDraw: p.noDraw, v: p.v.slice(), i32: p.i32.slice(), m50: p.m50.slice(), dt: drawType(p.P), ext: p.ext ? JSON.parse(JSON.stringify(p.ext)) : null, data: p.data.slice() })) } : null;
         if (dumps[k]) res[dumps[k]] = sp;
       }
+      // worker 0206: the back-face cull of FUN_002f5c50 (flag 0x10 when model +0 bit 1 is clear: model 4). No culled model
+      // has a back face in the dumps, so a hand case after the replay: tag 40's matrix mirrored in y (same screen box,
+      // opposite winding) draws none of its 2 quads; unmirrored, both
+      {
+        const p40 = t.emitter?.lists[1].find(p => p.tag === 40);
+        if (!p40) ok(false, 'model cull: no tag 40 particle at f1150');
+        else {
+          const m0 = p40.m50.slice(), n0 = t.fx.sprites({}).filter(s => s.model === 4).length;
+          for (let j = 4; j < 8; j++) p40.m50[j] = -p40.m50[j];
+          const n1 = t.fx.sprites({}).filter(s => s.model === 4).length;
+          p40.m50.set(m0);
+          ok(n0 === 2 && n1 === 0, `model cull (FUN_002f5c50 flag 0x10, model 4): tag 40 draws ${n0} quads, mirrored in y ${n1} (back faces culled)`);
+        }
+      }
       eq(spawnAt, 894, 'title spawned in page frame 894 (request 880 + 14; RAM: age 13.2 at state counter 906 .. 302.4 at 1147)');
       // particles against RAM: tag, age, event index, the value region (w lanes of the type 4 / 7 outputs at
       // indices 11 / 19 are never written by the game: pool leftovers), matrix +0x50
@@ -382,7 +396,7 @@ else {
       // dump that is not one of type 35's frame-buffer passes (or type 11's texture 0 mesh) is one of ours
       const blendOf = a => [a & 3, (a >> 2) & 3, (a >> 4) & 3, (a >> 6) & 3];
       for (const [k, name] of Object.entries(dumps)) {
-        const all = res[name], sp = all.filter(s => !s.glow), T = JSON.parse(fs.readFileSync(path.join(W, name + '.json')));
+        const all = res[name], sp = all.filter(s => !s.glow && s.model === undefined), T = JSON.parse(fs.readFileSync(path.join(W, name + '.json')));
         // ours: the tex2 sprites and the letters (tex1, ALPHA 0x44); type 35's tex1 passes go through its 64 x 64 page
         const own = T.filter(r => r.tex0 === '0x4006388621313000' || (r.tex0 === '0x4006380621312e00' && r.blend.slice(0, 4).join() === '0,1,0,1' && !r.v.some(v => v[0] === 2016 || v[0] === 2080)));
         let worst = 0, bad = 0;
@@ -401,8 +415,50 @@ else {
             if (blendOf(s.alpha).join() !== r.blend.slice(0, 4).join()) bad++;
           }
         }
+        // worker 0206: the draw order (effects.js drawSlot: the draw buckets). The type-10 sprites' TEX0 runs in our order =
+        // the dump's (by triangle index; two triangles a sprite)
+        const runs = keys => keys.reduce((r, k) => (r.length && r[r.length - 1][0] === k ? r[r.length - 1][1]++ : r.push([k, 1]), r), []).map(r => r.join(':')).join(' ');
+        const ourRuns = runs(sp.map(s => '0x' + s.tex.tex0[1].toString(16) + s.tex.tex0[0].toString(16).padStart(8, '0')).flatMap(k => [k, k]));
+        const dumpRuns = runs(own.slice().sort((x, y) => x.i - y.i).map(r => r.tex0));
+        if (ourRuns !== dumpRuns) { bad++; console.log(`  sprite order: page ${ourRuns} / dump ${dumpRuns}`); }
         ok(sp.length > 0 && bad === 0 && worst < 0.15 && used.size === own.length,
-          `${name} (f${k}): our ${sp.length} sprites = the dump's ${own.length / 2} type-10 sprites (${used.size} / ${own.length} triangles; corners ${worst.toFixed(3)} px; RGBA / ALPHA / TEX0 exact; ${T.length - own.length} triangles of untranslated types not drawn)`);
+          `${name} (f${k}): our ${sp.length} sprites = the dump's ${own.length / 2} type-10 sprites (${used.size} / ${own.length} triangles; corners ${worst.toFixed(3)} px; RGBA / ALPHA / TEX0 exact; TEX0 runs in the dump's order; ${T.length - own.length} triangles of other types)`);
+        // worker 0206: types 11 / 20's FED models (effects.js drawModel = FUN_002f5c50) against the dump, triangle for
+        // triangle in draw order (a quad = a strip of two): the textured ones (TEX0 0x40063a0621312f00, the FED's texture
+        // 0; dumpN.json) and the untextured ones (untexN.json: dumpfx.py --untex): XY, Z, RGBA, ST (= S / Q), ALPHA
+        {
+          const up = path.join(W, 'untex' + name.slice(4) + '.json');
+          if (!fs.existsSync(up)) console.log(`SKIP ${name} models: no ${up} (dumpfx.py --untex)`);
+          else {
+            const U = JSON.parse(fs.readFileSync(up));
+            const G = T.filter(r => r.tex0 === '0x40063a0621312f00').map(r => ({ ...r, tex: true })).concat(U).sort((a, b) => a.i - b.i);
+            const mine = [], kinds = {};
+            for (const s of all.filter(s => s.model !== undefined)) {
+              kinds[`${s.type}/${s.tag}/m${s.model}`] = (kinds[`${s.type}/${s.tag}/m${s.model}`] ?? 0) + 1;
+              for (const ix of s.verts.length === 3 ? [[0, 1, 2]] : [[0, 1, 2], [1, 2, 3]]) mine.push({ s, v: ix.map(j => s.verts[j]) });
+            }
+            let xy = 0, st = 0, zb = 0, bad = 0;
+            mine.forEach((m, i) => {
+              const g = G[i];
+              if (!g) { bad++; return; }
+              if (!!g.tex !== !m.s.untextured || blendOf(m.s.alpha).join() !== g.blend.slice(0, 4).join()) bad++;
+              m.v.forEach((q, j) => {
+                const v = g.v[j];
+                xy = Math.max(xy, Math.abs(q.gs[0] - v[0]), Math.abs(q.gs[1] - v[1]));
+                zb = Math.max(zb, Math.abs(q.gs[2] - v[2]));
+                if (q.rgba.join() !== (g.tex ? v[6] : v[3]).join()) bad++;
+                if (g.tex) st = Math.max(st, Math.abs(q.uv[0] - v[3] / v[5]), Math.abs(q.uv[1] - v[4] / v[5]));
+              });
+            });
+            // the order against the title's sprites: in the dump every model triangle draws before the first FED-textured
+            // type-10 sprite (particle list order: tags 40 / 41 / 58 / 59 / 61 come before the letters' particles)
+            const firstSprite = Math.min(...T.filter(r => r.tex0 !== '0x40063a0621312f00' && r.tex0 !== '0x4007bd06613137c0').map(r => r.i));
+            const lastModel = Math.max(...G.map(r => r.i)), ours = all.map(s => s.model !== undefined);
+            const order = lastModel < firstSprite && ours.lastIndexOf(true) < ours.indexOf(false);
+            ok(mine.length > 0 && mine.length === G.length && bad === 0 && order && xy <= 0.0625 && zb <= 1 && st < 2e-4,
+              `${name} (f${k}): our type 11 / 20 model triangles = the dump's, in draw order (${mine.length} / ${G.length}: ${JSON.stringify(kinds)} items; XY ${xy.toFixed(4)} px, Z ${zb}, ST ${st.toExponential(1)}; RGBA / ALPHA exact; drawn before the sprites, as the dump${bad ? `; ${bad} mismatches` : ''}${order ? '' : '; ORDER differs'})`);
+          }
+        }
         // worker 0202: type 35's glows against the page passes of the dump (dumpfx.py --glow: glowN.json): per glow the
         // record drawn into the 64 x 64 page (FRAME FBW 1, TEX 0x2e00: corners, RGBA, ALPHA), the copy of the frame (TEX0
         // 0x66401ce00 = TBP 0xe00 / TBW 7 / CT32 / 512 x 512: ST), the page drawn back (TEX0 0x598006a00: XY 12.4, RGBA,

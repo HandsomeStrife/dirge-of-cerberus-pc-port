@@ -144,8 +144,48 @@ transition, +0x1c eval, +0x24 draw, +0x2c destroy, +0x34 loop). Which tags: 35 =
 - Evidence: glowN.json (dumpfx.py --glow), ramN.json with 'vall' / 'pool' (title_fixture.py), the call logs, w202_fxtitle.
   The last dump (g5) is page frame 1149 (state + 3), not 1150: the glow's alpha ramp shows it.
 
+## Model renderer, types 11 / 20, draw order (worker 0206, 2026-11-02)
+- **Which renderer**: FUN_002f2f08 picks FUN_002f93d8 only with flag 0x2000, which the callers set only when data +0x45
+  (type 20, 0x27b55c asm) / +0x15 (type 11) is non-zero: 0 in all five title particles. So the title's models go through
+  **FUN_002f5c50** (EE + VU0 macro code, no VU1 micro; read from the recompiled `func_002f5c50`, port/recomp/generated_all/
+  eetu_0010.c, with the COP2 words decoded by hand). FUN_002f93d8 stays undecoded (warned).
+- **Caller block** 0x70003c00 (FUN_0027a170 / FUN_0027b300): flags (11: 2, 20: 4; | 0x10 when model +0 bit 1 is clear =
+  back-face cull; | 8 when bit 0 is clear = TEST from DAT_004ec480; | 0x100), +0x10 / +0x14 the UV offset (type 20: (acc t^2/2
+  + rate t + base) x 65536, t = age - the draw entry's start, FUN_002eadc0), +0x18 the colour (ref 0 x emitter colour,
+  clamped, truncated: as type 10), +0x1c added colour (0), +0x20 the FUN_002e3498(model +0x18, ..) matrix, +0x44 the depth
+  matrix (data +0x18 / +0x48: 0 here; warned when set).
+- **Model** (FED +0x6c table, entries relative to the table): +0 flags, +4 commands, +8 s16 xyz vertices (count u16 +0x12),
+  +0x16 / +0x17 GS ALPHA / FIX (FUN_002f2bc8), +0x18 scale. Title: model 0 (tag 61: 64 textured tris, cmd 2, cull), 1 (tag 41:
+  6 black quads, cmd 4), 2 (tags 58 / 59: 192 textured quads, cmd 6), 4 (tag 40: the dim backdrop, 2 quads, cmd 4, cull).
+- **Per vertex**: M (x, y, z, 1) row order (VMULA / VMADDA; w = 1 from the VMOVE of vf0), Q = 1 / w; w <= 0 (MAC Zw | Sw)
+  stores (0, 0, 0, 1). **Commands** (16-byte header, byte +1 kind, s16 +2 count; jump table 0x49f920; 0xff ends): 2 textured
+  triangles (32-byte records), 4 untextured quads (24), 6 textured quads (40); quads are GS strips (ADC on the first two).
+  Per primitive: cull (flag 0x10) if VFTOI4 of the z of (v0 - v1) x (v2 - v1) >= 0; clip against DAT_0046d470 / 480 / 490
+  ((2048, 2048, 2^23) +- 256 wholly / +- 1536 any, z +- 2^23: the VU1 sprite's box); colour = bytes x colour / 128 + added,
+  VMINI 255, VMAX (0, 0, 0, 1); ST = ((u, v) + ((off % (W << 16)) >> 4) / W) / 4096. The odd kinds (1 / 3 / 5 / 7), 0, 8,
+  0x20, 0x22 and the float-vertex path (model flag 0x400) are not used by the title: warned.
+- **Fog** (corrected after review): PRIM FGE is set, but the vertices are packed XYZ2 (GIF reg 5, not XYZF2), so F comes
+  from the FOG register, written per model by FUN_002f2d90 (flag 0x100: from the emitter's +0xc8 / +0xcc and a depth,
+  clamped to bytes +0xd4 / +0xd5). Every FOG write in w198 g3 / g4 is 255: no fog (DECODED + the dumps), the page draws
+  without it. FUN_002f2d90's value for gameplay emitters is not computed (open).
+- **T**: test_gameover vs the w198 dumps (dumpN.json textured, new untexN.json = `dumpfx.py --untex`): f969 600 / 600
+  triangles (tag 41, 61, 58, 59), f1050 / f1151 48 / 48 (tags 61, 40), in draw order, XY within 1/16 px, Z exact, RGBA /
+  ALPHA exact, ST <= 2e-7. Model 2's 272 of 384 quads: the clip box (no culled model shows a back face in the dumps; the
+  cull is a hand case: tag 40 mirrored draws nothing).
+- **Draw order** (the old 'spawn order' GUESS): the frame loop's FUN_002e20f0(layer) walks DAT_004eb680[slot] lists in slot
+  order; type 14's eval FUN_002740a0 appends the particle's node (P +0x3c) through FUN_002e1ec8(node, .., data +4, data +5):
+  cat 0 = the emitter's slot (FUN_002e7cd0: FUN_002e1d88(E +0xe, E +0xf)), cat 3 = a depth bucket (FUN_002e1c90, camera 0),
+  else DAT_0046c9a8[DAT_0046ca08[cat]] + DAT_0046ca18[cat] + min(sub, DAT_0046ca28[cat] - 1). RAM (w198 s3 / s4): the
+  title's cat 0 particles (models, ornaments, type 119) in 0x11c, the letters and glows (cat 5 sub 3) in 0x11f, type 103
+  (cat 7) in 0x12c, each list in list order. So the title draws in layer 4 (0x11a..0x121; FUN_002f00c0 also clears depth)
+  and type 103 in layer 5. effects.js `drawSlot` + the sort in `sprites()`; a particle with a depth-bucket slot keeps the
+  old spawn order for the whole pass (GUESS row).
+- **Gameplay** (review fix): drawModel draws only camera-1 emitters; the floor shot 0x45400 does not match its dump
+  (w206_floor, notes/effects-research.md 'FED models, draw order'), so camera-0 models are warned, not drawn.
+- **Not done**: 103's lines (FUN_002aa120) and 119's frame-buffer mesh (FUN_002b4f70) use other draw paths: still warned.
+
 ## Open
-- GAME OVER title: the draws of types 11 / 20 (FUN_002f93d8), 103 (lines, layer 6), 119 (FUN_002b4f70); the effect step; the death camera (FUN_0032ace0's CAM+0x1e8 0x400000 branch, CAM+0x230
+- GAME OVER title: the draws of 103 (lines, FUN_002aa120), 119 (FUN_002b4f70); FUN_002f93d8 (flag 0x2000 models: not the title's); the effect step; the death camera (FUN_0032ace0's CAM+0x1e8 0x400000 branch, CAM+0x230
   phases), HUD slide-out (FUN_003aff20: done, worker 0203, notes/hud-research.md 'Slide-out at game over'), the voice (stream SE), the volume ramp hooks, the world stop after the
   answer, menu sounds through audio.js MenuSound, the Restart path (done: worker 0201, notes/checkpoint-research.md), Quit ->
   title.

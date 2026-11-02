@@ -28,6 +28,7 @@ ap.add_argument('--lines', action='store_true')
 ap.add_argument('--flat', help='(worker 0200) write the last frame\'s untextured triangles at least 400 px wide (type 107 screen sprites) to this JSON')
 ap.add_argument('--fed', action='append', default=[], help='(worker 0198) also the draws with this FED\'s own TIM2 TEX0s')
 ap.add_argument('--glow', help='(worker 0202) write the last frame\'s type 35 page passes to this JSON: draws into a 64-wide frame (FBW 1) and the page drawn back (TEX0 TBW 1, CT32), with FRAME / TEX0 / ALPHA / TEST and the vertices (x, y, z, s, t, q, rgba)')
+ap.add_argument('--untex', help='(worker 0206) write the last frame\'s untextured triangles of effect layer 5 (between the first two depth clears, TEST 0x32001; TEST 0x5000d: the title\'s model quads) to this JSON, with TEST and the blend')
 ap.add_argument('--clut-out', help='(worker 0198) with --fed: write the CT32 CLUT (256 words, CSM1 logical order) at each FED texture\'s CBP in the dump\'s frozen GS memory')
 args = ap.parse_args()
 buf = open(args.dump, 'rb').read()
@@ -82,6 +83,15 @@ if args.flat:                        # (worker 0200) the screen sprites: untextu
             fl.append({'i': i, 'blend': c['blend'], 'test': c.get('test'), 'v': [[v[0] / 16, v[1] / 16, v[2], list(v[8:12])] for v in t[:3]]})
     json.dump(fl, open(args.flat, 'w'))
     print(len(fl), 'flat screen tris ->', args.flat)
+if args.untex:                       # (worker 0206) types 11 / 20's untextured model primitives (FUN_002f5c50 kinds 0 / 4)
+    clr = [i for i in range(a, b) if gif.tris[i][3].get('test') == 0x32001]
+    runs = [i for i in clr if i - 1 not in clr]
+    lo, hi = runs[0], (runs[1] if len(runs) > 1 else b)
+    un = [{'i': i, 'blend': gif.tris[i][3]['blend'], 'test': gif.tris[i][3].get('test'), 'ptype': gif.tris[i][3].get('ptype'),
+           'v': [[v[0] / 16, v[1] / 16, v[2], list(v[8:12])] for v in gif.tris[i][:3]]}
+          for i in range(lo, hi) if not gif.tris[i][3].get('tme') and gif.tris[i][3].get('test') == 0x5000d]   # the model TEST (DAT_004ec4a0)
+    json.dump(un, open(args.untex, 'w'))
+    print(len(un), 'untextured layer-5 triangles ->', args.untex)
 if args.glow:                        # (worker 0202) type 35: FRAME FBW 1 (the page) or TEX0 TBW 1 PSMCT32 (the page drawn back)
     gl = []
     for i in range(a, b):

@@ -19,17 +19,18 @@
 //   [save (0.1753, 0, 0.9845)], HP 780 [780], P+0x118 0x20209 [0x20209], gun drawn (h_st_a) [holstered, h_st];
 //   soldiers 44-49 / 66: state +0x104, +0x118, HP, position and clip equal to the save's; 41-43 alive and attacking
 //   (HP 10 / 28 / 24, astate 3) [dead in the save]; event flags all 0 [the page's start: {2: 7, 46: 1}].
-// Where the stage start's position comes from in code / data is not found (stage files and every extracted file
-// searched for the floats: no plain copy; two attempts, notes): the page takes the traced values below.
-// Worker 0204: the placement itself is FUN_00558cc0 (actor at its status matrix +0x30 / +0x40 / +0x50; call log
-// w204pos: Vincent at frame 10, 41-43 at frame 24, both from 0x558d60), and status matrices are written from the loaded
-// event actor's model by FUN_003157b0 (FUN_003159b8 / FUN_00319190): the opening cutscene's final pose. So the start
-// position is the cutscene's hand-off; it needs the event (cutscene) runtime.
+// The start position and 41-43's moves are the opening event's hand-off (worker 0205, notes/checkpoint-research.md
+// "The opening cutscene's hand-off"): the stage's event ev0100 runs its class scr001 (decrypted by FUN_003a8320; T: in
+// RAM in the reload state), whose first_event() ends with setpos / setdir / setmotionofbattle per actor, then
+// setbattlename / set_battlemode. Each body plays its battle clip; at the clip's end FUN_00343de8
+// (C+0x564 bit 0x10000000, FUN_00346150() == 0) -> FUN_00344d68 -> FUN_003157b0 writes the status matrix from the
+// event model and FUN_00558cc0 places the actor there. data/checkpoint.json (export_web_checkpoint.py, from the disc)
+// carries each actor's origin, dirs and its battle clip's last-frame bone 1; handOff() below does the rest.
+// T (w201_reload / w204_reload / w205_reload call log): Vincent placed at record 10, 41-43 at record 24, all from
+// 0x344e60 (FUN_00344d68); the clips' last frames give those positions and facings to the float.
 
-// Vincent at the checkpoint (T: w201_reload record 10; x / z = the save state's C+0x30 bit for bit)
+// The checkpoint's other values (T: w201_reload record 10 = Vincent's placement)
 export const CHECKPOINT = Object.freeze({
-  pos: Object.freeze({ x: -1395.151611328125, y: -98.64443969726562, z: -1111.014892578125 }),
-  face: Object.freeze({ x: 0.0008162574958987534, z: 0.9999997615814209 }),   // C+0x20 at the placement
   // CAM+0x80 at the placement: the gun-drawn view (kept for the tests; the page restarts holstered and uses its start
   // camera, see restoreCheckpoint)
   camFwd: Object.freeze([-0.0005414184415712953, -0.42466089129447937, 0.9053523540496826]),
@@ -45,8 +46,44 @@ export const CHECKPOINT = Object.freeze({
   aiNow: 26, aiAcc: 0.3,
 });
 
-// heading (player.js: face = (sin h, 0, cos h))
-export const checkpointHeading = () => Math.atan2(CHECKPOINT.face.x, CHECKPOINT.face.z);
+// GUESS: the frames from Vincent's battle clip end (his placement, record 10) to the soldiers' (record 24): traced; the
+// battle clips' clock across the load is not decoded (their remaining frames at the stage loop's first frame).
+export const SOLDIER_RELEASE = 14;
+
+const f32 = Math.fround;
+// GUESS (matches T): the status matrix at the battle clip's end = FUN_003157b0's root x bone 1 form (param 0) on the
+// clip's last frame. The release itself (FUN_00344d68) calls FUN_003157b0(status, 1), which copies the event model's
+// root only; T w205_3157b0 (call-log set w205b): status +0x88 is the event model from frame 10 (FUN_003159b8's param-0
+// call, mid-clip), and at the release the root it copies already equals origin x bone 1 of the last frame, so the
+// clip's bone-1 offset reaches the model root at the clip's end; that writer is not found. h = data/checkpoint.json
+// actor: origin (setpos), dir (setdir), bone1 (the clip's last frame, rows 0-2 axes, row 3 translation). Bone 1 as
+// FUN_005ad9c0 -> FUN_005b29c0 (row w's 0, row 3 w 1) with row 3's y zeroed (sp+0x84); FUN_0026125c: out row i =
+// sum_k bone[i][k] x root[k]; status +0x30 = out row 3, +0x40 = -(out row 2) normalized (pxor sign + vrsqrt), +0x50 =
+// (0, -1, 0).
+// FUN_00558cc0: actor row 2 = +0x40 (the facing), row 3 = +0x30 (the position).
+// GUESS: setdir's value here (180) = the identity root rotation (T: the event-actor models' roots in the reload state
+// are identity for p_Vin and e_Sol_11-13, all with that value; the native behind setdir is not found). Other values are refused (warned).
+export function handOff(h) {
+  const v3 = v => Array.isArray(v) && v.length >= 3 && v.slice(0, 3).every(Number.isFinite);
+  if (!h || !v3(h.origin) || !Array.isArray(h.bone1) || h.bone1.length !== 4 || !h.bone1.every(v3)) {
+    warnOnce(`restart: malformed hand-off entry in data/checkpoint.json (${h && h.clip}): skipped`); return null;
+  }
+  if (h.dir !== 180) { warnOnce(`restart: hand-off with setdir(${h.dir}) not decoded (only 180 = the identity root is known)`); return null; }
+  const root = [[1, 0, 0], [0, 1, 0], [0, 0, 1], h.origin.map(f32)];
+  const b = h.bone1.map(r => r.map(f32));
+  const t = [b[3][0], 0, b[3][2]];                                         // sp+0x84 = 0: bone 1's y off
+  const row = (v, w) => [0, 1, 2].map(j => f32(f32(f32(v[0] * root[0][j]) + f32(v[1] * root[1][j])) + f32(v[2] * root[2][j]) + (w ? root[3][j] : 0)));
+  const pos = row(t, 1), r2 = row(b[2], 0);
+  const n = Math.hypot(r2[0], r2[1], r2[2]);
+  return { pos, face: r2.map(v => -v / n) };
+}
+
+// Vincent's start from the hand-off (null without data/checkpoint.json: warned)
+export function vincentStart(data) {
+  const h = data && data.actors && data.actors.p_Vin;
+  if (!h) { warnOnce('restart: data/checkpoint.json (export_web_checkpoint.py) missing: Vincent restarts at the page spawn'); return null; }
+  return handOff(h);
+}
 
 // Vincent's stamps against the world's frame counter after the reload (decoded): the stage loop's exit tears the world
 // down (FUN_004012c0 -> FUN_003249d0 -> FUN_003236c8 -> FUN_0053a618) and the reload builds a new object manager
@@ -74,29 +111,33 @@ export function restoreCheckpoint(sys) {
   const C = CHECKPOINT, out = {};
   if (sys.gameOver) sys.gameOver.reset();
   if (sys.php) { sys.php.hp = C.hp; sys.php.f118 = C.f118; sys.php.s64 = 0; Object.assign(sys.php, PLAYER_STAMPS); }
+  // Vincent at his battle clip's end (handOff; T record 10). Without the data: the page spawn (warned)
+  const vs = vincentStart(sys.handoff);
+  out.handoff = vs;
   if (sys.ctrl) {
     const ctrl = sys.ctrl, sp = ctrl.spawn;
-    const gy = sys.groundY ? sys.groundY(C.pos.x, C.pos.z, C.pos.y) : null;
-    ctrl.spawn = { x: C.pos.x, y: gy ?? C.pos.y, z: C.pos.z, heading: checkpointHeading() };
+    if (vs) {
+      // y: status +0x30's (the origin's); the body lands on the ground at once (T: -98.34 -> -98.6444 at record 11)
+      const gy = sys.groundY ? sys.groundY(vs.pos[0], vs.pos[2], vs.pos[1]) : null;
+      ctrl.spawn = { x: vs.pos[0], y: gy ?? vs.pos[1], z: vs.pos[2], heading: Math.atan2(vs.face[0], vs.face[2]) };
+    }
     ctrl.reset();                                  // the stage load builds him anew (state 2, no motion, no action)
     ctrl.spawn = sp;                               // H (page aid) keeps the page's spawn
     out.pos = { ...ctrl.pos };
     if (sys.php) { sys.php.pos = [ctrl.pos.x, ctrl.pos.y, ctrl.pos.z]; sys.php.face = [ctrl.C.face.x, ctrl.C.face.y, ctrl.C.face.z]; }
   }
-  // GUESS: holstered after the restart (the game's opening cutscene leaves him with the gun drawn, h_st_a; that
-  // hand-off is not decoded, so the page doesn't draw it). Worker 0204: no stage-start command draws it: in 0201's reload
-  // state (before the stage loop's first frame) P+0x104 is already state 3 (gun up) with h_st_a and his status facing
-  // (0.0008, 0, 1), so both come from the cutscene's end. The event VM's game calls (FUN_00326660 cases 0x64-0x7a,
-  // FUN_003262b8: player placement FUN_00558cc0 / FUN_0054b1a0, FUN_00578548, FUN_005764d0 = state 2 / 3 by P+0x2a8
-  // bit 0) and the event file's last commands would be needed.
+  // GUESS: holstered after the restart. The game's opening event leaves him with the gun drawn (state 3, h_st_a, already
+  // in the reload state). Worker 0205: not FUN_005764d0 (only from states >= 8) nor FUN_00326660 / FUN_003262b8 (not
+  // called in the hand-off, T w205_reload); the event's natives (set_battlemode, setmotionofbattle) are not bound by
+  // name in the ELF (the native registry is not decoded; two attempts, notes)
   warnOnce('restart: the gun is drawn at the game\'s checkpoint (after the opening cutscene); the page restarts holstered');
   if (sys.weapon) sys.weapon.reset();
   if (sys.cape) sys.cape.cloth.started = false;
   if (sys.follow) {
     if (sys.follow.clearDeath) sys.follow.clearDeath();   // FUN_00328368's death bits (worker 0199)
     // GUESS: the page's start camera angles (player.js CAM_SPAWN). The game's at the checkpoint are the gun-drawn view's
-    // (CHECKPOINT.camFwd, pitched ~25 deg down), which the holstered page can't use; the hand-off is not decoded
-    sys.follow.reset(sys.ctrl ? sys.ctrl.pos : C.pos);
+    // (CHECKPOINT.camFwd, pitched ~25 deg down), which the holstered page can't use (the gun's hand-off is not decoded)
+    sys.follow.reset(sys.ctrl ? sys.ctrl.pos : vs && { x: vs.pos[0], y: vs.pos[1], z: vs.pos[2] });
     // the reload's new camera object is built by FUN_00328368 (FUN_003387f8 kind 0xe -> FUN_00328010), which also zeroes
     // what reset() (FUN_003285d0) keeps: CAM+0x1c4 / +0x1c8 (the ladder pull-back), +0x1a8 (the auto-turn gain), and sets
     // +0x1e2 = 0xec (-20). T: the state saved at the reload: +0x1c4 / +0x1c8 / +0x1a8 0, +0x1e2 -12 (-20 + 8 frames).
@@ -115,8 +156,17 @@ export function restoreCheckpoint(sys) {
   if (sys.rebuildEnemies) {
     out.enemies = sys.rebuildEnemies(C.eventFlags, C.frame, { now: C.aiNow, acc: C.aiAcc });
     // 41-43: the rebuilt world runs the stage-load pass (enemy_ai stageLoad = FUN_00319190 -> FUN_005453b0 ->
-    // FUN_00558f68, worker 0204) from play.js rebuildEnemies; their placement move at record 24 (the cutscene's
-    // hand-off) is warned by enemy_ai.
+    // FUN_00558f68, worker 0204) from play.js rebuildEnemies; at their battle clips' end (SOLDIER_RELEASE frames after
+    // Vincent's) FUN_00344d68 -> FUN_00558cc0 moves them to the hand-off (enemy_ai scheduleHandOff)
+    const list = [];
+    if (!(sys.handoff && sys.handoff.actors)) warnOnce('restart: no data/checkpoint.json: 41-43 stay at their placements (the opening event\'s hand-off at record 24 is left out)');
+    for (const h of Object.values((sys.handoff && sys.handoff.actors) || {})) {
+      if (!h || h.rec === 0) continue;
+      const p = handOff(h);
+      if (p) list.push({ rec: h.rec, frame: C.frame + SOLDIER_RELEASE, pos: p.pos, face: p.face });
+    }
+    if (out.enemies && out.enemies.scheduleHandOff) out.enemies.scheduleHandOff(list);
+    out.soldierHandOff = list;
   }
   if (sys.music) sys.music();
   return out;

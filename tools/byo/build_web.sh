@@ -303,6 +303,11 @@ run enemy_ai $PY export_web_triggers.py "$NOPATH/06800001.bin" "$DATA/enemies" "
 grep '^wrote' "$LOGS/enemy_ai.log" | sed "s#$REPO/##" | cut -c1-160
 echo "ok"
 
+step "the opening cutscene's hand-off (ev0100 scr001 class + its battle clips, ELF table) -> data/checkpoint.json"
+run checkpoint $PY export_web_checkpoint.py --elf "$ELF" --nopath "$NOPATH" --placements "$DATA/enemies/placements.json" -o "$DATA/checkpoint.json"
+[ -s "$DATA/checkpoint.json" ] || fail "data/checkpoint.json missing (log: $LOGS/checkpoint.log)"
+tail -n 1 "$LOGS/checkpoint.log" | sed "s#$REPO/##" | cut -c1-160
+
 step "weapon stats + reticle tables and texture (bgd.bin parts, menudata.bin menu2, ELF from the disc) -> data/aim"
 run aim $PY export_web_aim.py --iso "$ISO" -o "$DATA/aim"
 tail -n 1 "$LOGS/aim.log"

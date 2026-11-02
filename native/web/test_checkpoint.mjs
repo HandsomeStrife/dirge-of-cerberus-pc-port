@@ -2,7 +2,9 @@
 //   node --import ./native/web/test_hooks.mjs native/web/test_checkpoint.mjs
 // Needs data/z128_collision.bin + data/enemies/ai.json (else SKIP). With tools/trace/out/w201_reload.jsonl
 // (TRACE_FIELDSET=enemy TRACE_ERECS=44,66, from the state saved at the stage reload after game over -> Restart)
-// it checks the restored state and the first 100 frames after it against the game.
+// it checks the restored state and the first 100 frames after it against the game. Worker 0205: needs
+// data/checkpoint.json (export_web_checkpoint.py: the opening event's hand-off); w204_reload / w205_rng (TRACE_RNG=1)
+// check 41-43's hand-off at record 24 and 41's first shot.
 import { readFileSync, existsSync } from 'node:fs';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 import path from 'node:path';
@@ -13,7 +15,7 @@ const OUT = process.env.TRACE_OUT ?? path.join(root, 'tools/trace/out');
 const imp = f => import(pathToFileURL(path.join(here, f)).href);
 const PL = await imp('player.js');
 const { Collision } = await imp('collision.js');
-const { CHECKPOINT, PLAYER_STAMPS, checkpointHeading, restoreCheckpoint } = await imp('checkpoint.js');
+const { CHECKPOINT, PLAYER_STAMPS, SOLDIER_RELEASE, handOff, vincentStart, restoreCheckpoint } = await imp('checkpoint.js');
 const { GameOver, mergeData } = await imp('gameover.js');
 let fail = 0;
 const ok = (c, m) => { console.log((c ? 'ok   ' : 'FAIL ') + m); if (!c) fail++; };
@@ -27,6 +29,29 @@ const AI = await imp('enemy_ai.js');
 const dp = path.join(here, 'data/pause.json'), dg = path.join(here, 'data/gameover.json');
 if (!existsSync(dp) || !existsSync(dg)) { console.log('SKIP: data/pause.json / data/gameover.json missing'); done(); }
 const GD = mergeData(JSON.parse(readFileSync(dp, 'utf8')), JSON.parse(readFileSync(dg, 'utf8')));
+// the opening event's hand-off (worker 0205): data/checkpoint.json from export_web_checkpoint.py
+const hp_ = path.join(here, 'data/checkpoint.json');
+// Without it (or TEST_NO_HANDOFF=1) the restart checks run with the page spawn and the trace parts skip.
+const HO = existsSync(hp_) && !process.env.TEST_NO_HANDOFF ? JSON.parse(readFileSync(hp_, 'utf8')) : null;
+if (!HO) console.log('SKIP hand-off parts: no data/checkpoint.json (export_web_checkpoint.py)');
+const VS = HO ? vincentStart(HO) : null;
+if (HO) {
+  ok(VS && Object.keys(HO.actors).sort().join() === 'e_Sol_11,e_Sol_12,e_Sol_13,p_Vin', `hand-off actors ${Object.keys(HO.actors)} (the event's setbattlename tags)`);
+  ok(['e_Sol_11', 'e_Sol_12', 'e_Sol_13', 'p_Vin'].map(t => HO.actors[t].clip).join() === 'km01daw,km01dbw,km01dcw,km01vnw2'
+     && Object.values(HO.actors).every(h => h.dir === 180), 'battle clips km01daw / dbw / dcw / vnw2, the same setdir value');
+}
+// handOff on synthetic entries (no data needed): FUN_003157b0's bone row 3 y is zeroed (sp+0x84), the root's y stays;
+// +0x40 = -row 2; a malformed entry warns and is skipped; vincentStart(null) warns and gives null
+{
+  const w0 = warns.length;
+  const syn = handOff({ origin: [1, 2, 3], dir: 180, bone1: [[1, 0, 0], [0, 1, 0], [0, 0, 1], [4, 5, 6]] });
+  ok(syn && syn.pos.join() === '5,2,9' && syn.face.map(v => v + 0).join() === '0,0,-1', `synthetic hand-off: pos ${syn && syn.pos} (5,2,9: bone y 5 dropped), face ${syn && syn.face}`);
+  ok(handOff({ origin: [1, 2], dir: 180, bone1: [] }) === null && handOff({ origin: [0, 0, 0], dir: 180, bone1: [[1, 0, 0], [0, 1, 0], [0, 0, 1], [0, 'x', 0]] }) === null
+     && handOff({ origin: [0, 0, 0], dir: 90, bone1: [[1, 0, 0], [0, 1, 0], [0, 0, 1], [0, 0, 0]] }) === null && handOff(null) === null,
+     'malformed / undecoded entries give null, no throw');
+  ok(vincentStart(null) === null && vincentStart({ actors: {} }) === null, 'vincentStart without data: null');
+  ok(warns.slice(w0).some(w => /malformed hand-off/.test(w)) && warns.slice(w0).some(w => /setdir\(90\)/.test(w)) && warns.slice(w0).some(w => /checkpoint.json.*missing/.test(w)), 'and they warn');
+}
 const WALK = () => ({ ...IDLE(), x: 1, z: 0, stick: PL.KEY_RUN });
 const IDLE = () => ({ x: 0, z: 0, stick: 0, keys: new Set(), pressed: new Set() });
 const STEP = 1.2;
@@ -61,7 +86,7 @@ function page() {
   P.W = AI.createEnemyAI(opts); for (const k of AWAKE) P.W.addActor({ rec: k, astate: AWAKE_STATE[k], f118: AWAKE_F118[k] });
   P.follow = { clearDeath() { P.cam.push('clearDeath'); }, reset(pos, s) { P.cam.push(['reset', { ...pos }, s]); } };
   P.sys = () => ({ ctrl, php, follow: P.follow, gameOver: P.gameOver, cape: P.cape, fx: P.fx,
-    groundY: (x, z, y) => col.groundY(x, z, y), weapon: { reset() { P.weaponResets++; } }, music: () => { P.music++; },
+    groundY: (x, z, y) => col.groundY(x, z, y), handoff: P.handoff === undefined ? HO : P.handoff, weapon: { reset() { P.weaponResets++; } }, music: () => { P.music++; },
     hud: { reset() { P.hudResets++; } }, sfx: P.sfx,
     rebuildEnemies: (flags, frame, clock) => { P.flagsSeen = flags; P.W = rebuild(opts, flags, frame, clock, P.load ?? LOAD); return P.W; } });
   return P;
@@ -84,9 +109,11 @@ function page() {
   const r = restoreCheckpoint(P.sys());
   const C = CHECKPOINT;
   ok(P.php.hp === 780 && P.php.f118 === 0x20209, `HP ${P.php.hp} (780), P+0x118 ${P.php.f118.toString(16)} (20209)`);
-  ok(P.ctrl.pos.x === C.pos.x && P.ctrl.pos.z === C.pos.z && Math.abs(P.ctrl.pos.y - C.pos.y) < 0.005,
-     `Vincent at the checkpoint ${[P.ctrl.pos.x, P.ctrl.pos.y, P.ctrl.pos.z].map(v => v.toFixed(3))}`);
-  ok(Math.abs(P.ctrl.heading - checkpointHeading()) < 1e-9 && Math.abs(P.ctrl.C.face.z - 1) < 1e-5, `facing ${P.ctrl.C.face.x.toFixed(5)}, ${P.ctrl.C.face.z.toFixed(5)}`);
+  if (VS) {
+    ok(P.ctrl.pos.x === VS.pos[0] && P.ctrl.pos.z === VS.pos[2] && Math.abs(P.ctrl.pos.y - col.groundY(VS.pos[0], VS.pos[2], VS.pos[1])) < 1e-9,
+       `Vincent at the hand-off ${[P.ctrl.pos.x, P.ctrl.pos.y, P.ctrl.pos.z].map(v => v.toFixed(3))} (on the ground below status +0x30)`);
+    ok(Math.abs(P.ctrl.heading - Math.atan2(VS.face[0], VS.face[2])) < 1e-9 && Math.abs(P.ctrl.C.face.z - 1) < 1e-5, `facing ${P.ctrl.C.face.x.toFixed(5)}, ${P.ctrl.C.face.z.toFixed(5)}`);
+  } else ok(P.ctrl.pos.x === spawn0.x && P.ctrl.pos.z === spawn0.z && warns.some(w => /checkpoint.json.*missing/.test(w)), 'no hand-off data: Vincent at the page spawn (warned)');
   ok(JSON.stringify(P.ctrl.spawn) === JSON.stringify(spawn0), 'the page spawn (H) is kept');
   ok(P.ctrl.P.state === 2 && !P.ctrl.active, `state ${P.ctrl.P.state} (2: on foot), no action`);
   ok(P.php.pos[0] === P.ctrl.pos.x && P.php.pos[2] === P.ctrl.pos.z, 'the AI sees him at the checkpoint (php.pos)');
@@ -111,9 +138,11 @@ function page() {
   ok(L.every(a => a.target === P.php), '41-43 target Vincent (cmd 0x193)');
   ok(L.every(a => a.C.f564 & 0x20000000), 'C+0x564 bit 0x20000000 set by the pass (FUN_00558f68)');
   ok(L.map(a => a.ai.rounds).join() === '6,6,-1', `rounds ${L.map(a => a.ai.rounds)} (FUN_00360418(ai, 1) with rand 0.1: 6 + 0, 6 + 0, mag -1 -> 0xffff)`);
-  ok(L.every(a => a.pos.every((v, i) => v === AIdata.records[a.rec].pos[i])), '41-43 at their placements (the cutscene hand-off at record 24 is MISSING)');
-  ok(!warns.some(w => /41-43.*not activated/.test(w)) && warns.some(w => /stage-load actors stay at their placements/.test(w))
-     && warns.some(w => /Status screen/.test(w)) && warns.some(w => /holstered/.test(w)), 'the left-out parts warn (the hand-off, the screens, the gun)');
+  ok(L.every(a => a.pos.every((v, i) => v === AIdata.records[a.rec].pos[i])), '41-43 at their placements until their battle clips end');
+  ok(JSON.stringify(P.W.handOffs.map(h => [h.rec, h.frame])) === JSON.stringify(HO ? [[41, 38], [42, 38], [43, 38]] : []) && SOLDIER_RELEASE === 14,
+     `41-43's hand-off scheduled at S.frame ${P.W.handOffs.map(h => h.frame)} (24 + 14)`);
+  ok(!warns.some(w => /41-43.*not activated/.test(w)) && (HO ? !warns.some(w => /stay at their placements/.test(w)) : warns.some(w => /41-43 stay at their placements/.test(w)))
+     && warns.some(w => /Status screen/.test(w)) && warns.some(w => /holstered/.test(w)), 'the left-out parts warn (the screens, the gun)');
   // play resumes: he walks
   P.W.tick(STEP, [P.ctrl.pos.x, P.ctrl.pos.y, P.ctrl.pos.z], [P.ctrl.pos.x, P.ctrl.pos.y, P.ctrl.pos.z]);
   ok(L.every(a => !(a.C.f564 & 0x20000000) && a.C.blendLen === 0), `their first clip after the pass: blend ${L.map(a => a.C.blendLen)} (FUN_00312678 = 0), bit 0x20000000 cleared (FUN_00344608)`);
@@ -218,16 +247,34 @@ function page() {
   ok(ref.c810 === 0 && ref.s148 === 0, `the hit passed the gates (C+0x810 / P+0x148 stamped now: ${ref.c810} / ${ref.s148})`);
 }
 
+// ------------------------------------------------ a soldier hit before its hand-off is left in place (warned)
+if (HO) {
+  const P = page(); restoreCheckpoint(P.sys());
+  const L = [41, 42, 43].map(k => P.W.actors.find(a => a.rec === k));
+  L[0].hp -= 1;                                                   // 41 hit before frame 38
+  const w0 = warns.length, here0 = L[0].pos.slice();
+  while (P.W.S.frame < 38) { const p0 = [P.ctrl.pos.x, P.ctrl.pos.y, P.ctrl.pos.z]; P.ctrl.step(IDLE()); P.W.tick(STEP, p0, p0); }
+  const H = Object.fromEntries(['e_Sol_11', 'e_Sol_12'].map((t, i) => [41 + i, handOff(HO.actors[t]).pos]));
+  ok(L[0].pos.every((v, i) => v === here0[i]) && L[1].pos.every((v, i) => v === H[42][i]) && warns.slice(w0).some(w => /record 41 hit before its hand-off/.test(w)),
+     '41 hit before its hand-off stays put (warned), 42 is placed');
+}
+
 // ------------------------------------------------ the trace: the restored state and the first 100 frames
 const tp = path.join(OUT, 'w201_reload.jsonl');
-if (!existsSync(tp)) console.log('SKIP trace part: no ' + tp);
+if (!HO || !existsSync(tp)) console.log('SKIP trace part: ' + (HO ? 'no ' + tp : 'no hand-off data'));
 else {
   const recs = readFileSync(tp, 'utf8').split('\n').filter(Boolean).map(l => JSON.parse(l)).filter(r => r.frame !== undefined);
   const fp = h => { const b = Buffer.from(h, 'hex'); return { face: [0, 4, 8].map(o => b.readFloatLE(o)), pos: [16, 20, 24].map(o => b.readFloatLE(o)) }; };
   const r10 = recs[10], r11 = recs[11];
-  ok(r10.matrix[3][0] === CHECKPOINT.pos.x && r10.matrix[3][2] === CHECKPOINT.pos.z && r11.matrix[3][1] === CHECKPOINT.pos.y,
-     'CHECKPOINT.pos = the placement (record 10 x / z, record 11 y on the ground)');
-  ok(r10.matrix[2][0] === CHECKPOINT.face.x && r10.matrix[2][2] === CHECKPOINT.face.z && r10.cam_fwd.slice(0, 3).every((v, i) => v === CHECKPOINT.camFwd[i]), 'CHECKPOINT.face / camFwd = record 10');
+  // the hand-off (ev0100's origin + km01vnw2's last frame) = the game's placement: record 10 x / y / z bit for bit,
+  // record 11 y on the ground; the facing within the clip decode's rotation error
+  ok(r10.matrix[3][0] === VS.pos[0] && r10.matrix[3][1] === VS.pos[1] && r10.matrix[3][2] === VS.pos[2]
+     && Math.abs(r11.matrix[3][1] - col.groundY(VS.pos[0], VS.pos[2], VS.pos[1])) < 1e-4,
+     `Vincent's hand-off = record 10 (${VS.pos.map(v => v.toFixed(4))}; record 11 y ${r11.matrix[3][1].toFixed(4)} on the ground)`);
+  const dFace = Math.abs(Math.atan2(VS.face[0], VS.face[2]) - Math.atan2(r10.matrix[2][0], r10.matrix[2][2]));
+  ok(dFace < 1e-4, `Vincent's hand-off facing within ${dFace.toExponential(2)} rad of record 10 (km01vnw2 bone 1 row 2)`);
+  console.log(`info: largest Vincent hand-off error: position 0, facing ${dFace.toExponential(2)} rad`);
+  ok(r10.cam_fwd.slice(0, 3).every((v, i) => v === CHECKPOINT.camFwd[i]), 'CHECKPOINT.camFwd = record 10');
   const flags = r => { const a = Buffer.from(r.evt_flags, 'hex'), k = Buffer.from(r.evt_key, 'hex'); return a.every((v, i) => (v ^ k[i]) === 0); };
   ok(recs.every(flags), 'event flags all 0 after the reload (every record)');
   // the page after the restore = record 10 (the placement); n frames later = record 10 + n
@@ -260,7 +307,7 @@ else {
 // tools/trace/out/w204_reload.jsonl: the same reload state, TRACE_FIELDSET=enemy TRACE_ERECS=41,42,43 TRACE_ENEMIES=3
 // TRACE_EPIN=41:904760:91af00,42:904f80:91b010,43:9057a0:91b120 (their bodies are built at record 10).
 const tp4 = path.join(OUT, 'w204_reload.jsonl');
-if (!existsSync(tp4)) console.log('SKIP w204 part: no ' + tp4);
+if (!HO || !existsSync(tp4)) console.log('SKIP w204 part: ' + (HO ? 'no ' + tp4 : 'no hand-off data'));
 else {
   const recs = readFileSync(tp4, 'utf8').split('\n').filter(Boolean).map(l => JSON.parse(l)).filter(r => r.frame !== undefined);
   const fp = h => { const b = Buffer.from(h, 'hex'); return [16, 20, 24].map(o => b.readFloatLE(o)); };
@@ -281,7 +328,8 @@ else {
     ok(R.join() === [0, 1, 2].map(k => g10[`e${k}_ai_ammo`] & 0xffff).join() && used.length === 2,
        `rounds with draws 0.6 / 0.1: ${R} (T ${[0, 1, 2].map(k => g10[`e${k}_ai_ammo`] & 0xffff)}), ${used.length} draws`);
   }
-  let bad = [], posBad = 0, shot42 = null, modeAt = { 0: null, 2: null };
+  let bad = [], posBad = 0, posAfter = 0, faceAt24 = 0, shot42 = null, modeAt = { 0: null, 2: null };
+  const ff = h => { const b = Buffer.from(h, 'hex'); return [0, 4, 8].map(o => b.readFloatLE(o)); };
   for (let n = 11; n <= 270; n++) {
     const g = recs[n], pOld = [P.ctrl.pos.x, P.ctrl.pos.y, P.ctrl.pos.z];
     P.ctrl.step(IDLE());
@@ -297,16 +345,59 @@ else {
       if (m.mode !== t.mode || m.hp !== t.hp || (k === 0 && m.astate !== t.astate)) bad.push(`${n} rec ${41 + k} ${JSON.stringify(m)} vs ${JSON.stringify(t)}`);
     }
     if (n < 24) for (let k = 0; k < 3; k++) posBad = Math.max(posBad, ...fp(g[`e${k}_face_pos`]).map((v, i) => Math.abs(v - L[k].pos[i])));
+    else for (let k = 0; k < 3; k++) {
+      posAfter = Math.max(posAfter, ...fp(g[`e${k}_face_pos`]).map((v, i) => Math.abs(v - L[k].pos[i])));
+      if (n === 24) faceAt24 = Math.max(faceAt24, ...[0, 2].map(i => Math.abs(ff(g[`e${k}_face_pos`])[i] - L[k].face[i])));
+    }
   }
   ok(bad.length === 0, 'brain modes / HP of 41-43 (and 41\'s actor state) = the game\'s, records 11-270' + (bad.length ? `: ${bad.length} off, ${bad.slice(0, 3).join('; ')}` : ''));
   ok(modeAt[0] === 90 && modeAt[2] === 160, `timers: 41 -> mode 2 at record ${modeAt[0]} (90 = 10 + 80), 43 -> mode 1 at record ${modeAt[2]} (160 = 10 + 150)`);
   ok(posBad < 1e-3, `41-43 at their placements, records 11-23: within ${posBad.toFixed(5)} u of the game`);
   const shotT = recs.findIndex((r, i) => i > 10 && (r.e1_ai_ammo & 0xffff) < (recs[i - 1].e1_ai_ammo & 0xffff));
   ok(shot42 === shotT && shot42 === 12, `42's first shot at record ${shot42} (T ${shotT})`);
-  // MISSING (reported, not asserted): from record 24 the game holds them at the cutscene's hand-off positions (41 ~9.6 u,
-  // 42 ~8.5 u, 43 ~4.8 u from the placements), and 41's first bullet hits Vincent at record 100 (44); the page's 41 fires
-  // from its placement and misses.
-  const d24 = [0, 1, 2].map(k => Math.hypot(...fp(recs[24][`e${k}_face_pos`]).map((v, i) => v - AIdata.records[41 + k].pos[i])));
-  console.log(`info: record 24 hand-off moves ${d24.map(d => d.toFixed(2)).join(' / ')} u (not on the page); game HP ${recs[99].p_hp} -> ${recs[100].p_hp} at record 100, page ${P.php.hp} at record 270`);
+  // the hand-off (worker 0205): from record 24 they stand where the game's do (the battle clips' last frames)
+  ok(posAfter < 1e-3, `41-43 at the hand-off, records 24-270: within ${posAfter.toFixed(5)} u of the game`);
+  ok(faceAt24 < 1e-4, `41-43's hand-off facings at record 24 within ${faceAt24.toExponential(2)}`);
+  console.log(`info: largest 41-43 errors: position ${posBad.toFixed(5)} (records 11-23) / ${posAfter.toFixed(5)} u (24-270), facing ${faceAt24.toExponential(2)}`);
+}
+
+// ------------------------------------------------ the first hit with the game's twister (worker 0205)
+// tools/trace/out/w205_rng.jsonl: w204_reload's fields + TRACE_RNG=1 (the twister DAT_004fbe00 / index each record).
+// The page from record 10 with the game's twister state there: 41 fires from the hand-off and its bullet takes
+// Vincent's HP 780 -> 736 (44) at record 100 in the game.
+const tp5 = path.join(OUT, 'w205_rng.jsonl');
+if (!HO || !existsSync(tp5)) console.log('SKIP w205 part: ' + (HO ? 'no ' + tp5 : 'no hand-off data'));
+else {
+  const recs = readFileSync(tp5, 'utf8').split('\n').filter(Boolean).map(l => JSON.parse(l)).filter(r => r.frame !== undefined);
+  const rf = r => { const g = new AI.GameRandom(1); for (let i = 0; i < 624; i++) g.s[i] = Buffer.from(r.rng_state.slice(8 * i, 8 * i + 8), 'hex').readUInt32LE(0); g.i = r.rng_idx; return g; };
+  let cur = rf(recs[9]);
+  const P = page(); P.opts.rand = () => cur.rand();
+  restoreCheckpoint(P.sys());
+  const L = [41, 42, 43].map(k => P.W.actors.find(a => a.rec === k));
+  ok(L.map(a => a.ai.rounds & 0xffff).join() === [0, 1, 2].map(k => recs[10][`e${k}_ai_ammo`] & 0xffff).join(),
+     `the activation's magazines with the game's twister: ${L.map(a => a.ai.rounds & 0xffff)} (T record 10)`);
+  cur = rf(recs[10]);                                   // the frame's other draws are not the page's: restart from record 10
+  let hitAt = null, hpAt = null, fire41 = null, r41 = L[0].ai.rounds, shot = null, idxAtShot = null;
+  for (let n = 11; n <= 110; n++) {
+    const pOld = [P.ctrl.pos.x, P.ctrl.pos.y, P.ctrl.pos.z];
+    P.ctrl.step(IDLE());
+    P.php.pos = [P.ctrl.pos.x, P.ctrl.pos.y, P.ctrl.pos.z];
+    P.W.tick(STEP, pOld, P.php.pos);
+    if (fire41 === null && L[0].ai.rounds !== r41) { fire41 = n; shot = P.W.bullets.find(b => b.from === L[0]); idxAtShot = cur.i; }
+    if (hitAt === null && P.php.hp < 780) { hitAt = n; hpAt = P.php.hp; }
+  }
+  const gFire = recs.findIndex((r, i) => i > 10 && (r.e0_ai_ammo & 0xffff) < (recs[i - 1].e0_ai_ammo & 0xffff));
+  const gHit = recs.findIndex(r => r.p_hp < 780);
+  ok(gHit === 100 && recs[gHit].p_hp === 736 && recs[gHit - 1].p_hp === 780, `T: the first hit on Vincent at record ${gHit}, 780 -> ${recs[gHit].p_hp} (44)`);
+  const fp5 = h => { const b = Buffer.from(h, 'hex'); return [16, 20, 24].map(o => b.readFloatLE(o)); };
+  ok(shot && shot.start[0] === L[0].pos[0] && shot.start[2] === L[0].pos[2]
+     && fp5(recs[gFire].e0_face_pos).every((v, i) => Math.abs(v - L[0].pos[i]) < 1e-4),
+     `41's first shot leaves from the hand-off (${shot && shot.start.map(v => v.toFixed(2))}), where the game's 41 stands`);
+  // NOT reproduced (reported): the page's 41 fires one frame early (record 95 vs 96, worker 0204's gap); the twister
+  // differs by then (record 12: the page draws 3, the game 1; the game draws once at records 39, 45, 50, 54, 88, the page
+  // not), so the page's shot takes words 423-425, the game's 426-428; and this hooked run has no body poses (the shot
+  // starts at the eye, not the muzzle; Vincent's part test has no bones). With the game's words forced at the shot the
+  // hooked run still misses, so the hit can't be judged here.
+  console.log(`info: 41's first shot: page record ${fire41}, game ${gFire}; twister index at the page's shot ${idxAtShot} (game ${recs[gFire - 1].rng_idx} before its shot); first hit on Vincent: page ${hitAt === null ? 'none to record 110' : 'record ' + hitAt + ' (HP ' + hpAt + ')'}, game record ${gHit} (HP ${recs[gHit].p_hp})`);
 }
 done();

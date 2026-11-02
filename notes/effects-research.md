@@ -276,3 +276,17 @@ frame-buffer page glow, items { glow } handled by a layer with `glows()`, only T
 1 VU0 R per point; lines not drawn), 119 simulated (DRAWN_ELSEWHERE); LOOP_NOOP + 11 / 35; `rz` (round toward zero for the
 glow's last steps). EffectLayer.update routes `glow` items to `this.glows` (warned without one). Tools: calllog.py set
 w202lcg (+ VU0 R spans), fields.py TRACE_FXTITLE, title_fixture.py 'vall' / 'pool', dumpfx.py --glow.
+
+## FED models, draw order (worker 0206, 2026-11-02)
+See notes/gameover-research.md "Model renderer, types 11 / 20, draw order". effects.js: `T[11]`, `T[20].draw`, `drawModel`
+(FUN_002f5c50: kinds 2 / 4 / 6), `drawSlot` + the slot sort in `sprites()` (FUN_002e1ec8 / FUN_002e20f0), draw gets `t`
+(segT); EffectLayer: an untextured material (`material(null, alpha)`) and 3-vertex items. Review fix: drawModel draws only
+camera-1 (2D) emitters; gameplay (camera 0) type 11 / 20 models are warned and not drawn. T: the floor shot 0x45400 (E20 tag 2,
+model 4) against a new grab (`tools/trace/out/w206_floor`: grab_gs.py on w193_floor, dump f834-835, state f836; fx_fixture
+state1.json, dumpfx dump1.json): the page's 4 gouraud quads per impact (vertices fading to (0, 0, 0, 1)) vs the dump's 10
+triangles of TEX0 0x4007bd06613137c0, flat (128, 40, 17, 153) / (128, 42, 8, 64), 7-70 px apart: not the same draw (and some
+of those may be the muzzle flash E0's). Not decoded which part differs (colour path, the spawn frame, or whether E20's model
+draws at all at f834). The 52-82 triangles of that TEX0 in the w188 dumps are the muzzle flashes E0 / E8 (the page never
+spawns them; the reviewer matched E8 to w188 A / C, 68 / 68 triangles). fx_end 0x800 (r0000 E3) belongs to weapons 26 / 27,
+which no z128 record uses: not reachable on the page.
+

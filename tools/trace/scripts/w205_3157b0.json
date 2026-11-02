@@ -1,0 +1,1 @@
+{"name": "w205_3157b0", "frames": 120, "log_from": 0, "doc": "worker 0205: as w204_reload (worker 0201's scratch state saved at the stage reload after game over -> Restart, f3984), no input; with TRACE_CALLLOG=w205b (the opening event's end and hand-off). TRACE_FIELDSET=enemy TRACE_ERECS=41,42,43 TRACE_LOCK=1", "events": []}

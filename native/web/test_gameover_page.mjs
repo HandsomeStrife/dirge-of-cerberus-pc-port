@@ -72,7 +72,7 @@ try {
       const P = await pg.evaluate(() => {
         const { renderer, output, root, camera, gameOver: G } = window.__play, L = G.titleLayer, gl = renderer.getContext();
         const W = gl.drawingBufferWidth, H = gl.drawingBufferHeight;
-        const letters = L.last.filter(s => s.alpha === 0x44 && /:1$/.test(s.tex.k));
+        const letters = L.last.filter(s => s.alpha === 0x44 && s.tex && /:1$/.test(s.tex.k));   // (models: untextured items, worker 0206)
         const w = L.camera.matrixWorld.elements, V = camera.position.constructor;
         let x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9;
         for (const s of letters) for (const v of s.verts) {
@@ -120,7 +120,7 @@ try {
           // draw order (sortObjects = false: scene-graph order): every title sprite, then the glows (w198 g4)
           last: L.group.children[L.group.children.length - 1] === L.glowGroup && on.every(g => g.mesh.parent === L.glowGroup),
           // TEX1 0x61: the title's sprites sample bilinear
-          linear: L.pool.filter(m => m.visible && m.material && m.material.uniforms).every(m => m.material.uniforms.map.value.magFilter === 1006) };
+          linear: L.pool.filter(m => m.visible && m.material && m.material.uniforms?.map).every(m => m.material.uniforms.map.value.magFilter === 1006) };
       });
       ok(Q.glows === 8 && Q.on === 8 && Q.keep && Q.prev && Q.rt === 64, `the 8 letter glows draw through 64 x 64 pages from the previous frame (${Q.glows} glows, ${Q.on} drawn, keepFrame ${Q.keep}, prevFrame ${Q.prev}, page ${Q.rt})`);
       // the copy reads the right pixels (worker 0202 review): render once (output.js keeps this frame + its camera), rebuild
@@ -184,6 +184,34 @@ try {
       });
       ok(K, 'a render with keep: false (report.js captures) leaves the kept frame as it was');
       ok(C.n >= 100 && C.mean < 6, `the glow pages copy the kept frame at the screen pixels of their GS boxes, with the cameras moved in between (${C.n} page texels: mean |dRGB| ${C.mean?.toFixed?.(1)}, worst ${C.worst}${C.err ? '; ' + C.err : ''})`);
+      // worker 0206: the dim backdrop (type 11 tag 40: FED model 4, FUN_002f5c50 kind 4): two gouraud quads over the view,
+      // RGBA (24, 8, 8, 64) on the centre line to (0, 0, 0, 64) at the top / bottom, ALPHA 0x44 (w198 dumps g4 / g5). Render
+      // with and without its meshes: near the quads' bottom edge every pixel = the frame behind it / 2 + the vertex colour
+      // (<= 10 % of (24, 8, 8)) / 2, i.e. the frame is halved there, as the dump's blend
+      const B = await pg.evaluate(() => {
+        const { renderer, output, root, camera, gameOver: G } = window.__play, L = G.titleLayer, gl = renderer.getContext();
+        const W = gl.drawingBufferWidth, H = gl.drawingBufferHeight, V = camera.position.constructor;
+        const list = L.last.filter(s => !s.glow && !s.screen && !s.line), dim = list.map((s, i) => [s, L.pool[i]]).filter(([s]) => s.model === 4 && s.type === 11);
+        if (dim.length !== 2) return { n: dim.length };
+        let y0 = 1e9, y1 = -1e9, x0 = 1e9, x1 = -1e9;
+        for (const [, m] of dim) { const P = m.geometry.attributes.position.array; for (let j = 0; j < 4; j++) {
+          const q = new V(P[3 * j], P[3 * j + 1], P[3 * j + 2]).project(camera);
+          x0 = Math.min(x0, (q.x + 1) / 2 * W); x1 = Math.max(x1, (q.x + 1) / 2 * W); y0 = Math.min(y0, (q.y + 1) / 2 * H); y1 = Math.max(y1, (q.y + 1) / 2 * H); } }
+        // the bottom 8 % of the quads (readPixels rows count from the bottom), inside the canvas
+        const bx0 = Math.max(0, Math.ceil(x0) + 2), bx1 = Math.min(W, Math.floor(x1) - 2), by0 = Math.max(0, Math.ceil(y0) + 2), by1 = Math.min(H, Math.floor(y0 + 0.08 * (y1 - y0)));
+        if (bx1 <= bx0 || by1 <= by0) return { n: dim.length, empty: [x0, x1, y0, y1, W, H] };
+        const grab = () => { output.render(root, camera, null, { keep: false }); const b = new Uint8Array((bx1 - bx0) * (by1 - by0) * 4); gl.readPixels(bx0, by0, bx1 - bx0, by1 - by0, gl.RGBA, gl.UNSIGNED_BYTE, b); return b; };
+        const a = grab(); dim.forEach(([, m]) => { m.visible = false; }); const b = grab(); dim.forEach(([, m]) => { m.visible = true; });
+        let n = 0, good = 0, sa = 0, sb = 0;
+        for (let i = 0; i < a.length; i += 4) {
+          n++; sa += a[i] + a[i + 1] + a[i + 2]; sb += b[i] + b[i + 1] + b[i + 2];
+          const d = [0, 1, 2].map(c => a[i + c] - b[i + c] / 2);
+          if (d[0] >= -1.5 && d[0] <= 3.5 && d[1] >= -1.5 && d[1] <= 2 && d[2] >= -1.5 && d[2] <= 2) good++;
+        }
+        return { n: dim.length, px: n, good, ratio: sb ? sa / sb : 0, rgba: dim[0][0].verts.map(v => v.rgba.join(',')), alpha: dim[0][0].alpha };
+      });
+      ok(B.n === 2 && B.px > 1000 && B.good >= 0.95 * B.px && B.ratio > 0.45 && B.ratio < 0.6,
+        `the dim backdrop (type 11, model 4) halves the frame near its edge as the dump's blend (${B.good} / ${B.px} px = behind / 2 + colour / 2; brightness ${B.ratio?.toFixed?.(3)} of the frame without it; vertex RGBA ${B.rgba}, ALPHA 0x${B.alpha?.toString(16)})${B.empty ? ' empty ' + B.empty : ''}`);
       ok(Q.last && Q.linear, `the glows draw after every title sprite (their group last: ${Q.last}); the title's sprites sample bilinear (TEX1 0x61: ${Q.linear})`);
       ok(Q.nR > 0.02 * Q.area && Q.nGB === 0, `the glow adds red only (${Q.nR} of ${Q.area} px redder, ${Q.nGB} with green / blue changed; RGBA ${Q.rgba}, ALPHA ${(Q.alpha || []).map(a => '0x' + a.toString(16))})`);
     }
@@ -195,20 +223,21 @@ try {
       const cam = window.__play.camera, THREE_V = cam.position.constructor;
       const vis = L.pool.filter(m => m.visible);
       // the letters (tex1, ALPHA 0x44): their projected centre in NDC
-      const letters = L.last.filter(s => s.alpha === 0x44 && /:1$/.test(s.tex.k));
+      const letters = L.last.filter(s => s.alpha === 0x44 && s.tex && /:1$/.test(s.tex.k));
       const c = new THREE_V();
       for (const s of letters) for (const v of s.verts) {
         const [x, y, z] = [v.pos[0], -v.pos[1], -v.pos[2]], w = L.camera.matrixWorld.elements;
         c.add(new THREE_V(w[0] * x + w[4] * y + w[8] * z + w[12], w[1] * x + w[5] * y + w[9] * z + w[13], w[2] * x + w[6] * y + w[10] * z + w[14]));
       }
       c.multiplyScalar(1 / Math.max(1, 4 * letters.length)).project(cam);
-      return { titleAt: window.__titleAt, beginAt: window.__beginAt, n: L.last.filter(s => !s.glow).length, vis: vis.length, inRoot: L.group.parent === window.__play.root,
+      return { titleAt: window.__titleAt, beginAt: window.__beginAt, n: L.last.filter(s => !s.glow && s.model === undefined).length, models: L.last.filter(s => s.model !== undefined).length, vis: vis.length, inRoot: L.group.parent === window.__play.root,
         letters: letters.length, ndc: [c.x, c.y] };
     });
     ok(T !== null, 'the title is loaded (data/gameover_title.fed, gameover.json "title")');
     if (T) {
       ok(T.titleAt - T.beginAt === 14 * 20, `title spawned 14 game frames after the request (clock +${T.titleAt - T.beginAt} ms; 280 expected)`);
-      ok(T.n === 30 && T.vis === 30 && T.inRoot, `settled: 30 type-10 sprites drawn (${T.n} sprites, ${T.vis} meshes, in the scene)`);
+      // + worker 0206: the models of tags 61 (44 triangles) and 40 (2 quads), as the w198 dumps g4 / g5
+      ok(T.n === 30 && T.models === 46 && T.vis === 76 && T.inRoot, `settled: 30 type-10 sprites and 46 model primitives drawn (${T.n} sprites, ${T.models} model items, ${T.vis} meshes, in the scene)`);
       ok(T.letters === 8 && Math.abs(T.ndc[0]) < 0.1 && T.ndc[1] > 0 && T.ndc[1] < 0.2, `the 8 letters centred, a little above the middle (NDC ${T.ndc.map(x => x.toFixed(3))})`);
     }
     ok(await pg.evaluate(() => window.__play.gameOver.go.menu.focus.id === 3), 'Restart focused (layout 0x477c38)');

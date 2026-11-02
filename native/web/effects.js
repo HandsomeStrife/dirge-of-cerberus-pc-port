@@ -461,7 +461,30 @@ function buildMatrix(X, a) {
   if (!m) { X.p.noDraw = `rotation order ${order} (FUN_002d82d0 case ${order})`; return; }
   X.p.m50 = m;
 }
-T[14] = { init(X, a) { buildMatrix(X, a); }, trans() {}, eval(X, t, a) { buildMatrix(X, a); }, once() {} };
+// FUN_002740a0 (eval) ends with FUN_002e1ec8(P +0x3c, .., data +4, data +5, ..): the particle's draw entry (slot below)
+T[14] = { init(X, a) { buildMatrix(X, a); }, trans() {}, eval(X, t, a) { buildMatrix(X, a); X.p.slot = drawSlot(X, a); }, once() {} };
+// Draw buckets (worker 0206; notes/gameover-research.md "Draw order"): the frame loop's FUN_002e20f0(layer) walks the
+// lists DAT_004eb680[slot] in slot order (layer 4: 0x11a..0x121, 5: 0x12a..0x131), each in the order its entries were
+// appended. FUN_002e1ec8(node, ctx, cat, sub, pos): cat 0 = the emitter's slot +0x3c (FUN_002e7cd0: FUN_002e1d88(E +0xe,
+// E +0xf) while emitter +0x3e is 0) unless E +0xe is 3; cat 3 (and E +0xe 0 / 3) = FUN_002e1c90(2, ..): a depth bucket
+// from camera 0 (not translated: null); other cats: DAT_0046c9a8[DAT_0046ca08[cat]] + DAT_0046ca18[cat] + min(sub,
+// DAT_0046ca28[cat] - 1) (0 when that count is 0); FUN_002e1d88's fixed form adds sub unclamped; cat 9 there = -1.
+// T: w198 s3 / s4 RAM (P +0x3c node, u16 +10 slot; the lists at 0x4eb680): the title's cat 0 particles (E +0xe 5, +0xf 0)
+// in 0x11c, cat 5 sub 3 (the letters and their glows) in 0x11f, cat 7 (type 103) in 0x12c, each list in list order.
+const SLOT_BASE = [0, 1, 9, 265, 266, 274, 282, 290, 298, 306, 310, 311, 312];   // DAT_0046c9a8 (u16)
+const SLOT_GRP = [1, 1, 1, 2, 4, 6, 7, 8, 9, 12, 3, 5], SLOT_OFF = [0, 2, 7, 0, 2, 2, 0, 2, 2, -1, 0, 2];   // DAT_0046ca08 / 18
+const SLOT_N = [0, 4, 0, 0, 4, 4, 0, 4, 0, 0, 0, 4];                             // DAT_0046ca28
+function drawSlot(X, a) {
+  const F = X.F, cat = F.u8(a + 4), sub = F.u8(a + 5);
+  if (cat === 0) {
+    const c = F.u8(X.em.E + 0xe);
+    if (c === 0 || c === 3 || c >= 9) return null;                 // depth bucket / -1 / outside the tables
+    return SLOT_BASE[SLOT_GRP[c]] + SLOT_OFF[c] + F.u8(X.em.E + 0xf);
+  }
+  if (cat === 3 || cat >= 12) return null;
+  const n = SLOT_N[cat];
+  return SLOT_BASE[SLOT_GRP[cat]] + SLOT_OFF[cat] + (n ? Math.min(sub, n - 1) : 0);
+}
 // type 3 position, quadratic (worker 0198): FUN_00274558 init (asm: rows +0 / +0x10 / +0x20 -> value +0x10 /
 // +0x20 / +0x30, out = base; the spawn parameter mgr +0xb4 is 0 on these paths), FUN_002745f0 -> FUN_002ecf18
 // transition, FUN_00274680 eval (byte-identical to type 17's FUN_00272348)
@@ -523,8 +546,8 @@ T[10] = {
 // is continuous, then (particle flag 2 clear, data +0x4a) adds six LCG draws (FUN_002d98c8) of the ranges +0x28..
 // +0x3c to +8..+0x1c. T: w202_lcg call log (TRACE_CALLLOG=w202lcg): 6 draws at 0x27b270..0x27b2d4 per type 20
 // particle, page frames 894 (tag 61) and 904 (tags 58, 59) = log frames 896 / 906.
-// The draw FUN_0027b300 -> FUN_002f2f08 (flag 0x2100 -> FUN_002f93d8, the 35 KB model renderer) is not decoded:
-// simulated, not drawn (warned).
+// The draw FUN_0027b300 -> FUN_002f2f08 -> FUN_002f5c50 (the model renderer; worker 0206, drawModel below): flag
+// 0x2000 (-> FUN_002f93d8) only when data +0x45 != 0 (0x27b55c asm), 0 in the title FED.
 T[20] = {
   init(X, a, o) {                                              // FUN_0027b0f8
     const F = X.F, v = X.p.v;
@@ -562,8 +585,119 @@ T[20] = {
     if (v[o + 2] < 0 || v[o + 2] >= 4096) v[o + 2] = wrap(v[o + 2]);
     if (v[o + 3] < 0 || v[o + 3] >= 4096) v[o + 3] = wrap(v[o + 3]);
   },
-  draw(X) { X.warn('effects: draw type 20 (FUN_0027b300 -> FUN_002f2f08: the FED model renderer FUN_002f93d8) not translated: not drawn'); },
+  // FUN_0027b300 (t = the particle's age - its draw entry's start, FUN_002eadc0): the UV offset (16.16 texels,
+  // cvt.w.s truncates) = (acc t^2 / 2 + rate t + base) x 65536 of the value's +8 / +0xc pairs
+  draw(X, a, o, view, out, tex, proj, t) {
+    const F = X.F, v = X.p.v, h = f(f(t * t) * 0.5);
+    if (F.u8(a + 0x45)) { X.warn('effects: type 20 data +0x45 (flag 0x2000 -> FUN_002f93d8) not translated: not drawn'); return; }
+    if (F.u8(a + 0x48)) { X.warn('effects: type 20 data +0x48 (depth matrix FUN_002e3948 -> model +0x44 pass) not translated: not drawn'); return; }
+    const uv = [Math.trunc(f(f(f(f(v[o + 6] * h) + f(v[o + 4] * t)) + v[o + 2]) * 65536)) | 0,
+      Math.trunc(f(f(f(f(v[o + 7] * h) + f(v[o + 5] * t)) + v[o + 3]) * 65536)) | 0];
+    drawModel(X, F.s32(a + 0xc), 4, uv, view, out, tex, proj);
+  },
 };
+// Type 11 (vtable 0x49a898: init 0x27a160 returns 1, transition 0x27a168 jr ra, eval / destroy / loop the shared
+// no-ops 0x2d5728 / 0x2d5738 / 0x2d5740): a FED model, no UV offset. Data: +0xc model index, +0x10 depth offset,
+// +0x15 (flag 0x2000), +0x18 / +0x19 depth matrix. Draw FUN_0027a170 -> FUN_002f2f08 -> FUN_002f5c50 (drawModel).
+T[11] = {
+  init() {}, trans() {},
+  draw(X, a, o, view, out, tex, proj) {
+    const F = X.F;
+    if (F.u8(a + 0x15)) { X.warn('effects: type 11 data +0x15 (flag 0x2000 -> FUN_002f93d8) not translated: not drawn'); return; }
+    if (F.u8(a + 0x18)) { X.warn('effects: type 11 data +0x18 (depth matrix FUN_002e3948 -> model +0x44 pass) not translated: not drawn'); return; }
+    drawModel(X, F.s32(a + 0xc), 2, [0, 0], view, out, tex, proj);
+  },
+};
+// The FED model renderer FUN_002f5c50 (worker 0206; EE + VU0 macro code, read from the recompiled func_002f5c50 in
+// port/recomp/generated_all/eetu_0010.c; notes/gameover-research.md "Model renderer"). The caller (FUN_0027a170 /
+// FUN_0027b300) fills the scratchpad block 0x70003c00: flags (type 11: 2, type 20: 4; | 0x10 when model +0 bit 1 is
+// clear; | 8 when bit 0 is clear; | 0x100), +0x10 / +0x14 the UV offset, +0x18 the colour (ref 0 x emitter colour,
+// clamped, truncated: as type 10), +0x1c the added colour (0), +0x20 the FUN_002e3498(model +0x18, ..) matrix.
+// Model (FED +0x6c table, entries relative to the table): +0 flags, +4 commands, +8 vertices (s16 x, y, z; count
+// u16 +0x12), +0x16 / +0x17 GS ALPHA / FIX (FUN_002f2bc8), +0x18 scale. Each vertex: M (x, y, z, 1) (VMULA / VMADDA
+// in row order; w = 1 from the VMOVE of vf0), Q = 1 / w; w <= 0 (MAC Zw | Sw) stores (0, 0, 0, 1), else (x Q, y Q,
+// z Q, Q). Commands (16-byte header: byte +1 kind, s16 +2 count; jump table 0x49f920; kind 0xff ends): 2 textured
+// triangles (TEX0 at header +8; record: 3 RGBA, 3 u16 vertex indices at +0xc, 3 s16 UV pairs at +0x14; 32 bytes),
+// 4 untextured quads (4 RGBA, 4 indices at +0x10; 24 bytes), 6 textured quads (as 4 + 4 UV pairs at +0x18; 40
+// bytes). The quads are strips (ADC on the first two XYZF2). Per primitive: back-face cull with flag 0x10 (VOPMSUB z
+// of (v0 - v1) x (v2 - v1), VFTOI4 >= 0 culled); the clip of the screen box against DAT_0046d470 (2048, 2048, 2^23,
+// 2^23) / 480 (w 256) / 490 (w 1536): CLIP mask 0x28514a (wholly outside +-256 or any corner past +-1536) and 0x810
+// (z wholly outside 2^23 +- 2^23); colour = RGBA bytes x colour / 128 + added, VMINI 255, VMAX (0, 0, 0, 1),
+// VFTOI0; ST = ((u, v) + offset) / 4096 (VITOF12) x Q, offset = ((uv off % (W << 16)) >> 4) / W (TEX0 TW / TH,
+// table DAT_0046dbc0). Fog: PRIM FGE is set, but the vertices go as packed XYZ2 (GIF reg 5), so the GS takes F from the
+// FOG register, which FUN_002f2d90 writes per model (flag 0x100: emitter +0xc8 / +0xcc x the depth of 0x4ee780 through
+// the matrix, clamped to bytes +0xd5 / +0xd4; else 255). Every FOG write in the w198 dumps g3 / g4 is 255 (no fog), so
+// the page draws without fog (FUN_002f2d90's value is not computed: open for gameplay emitters).
+const MDL = { cx: 2048, cy: 2048, cz: 8388608, zw: 8388608, box: 256, band: 1536 };   // DAT_0046d470 / 480 / 490
+const MDL_REC = { 2: 32, 4: 24, 6: 40 };
+function drawModel(X, mi, kind, uvo, view, out, tex, proj) {
+  const F = X.F, p = X.p, em = X.em, d = X.d, tbl = F.u32(0x6c);
+  if (mi < 0 || !tbl) return;
+  // Only the 2D camera's emitters (the GAME OVER title, checked against the w198 dumps). The gameplay floor shot
+  // (0x45400, w206_floor dump f834) does not match: the page's 4 gouraud quads per impact vs the dump's flat
+  // (128, 40, 17, 153) triangles of that TEX0, 7-70 px apart (notes/gameover-research.md, fidelity-audit row).
+  if (em.cat !== 1) { X.warn('effects: type 11 / 20 models of camera-0 emitters (FUN_002f5c50) do not match the game yet (w206_floor): not drawn'); return; }
+  const m = tbl + F.u32(tbl + 4 * mi);
+  const mf = F.u32(m);
+  const flags = kind | ((mf & 2) ? 0 : 0x10) | ((mf & 1) ? 0 : 8);
+  if (flags & 8) { X.warn('effects: model flag 8 (TEST from DAT_004ec480) not translated: not drawn'); return; }
+  if (mf & 0x400) { X.warn('effects: model flag 0x400 (float vertices, FUN_002f5c50) not translated: not drawn'); return; }
+  // FUN_002e3498(model +0x18, .., the type 14 bytes): the main matrix (as type 10's; no flip)
+  const m14 = p.data[D.ref(F, d, 1)];
+  const C = viewMatrix(X, p.m50, F.u8(m14 + 1), view, F.f32(m + 0x18), null);
+  if (!C) return;
+  const colSlot = D.refSlot(F, d, 0) / 4;
+  const col = [0, 1, 2, 3].map(i => f(Math.trunc(Math.min(255, Math.max(0, f(p.v[colSlot + i] * em.col[i])))) * f(1 / 128)));
+  const add = [0, 0, 0, 0];                                         // 0x70003c1c = 0 (both callers)
+  // the vertices (the s16 path, flags & 0x400 clear)
+  const vb = m + F.u32(m + 8), n = F.u16(m + 0x12), V = [];
+  for (let i = 0; i < n; i++) {
+    const x = F.s16(vb + 6 * i), y = F.s16(vb + 6 * i + 2), z = F.s16(vb + 6 * i + 4);
+    const pv = [0, 1, 2].map(j => f(f(f(f(x * C[j]) + f(y * C[4 + j])) + f(z * C[8 + j])) + C[12 + j]));
+    if (!(pv[2] > 0)) { V.push({ s: [0, 0, 0], q: 1, pv: null }); continue; }   // the game's w = the view z
+    const q = f(1 / pv[2]);
+    V.push({ s: [f(f(proj.fx * pv[0] / pv[2]) + proj.cx), f(f(proj.fy * pv[1] / pv[2]) + proj.cy), f(proj.zA / pv[2] + proj.zB)], q, pv });
+  }
+  const alpha = F.u8(m + 0x16);
+  for (let c = m + F.u32(m + 4); ; ) {
+    const k = (F.u8(c + 1) << 24) >> 24, cnt = F.s16(c + 2);   // lb: signed
+    if (k < 0) break;                                               // 0xff: the end (default case 0x2f91b8)
+    const sz = MDL_REC[k];
+    if (!sz) { X.warn(`effects: model command ${k} (FUN_002f5c50) not translated: not drawn`); return; }
+    const tx = k !== 4, nv = k === 2 ? 3 : 4;
+    let t = null, uoff = 0, voff = 0;
+    if (tx) {                                                       // TEX0 = header +8 (+ 0x70003c0c TBP / CBP: 0)
+      const lo = F.u32(c + 8), hi = F.u32(c + 12);
+      const W = 1 << ((lo >>> 26) & 15), H = 1 << (((lo >>> 30) | (hi << 2)) & 15);
+      uoff = Math.trunc(((uvo[0] % (W * 65536)) >> 4) / W); voff = Math.trunc(((uvo[1] % (H * 65536)) >> 4) / H);
+      t = tex.get(`${hi.toString(16)}:${lo.toString(16)}`);
+      if (!t) { X.warn(`effects: model TEX0 ${hi.toString(16)}${lo.toString(16).padStart(8, '0')} not in the FED's textures: not drawn`); c += 16 + cnt * sz; continue; }
+    }
+    const ix = k === 2 ? 0xc : 0x10, uvAt = k === 2 ? 0x14 : 0x18;
+    for (let r = c + 16, e = 0; e < cnt; e++, r += sz) {
+      const vs = [0, 1, 2, 3].slice(0, nv).map(j => V[F.u16(r + ix + 2 * j)]);
+      if (flags & 0x10) {                                           // VOPMULA / VOPMSUB z of (v0 - v1) x (v2 - v1), VFTOI4
+        const ax = f(vs[0].s[0] - vs[1].s[0]), ay = f(vs[0].s[1] - vs[1].s[1]);
+        const bx = f(vs[2].s[0] - vs[1].s[0]), by = f(vs[2].s[1] - vs[1].s[1]);
+        if (Math.trunc(f(f(f(ax * by) - f(bx * ay)) * 16)) >= 0) continue;
+      }
+      const rel = vs.map(u => [f(u.s[0] - MDL.cx), f(u.s[1] - MDL.cy), f(u.s[2] - MDL.cz)]);
+      const mx = [0, 1, 2].map(j => Math.max(...rel.map(u => u[j]))), mn = [0, 1, 2].map(j => Math.min(...rel.map(u => u[j])));
+      if (mn[0] < -MDL.band || mn[1] < -MDL.band || mx[0] > MDL.band || mx[1] > MDL.band) continue;   // CLIP 0x28514a
+      if (mn[0] > MDL.box || mn[1] > MDL.box || mx[0] < -MDL.box || mx[1] < -MDL.box) continue;
+      if (mn[2] > MDL.zw || mx[2] < -MDL.zw) continue;                                               // CLIP 0x810
+      const verts = vs.map((u, j) => {
+        const w = F.u32(r + 4 * j);
+        const rgba = [0, 1, 2, 3].map(i => Math.trunc(Math.max(i === 3 ? 1 : 0, Math.min(255, f(f(((w >>> (8 * i)) & 0xff) * col[i]) + add[i])))));
+        const uv = tx ? [f((F.s16(r + uvAt + 4 * j) + uoff) / 4096), f((F.s16(r + uvAt + 4 * j + 2) + voff) / 4096)] : [0, 0];
+        // GS X / Y (VFTOI4: 1/16 px, toward zero), Z (VFTOI0); pos = the view-space point (the page camera)
+        return { pos: u.pv, uv, rgba, gs: [Math.trunc(u.s[0] * 16) / 16, Math.trunc(u.s[1] * 16) / 16, Math.trunc(u.s[2])] };
+      });
+      out.push({ verts, tex: t, untextured: !tx, alpha, emitter: em.ei, id: em.id, type: D.type(F, d), tag: p.tag, model: mi });
+    }
+    c += 16 + cnt * sz;
+  }
+}
 // Type 35: the glow of a sprite through a frame-buffer page. Data: +0 anim (FED +0x70), +4 speed, +8 scale % (the
 // repeat's growth), +0xc depth offset, bytes +0x10 page size index (DAT_0046c230 / 238 / 240 / 248), +0x11 frame
 // buffer (FUN_002ef560(mgr, +0x11 != 0, 1)), +0x12 GS ALPHA index (DAT_0046c250), +0x13 repeats, +0x14 depth matrix.
@@ -1086,7 +1220,7 @@ function drawSparks(X, a, o, view, out, proj) {               // FUN_0027da78
 // 72 tris a particle: w198 g2 / g3, TEX0 the displayed frame 0xe00) is not decoded. MEASURED (w202_lcg): its own
 // channel draws no LCG / VU0 R value in 0x270000..0x2e0000, so the particle is simulated without it (its type 24
 // channel draws 1 LCG value at spawn: log 0x275684 at page frames 911..940 + 2).
-const DRAWN_ELSEWHERE = { 11: 'FUN_0027a170', 100: 'FUN_002cb3f0', 119: 'FUN_002b4f70' };
+const DRAWN_ELSEWHERE = { 100: 'FUN_002cb3f0', 119: 'FUN_002b4f70' };   // 11: T[11] (worker 0206)
 
 // ---------------------------------------------------------------------------------------------
 // The engine. One manager (DAT_004ee2e0, the FED 0x40000 is linked into it).
@@ -1189,7 +1323,7 @@ export function createEffects({ fed, fed0 = null, core, warn = console.warn, twi
       const d = F.desc(P, idx), ty = D.type(F, d);
       p.data[idx] = a;
       const ev = T[ty];
-      // an untranslated draw type (11 / 100) leaves the particle simulated, so its other channels draw the RNGs
+      // an untranslated draw type (100 / 119; 11 until worker 0206) leaves the particle simulated, so its other channels draw the RNGs
       // as in the game (worker 0188 review: tag 5's type 23 / 24 transitions are 6 LCG draws before tag 3's type 21
       // eval), but not drawn; an untranslated channel type still skips the particle. Type 11's init / transition
       // (0x27a160 / 0x27a168) are jr ra. CORRECTION (worker 0200, MEASURED w200_lcg): type 100's eval 0x2cb3b8 ->
@@ -1414,12 +1548,18 @@ export function createEffects({ fed, fed0 = null, core, warn = console.warn, twi
 
   // The draw pass: FUN_002eadc0 runs each particle's draw list (+0x3c, slot +0x24).
   function sprites(view) {
-    const out = [];
+    const out = [], order = [];
     for (const em of emitters) {
       if (em.age < 0) continue;
-      F = em.F;
-      if (em.noDraw) { warnOnce(`effects: emitter ${em.ei} with ${em.noDraw} not translated: not drawn`); continue; }
-      for (const L of em.lists) for (const p of L) {
+      if (em.noDraw) { F = em.F; warnOnce(`effects: emitter ${em.ei} with ${em.noDraw} not translated: not drawn`); continue; }
+      for (const L of em.lists) for (const p of L) order.push([em, p]);
+    }
+    // the draw buckets (drawSlot, worker 0206): slot order, append (eval) order within a slot. GUESS: when a drawn
+    // particle has no decoded slot (a depth bucket, FUN_002e1c90), the pass keeps the spawn order (as before)
+    if (order.every(([, p]) => p.skip || p.noDraw || typeof p.slot === 'number')) order.sort((x, y) => (x[1].slot ?? 0) - (y[1].slot ?? 0));
+    {
+      for (const [em, p] of order) {
+        F = em.F;
         if (p.skip) continue;
         if (p.noDraw) { warnOnce(`effects: particle with ${p.noDraw} not translated (emitter ${em.ei}): not drawn`); continue; }
         const P = p.P, Ld = F.list(P, 3);
@@ -1428,7 +1568,8 @@ export function createEffects({ fed, fed0 = null, core, warn = console.warn, twi
         const [V, Pj] = em.cat === 1 ? [CAM2D_VIEW, cam2dProj(em.p40 ?? [0, 0])] : [view, proj];
         for (let j = 0; j < F.u8(P + 0x23); j++) {
           const idx = F.u16(Ld + 2 * j), d = F.desc(P, idx), h = T[D.type(F, d)];
-          if (h && h.draw) h.draw(ctx(em, p, d), p.data[idx], D.slot(F, d) / 4, V, out, tex, Pj);
+          // FUN_002eadc0: the draw gets t = age - the draw entry's start (as the evals' segT; type 20's UV offset)
+          if (h && h.draw) h.draw(ctx(em, p, d), p.data[idx], D.slot(F, d) / 4, V, out, tex, Pj, segT(p, idx));
           else if (!h) warnOnce(`effects: draw type ${D.type(F, d)} not translated: not drawn`);
         }
       }
@@ -1730,7 +1871,7 @@ export class EffectLayer {
     return g;
   }
   material(t, alpha) {
-    const THREE = this.THREE, key = `${t.k}:${alpha}`;
+    const THREE = this.THREE, key = `${t ? t.k : 'none'}:${alpha}`;   // t null: an untextured model primitive (worker 0206)
     this.mats ??= new Map();
     let m = this.mats.get(key);
     if (m !== undefined) return m;
@@ -1741,7 +1882,14 @@ export class EffectLayer {
     else if (A === 0 && B === 2 && Cc === 0 && Dd === 1) blend = [THREE.SrcAlphaFactor, THREE.OneFactor, THREE.AddEquation];
     else if (A === 2 && B === 0 && Cc === 0 && Dd === 1) blend = [THREE.SrcAlphaFactor, THREE.OneFactor, THREE.ReverseSubtractEquation];
     else { this.fx.warn(`effects: GS ALPHA 0x${alpha.toString(16)} not translated: not drawn`); this.mats.set(key, null); return null; }
-    m = new THREE.ShaderMaterial({
+    // untextured (TME 0, gouraud): the vertex colour as is, alpha 0x80 = 1.0
+    if (!t) m = new THREE.ShaderMaterial({
+      vertexShader: 'attribute vec4 rgba; varying vec4 vC; void main() { vC = rgba; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+      fragmentShader: 'varying vec4 vC; void main() { if (vC.a <= 0.0) discard; gl_FragColor = vec4(vC.rgb / 255.0, vC.a / 128.0); }',
+      transparent: true, depthWrite: false, depthTest: true, side: THREE.DoubleSide,
+      blending: THREE.CustomBlending, blendEquation: blend[2], blendSrc: blend[0], blendDst: blend[1],
+    });
+    else m = new THREE.ShaderMaterial({
       uniforms: { map: { value: this.texture(t) } },
       vertexShader: 'attribute vec4 rgba; varying vec4 vC; varying vec2 vUv; void main() { vC = rgba; vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
       // texels and vertex colour in GS units (0..255, alpha 0..128 = 1.0): modulate, clamp, alpha test
@@ -1804,6 +1952,7 @@ export class EffectLayer {
         U[2 * j] = vx.uv[0]; U[2 * j + 1] = vx.uv[1];
         for (let k = 0; k < 4; k++) C[4 * j + k] = vx.rgba[k];
       });
+      g.setDrawRange(0, s.verts.length === 3 ? 3 : 6);                 // a model triangle (worker 0206) or a strip of 4
       g.attributes.position.needsUpdate = g.attributes.uv.needsUpdate = g.attributes.rgba.needsUpdate = true;
       const mat = this.material(s.tex, s.alpha);
       if (!mat) { mesh.visible = false; return; }

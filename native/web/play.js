@@ -1069,10 +1069,13 @@ async function main() {
     if (window.__play) window.__play.enemyAI = enemyAI;
     return enemyAI;
   };
+  // the opening event's hand-off (export_web_checkpoint.py; checkpoint.js handOff, worker 0205): fetched now, used at a Restart
+  let handoff = null;
+  fetch('data/checkpoint.json').then(r => r.ok ? r.json() : null).then(j => { handoff = j; }).catch(() => {});
   const restart = () => {
     restarts++;
     restoreCheckpoint({ ctrl, groundY: (x, z, y) => col.groundY(x, z, y), follow, php, gameOver, weapon, cape, fx,
-                        hud: gameHud, sfx, rebuildEnemies, music: () => { if (musicRestart) musicRestart(); } });
+                        hud: gameHud, sfx, rebuildEnemies, handoff, music: () => { if (musicRestart) musicRestart(); } });
     detached = null; pressed.clear(); mouse.dx = mouse.dy = 0;
   };
 

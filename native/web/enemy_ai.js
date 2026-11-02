@@ -3723,6 +3723,28 @@ export function createEnemyAI(opts) {
       bodyUpdate(a, step);
       trackMoved(a);
     }
+    // 3b. the opening event's hand-off (worker 0205, checkpoint.js handOff): a body whose battle clip ends this frame
+    // (FUN_00343de8: C+0x564 bit 0x10000000, FUN_00346150() == 0) -> FUN_00344d68: C+0x564 &= ~0x18000000,
+    // FUN_003157b0(status, 1), FUN_00558cc0 (the actor at the status matrix: +0x30 position, +0x40 facing).
+    // T: after step 3's turn (record 24 holds the hand-off facing, the turn shows from record 25). Not translated: FUN_00558cc0's
+    // vt+0x234 / FUN_00356d98 / FUN_00340e08 body sync and FUN_005476d0(mgr, 1, a) (T w204_reload: they stay at
+    // the hand-off, y -141.45, to record 270).
+    // GUESS: a fixed frame (h.frame, checkpoint.js SOLDIER_RELEASE) stands in for the whole clip-end condition. Not
+    // translated: FUN_00344d68's status +0x60 bit 0x20000 branch (no FUN_003157b0) and its param_2 != 0 path (from
+    // FUN_00558bb8, the deactivation). In the game a new motion request (a hit reaction, FUN_00344bd0 / FUN_003449a0)
+    // ends the battle clip early and places the actor at that frame's pose, which the page doesn't have: a soldier hit
+    // (HP changed) or dead before its hand-off is skipped (warned).
+    for (let i = 0; i < handOffs.length;) {
+      const h = handOffs[i];
+      if (h.frame !== S.frame) { i++; continue; }
+      handOffs.splice(i, 1);
+      const a = actors.find(x => x.rec === h.rec);
+      if (!a) continue;
+      if (dead(a) || (h.hp != null && a.hp !== h.hp)) { warnOnce(`enemy_ai: record ${h.rec} hit before its hand-off: the game places it at that frame's battle-clip pose (not on the page); left in place`); continue; }
+      // C+0x564 &= ~0x18000000 (FUN_00344d68): kept for the record; the page never sets these bits (dead here)
+      a.C.f564 = (a.C.f564 & ~0x18000000) >>> 0;
+      a.pos = h.pos.slice(); a.face = h.face.slice();
+    }
     // 4. messages posted last frame -> event 2 of the receiver (r0 = n, r2 = sender)
     const mail = mailbox.splice(0);
     for (const m of mail) { const o = objects.get(m.to); if (o) runEvent(o, 2, [m.n, 0, m.from, 0]); }
@@ -3762,9 +3784,8 @@ export function createEnemyAI(opts) {
   //   body's mover off: a new body's mover is 0 already), +0x154 = 0, +0x118 &= ~0x40000, +0x150 bits 44-47 = 0.
   // T: w204_reload (from 0201's reload state): 41-43 active at record 10 (Vincent's placement frame), actor state 3,
   // HP 10 / 28 / 24, timer 1 = 80 / 0 / 150, 42 brain mode 1; 41 mode 2 at record 90.
-  // MISSING (warned): at record 24 the game moves all three (FUN_00558cc0 from FUN_00558f68 again) to their status
-  // matrices, rewritten from the opening cutscene's actor models (FUN_003157b0: the event actor's root transform +
-  // bone offset); without the cutscene runtime the page keeps them at their placements.
+  // At record 24 the game moves all three to the opening event's hand-off (worker 0205: FUN_00344d68 -> FUN_003157b0 ->
+  // FUN_00558cc0 at their battle clips' end): checkpoint.js schedules it (scheduleHandOff, applied in tick step 3b).
   function stageLoad(recs) {
     const order = [...new Set(recs)].sort((x, y) => x - y);                    // slot order (record + 22)
     // Only the loaded statuses get here: FUN_005453b0 calls vt+0x36c for an object with +0x28 bit 0x40 or status +0x60
@@ -3788,7 +3809,15 @@ export function createEnemyAI(opts) {
       if (a.C.mover !== 0) warnOnce(`enemy_ai: stage-load pass on record ${k} with a moving body (FUN_0034edf0(C, 0) -> FUN_00352a60) not translated`);
       a.f118 = (a.f118 & ~0x40000) >>> 0;
     }
-    if (order.length) warnOnce('enemy_ai: stage-load actors stay at their placements (the opening cutscene\'s hand-off, FUN_003157b0 at record 24, is not translated)');
+  }
+
+  // the opening event's hand-off (checkpoint.js): [{ rec, frame (S.frame of the tick it happens in), pos, face }]
+  const handOffs = [];
+  function scheduleHandOff(list) {
+    for (const h of list) {
+      const a = actors.find(x => x.rec === h.rec);
+      handOffs.push({ rec: h.rec, frame: h.frame, pos: h.pos.slice(), face: h.face.slice(), hp: a ? a.hp : null });
+    }
   }
 
   // FUN_0053e868: for each listed object (head first; an entry appended meanwhile is reached too): each running timer
@@ -3836,7 +3865,7 @@ export function createEnemyAI(opts) {
   // boneWorld: (actor) => (bone) => world rows of that bone (the MP's last posed skeleton), set by the
   // page (enemies.js partPose) or a test; the part test needs it. playerShot(muzzle, aim, W): Vincent
   // fired, now; queueShot: the same at this frame's player slot inside the next tick (the page).
-  const world = { S, actors, triggers, bullets, attackObjs, objects, addActor, tick, runEvent, recById, events, activated, setActive, stageLoad,
+  const world = { S, actors, triggers, bullets, attackObjs, objects, addActor, tick, runEvent, recById, events, activated, setActive, stageLoad, scheduleHandOff, handOffs,
                   timerList,                              // script-timer list (FUN_0053e6e8; tests)
                   playerShot, queueShot, lockTargets, pushOut, boneWorld: opts.boneWorld || null,
                   eventFlags: EVFLAGS,                    // the world's event flags (FUN_003ff738; tests: checkpoint.js)
