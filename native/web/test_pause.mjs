@@ -6,6 +6,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import crypto from 'crypto';
 import { loadPauseData, PauseScreen, PauseFlow, gsX, gsY, scissor, measureText } from './pause.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -17,12 +18,15 @@ let fails = 0, checks = 0;
 function ok(cond, msg) { checks++; if (!cond) { fails++; console.log('FAIL', msg); } }
 const eq = (a, b, msg) => ok(JSON.stringify(a) === JSON.stringify(b), `${msg}: ${JSON.stringify(a)} vs ${JSON.stringify(b)}`);
 const text = b => String.fromCharCode(...[...b.subarray(2)].map(c => c + 0x1d));   // '$&' glyph codes
+// a long message by its shape (length, control bytes [index, byte], sha256 prefix): the repo is public, so no game text
+const shape = b => ({ len: b.length, ctrl: [...b].flatMap((c, i) => c < 0x20 || c >= 0x80 ? [[i, c]] : []),
+    sha: crypto.createHash('sha256').update(b).digest('hex').slice(0, 16) });
 
 // ---- strings (kelstr.bin, FUN_003fd370 / FUN_003fd578)
 eq(text(D.msg[0x5c01]), 'Restart', 'message 0x5c01');
 eq(text(D.msg[0x5c00]), 'Tempsave', 'message 0x5c00');
 eq(text(D.msg[0x5c02]), 'Quit', 'message 0x5c02');
-eq(String.fromCharCode(...D.msg[0x5c06]), 'Return to the most recent checkpoint?', 'message 0x5c06');
+eq(shape(D.msg[0x5c06]), { len: 37, ctrl: [], sha: 'de4fefef6b81f97d' }, 'message 0x5c06 (the restart question)');
 
 // ---- the widget tree (RAM at the pause: root +0x24 list order, rects)
 const s = new PauseScreen(D, { now: 0 });
@@ -153,7 +157,7 @@ eq(g.input(3, 210), { moved: 4 }, 'flow: down');
 eq(g.input(0, 220), { box: 4, id: 0x27 }, 'flow: ✕ on Tempsave opens its box');
 
 // ---- the confirm box (worker 0189): FUN_003c0220 -> 0x477a10 -> FUN_003b65c0 / FUN_003b7f38
-eq(String.fromCharCode(...D.msg[0x5c08]), 'Create tempsave data and\nreturn to the title screen?', 'message 0x5c08');
+eq(shape(D.msg[0x5c08]), { len: 52, ctrl: [[24, 10]], sha: '3c41eda9292ba8c2' }, 'message 0x5c08 (the quit question, two lines)');
 eq(text(D.msg[0x3800]), 'OK', 'message 0x3800');
 eq(text(D.msg[0x3801]), 'CANCEL', 'message 0x3801');
 const bf = new PauseFlow(D); bf.start(0); bf.frame(200);

@@ -17,7 +17,7 @@
 //     script class KerberosIntermissionCalc's static calc(), run to its end in the caller's VM; here a second EventVM
 //     with the stage VM's classes and natives), endSection FUN_003a26a8.
 //   The counters during play (enemy_ai.js hooks; T: w232 call log): 0 kills (Vincent's vt+0x31c FUN_005726e0 from
-//     FUN_0055db50 / FUN_0055e498), 1 shots (FUN_00577480), 2 hits / 3 critical hits (FUN_00554ea8), 8 damage taken
+//     FUN_0055db50 / FUN_0055e498), 1 shots (FUN_00577480), 2 hits / 3 criticals (FUN_00554ea8), 8 damage taken
 //     (FUN_0055c7f8), 9 KOs (FUN_00242938), 52 kill chains (FUN_005694a0: not on the page, see below).
 //   The Status box: displayStageInfo(2) -> FUN_003fdb48(2) (FUN_003fdb00) -> FUN_003fdf00 -> box kind DAT_004a8250[2]
 //     = 0x1d: FUN_003c5358, FUN_003c54f8 (stats -> +0xff0; the row packing; FUN_003e2730 copies), FUN_003c6d70 (rank

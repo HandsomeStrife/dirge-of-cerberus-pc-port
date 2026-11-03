@@ -85,8 +85,8 @@ try {
   const rows = await pg.evaluate(() => window.__play.results.box.texts());
   const byId = Object.fromEntries(rows.map(t => [t.id, t.text]));
   ok(rows.length >= 18, `the rows are up: ${rows.length} texts`);
-  ok(byId[0x13] === '3', `Targets Destroyed value (widget 0x13) = ${byId[0x13]} (3)`);
-  ok(byId[0x1a] === '100%', `Accuracy value (widget 0x1a) = ${JSON.stringify(byId[0x1a])} (pct(3, 3) = 100, "%3d%%")`);
+  ok(byId[0x13] === '3', `row 0 value (widget 0x13, stat 0) = ${byId[0x13]} (3)`);
+  ok(byId[0x1a] === '100%', `row 1 value (widget 0x1a, stat 10) = ${JSON.stringify(byId[0x1a])} (pct(3, 3) = 100, "%3d%%")`);
   ok(byId[0x8] && byId[0x7] && byId[0x7] !== byId[0x8], 'a label and the section name are drawn (text from the user\'s disc)');
   const prims = await pg.evaluate(() => (window.__play.stageInfo.draw() || []).length);
   ok(prims > 50, `the Status screen draws ${prims} primitives`);

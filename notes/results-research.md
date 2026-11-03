@@ -48,15 +48,15 @@ Section start FUN_0031db30 (via FUN_003fdaa0 when stat 14 changed): clears all b
 Save (sea-of-flames.p2s): block 0xa09b00, start 11, play 53 s, stats {0: 3, 1: 3, 2: 3, 7: 9, 14: 1, 52: 2}, PTR 1.
 
 ## The counters (T: w232 call log, TRACE_CALLLOG=results over w217_r02_barrier from r02_walkway)
-| stat | row | where | page |
+| stat | row (label message, layout 0x4791d0) | where | page |
 |---|---|---|---|
-| 0 | Targets destroyed | Vincent's vt+0x31c FUN_005726e0 (from FUN_0055db50 / FUN_0055e498 when the victim is dead after the HP update) | enemy_ai playerKill |
+| 0 | row 0 (0xb82a) | Vincent's vt+0x31c FUN_005726e0 (from FUN_0055db50 / FUN_0055e498 when the victim is dead after the HP update) | enemy_ai playerKill |
 | 1 | (shots) | FUN_00577480, once a trigger pull with bullets made (f190) | playerShot |
-| 2 / 3 | (hits) / Critical hits | FUN_00554ea8 (bullet +0x120 bit 2, an object hit +0x14c != -1; hit nibble +0x140 bits 7-10 == 0; 3 with +0x120 0x40000 = zone flag 8) (f195, f301) | playerBulletStats |
-| 8 | Damage sustained | FUN_0055c7f8 (P+0x28 bit 2), after the clamps | the three HP sites |
-| 9 | Times KO'd | DAT_0046b304 (FUN_00242938) | play.js game over |
-| 10 | Accuracy | pct(2, 1) | computed |
-| 52 | Killchains | FUN_005694a0 from FUN_005726e0, gate FUN_003b3538(HUD, 3) | not on the page |
+| 2 / 3 | (hits) / row 3 (0xb82d) | FUN_00554ea8 (bullet +0x120 bit 2, an object hit +0x14c != -1; hit nibble +0x140 bits 7-10 == 0; 3 with +0x120 0x40000 = zone flag 8) (f195, f301) | playerBulletStats |
+| 8 | row 2 (0xb82c) | FUN_0055c7f8 (P+0x28 bit 2), after the clamps | the three HP sites |
+| 9 | row 8 (0xb832) | DAT_0046b304 (FUN_00242938) | play.js game over |
+| 10 | row 1 (0xb82b) | pct(2, 1) | computed |
+| 52 | row 4 (0xb875) | FUN_005694a0 from FUN_005726e0, gate FUN_003b3538(HUD, 3) | not on the page |
 | 4 / 5 (13) / 12 (6, 7) | Magic / Limit / Mako | FUN_00568ea0 / FUN_00572f98, FUN_00572b90 (5), FUN_00577e68 (13) / FUN_005606c8 (6), FUN_0031dca8 (7) | none on the page |
 | 15 | Time | end - start | computed |
 | 18 / 20-31 / ... | Gil, ranks, points | calc | runCalc |
@@ -67,7 +67,7 @@ The Status rows show stat 13 in the Limit row and stat 24 for 25: FUN_003c54f8 c
 
 ## The Status box (box kind DAT_004a8250[2] = 0x1d)
 FUN_003fdf00 -> FUN_003b66c0 -> FUN_003c52b0 -> FUN_003c5358; FUN_003c54f8: stats -> +0xff0 (totals when stat 14 ==
-0x10: "Cumulative Results"), the four point rows packed (DAT_0047a315 / 0x47a338), step table 0x479650 (126 records to
+0x10: title message 0xb878 instead of 0xb800), the four point rows packed (DAT_0047a315 / 0x47a338), step table 0x479650 (126 records to
 0x47a028), FUN_003c6d70: rank effect ids (DAT_0047a4f8 triples: stat < 5 -> slot ids DAT_0047a4c8 / 0x47a4e0; positions
 0x51d0e0 with script flag 0x1e), slot 27 = 0x81744800.
 Commands (FUN_003c6600, op + 0x1d): 0 / 2 skip the close unless totals / tutorial; 1 totals lives; 3 sound; 5 effect
@@ -80,7 +80,7 @@ stat pair DAT_0047a300, FUN_003c7068 200 ms count FUN_003d0d08, formats 0xb837 %
 hidden); 0x1a title 0xb800 / 0xb878; 0x1b close.
 Layout widgets are type 2 text (FUN_003d6f88; the layout's op 0x10 id is the string, FUN_003cbf18).
 Parts: A (0-3 s: title, panel effects), auto -> B (rows every 500 ms from 1.5 s, the evaluation effects at 6.5 / 8.5 s,
-hold 9.5 s, ✕), C (the points: "Calculating", Gil; hold 9.1 s, ✕), D (title 0xb842, 4 s auto), FUN_003c73f0's screen
+hold 9.5 s, ✕), C (the points: title 0xb842, the Gil rows; hold 9.1 s, ✕), D (title 0xb842, 4 s auto), FUN_003c73f0's screen
 (the EXP -> gil exchange prompt: layout 0x4795c8, text 0xb83e (with a %d) + an option widget type 6 0xb83f; a
 FUN_003dae10(0x1bc) menu, input; not decoded, left out on the page), close.
 T w232_status (frames from the save): kind 2 f41, file read, box f49 (8 frames: stage_info.js READ_FRAMES holds), part B

@@ -1,0 +1,13 @@
+# hygiene_text.py allowlist: one entry per line. A run of a message is skipped when it equals an entry
+# (case and spacing ignored).
+#
+# Only two kinds of entry belong here:
+#   - a name Dan has cleared for the public repo (say who cleared it and when), and
+#   - a generic English word that is not game text in itself.
+# Never add a phrase, sentence or menu line from the game: refer to it by role or message id instead.
+
+# names cleared by Dan
+Sea of Flames      # stage name, used as the project's name (cleared by Dan, 2026-11-03)
+
+# generic words
+Potion

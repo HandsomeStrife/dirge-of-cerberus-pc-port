@@ -42,6 +42,7 @@
 !native/web/actions/*.js
 !native/assets/collision/*.mjs
 !tools/trace/scripts/*.json
+!tools/hygiene_allow.txt
 
 # ----------------------------------------------------------------------------
 # 4) Re-exclude DERIVATIVES OF THE COPYRIGHTED GAME BINARY (never public):

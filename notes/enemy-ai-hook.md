@@ -1046,7 +1046,7 @@ Traced but not decoded:
   stays 0xc). Not decoded (no lead read).
 - Game over: the 'GAME OVER' title (FED effect, animated in ~f900-1000), the HUD gone, the world keeps running
   (AI clocks, soldiers), the Restart / Quit menu by ~f1218 waits for input. Restart (✕ f1250): fade to black
-  (~f1263), 'Calculating Points' (f1332-1500), then the stage-result Status screen (EXP earned / exchange for gil, waits for input) from ~f1651 to f2600 (w181_restart_long). The checkpoint reload after it is not traced. What starts the game over: two
+  (~f1263), the points tally (f1332-1500), then the stage-result Status screen (EXP earned / exchange for gil, waits for input) from ~f1651 to f2600 (w181_restart_long). The checkpoint reload after it is not traced. What starts the game over: two
   attempts failed (FUN_00576b48's chain; the player-dead checks FUN_00323538 / 003235b8 / 00323628 (stage
   transitions FUN_0037e048 / FUN_0037cf30 wait on them) and P+0x244). Lead: DAT_0046e54c bit 2 (FUN_00576c28).
   The menu: the top-level mode machine FUN_00247508 creates FUN_003bf3c8 -> FUN_003bf408 (layout 0x477470); not

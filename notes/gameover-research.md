@@ -46,7 +46,7 @@ What the game does after Vincent dies, decoded and (except the visuals noted bel
    FUN_002f2098(0x81840000), FUN_003aff20(HUD)) -> FUN_003b7830(box, 0, result).
 7. FUN_003c6050 mode 4 reads the result: 7 / 8 -> close the box, FUN_003b7830(seq, 0, r); 6 in story mode
    (FUN_002419d8(0xc / 10 / 0x11) == 0 and stage +0x1558 bits 47-48 != 1) -> the box goes and FUN_003c72f8 runs on
-   (the 'Calculating Points' / stage result screens; not decoded).
+   (the points tally / stage result screens; not decoded).
 
 Not the game over: DAT_0046e54c (the earlier lead) is the HUD's refresh mask (FUN_00339590: bit 2 redraws the HP
 gauge, FUN_003adda8). FUN_003bf3c8 / FUN_003bf408 (layout 0x477470) is the memory card screen (FUN_00240678 KB free).

@@ -964,7 +964,7 @@ async function main() {
     if (!e.repeat) pressed.add(e.code);
     // H: back to the spawn (debug aid, not a game feature)
     // page aid (worker 0181): H also puts HP back to the save's 780, so a dead Vincent (state 7, FUN_005786e8's
-    // HP gate) can play on. Not the game's retry: that goes game over -> Restart -> 'Calculating Points' -> the
+    // HP gate) can play on. Not the game's retry: that goes game over -> Restart -> the points tally -> the
     // stage-result Status screen -> (not traced further); the soldiers keep their target-dead state.
     // H also rebuilds the HUD and slides it in as after a Restart (hud.js reset; page aid, not the game's: even while
     // Vincent is alive).
