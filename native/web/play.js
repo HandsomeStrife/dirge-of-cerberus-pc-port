@@ -15,11 +15,12 @@
 // the background after start (vincent_<pack>.glb).
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { TICK, STEP, PlayerController, SpeedAnimator, FollowCamera, cameraRays, KEY_WALK, KEY_RUN, MouseFeed, MOUSE_SENS_DEFAULT, CROSS_KEY } from './player.js';
+import { TICK, STEP, PlayerController, SpeedAnimator, FollowCamera, cameraRays, KEY_WALK, KEY_RUN, MouseFeed, MOUSE_SENS_DEFAULT, CROSS_KEY, dirAngles } from './player.js';
 import { attachGun } from './gun.js';
 import { loadActions } from './actions/index.js';
 import { initReport } from './report.js';
 import { loadRoom, showChunks } from './room.js';
+import { viewOf } from './room_occl.js';
 import { CapeCloth } from './cloth.js';
 import { createOutputStage } from './output.js';
 import { setupAim } from './aim.js';
@@ -532,7 +533,7 @@ async function loadCol() {
 
 // ------------------------------------------------------------ main
 async function main() {
-  const [{ scene, root, lo, hi, floats, uvAnim }, { col, name: colName, camRays }] = await Promise.all([loadRoomPlay(), loadCol()]);
+  const [{ scene, root, lo, hi, floats, uvAnim, occl: roomOccl }, { col, name: colName, camRays }] = await Promise.all([loadRoomPlay(), loadCol()]);
   const vin = await loadVincent();
   msg.style.display = 'none';
   root.add(vin.body);
@@ -607,8 +608,13 @@ async function main() {
   // matrix 0x4fcb10 (the last frame's camera) through the slots loaded before this frame's stream
   // (light.json without area boxes: every chunk is drawn, so the probe looks through every chunk's cid)
   const streamed = () => !!light?.stream.areas.length;
-  const roomProbe = eye => { if (roomVis && eye) visMask.setCamera(roomVis.probe(eye, streamed() ? light.stream.loaded() : roomVis.chunks).mask); };
-  const roomShow = () => { if (streamed()) showChunks(root, light.stream.loaded(), roomVis ? visMask : null); else if (roomVis) showChunks(root, null, visMask); };
+  // then FUN_00269868: the occluder volumes from the same camera (room_occl.js, worker 0233); cam: that camera (three.js)
+  const occlV = new Float32Array(16);
+  const roomProbe = (eye, cam) => {
+    if (roomVis && eye) visMask.setCamera(roomVis.probe(eye, streamed() ? light.stream.loaded() : roomVis.chunks).mask);
+    if (roomOccl && cam) roomOccl.frame(viewOf(cam, occlV), streamed() ? light.stream.loaded() : roomOccl.chunks);
+  };
+  const roomShow = () => { if (streamed()) showChunks(root, light.stream.loaded(), roomVis ? visMask : null, roomOccl); else if (roomVis || roomOccl) showChunks(root, null, roomVis ? visMask : null, roomOccl); };
   roomShow();
   if (light) {
     const ap = new THREE.Vector3(), Y = new THREE.Vector3(0, 1, 0);
@@ -777,7 +783,7 @@ async function main() {
     if ((ids.stage || []).length && (ids.rand === undefined || !roomVis)) console.warn('effects: no rand() state in ids.json (re-run export_web_effects.py --state) or no room visibility probe (data/z128_vis.json): the z128 fire is left out');
     else if ((ids.stage || []).length) {
       const stage = await Promise.all(ids.stage.map(get));
-      fxStage = createEffects({ fed: stage[0], stage, core, rng: fx.rng, reseed: false, cull: true, mask: visMask, hiddenScript: ids.hidden_script || [], models0: true, warn: m => console.warn(m) });
+      fxStage = createEffects({ fed: stage[0], stage, core, rng: fx.rng, reseed: false, cull: true, mask: visMask, occl: roomOccl, hiddenScript: ids.hidden_script || [], models0: true, warn: m => console.warn(m) });
       fxStage.stageLoad();
       fxStageLayer = new EffectLayer(THREE, fxStage); fxStageLayer.orderBase = 3000; fxStageLayer.deferred = true; root.add(fxStageLayer.group);
     } else console.warn('effects: data/effects has no stage FEDs (re-run export_web_effects.py): the z128 fire is left out');
@@ -813,6 +819,7 @@ async function main() {
     if (enemies) enemies.mpHead = vin.body;            // newer actors draw before older ones (enemies.js add)
     aiOpts = ENEMY_AI && aiData && enemies ? { data: aiData, player: php, rand: () => aiRng.rand(), log: m => console.log(m), damage: ENEMY_DMG,
       sound: snd,
+      stats: { add: (k, n) => { if (stageRes) stageRes.stats.add(k, n); } },   // FUN_0031d668: the section stats (results.js, worker 0232)
       areaSound: (n, v) => { if (areaSoundHook) areaSoundHook(n, v); },   // stage-script cmd 6 (worker 0212)
       cellMask: (bit, on) => visMask.setScript(bit, on),   // stage-script cmds 0x54 / 0x55 (worker 0208) -> DAT_004e8700 (worker 0225)
       // FUN_00335f40 / FUN_003361b8: the impact and hit effects (effects.js)
@@ -896,7 +903,7 @@ async function main() {
   if (MOUSE_DIRECT) follow.mouseDirect = { sens: MOUSE_SENS * Math.PI / 180 };   // OPTION mouselook
   follow.reset(ctrl.pos);
   // the room's mask before the first game frame (worker 0225): the probe from the start camera
-  roomProbe(follow.eye); roomShow();
+  roomProbe(follow.eye, fxCamera()); roomShow();
 
   // ---- actions (player.js header / ACTIONS.md)
   const motions = {};
@@ -1072,6 +1079,16 @@ async function main() {
     const due = Math.min(Math.floor(acc / TICK), 8);   // game frames this rendered frame runs (MouseFeed)
     while (acc >= TICK && n < 8) {
       if (restartReady) { restartReady = false; restart(); }   // Restart: the checkpoint, before this game frame (bodies attached)
+      // worker 0232: after Zone.exit (FUN_00241ed8) FUN_004012c0 returns 1 and the stage program ends, while the Status box
+      // (displayStageInfo(2), 0.5 s earlier) runs on in the menu manager. GUESS: the world stops and only the stage-info
+      // box runs until it closes; then the page stops (report mode: the next stage is not on the page). The game's states
+      // between the program's end and the next stage (FUN_00401b90 / FUN_00247508) are not decoded (notes/fidelity-audit.md)
+      if (stageRes && stageRes.exit) {
+        if (stageSi && stageSi.kind >= 0) { stageSi.frame(pressed.has(CROSS_KEY)); stageSi.sounds(); stageSi.events.length = 0; }
+        else { frozen = true; keys.clear(); console.info('results: the Status box closed after Zone.exit: the page stops here'); }
+        pressed.clear(); mouse.dx = mouse.dy = 0;
+        acc -= TICK; n++; stats.ticks++; continue;
+      }
       if (intro) {                                 // the opening event: its frame instead of play's (intro.js)
         pressed.clear(); mouse.dx = mouse.dy = 0;
         // GUESS: the placed sounds (ambient.js) and the sound emitters' sends do not run during the opening event (this branch
@@ -1081,7 +1098,7 @@ async function main() {
           // FUN_00248110 runs on during events: the chunk stream at Vincent's MP+0x10 (FUN_0026a0c0; the page's player
           // holds still while the event runs) and the effect managers (FUN_002efc78 / FUN_002efe00 / FUN_002efe98), the
           // level fire included (worker 0208's fxStage), drawn with the event camera
-          roomProbe(intro.rt.view ? intro.rt.view.eye : follow.eye); if (light) light.stream.frame(ctrl.prev); roomShow();
+          roomProbe(intro.rt.view ? intro.rt.view.eye : follow.eye, introFxCamera()); if (light) light.stream.frame(ctrl.prev); roomShow();
           // FUN_00265350 (late in FUN_00248110; reads only the slot table): the chunks' scrolling UVs (room.js RoomUVAnim)
           if (uvAnim) uvAnim.frame(light && light.stream.areas.length ? light.stream.loaded() : null, STEP);
           if (fx) fx.begin(STEP);
@@ -1105,7 +1122,7 @@ async function main() {
       // left him, and this frame's stick-to-world uses its new matrix (player.js camera notes)
       // FUN_00248110: FUN_00267970 + FUN_0026a0c0 before the game logic, at MP+0x10's translation: the matrix
       // last frame's draw used, which the page models as ctrl.prev (logicPose; not ctrl.pos, the moved position)
-      roomProbe(follow.eye); if (light) light.stream.frame(ctrl.prev); roomShow();
+      roomProbe(follow.eye, fxCamera()); if (light) light.stream.frame(ctrl.prev); roomShow();
       // FUN_00265350 (late in FUN_00248110; reads only the slot table): the chunks' scrolling UVs (room.js RoomUVAnim)
       if (uvAnim) uvAnim.frame(light && light.stream.areas.length ? light.stream.loaded() : null, STEP);
       // the stage controller (stage_controller.js, worker 0219): ev0100 main's frame (FUN_00377c68). GUESS: its place in
@@ -1114,6 +1131,7 @@ async function main() {
       // (GUESS: order, notes/fidelity-audit.md 'Stage-info boxes'); its ✕ is the frame's edge (FUN_003de918(0, 1))
       if (stageSi) { stageSi.frame(pressed.has(CROSS_KEY)); stageSi.sounds(); stageSi.events.length = 0; }
       if (stage) stage.tick(20);
+      if (stageRes) stageRes.frame(stageSi ? stageSi.now : 0);   // FUN_00242a50 (FUN_00247428): the play clock (results.js)
       // FUN_00331f08: the player's control update (vt+0x5c) is skipped while game-state bit 11 is set (set_usercontrol(0)
       // / free_usercontrol(1), game_state.js): no stick or button reaches him (the box's ✕ above does not jump)
       const noControl = !!(stageGs && stageGs.test(11));
@@ -1131,6 +1149,7 @@ async function main() {
         if (gameOver.go.events.includes('deathCamera')) follow.startDeath();   // FUN_0032a420(CAM, 1, 0, 0) + FUN_00328720(CAM)
         if (gameHud && gameOver.go.events.includes('begin')) gameHud.hideAll();  // FUN_003fdb48(3) -> FUN_003ad5b0: the HUD slides out
         if (stageSi && gameOver.go.events.includes('begin')) stageSi.stop();     // FUN_004012c0: FUN_003fdd58 before FUN_003fdb48(3)
+        if (stageRes && gameOver.go.events.includes('begin')) stageRes.gameOver();   // FUN_003fdb48(3) -> FUN_00242938 (the KO count)
       }
       // on the ladder the camera reads the ladder's P+0x104 (ladder.js camState) and the facing C+0x20
       follow.tick({ pos: ctrl.pos, want: ctrl.C.dir, state: ctrl.active?.camState ?? ctrl.P.state, facing: ctrl.C.face,
@@ -1227,7 +1246,7 @@ async function main() {
     if (!aiOpts) return null;
     // the reload rebuilds every status (FUN_0030f3d8 / the stage load): nothing is dead (T w204_reload: 41-43 HP 10 / 28 / 24)
     if (items) items.restart();                     // the checkpoint's inventory, taken bits cleared (worker 0224; before attach)
-    enemyAI = createEnemyAI({ ...aiOpts, eventFlags: flags, deadRecs: [], now: clock.now, acc: clock.acc });
+    enemyAI = createEnemyAI({ ...aiOpts, eventFlags: flags, deadRecs: [], now: clock.now, acc: clock.acc, mgr20: clock.mgr20, mgr24: clock.mgr24 });
     enemyAI.S.frame = frame;                         // the new world's frame counter at the placement (checkpoint.js)
     // T w204_reload: 44 / 66 are already active in the reload state; 41-43 (the stage-load pass, FUN_005453b0 in slot
     // order) and 45-49 become active at record 10. GUESS (0201): 44-49 / 66 still take the save's states (wakeSave)
@@ -1285,7 +1304,7 @@ async function main() {
                     playerState, camView, report, keys, pressed, motions, packsReady, actionHelp, cape, enemies, enemyAI, php, pause, gameHud, pauseSound, gameOver,
                     restart: { get count() { return restarts; }, get pending() { return restartPending || !!restartHold || restartReady; } },
                     intro: { get active() { return !!intro; }, get rt() { return introRt; }, get ended() { return introEnded; }, get paused() { return !!intro && intro.paused; } },
-                    get stage() { return stage; }, get stageInfo() { return stageSi; }, get gameState() { return stageGs; }, visMask };
+                    get stage() { return stage; }, get stageInfo() { return stageSi; }, get gameState() { return stageGs; }, get results() { return stageRes; }, visMask, roomOccl };
   // ---- the opening event (intro.js): played before play on a fresh load; at its end the Restart path (checkpoint.js)
   // places Vincent and soldiers 41-43 as the event's end hands them to play. The page's gameplay bodies and HUD are
   // hidden while it runs (the event's own actors are left out, see intro.js)
@@ -1309,6 +1328,7 @@ async function main() {
   });
   actionHelp.push('During the opening: Enter = the event pause, then Space (✕) = Skip');
   let stage = null, stageData = null, createStage = null, stageGs = null, stageSi = null;
+  let stageRes = null;                            // results.js (worker 0232): the section stats, the level end's Status screen
   // opening: main runs alongside it (first_event waits for the hand-off, then main reads the opening's +0x156c);
   // else from the save / a hand-off already past (skip: that +0x156c)
   function startStage(opening = false, skip = 0) {
@@ -1320,10 +1340,58 @@ async function main() {
       autoSkip: params.get('autoskip') !== '0',
       openingDone: opening ? () => !intro : undefined, openingSkip: opening ? () => (introRt ? introRt.skip : 0) : undefined,
       flags: () => (enemyAI ? enemyAI.eventFlags : null),             // the current world's (a Restart replaces it)
+      bossOverlay: on => { if (enemyAI && enemyAI.setBossPlugin) enemyAI.setBossPlugin(on); },   // worker 0231: Zone.boss (FUN_0037fe18)
       stream: () => (light ? light.stream : null),                     // area_stream.js: FUN_002677a0
       music: () => pauseSound.music,                                   // music.js GameMusic (worker 0215)
       area: () => ({ play: (n, v) => { if (areaSoundHook) areaSoundHook(n, v); }, stop: () => console.warn('stage: stopBgAreaSound not wired') }),
-      gameState: () => stageGs, stageInfo: () => stageSi });
+      gameState: () => stageGs, stageInfo: () => stageSi,
+      // worker 0232 (results.js): Intermission's stats / calc, endSection, Zone.exit (the next stage is not on the page:
+      // the page stops there, report mode)
+      stats: () => (stageRes ? stageRes.stats : null), calc: vm => { if (stageRes) stageRes.calc(vm); },
+      onEndSection: () => { if (stageRes) stageRes.endSection(); },
+      onExit: (z, a, b) => { if (stageRes) stageRes.onExit(z, a, b); },   // the frame loop below stops the world
+      battleObject, cameraReset: (view) => { if (stage) stageCameraReset(view); } });   // main's battle actors (worker 0229)
+  }
+  // ev0100 main's battle actors (stage_controller.js, worker 0229): the gameplay object whose status has that 8-char name
+  // (FUN_003193c0 / FUN_00316d40: section-1 record +0x44, ai.json records[k].tag; record 0 = p_Vin = Vincent)
+  function battleObject(name) {
+    const k = aiData && aiData.records ? aiData.records.findIndex(r => r.tag === name) : -1;
+    if (k < 0) { if (aiData && aiData.records && !aiData.records.some(r => r.tag)) console.warn('stage: ai.json records have no tag (re-export data/enemies: export_web_triggers.py)'); return null; }
+    if (k === 0) return vinBattle;
+    const wa = enemyAI && enemyAI.actors.find(a => a.rec === k), da = enemies && enemies.actors.find(a => a.rec === k);
+    if (!wa) return null;
+    return {
+      tag: name,
+      // the model's rows: row 2 = -facing (FUN_003157b0 reads -row 2), row 1 = (0, -1, 0) (the y-down frame of the traced
+      // matrices; FUN_00383d10's row 2 does not depend on its sign)
+      matrix: () => [-wa.face[2], 0, wa.face[0], 0, 0, -1, 0, 0, -wa.face[0], 0, -wa.face[2], 0, wa.pos[0], wa.pos[1], wa.pos[2], 1],
+      lend() {}, show(v) { if (da && da.body) da.body.visible = v; }, release() { if (da && da.body) da.body.visible = true; },
+      place() { console.warn('stage: a townsperson / soldier handed back by name (FUN_003157b0 on its status) is not translated'); },
+    };
+  }
+  // Vincent as a battle actor: his model goes to a slot while lent (shown / hidden by it); FUN_003157b0(status, 0) puts his
+  // status at the slot's place and writes only status +0x30 (root row 3: the position), +0x40 (-row 2: the facing) and +0x50
+  // (0, -1, 0). Worker 0230: so no teleport path (no camera reset: that is battle()'s FUN_003285d0, stageCameraReset; no
+  // cloth restart, no stream aid, velocity kept). The walk-mesh search stays (the body lands on the ground: T w229_rescue_pos
+  // y 0 -> -0.0623). L: ctrl.prev / prevHeading (the page's record of the last frame, its trigger segment) follow the place.
+  const vinBattle = {
+    tag: 'p_Vin',
+    matrix: () => { const f = ctrl.C.face; return [-f.z, 0, f.x, 0, 0, -1, 0, 0, -f.x, 0, -f.z, 0, ctrl.pos.x, ctrl.pos.y, ctrl.pos.z, 1]; },
+    lend() {}, show(v) { vin.body.visible = v; }, release() { vin.body.visible = true; },
+    place(p, f) {
+      ctrl.pos = { x: p[0], y: p[1], z: p[2] };                                       // status +0x30
+      ctrl.heading = Math.atan2(f[0], f[2]);                                          // +0x40 (facing)
+      ctrl.C.face = { x: Math.sin(ctrl.heading), y: 0, z: Math.cos(ctrl.heading) };
+      ctrl.locate();
+      ctrl.prev = { ...ctrl.pos }; ctrl.prevHeading = ctrl.heading;
+    },
+  };
+  // battle()'s camera reset (FUN_00324e70 -> FUN_00329f68 -> FUN_003285d0): the angles of render view 1's forward
+  // (FUN_00260f54) = the event camera's while one was active (view), else the follow camera's own
+  function stageCameraReset(view) {
+    let s = { yaw: follow.yaw, pitch: follow.pitch };
+    if (view) { const [pitch, yaw] = dirAngles(view.aim[0] - view.eye[0], view.aim[1] - view.eye[1], view.aim[2] - view.eye[2]); s = { yaw, pitch }; }
+    follow.reset(ctrl.pos, s);
   }
   function hideForIntro() {
     for (const o of [vin.body, ...(enemies ? enemies.actors.map(a => a.body) : [])]) if (o && o.visible) { o.visible = false; introHidden.push(o); }
@@ -1386,13 +1454,15 @@ async function main() {
     // with the opening: loaded alongside its first frames (an await here changed the start-up order of the HUD and the
     // opening); from the save (?intro=0): awaited, so main is settled before the first game frame
     const stageReady = Promise.all([fetch('data/event/ev0100_stage.json').then(r => (r.ok ? r.json() : null)).catch(() => null), import('./stage_controller.js'),
-                 import('./game_state.js'), import('./stage_info.js')])
-      .then(([d, m, GS, SI]) => {
+                 import('./game_state.js'), import('./stage_info.js'), import('./results.js').catch(e => { console.warn('results: module off:', e && e.message); return null; })])
+      .then(([d, m, GS, SI, RS]) => {
         if (!d) { console.warn('stage: data/event/ev0100_stage.json missing (tools/byo/build_web.sh step stage): no story beats'); return; }
         stageData = d; createStage = m.createStageController;
         // worker 0220: the game-state bits (game_state.js) and the stage-info boxes (stage_info.js: FUN_0039e8e8 / FUN_003fdb48)
         stageGs = GS;
         stageSi = SI.createStageInfo({ output, pause, flags: { event: n => (stage && stage.globalFlags ? stage.globalFlags[n] : 0) } });
+        // worker 0232: the section stats from the save (results.js) and the Status box (stage-info kind 2 -> box 0x1d)
+        if (RS) stageRes = RS.createResults({ stageInfo: stageSi, gil: () => (items ? items.inventory.gil : 0) });
         if (!stage) startStage(!!intro, intro ? 0 : (introRt ? introRt.skip : 0));   // with the opening, or from the save / a hand-off
       }).catch(e => console.warn('stage: controller off:', e && e.message));
     if (!intro) await stageReady;

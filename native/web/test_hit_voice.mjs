@@ -62,14 +62,15 @@ for (let k = 0; k < 7; k++) {
   ok(w.player.hp < 780 && order.length === 1 && order[0] === `react after ${s0 + 1} sound(s)`, `HP ${w.player.hp} and the voice before the reaction (${order})`);
 }
 
-// ---- the 15-frame gate FUN_003412d0 (C+0x810): > 14 frames since the last gated cue
+// ---- the 15-tick gate FUN_003412d0 (C+0x810): > 14 ticks of the manager clock (mgr +0x20, 1.2 a PAL frame; worker 0230)
 for (const [gap, draws2] of [[14, 0], [15, 1]]) {
   const w = world([pick(0), pick(1)]);
   w.shot();
-  for (let i = 0; i < gap; i++) w.W.tick(1.2, w.player.pos, w.player.pos);
+  const c0 = w.W.S.mgr20;
+  while (w.W.S.mgr20 - c0 < gap) w.W.tick(1.2, w.player.pos, w.player.pos);
   w.shot();
-  ok(w.drawn.length === 1 + draws2 && w.calls.length === 1 + draws2,
-    `second hit ${gap} frames later: ${w.drawn.length} draws, sounds ${w.calls.map(c => c.name)} (gate ${draws2 ? 'open' : 'shut'})`);
+  ok((draws2 ? w.W.S.mgr20 - c0 >= gap : w.W.S.mgr20 - c0 === gap) && w.drawn.length === 1 + draws2 && w.calls.length === 1 + draws2,
+    `second hit ${w.W.S.mgr20 - c0} ticks later: ${w.drawn.length} draws, sounds ${w.calls.map(c => c.name)} (gate ${draws2 ? 'open' : 'shut'})`);
 }
 { // the save's C+0x810 = 359 at frame counter 1575: the first hit passes on frame 0
   const w = world([pick(1)]);

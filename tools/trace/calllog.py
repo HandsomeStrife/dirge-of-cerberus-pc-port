@@ -505,6 +505,11 @@ SETS["stage"] = [
     dict(id=201, kind="site", where=(0x39C728, 0x39C7E4, 0x23D690), name="scene_save", copy=[cpr("a1")]),
     dict(id=202, kind="site", where=(0x3DFDC8, 0x3DFE0C, 0x372F70), name="skip", copy=[]),
 ]
+# worker 0231: the boss beat (notes/boss-research.md): the stage set + Zone.boss(Z) (FUN_0039c510 / FUN_0039c568 ->
+# FUN_0037fe18: a1 = zone or -1, a2 = on).
+SETS["boss"] = SETS["stage"] + [
+    dict(id=230, kind="site", where=(0x39C510, 0x39C5C8, 0x37FE18), name="zone_boss", copy=[cpr("a1"), cpr("a2")]),
+]
 # worker 0222: the opening event's sound and windows (notes/event-vm-research.md "Event sound"): setSoundEffect2_l
 # FUN_0039ff68 -> FUN_003e8e18 (slot open: a1 = the name), loadVoice2 FUN_003a0968 -> FUN_00378c88 (a1 = name),
 # playVoice FUN_003a0900 -> FUN_003eaf10 (a0 = name; f12 = pi / 4), the window command FUN_00383408 -> FUN_003b66c0
@@ -518,4 +523,11 @@ SETS["evsound"] = [SETS["stage"][0], SETS["stage"][1], SETS["stage"][2], SETS["s
     dict(id=244, kind="site", where=(0x383408, 0x3837D0, 0x3B6AB8), name="ev_window_text", copy=[cp("a2", 0, 6)]),
     dict(id=245, kind="site", where=(0x3736C8, 0x3737C0, 0x2F21D8), name="ev_fadein", copy=[]),
     dict(id=246, kind="site", where=(0x3736C8, 0x3737C0, 0x2F21F8), name="ev_fadeout", copy=[]),
+]
+# worker 0232: the section stats (notes/results-research.md): every FUN_0031d668(stat, n) (stat += n), FUN_0031d698
+# (stat = v) and FUN_0031d6d8 (total = v) call in the ELF, with the caller's return address (ra = site + 8).
+SETS["results"] = [
+    dict(id=260, kind="site", where=(0x100000, 0x5f0000, 0x31D668), name="stat_add", copy=[cpr("ra")]),
+    dict(id=261, kind="site", where=(0x100000, 0x5f0000, 0x31D698), name="stat_set", copy=[cpr("ra")]),
+    dict(id=262, kind="site", where=(0x100000, 0x5f0000, 0x31D6D8), name="total_set", copy=[cpr("ra")]),
 ]

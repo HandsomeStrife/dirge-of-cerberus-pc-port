@@ -71,9 +71,10 @@ try {
     const hits = [], cues = [], plays = [];
     const tick = ai.tick;
     ai.tick = (...x) => {
+      const m = ai.S.mgr20;                                 // the manager clock the tick's hits read (mgr +0x20, ticks)
       const ev = tick(...x), f = ai.S.frame;
       for (const e of ev) {
-        if (/^hit player /.test(e)) hits.push({ f, pos: P.php.pos.slice() });
+        if (/^hit player /.test(e)) hits.push({ f, m, pos: P.php.pos.slice() });
         else if (/^event -1 script \d+ ev 37 r 76,/.test(e)) cues.push(f);
         else { const m = /^sound (bt_v00[0-2]) range (\S+) at /.exec(e); if (m) plays.push({ f, name: m[1], range: +m[2] }); }
       }
@@ -99,14 +100,15 @@ try {
   ok(!!r, 'record 69 activated and firing');
   if (!r) done();
 
-  // the gate, worked out here from the hit frames: gated when more than 14 frames after the last gated hit (the
-  // save's C+0x810 = 359 against the counter 1575 leaves the first hit open)
+  // the gate, worked out here from the hits: FUN_003412d0 passes when more than 14 ticks of the manager clock (DAT_0046e880 +0x20,
+  // 1.2 ticks a PAL frame: worker 0230) passed since the last gated hit (the save's C+0x810 = 359 against the counter 1575 leaves
+  // the first hit open)
   let last = -Infinity;
   const want = [];
-  for (const h of r.hits) if (14 < h.f - last) { want.push(h.f); last = h.f; }
+  for (const h of r.hits) if (14 < h.m - last) { want.push(h.f); last = h.m; }
   ok(r.hits.length >= 12, `Vincent hit ${r.hits.length} times (HP now ${r.hp})`);
   ok(JSON.stringify(r.cues) === JSON.stringify(want),
-     `cue 0x4c through the 15-frame gate reaches script event 0x25 on every gated hit: ${r.cues.length} events at the ${want.length} gated hit frames (${r.cues.slice(0, 6).join(',')}..)`);
+     `cue 0x4c through the 15-tick gate reaches script event 0x25 on every gated hit: ${r.cues.length} events at the ${want.length} gated hit frames (${r.cues.slice(0, 6).join(',')}..)`);
   ok(r.plays.length >= 1 && r.plays.every(p => r.cues.includes(p.f) && p.range === 400),
      `script 297 rand_i(6) 0-2 -> cmd 0x125: ${r.plays.length} of ${r.cues.length} gated hits grunt (${r.plays.map(p => p.name.slice(-1)).join('')}), each on a gated hit's frame, range 400 (no r1)`);
   // each grunt reaches the AudioContext: started on the running context the next frame (play.js runs

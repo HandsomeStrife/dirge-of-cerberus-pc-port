@@ -26,6 +26,7 @@ from export_bmd_bound import emit_group, tex_png_for, packet_tris, _norm
 from bmd_env import read_env, fog_directive
 from bmd_chains import packet_chains, chain_headers, raw_chain_ids
 from bmd_uvanim import chunk_uv_tracks
+from bmd_occl import tree as bmd_tree, occluders as bmd_occluders
 from room_overlap import PlaneIndex
 
 # z128's 13 room geometry chunks (FileCodes 06800012..06800c12; the collision build uses the
@@ -405,6 +406,7 @@ def main():
 
     flat_by = defaultdict(list); ntri_by = defaultdict(int)
     cul_by = defaultdict(list)          # per-vertex back-face tag (cull_tag)
+    occl_chunks = []                                                    # bone tree + occluder quads per chunk (bmd_occl.py)
     uvt_by = defaultdict(list); uv_anims = []; uv_tracks = []         # per-vertex UV track (-1 none); bmd_uvanim.py
     abe_by = defaultdict(bool);  npk_by = defaultdict(int)
     ntri_chunk = defaultdict(int)
@@ -454,6 +456,23 @@ def main():
             print('warning: %s missing: chunk %s has no UV animation' % (anp, cid), file=sys.stderr)
         for w in cwarn:
             print('warning: chains %s: %s' % (cid, w), file=sys.stderr)
+        # occluder culling (worker 0233; bmd_occl.py): each chain's bone-tree node, the tree's boxes and the occluder
+        # quads; room_occl.js drops the sub-trees FUN_0026ccc8 skips. A chain with no node (-1) is never culled.
+        chain_node = {}
+        try:
+            nodes_, cn_ = bmd_tree(buf, pay); quads_ = bmd_occluders(buf, pay)
+            rid_ = raw_chain_ids(buf, pay)
+            for obj, ni in cn_.items():
+                c_ = rid_.get(pay + obj + 0xb0)
+                if c_ is None:
+                    print('warning: occl %s: chain object 0x%x has no packet; not culled' % (cid, obj), file=sys.stderr)
+                else:
+                    chain_node[c_] = ni
+            occl_chunks.append({'chunk': int(cid[4:6], 16), 'parent': [x['parent'] for x in nodes_],
+                                'box': [round(v, 4) for x in nodes_ for c in x['box'] for v in c],
+                                'quads': [round(v, 4) for q in quads_ for c in q for v in c]})
+        except ValueError as x:
+            print('warning: occl %s: %s; no occluder culling in this chunk' % (cid, x), file=sys.stderr)
         groups = defaultdict(list); final = {}; not_applied = set()
         for i in range(n):
             if (cid, i) in EXCLUDE_PACKETS:
@@ -583,14 +602,16 @@ def main():
         for key, idxs in list(groups.items()) + [(k + UNDER_SUFFIX, v) for k, v in groups.items()]:
             # one range per run of packets of one visibility group (packet order kept):
             # [chunk, first vertex, vertex count, group] (group -1 = never hidden)
+            # [chunk, first vertex, vertex count, group, node]: also split by the chain's bone-tree node (-1 = none;
+            # room_occl.js)
             runs = []
             for i in idxs:
-                vg = vis_group(hdrs.get(chain[i]))
-                if runs and runs[-1][0] == vg:
+                vg = vis_group(hdrs.get(chain[i])); nd = chain_node.get(chain[i], -1)
+                if runs and runs[-1][0] == (vg, nd):
                     runs[-1][1].append(i)
                 else:
-                    runs.append((vg, [i]))
-            for vg, ridx in runs:
+                    runs.append(((vg, nd), [i]))
+            for (vg, nd), ridx in runs:
                 tg = []; cg = []
                 flat, ntri = build_flat_kept(packets, ridx, under if key.endswith(UNDER_SUFFIX) else kept,
                                              tg, lambda i: chain_gtrack.get(chain[i], -1), cg)
@@ -598,10 +619,10 @@ def main():
                     continue
                 r = ranges_by[key]
                 first = len(flat_by[key]) // 12
-                if r and r[-1][0] == ci and r[-1][3] == vg and r[-1][1] + r[-1][2] == first:
+                if r and r[-1][0] == ci and r[-1][3] == vg and r[-1][4] == nd and r[-1][1] + r[-1][2] == first:
                     r[-1][2] += len(flat) // 12
                 else:
-                    r.append([ci, first, len(flat) // 12, vg])
+                    r.append([ci, first, len(flat) // 12, vg, nd])
                 flat_by[key].extend(flat); ntri_by[key] += ntri; npk_by[key] += len(ridx)
                 uvt_by[key].extend(tg)
                 cul_by[key].extend(cg)
@@ -673,7 +694,7 @@ def main():
              'texture_container': cont, 'abe': abe_by[key]}
         if key.endswith(UNDER_SUFFIX):
             g['underlay'] = True
-        g['chunks'] = ranges_by[key]       # [chunk, first vertex, vertex count, visibility group]
+        g['chunks'] = ranges_by[key]       # [chunk, first vertex, vertex count, visibility group, tree node]
         if any(t >= 0 for t in uvt_by[key]):   # scrolling UVs: int16 track per vertex (bmd_uvanim.py)
             uvt = os.path.splitext(os.path.join(os.path.dirname(a.out) or '.', mesh_name))[0] + '.uvt'
             array.array('h', uvt_by[key]).tofile(open(uvt, 'wb'))
@@ -694,6 +715,7 @@ def main():
         total += ntri_by[key]
     for gi, key in enumerate(order):
         add_group(gi, key)
+    manifest['occl'] = {'chunks': occl_chunks}     # bmd_occl.py: room.js / room_occl.js
     manifest['uv_anims'] = {'anims': uv_anims, 'tracks': uv_tracks}   # bmd_uvanim.py; room.js RoomUVAnim
     manifest['streaming'] = {'pairs': [list(p) for p in pairs], 'all_chunks': a.all_chunks,
                              'always': {'%02x' % c: sorted(always[c]) for c in range(len(cids))},
@@ -778,9 +800,13 @@ def main():
         # mask can hide; the native renderer drops those its mask hides (render_scene_textured -vis / -hide). The web
         # export takes the same ranges from the manifest's 'chunks'.
         for g in manifest['groups']:
-            for c, first, count, vg in g.get('chunks', []):
-                if vg >= 0:
-                    f.write('@group %s %d %d %d\n' % (g['mesh'], first, count, vg))
+            run = None                                  # ranges split only by tree node are merged back here
+            for c, first, count, vg, *_node in g.get('chunks', []) + [(-1, -1, 0, -2)]:
+                if run and run[2] == vg and run[0] + run[1] == first:
+                    run[1] += count; continue
+                if run and run[2] >= 0:
+                    f.write('@group %s %d %d %d\n' % (g['mesh'], run[0], run[1], run[2]))
+                run = [first, count, vg]
     nb = len({g['filecode'] for g in manifest['groups'] if g['filecode'] and not g.get('sky')})
     print('binding %s: %s; visibility groups kept (page masks them); duplicates dropped: %d tris (%d with '
           'another texture), %d covered by earlier chunks; %d marked underlay' % (a.bind, dict(stats),

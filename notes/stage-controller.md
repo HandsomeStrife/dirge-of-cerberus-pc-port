@@ -79,3 +79,40 @@ the skipped beat in ~10 frames (its loads are at once); the game's 7 frames befo
   the prelude runs in its first frames, first_event waits for the hand-off (opts.openingDone), then main reads the
   opening's +0x156c (opts.openingSkip). From the save (?intro=0) the stage load is awaited before the first frame and
   main settles there (no synchronous work mid-play).
+
+## Battle actors and the hand-back by name (worker 0229, 2026-11-03)
+Natives (method +0x0c, registry DAT_004ef498, read from out/route/r02_climb.p2s): getbattleactor_l 0x39e1a8, setbattlename_l
+0x39d430, setpos_l 0x39d170, setdir_l 0x39f038, setVisible_l 0x3a3478, finalize_l 0x3a3410, getmorphstate 0x39d090,
+getweaponframe 0x3a3330, setdirofbattle_l 0x3a3448, getposx/y/z_l 0x39d488 / 0x39e108 / 0x39e158, get_battle_camera_l 0x3a29c8.
+- **getbattleactor(name)** -> FUN_00376b00: the status by 8-char name (FUN_003193c0; the name = status +0xa0 record +0x44,
+  FUN_00316d40; record 0 = p_Vin, 113 = n_CupM, 114 = n_CupW), its object (FUN_0053bd50 -> FUN_0053b978(status +10));
+  FUN_0056a5e0 takes the object's model (+0x180 = 0, +0x28 |= 0x40, FUN_00315758(status, 1): +0x88 = 0, +0x60 |= 4); a
+  new slot FUN_00376308(ev, model, 0, id), slot matrix = the model's; p_Vin: FUN_00380858(0).
+- **setbattlename** -> FUN_003765a0: frame sync FUN_0037e4e0, slot +0xa5 = name. **setdir_l** (bool unused) -> FUN_0037c300
+  -> FUN_00383d10: d = row 3 - target (y 0); row 0 = row 1 x d, row 2 = row 0 x row 1, row 1 = row 2 x row 0, normalised.
+- **Hand-back**: FUN_00376938(name) releases the slot named `name` (FUN_003771e0 / FUN_00376890 / FUN_00376c80(.., 0))
+  and returns its model; FUN_003157b0(status, 0): +0x30 = root row 3 (+ bone 1, y 0), +0x40 = -row 2. Callers: the status
+  update FUN_003159b8 when +0x88 == 0 (a lent object: the frame after setbattlename), and FUN_00319190 for every status in
+  battle()'s FUN_00324e70 (branch with DAT_004b8ac8 bit 5 clear), which then resets the camera FUN_00329f68 -> FUN_003285d0
+  (angles from render view 1's forward). battle() first finalizes unnamed slots (FUN_00376c80(.., 1): FUN_005a7d88 frees a
+  lent model; the object's FUN_003159b8 other branch builds a new one).
+- Beats seen: after rv_matiawase main loads p000 into a slot, setpos (-889.2, 0, -599), setdir (-929.2, 0, -599),
+  setbattlename p_Vin, battle(1500); the rescue (pc 0x849, flag 1 = 5, flag 12 < 1): getbattleactor p_Vin / n_CupM / n_CupW,
+  hide them, roji02_01, flag 12 = 1, Vincent setVisible / setpos (-1120.2, 0, -1277.3) / setdir (-1118.2, 0, -1277.6),
+  Camera.set eye (-1135.5, -31.8, -1275.1) aim (-1134.75, -31.16, -1275.205) fov 73.5, active, setbattlename p_Vin, battle().
+- **T** (tools/trace/scripts/w229_rescue.json / w229_rescue_pos.json; state = worker 0223's grab95/s826.p2s, poke
+  `TRACE_POKE=a06338=91379f02` = stage flags 0 = 2, 1 = 5): rv_matiawase event f126, scene_save f702, then the memory-card
+  box (right + ✕ = CANCEL, left + ✕ = continue without saving) and the map screen (✕): **this is the 600-frame hold** noted
+  above (input, not the save). battle(1500) f1231, event f1320, roji02_01 unskipped to ~f2100, battle f2128 (call log).
+  Fields (TRACE_FIELDSET=enemy TRACE_ERECS=113,114 TRACE_ENEMIES=2 TRACE_LOG_AT=a5800): f1850 Vincent (-889.2, -0.064, -599)
+  facing -x; record 2126 Vincent (-1120.2, -0.0623, -1277.3) facing (0.98894, 0, -0.14831), CAM+0x80 (0.75641, 0.64547,
+  -0.10588) = main's event camera, eye (-1136.096, -31.009, -1275.074); 113 / 114 at (-913.1, -140.2, -892.4) 'r_gst_lk' /
+  (-953.9, -160.4, -1084.8) 'r_gst', +0x28 bit 0x40 cleared.
+- Page: stage_controller.js (EventActors slot state + the natives + `lentUpdate` / `handBackAll` / camera reset in
+  `enterBattle`), play.js `battleObject` / `vinBattle` / `stageCameraReset`, ai.json records' `tag`. Tests:
+  test_stage_controller section 5 (+ trace checks; MUTATE=setpos|camset|setdir|bname), test_npc_page (the two beats on the page).
+- **Open**: where the townspeople are after the rescue (not main; roji02_01 / scripts on flag 12?) and whether they are
+  drawn; the camera's distance after the reset (T 21.05 u, page 36.1 u: FollowCamera at pitch -0.70); bone 1's offset
+  (GUESS 0); the slot's own drawing while lent (setpos / setmotion not shown during the auto-skipped beat); who clears
+  Vincent's +0x88 for the p000 hand-back; getmorphstate / getweaponframe / setdirofbattle / loadVincentWeapon,
+  getpos / get_battle_camera, the other events' natives.

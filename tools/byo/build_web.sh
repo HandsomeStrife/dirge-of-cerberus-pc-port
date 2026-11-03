@@ -277,7 +277,13 @@ step "z128's other enemy types (stage section 1: e048, e030, e036, e023, e024, e
 # e048 / e030: the clips of the motions enemy_ai.js requests (their stance rows and attack tables, ai.json model_clips)
 E048_CLIPS=r_gst,r_gst_lk,r_st_a,r_st_f,r_stlld0,r_stlaf0,r_stbf0,m_gst,m_gst_lk,m_st_a,m_st_f,m_stlld0,m_stlaf0,m_stbf0,r_sq_a,r_sq_f,m_sq_a,m_sq_f,m_atk,r_atk
 E030_CLIPS=st_a,look,stld0,stbf0,jp0,jp1,jp2,atk_0,atk_1,atk_2,atk_3,b_stp,st_btl
-for mc in e048:$E048_CLIPS e030:$E030_CLIPS e036:m_gst e023:idle e024:idle e001:n_st; do
+# worker 0230: e036 runs the soldiers' AI (enemy_ai AI_TYPES): its stance-0x1e rows and attack clip (ai.json model_clips)
+E036_CLIPS=m_gst,m_gst_lk,m_st_a,m_st_f,m_stlld0,m_stbf0,m_stlaf0,m_sq_a,m_gwk,m_grn,m_atk_0
+# e001: its stance-0x10 rows and attack clip (m001 0765004b; ai.json model_clips)
+E001_CLIPS=a_st,a_atk_1,a_stlld0,a_dead,a_wk,a_rn,n_ude
+# worker 0231: e024 (the z128 boss) also takes the clips its overlay brain sets by name (FUN_00344840; notes/boss-research.md)
+E024_CLIPS=idle,l_trn,r_trn,atk_sp1,atk_sp2,atk_sp3,idl_lean,lean,lean_idl
+for mc in e048:$E048_CLIPS e030:$E030_CLIPS e036:$E036_CLIPS e023:idle e024:$E024_CLIPS e001:n_st,$E001_CLIPS; do
   m=${mc%%:*}
   run enemy_$m $PY export_web_enemy.py export --model $m --out "$DATA/enemies" --clips ${mc#*:}
   [ -s "$DATA/enemies/$m.glb" ] || fail "data/enemies/$m.glb missing after the enemy export (log: $LOGS/enemy_$m.log)"
@@ -395,6 +401,12 @@ step "stage-info boxes (displayStageInfo): step tables, layouts, '$' codes (ELF)
 run stageinfo $PY export_web_stageinfo.py --elf "$ELF" --disc "$KEL" -o "$DATA/stage_info.json"
 [ -s "$DATA/stage_info.json" ] || fail "data/stage_info.json missing (log: $LOGS/stageinfo.log)"
 tail -n 1 "$LOGS/stageinfo.log" | cut -c1-160
+echo "ok"
+
+step "level end / Status results screen: step table, layouts, tables (ELF), texts (kelstr.bin), KerberosIntermissionCalc.class -> data/results.json"
+run results $PY export_web_results.py --elf "$ELF" --disc "$KEL" -o "$DATA/results.json"
+[ -s "$DATA/results.json" ] || fail "data/results.json missing (log: $LOGS/results.log)"
+tail -n 1 "$LOGS/results.log" | cut -c1-160
 echo "ok"
 
 step "menu layout scripts (ELF) -> data/menu.json (read by the menu layout tests)"

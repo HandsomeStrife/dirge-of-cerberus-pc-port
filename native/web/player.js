@@ -1565,7 +1565,7 @@ const clampf = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 // FUN_00260bc8(a, pi): wrap to +-pi in steps of pi/4096 (13-bit signed)
 const quantA = a => (((Math.trunc((a / PI_) * 4096.0) << 19) >> 19) * PI_ * 0.00024414062);
 // FUN_00260f54: (pitch, yaw) of a direction
-const dirAngles = (x, y, z) => [Math.atan2(-y, Math.hypot(x, z)), Math.atan2(x, z)];
+export const dirAngles = (x, y, z) => [Math.atan2(-y, Math.hypot(x, z)), Math.atan2(x, z)];   // exported for the stage's camera reset (play.js, worker 0229)
 // FUN_00323318(k): per-frame fraction for the step (whole ticks compounded)
 function stepFrac(k) {
   if (!(1.0 < CSTEP)) return k * CSTEP;
@@ -1666,6 +1666,9 @@ export class FollowCamera {
     // CAM+0x1c4 / +0x1c8: base pulled back along the player's facing (the ladder; FUN_00328640).
     // FUN_003285d0 (reset) leaves both as they are
     this.back = 0; this.backTarget = 0;
+    // CAM+0x1e2 (the idle counter) / CAM+0x1a8 (the look gain): their values at the camera's start. GUESS: the save state's
+    // (30 / 0); FUN_003285d0 (reset()) writes neither, so a reset keeps them (worker 0230: were set in reset())
+    this.idle = 30; this.gain = 0;
     // the death camera (worker 0199): CAM+0x1e8 bit 0x400000 and CAM+0x230 (FUN_00328790's phase). The
     // camera init FUN_00328368 writes CAM+0x1e8 = 0x2004 and +0x230 / +0x234 = 0; FUN_003285d0 (reset()) keeps them
     this.death = false; this.phase230 = 0;
@@ -1714,8 +1717,6 @@ export class FollowCamera {
     this.dist = 1000.0;                           // CAM+0x1c0 = 0x447a0000
     this.ramp = 0; this.rampDir = [0, 0];         // CAM+0x1ec (+0x1f0 left as is in the game)
     this.snap = true;                             // CAM+0x1e8 bit 0x2000
-    this.idle = 30;                               // CAM+0x1e2 (GUESS: the state's value)
-    this.gain = 0;                                // CAM+0x1a8 (GUESS: not reset by FUN_003285d0)
     this.look = [0, 0];
     this.mouseActive = false;                     // page aid: H / warp drop the mouse latch (DAT_004e17d0)
     this.flags14 = 0;                             // DAT_0046e290+0x14 (this frame's camera request bits)

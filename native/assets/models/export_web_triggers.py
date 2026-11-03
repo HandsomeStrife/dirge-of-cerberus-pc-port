@@ -240,7 +240,10 @@ def records(d):
         if weapon >= 0:
             so24 = sec[24][0] + weapon * sec[24][2]
             wcls = d[so24 + 0x14] >> 2 & 7
-        out.append(dict(rec=k, model=model, stance=stance_of(model, weapon >= 0, wcls),
+        # +0x44: the status name (8 chars; FUN_00316d40 returns status +0xa0 (this record) + 0x44): what ev0100's
+        # getbattleactor / setbattlename find the object by (FUN_003193c0; worker 0229)
+        tag = d[o + 0x44:o + 0x4c].split(b'\0')[0].decode('latin-1')
+        out.append(dict(rec=k, model=model, tag=tag, stance=stance_of(model, weapon >= 0, wcls),
                         script=struct.unpack_from('<h', d, o + 4)[0],
                         mode=struct.unpack_from('<i', d, o + 8)[0],
                         pos=f32s(d, o + 0xc, 3), face=f32s(d, o + 0x1c, 3), weapon=weapon, hp=hp, lvl=lvl, zones=zi,
@@ -571,6 +574,10 @@ def death_cues(elf):
 
 # exported for every z128 enemy type
 AI_TYPES = ('e027', 'e048', 'e030')
+# worker 0230: e036 (stance 0x1e by its weapon class, FUN_00564228 fall-through; flags 0x872b) runs the soldiers' AI
+AI_TYPES += ('e036',)
+# worker 0230: e001 / e023 get the shared actor too (FUN_00559748 builds one for every type; brain mode 0 from their records)
+AI_TYPES += ('e001', 'e023')
 BOX_TYPES = ('e027', 'e048', 'e030', 'e036', 'e023', 'e024', 'e001')
 # worker 0228: the townspeople (same actor class 0x58e1f8; their part boxes for Vincent's bullets, notes/npc-research.md §8)
 BOX_TYPES += ('n023', 'n024', 'n025', 'n026', 'n027', 'n028', 'n029', 'n030', 'n031', 'n032', 'n033', 'n034')
@@ -613,7 +620,7 @@ def main():
                sizes={str(r['zones']): zone_size(d, r['zones']) for r in recs if r['zones'] >= 0},
                lock_bones={str(r['zones']): lock_bone(d, r['zones']) for r in recs if r['zones'] >= 0},
                paths=paths(d), locators=locators(d), areas=areas(d), nav=nav_graph(d), markers={m: markers(m) for m in boxes}, se=se_tables(elf),
-               pset_script=pset_script, player=dict(script=PLAYER_SCRIPT, pset=PLAYER_PSET, cues=PLAYER_CUES, death=death_cues(elf)), cues=cue_tables(d))
+               pset_script=pset_script, player=dict(script=PLAYER_SCRIPT, pset=PLAYER_PSET, cues=PLAYER_CUES, death=death_cues(elf)), cues=cue_tables(d), names=names(d), values32=values32(d))
     res['hitboxes']['p000'] = pbox
     path = os.path.join(out, 'ai.json')
     with open(path, 'w') as fh:
@@ -621,6 +628,28 @@ def main():
     print('wrote %s: %d triggers, %d records, %d weapons, %d scripts, %d paths, zone sets %s, clips %s, stances %s, model clips %s' % (
         path, len(trig), len(recs), len(res['weapons']), len(scr), len(res['paths']), sorted(res['zones']), res['clips'],
         sorted(st), {m: len(c) for m, c in res['model_clips'].items()}))
+
+
+def names(d):
+    """Section 0x11 = the stage's name dictionary (worker 0231, notes/boss-research.md): FUN_00311c98(name) ->
+    FUN_00311078 (section 0x11 base, count > 0) -> FUN_0036f450 binary search over 16-byte entries from +0x10
+    (count at +0): bytes 0..7 = the name, last character first; +8 = section << 24 | index. Used by the boss
+    overlay (btbox0..5 = triggers, nwe024* = weapons, bshv0 = a section-32 value)."""
+    o, _n, _st = SE.sections(d)[0x11]
+    cnt = struct.unpack_from('<I', d, o)[0]
+    out = {}
+    for k in range(cnt):
+        e = o + 0x10 + k * 16
+        nm = d[e:e + 8][::-1].rstrip(b'\0').decode('latin1')
+        v = struct.unpack_from('<I', d, e + 8)[0]
+        out[nm] = [v >> 24, v & 0xffffff]
+    return out
+
+
+def values32(d):
+    """Section 0x20 words (FUN_00311a80 -> FUN_00311a18(i): entry i's first word)."""
+    o, n, st = SE.sections(d)[0x20]
+    return [struct.unpack_from('<i', d, o + i * st)[0] for i in range(n)]
 
 
 if __name__ == '__main__':

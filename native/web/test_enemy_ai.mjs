@@ -585,8 +585,10 @@ else {
   const W = AI.createEnemyAI({ data, player: { pos: [0, 0, 0], hp: 780, id: 0x16, f118: 0, s64: 0 }, quiet: true, onActivate: (r, a) => got.push([r.model, !!a]) });
   const pick = m => data.records.find(r => r.model === m && r.hp > 0).rec;
   for (const m of ['e027', 'e048', 'e030', 'e036', 'e023', 'e024', 'e001']) W.setActive(W.objects.get(pick(m) + 22), 1);
-  ok(JSON.stringify(got) === JSON.stringify([['e027', true], ['e048', true], ['e030', true], ['e036', false], ['e023', false], ['e024', false], ['e001', false]]),
-     `activation per type: ${got.map(([m, a]) => m + (a ? ' actor' : ' -')).join(', ')} (actor for e027 / e048 / e030)`);
+  // worker 0230: e036 / e023 / e001 have actors too (test_other_types); e024 (the boss) is still body-only. Its entry follows
+  // AI_TYPES so the boss worker's change doesn't trip this check.
+  ok(JSON.stringify(got) === JSON.stringify([['e027', true], ['e048', true], ['e030', true], ['e036', true], ['e023', true], ['e024', AI.AI_TYPES.has('e024')], ['e001', true]]),
+     `activation per type: ${got.map(([m, a]) => m + (a ? ' actor' : ' -')).join(', ')} (actor for e027 / e048 / e030 / e036 / e023 / e001)`);
 }
 
 // Brain mode 1 (FUN_00362998, start FUN_003628f8): Dan's report 20261031T000852Z-9974, the alley guard

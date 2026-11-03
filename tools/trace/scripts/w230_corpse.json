@@ -1,0 +1,88 @@
+{
+ "name": "w230_corpse",
+ "frames": 1400,
+ "log_from": 1200,
+ "doc": "worker 0230: k_hits12's inputs (#66 killed f843, #67 f871) run to f1400 to see the corpse chain FUN_0055cac8 -> code -11 at +300 -> FUN_0053f040 case 200 (fade 180) -> code -10 -> manager event 9 -> +0x144(0, 1) + script event 0x20. TRACE_FIELDSET=enemy. Logged f1200-1400 (log buffer: 272 frames of the enemy fieldset).",
+ "events": [
+  {
+   "from": 10,
+   "to": 230,
+   "lx": 0.6,
+   "ly": -1.0
+  },
+  {
+   "from": 240,
+   "to": 244,
+   "buttons": [
+    "cross"
+   ]
+  },
+  {
+   "from": 280,
+   "to": 284,
+   "buttons": [
+    "cross"
+   ]
+  },
+  {
+   "from": 300,
+   "to": 470,
+   "lx": 0.6,
+   "ly": -1.0
+  },
+  {
+   "from": 490,
+   "to": 494,
+   "buttons": [
+    "cross"
+   ]
+  },
+  {
+   "from": 500,
+   "to": 787,
+   "lx": 0.6,
+   "ly": -1.0
+  },
+  {
+   "from": 795,
+   "to": 799,
+   "buttons": [
+    "r1"
+   ]
+  },
+  {
+   "from": 805,
+   "to": 817,
+   "rx": -1.0
+  },
+  {
+   "from": 819,
+   "to": 829,
+   "ry": 1.0
+  },
+  {
+   "from": 840,
+   "to": 842,
+   "buttons": [
+    "r1"
+   ]
+  },
+  {
+   "from": 845,
+   "to": 851,
+   "rx": -1.0
+  },
+  {
+   "from": 852,
+   "to": 861,
+   "ry": -1.0
+  },
+  {
+   "from": 866,
+   "to": 868,
+   "buttons": [
+    "r1"
+   ]
+  }
+ ]
+}

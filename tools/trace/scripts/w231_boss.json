@@ -1,0 +1,3 @@
+{"name": "w231_boss", "frames": 2000, "log_from": 1000,
+ "doc": "worker 0231: the save with stage flag 0 poked to 36 (TRACE_POKE=a06338=91309a24: the zone object +0x38, key byte 0 = 0 in this save), no input: does main fall through to the boss beat (heri_lastst -> Zone.boss(true))? Run with TRACE_FIELDSET=stage TRACE_CALLLOG=boss.",
+ "events": []}

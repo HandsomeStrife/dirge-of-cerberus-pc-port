@@ -21,6 +21,7 @@ side runs as normal; it then overwrites buffer bytes 2..19 and logs.
 import struct
 
 HOOK, CTRL, FIELDS, SCRIPT, LOG, LOG_END = 0x96000, 0x96800, 0x96900, 0x97000, 0x9D000, 0x100000
+CALLS = 0x96E00                         # TRACE_CALLS table (worker 0232), the top of the field-table area
 SCRIPT_STRIDE = 24
 # TRACE_LOG_AT=<hex> (worker 0159): start the frame log later, so longer scripts fit (script frames =
 # (LOG - SCRIPT) / 24; the log keeps LOG..LOG_END). Default 0x9D000 = 1024 script frames.
@@ -68,6 +69,7 @@ class Asm:
     def jr(self, rs): self._r(rs, "zero", "zero", 0, 0x08)
     def nop(self): self.code.append(0)
     def jal(self, target): self.code.append((0x03 << 26) | ((target >> 2) & 0x3FFFFFF))
+    def jalr(self, rs): self._r(rs, "zero", "ra", 0, 0x09)
 
     def _br(self, op, rs, rt, lab):
         self.fix.append((len(self.code), lab))
@@ -158,6 +160,28 @@ def assemble_hook():
     a.beq("zero", "zero", "fld")
     a.nop()
     a.label("fdone")
+    # TRACE_CALLS (worker 0232): at frame index k call a game function f(a0, a1, a2) from here (the main thread's pad
+    # read), e.g. to open a screen the run can't reach. Table CALLS: {u32 k, f, a0, a1, a2} ..., f = 0 ends it.
+    a.li32("s0", CALLS)
+    a.label("cl")
+    a.lw("t8", 4, "s0")
+    a.beq("t8", "zero", "cdone")
+    a.nop()
+    a.lw("t2", 0, "s0")
+    a.lw("t1", 4, "s1")
+    a.bne("t2", "t1", "cnext")
+    a.nop()
+    a.lw("a0", 8, "s0")
+    a.lw("a1", 12, "s0")
+    a.lw("a2", 16, "s0")
+    a.jalr("t8")
+    a.nop()
+    a.label("cnext")
+    a.addiu("s0", "s0", 20)
+    a.beq("zero", "zero", "cl")
+    a.nop()
+    a.label("cdone")
+    a.lw("t1", 4, "s1")
     a.addiu("t1", "t1", 1)
     a.sw("t1", 4, "s1")
     a.label("out")
@@ -192,8 +216,16 @@ def patch_memory(mem, script_frames, field_table, log_from=0):
                            % (len(script_frames) - log_from, nmax, rec))
     if len(script_frames) > (LOG - SCRIPT) // SCRIPT_STRIDE:
         raise RuntimeError("script too long for the script area")
-    if FIELDS + 8 * (len(field_table) + 1) > SCRIPT:
+    if FIELDS + 8 * (len(field_table) + 1) > CALLS:
         raise RuntimeError("field table too long")
+    # TRACE_CALLS="k:func[:a0[:a1[:a2]]],..." (hex; worker 0232): game calls made by the hook at frame index k
+    calls = [[int(x, 16) for x in item.split(":")] for item in
+             filter(None, __import__("os").environ.get("TRACE_CALLS", "").split(","))]
+    if 20 * (len(calls) + 1) > SCRIPT - CALLS:
+        raise RuntimeError("too many TRACE_CALLS")
+    for i, c in enumerate(calls):
+        c = (c + [0, 0, 0])[:5]
+        struct.pack_into("<5I", mem, CALLS + 20 * i, *c)
     code = assemble_hook()
     mem[HOOK:HOOK + len(code)] = code
     for i, fr in enumerate(script_frames):

@@ -1,0 +1,4 @@
+{"name": "w232_status", "frames": 850, "log_from": 0,
+ "doc": "worker 0232 (notes/results-research.md): from the save, the level end's calls made by the hook (TRACE_CALLS): f30 FUN_003fdb00 (endSection), f31 FUN_003e0538(7, 0, 1) and f33 FUN_003e0600(0) (the loader runs calc and is released, as the pause Status page FUN_003c0f30), f40 FUN_003fdb48(2) (displayStageInfo(2)); poke global flag 13 = 99 (main sets it before endSection). Cross at 300 (fast-forward the rows), 330 (next part), 450 (fast-forward the points), 480 (next part). TRACE_FIELDSET=results TRACE_SIBOX=2340a0 TRACE_LOG_AT=A1000 TRACE_POKE=50db2c=ccc0ed1a TRACE_CALLS=1e:3fdb00,1f:3e0538:7:0:1,21:3e0600:0,28:3fdb48:2",
+ "events": [{"from": 300, "to": 304, "buttons": ["cross"]}, {"from": 330, "to": 334, "buttons": ["cross"]},
+            {"from": 450, "to": 454, "buttons": ["cross"]}, {"from": 480, "to": 484, "buttons": ["cross"]}]}

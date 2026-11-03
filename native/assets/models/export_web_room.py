@@ -179,13 +179,14 @@ def main():
     fog, nofog, groups = parse_list(a.room)
     # per-chunk vertex ranges (export_z128_room.py manifest `chunks`); a room without them draws whole
     man = os.path.splitext(a.room)[0] + "_manifest.json"
-    chunk_ranges = {}; uvt_of = {}; cul_of = {}; uv_anims = None
+    chunk_ranges = {}; uvt_of = {}; cul_of = {}; uv_anims = None; occl = None
     if os.path.exists(man):
         mj = json.load(open(man))
         chunk_ranges = {g["mesh"]: g["chunks"] for g in mj["groups"] if g.get("chunks")}
         uvt_of = {g["mesh"]: g["uvt"] for g in mj["groups"] if g.get("uvt")}   # scrolling UVs (bmd_uvanim.py)
         cul_of = {g["mesh"]: g["cul"] for g in mj["groups"] if g.get("cul")}   # back faces (export_z128_room cull_tag)
         uv_anims = mj.get("uv_anims")
+        occl = mj.get("occl")             # bone trees + occluder quads (bmd_occl.py): room_occl.js
     if not chunk_ranges:
         print("warning: no per-chunk ranges in %s: the page will draw every chunk (no area streaming)" % man,
               file=sys.stderr)
@@ -265,6 +266,8 @@ def main():
                  textures=textures, meshes=meshes, draws=draws,
                  char=dict(mesh="vincent", s=s, yaw=yaw, x=tx, y=fy, z=tz, pivot=piv, runs=runs, aref=aref,
                            bbox=dict(min=placed[:, :3].min(0).tolist(), max=placed[:, :3].max(0).tolist())))
+    if occl and occl["chunks"]:
+        scene["occl"] = occl               # room_occl.js (FUN_0026ccc8 / FUN_00269868)
     if uv_anims and uv_anims["tracks"]:
         scene["uvanim"] = uv_anims         # bmd_uvanim.py curves: room.js RoomUVAnim
     if os.path.isfile(os.path.join(out, "hud", "hud.json")):

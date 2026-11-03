@@ -55,6 +55,14 @@ export const R_PLAYER = 5.0;
 // (melee attacks, not translated: it stands) but is hit, flinches and dies like the others. Other types
 // (e036, e023, e024, e001) are drawn by enemies.js without an AI actor.
 export const AI_TYPES = new Set(['e027', 'e048', 'e030']);
+// worker 0230: e036 (record 80). FUN_00564228 has no case for 'e036' (0x65303336 falls through to the weapon-class rule, as
+// e027 / e048): weapon 8 class 2 -> stance 0x1e (m_* rows), flags 0x872b (brain 2 shooter branch). So it runs e027's whole AI.
+AI_TYPES.add('e036');
+// worker 0230: e001 (record 1, stance 0x10, the a_* rows) and e023 (records 31 / 87, the helicopter: stance 0x19, row 0 / 1 'idle')
+// get the same actor (FUN_00559748 builds one for every type); their records' brain mode is 0 (class 0x4a2430, empty update), so
+// what they do comes from their scripts (cmds 0x113 / 0x19e / 0x131 / 0x141 ...) and the shared body / hit / death code.
+// Not traced (no route state reaches their fights): notes/other-types.md.
+AI_TYPES.add('e001'); AI_TYPES.add('e023');
 // worker 0228 (notes/npc-research.md §8): the townspeople. The same actor class 0x58e1f8, so an activation builds the same
 // actor + AI (FUN_00559748 -> FUN_00365c50; T: w223_npc95 AI mode 0 after the wake). Brain mode 0 (their section-1 +8) is
 // class 0x4a2430, update FUN_003614b0 = `jr ra` (empty): what they do comes from their scripts (cmds 0x141 / 0x131 / 0x16a /
@@ -131,7 +139,7 @@ const DEFLECT_TICKS = 8;
 // (FUN_00569dc0 -> FUN_00573360, combo FUN_0056de80 / FUN_0056ec08) moves it, and the page has no melee for him.
 const P27C_INIT = -40;
 // P+0x280 (worker 0200): FUN_00571ee8 sets -DAT_0046ee28 = -15 (ELF word 15; the save RAM holds -15 at frame counter
-// 1575, the page's S.frame 0), so the first hit always passes FUN_005720c8's gate
+// 1575, the page's S.mgr20 0), so the first hit always passes FUN_005720c8's gate
 const HIT_FX_GAP = 15, P280_INIT = -HIT_FX_GAP - 1575;
 // FUN_00348fe8 (FUN_00323128, after the object update) runs FUN_00343160 on each C object in the list *(DAT_0046f0e0
 // + 8) -> C+0x550. The save's list (RAM): #66 (record 44), #88 (record 66), Vincent, 0x919d80, #67..#71 (records
@@ -418,12 +426,16 @@ export function createEnemyAI(opts) {
   // GUESS: record 9 is the save-RAM value of C+0x766 (not decoded where it is set; same notes)
   const PLAYER_CUES = data.cues && data.player ? data.cues[data.player.cues] : null;
   // C+0x810: the frame of the last gated cue (FUN_003412d0). GUESS: save RAM 359 with the frame counter at 1575
-  // (DAT_0046e880+0x20 = DAT_0046e938+0x20 = S.frame here, which starts at 0); not decoded: FUN_003412d0 has
+  // (DAT_0046e880+0x20 = DAT_0046e938+0x20 = S.mgr20 here, which starts at 0); not decoded: FUN_003412d0 has
   // other callers that stamp it (fidelity-audit "C+0x810 stampers"), so its stage-start value is unknown.
   if (P) P.c810 ??= 359 - 1575;
   // manager shorts (+0x28, cmd 0x2f writes, 0x30 reads). GUESS: their values at stage start are not
   // decoded; short 18 = MANAGER_SHORT_18, the rest 0.
   const mshort = new Int16Array(0x100);
+  // worker 0231: the HUD gauge request of manager cmds 0x6e / 0x6f / 0x70 (FUN_003b58e0: id, value, max, flag; +0xc59 shown)
+  // and the boss overlay's plug-in (DAT_0046e590, set by Zone.boss: stage_controller.js -> world.setBossPlugin)
+  const hudGauge = { id: -1, v: 0, max: 0, f: 0, c59: 0 };
+  let bossPlugin = false;
   mshort[18] = MANAGER_SHORT_18;
   // manager +0x260: the position cmd 0x40 (a locator, FUN_0053d960) / 0x10f (the object's +0x90) write; 0x10e and the
   // gimmicks' 0x2a / 0x2b / 4 (props.js, through world.mgr260) read it. One field for both (worker 0212). L: its
@@ -437,7 +449,10 @@ export function createEnemyAI(opts) {
 
   // AI scheduler (*DAT_0046f4e4): +0 clock, +8 step accumulator, +0x10 rays / +0x11 shots /
   // +0x12 runs / +0x13 total this tick, +0x20 AI queue (sorted by due), +0x2c fire timers.
-  const S = { frame: 0, now: opts.now ?? 0, acc: opts.acc ?? 0, rays: 0, shots: 0, runs: 0, total: 0, q: [], timers: [] };
+  // mgr20 / mgr24 = DAT_0046e880 +0x20 / +0x24 (the same object as DAT_0046e938): ticks, and the step accumulator's fraction.
+  // The page's 0 is the save's 1575; the save RAM's +0x24 is 0.5998749732971191 (sea-of-flames.p2s, worker 0230). A rebuilt
+  // world passes its own (opts.mgr20 / opts.mgr24: checkpoint.js).
+  const S = { mgr20: opts.mgr20 ?? 0, mgr24: Math.fround(opts.mgr24 ?? 0.5998749732971191), frame: 0, now: opts.now ?? 0, acc: opts.acc ?? 0, rays: 0, shots: 0, runs: 0, total: 0, q: [], timers: [] };
   const objects = new Map();    // object id -> actor or trigger object
   const actors = [];
   const bullets = [];
@@ -451,6 +466,10 @@ export function createEnemyAI(opts) {
   // sets nothing).
   const timerList = [];
   const mailbox = [];           // 0x101 messages posted this frame, delivered next frame (GUESS: FUN_0053e9e0 consumer not decoded)
+  // worker 0230: the manager's delayed list (+0x1254, FUN_0053e9e0(mgr, id, code, delay, arg, 0): due = mgr +0x20 (S.mgr20, ticks) +
+  // delay) for its negative codes, consumed by FUN_0053f040 (switch on code + 0xd3). Translated: the corpse chain -11 / -10 (below,
+  // enemyDeath / delayedTick). The page's non-negative codes (0x101 messages) still go through `mailbox`.
+  const delayed = [];
   const events = [];            // per-frame record of what happened (tests / page debug)
 
   // ------------------------------------------------ objects
@@ -541,6 +560,7 @@ export function createEnemyAI(opts) {
            // root motion (rootSample): C+0x568 flags, C+0x6d0 last root sample (identity: FUN_0033ff18), C+0x310 / +0x370
            // (mover 8), mp = the MP head layer as enemies.js plays it (clip, frame; null before the first request)
            f568: 0, r6d0: PM.IDENT4(), m310: PM.IDENT4(), r370: 0, mp: null,
+           f6b4: 1, f6b8: 1, f6bc: 0,                // the body fade (FUN_0033ff18: C+0x6b4 = 1.0; worker 0230)
            ...stanceOf(rec) },
       model: rec.model,
       size: sizeOf(rec),                         // actor +0x2c / +0x30 (FUN_00563fc0)
@@ -550,6 +570,8 @@ export function createEnemyAI(opts) {
     // their event 3's cmd 0x16a(1) (w223_npc95 RAM f826; bit 0 bullets test it, bit 2 clear never lockable, bit 9 push-out).
     // GUESS: the same value from the activation on (its constructor / FUN_00559748 writer is not read; 0x16a sets 0x210 again)
     if (NPC_TYPES.has(rec.model)) a.f38 = 0x391;                            // = NPC_PROBE_BITS
+    // worker 0230: FUN_00564228 'e023' (0x65303233): FUN_00340ac0(C, 0x19), actor +0x118 |= 0x80801c (the same for e024)
+    if (rec.model === 'e023') a.f118 = (a.f118 | 0x80801c) >>> 0;
     // the body listener's node event (FUN_0034fad0 -> C+0x540 event 3 -> FUN_005690c8 case 3): FUN_00588550 case 3 posts
     // manager event 0x10 with the node (0x588694: arg = *param_3), then FUN_00563970(a, -1)
     a.listen = (ev, n) => { if (ev === 3) { postManager(0x10, a.id, n); trackMoved(a); } };
@@ -719,6 +741,16 @@ export function createEnemyAI(opts) {
       if (cmd === 0xa7) return +(DIFF === 3);                  // FUN_00242c28() == 3
       if (cmd === 0x2f) { if ((r[0] >>> 0) < 0x100) mshort[r[0]] = r[1]; return 0; }   // FUN_00545b20 case 0x2f
       if (cmd === 0x30) return (r[0] >>> 0) < 0x100 ? mshort[r[0]] : 0;                 // case 0x30
+      // worker 0231 (notes/boss-research.md): case 0x6e: r0 < 0x12 -> FUN_003b58e0(HUD DAT_00471380, r0, r1, r2, r3) (a
+      // HUD gauge: id, value, max, r3); 0x6f -> FUN_003b5378 (HUD +0xc59 = 1: shown); 0x70 -> FUN_003b53c0 (shown -> 2).
+      // The page keeps the request (world.hudGauge(), opts.hudGauge); drawing the gauge is not translated (warned).
+      if (cmd === 0x6e || cmd === 0x6f || cmd === 0x70) {
+        if (cmd === 0x6e && (r[0] >>> 0) < 0x12) Object.assign(hudGauge, { id: r[0] | 0, v: r[1] | 0, max: r[2] | 0, f: r[3] | 0 });
+        else if (cmd === 0x6f) hudGauge.c59 = 1;
+        else if (cmd === 0x70 && hudGauge.c59 === 1) hudGauge.c59 = 2;
+        if (opts.hudGauge) opts.hudGauge(cmd, hudGauge); else warnOnce('enemy_ai: HUD gauge (FUN_003b58e0 / FUN_003b5378 / FUN_003b53c0) not drawn on the page');
+        return 0;
+      }
       // worker 0209: section-15 gimmicks (props.js): 0x3e = object id of gimmick r0 (manager +0x5b2), 0x2a / 0x2b the explosion
       // worker 0224: placed items are section-15 gimmicks too (items.js)
       if (cmd === 0x3e) { const k = opts.props ? opts.props.id(r[0]) : -1; return slot(k !== -1 ? k : (opts.items ? opts.items.id(r[0]) : -1)); }   // manager +0x5b2 (-1 after a delete)
@@ -904,6 +936,41 @@ export function createEnemyAI(opts) {
         } else warnOnce(`enemy_ai: object cmd 0x16a on ${t.kind} ${t.id} (+0x38 not modelled) not translated (skipped)`);
         return 0;
       case 0x193: if (t.kind === 'actor' && t.ai) setTarget(t.ai, P); return 0;   // FUN_005661e8 0x193 (FUN_0053bb08 = the player)
+      // worker 0230 (notes/other-types.md). FUN_0054cd70: object +0x38 bit commands, r0 == 1 sets else clears: 0x16b bit 3,
+      // 0x16c bit 0 (+ +0x40 bit 4: not modelled), 0x16d bit 1, 0x16e bit 2, 0x16f bit 6, 0x167 bit 8 (+ +0x40 bit 6). Bit 0 gates
+      // Vincent's bullets, bit 2 the lock-on, bit 9 the push-out (a.f38 readers). An actor without its own +0x38 (the soldiers'
+      // PROBE_BITS stand-in) takes the stand-in's value first.
+      case 0x167: case 0x16b: case 0x16c: case 0x16d: case 0x16e: case 0x16f: {
+        if (t.kind !== 'actor') { warnOnce(`enemy_ai: object cmd 0x${cmd.toString(16)} on ${t.kind} ${t.id} (+0x38 not modelled) not translated (skipped)`); return 0; }
+        const bit = { 0x167: 0x100, 0x16b: 8, 0x16c: 1, 0x16d: 2, 0x16e: 4, 0x16f: 0x40 }[cmd];
+        if (t.f38 === undefined) { t.f38 = dead(t) ? PROBE_BITS_DEAD : PROBE_BITS; t.f38own = true; }
+        t.f38 = (r[0] === 1 ? t.f38 | bit : t.f38 & ~bit) >>> 0;
+        events.push(`f38 ${t.id} 0x${t.f38.toString(16)}`);
+        return 0;
+      }
+      // FUN_0054cd70 case 0x11a -> FUN_0054b508: +0x28 bit 12 (0x1000) = r0 != 0 (its readers are not decoded: stored)
+      case 0x11a: t.flags28 = (r[0] ? t.flags28 | 0x1000 : t.flags28 & ~0x1000) >>> 0; return 0;
+      // FUN_005661e8 case 0x1a3: status (+0x17c) -> FUN_00317420(status, (short) r0): HP = r0 clamped to [0, max +4]
+      case 0x1a3: {
+        const max = data.records[t.rec] ? data.records[t.rec].hp ?? 0 : 0;
+        if (t.kind === 'actor' || t.kind === 'record') t.hp = Math.min(Math.max(short(r[0] | 0), 0), max);
+        return 0;
+      }
+      // FUN_005661e8 case 0x19e: AI (+0x184) -> FUN_0035f9a0(ai, r0) = the combat layer; 0x19f: FUN_0035f540(ai, r0) = the action
+      // layer. No AI: nothing.
+      case 0x19e: if (t.kind === 'actor' && t.ai) setCombatLayer(t.ai, r[0] | 0); return 0;
+      case 0x19f: if (t.kind === 'actor' && t.ai) setActionLayer(t.ai, r[0] | 0); return 0;
+      // FUN_0054cd70 case 0x113: old = +0x36, +0x36 = (short) r0. New < 1: an old period > 0 loses its pending code -2
+      // (FUN_0053edb0). Else: drop a pending one (old > 0), queue code -2 at +0x36 (FUN_0053e9e0). Code -2 -> manager event 0x16
+      // (FUN_0053f040 case 0xd1) -> FUN_0053fde8 case 0x17: script event 0x18 (FUN_0054cca8: its result != 0 ends it); 0 and
+      // +0x36 > 0 -> again at +0x36, else +0x36 = 0. So: event 0x18 every r0 ticks until it returns non-zero.
+      case 0x113: {
+        const old = t.s36 | 0;
+        t.s36 = short(r[0] | 0);
+        if (t.s36 < 1) { if (old > 0) delayedDrop(t.id, -2); }
+        else { if (old > 0) delayedDrop(t.id, -2); delayedPost(t.id, -2, t.s36); }
+        return 0;
+      }
       // worker 0212 (notes/stage-script-cmds.md). FUN_0054cd70 case 0x10a: vt+0x54 (actors 0x58e24c -> FUN_0054e908 = 0;
       // triggers FUN_00550380) -> FUN_0054add0(obj, 1): only with a script event 0x54 (FUN_0054e7c8), which no z128 script
       // has (warned); then FUN_0053fa08(mgr, id): +0x28 bit 0x80000 already set -> nothing; else set it and queue manager
@@ -956,6 +1023,18 @@ export function createEnemyAI(opts) {
       // FUN_00588b78 case 0x155: body +0xe8 -> FUN_0034b978: C+0x1d4 (the constant move speed) = r0 as a float (lwc1 of
       // the cell: asm 0x588e7c)
       case 0x155: if (t.kind === 'actor' && t.C) t.C.spd = Math.fround(+r[0] || 0); return 0;
+      // worker 0231: FUN_00588b78 case 0x156: body -> FUN_0034ad00(r0, r1, r2): C+0x1e4 = r0, +0x1e0 = r1, +0x1e8 = r2 (the
+      // mode-1 move's accel / top speed / decel, fly_mover.js; script 242 sends floats 120 / 600 / 60)
+      case 0x156: if (t.kind === 'actor' && t.C) { t.C.f1e4 = Math.fround(+r[0] || 0); t.C.f1e0 = Math.fround(+r[1] || 0); t.C.f1e8 = Math.fround(+r[2] || 0); } return 0;
+      // case 0x157: r0 0 -> C+0x1c0 |= 1, &= ~2; 1 -> &= ~1, |= 2 (profiled moves); 2 -> &= ~3; else nothing
+      case 0x157: {
+        if (t.kind !== 'actor' || !t.C) return 0;
+        const C = t.C, n = r[0] | 0;
+        if (n === 0) C.f1c0 = ((C.f1c0 | 1) & ~2) >>> 0;
+        else if (n === 1) C.f1c0 = ((C.f1c0 & ~1) | 2) >>> 0;
+        else if (n === 2) C.f1c0 = (C.f1c0 & ~3) >>> 0;
+        return 0;
+      }
       // 0x113 (FUN_0054cd70): object +0x36 = r0 and a delayed message to itself through
       // FUN_0053e9e0, whose delivery is not decoded. GUESS: it and other commands are skipped
       // (return 0, the script goes on).
@@ -1411,6 +1490,12 @@ export function createEnemyAI(opts) {
   // vt+0x14 FUN_003628f8, update vt+0x1c FUN_00362998); mode 2 = class 0x4a2608 (FUN_00362e58);
   // mode 0 / other = class 0x4a2430 (update FUN_003614b0 is empty).
   function setMode(ai, mode) {
+    // worker 0231: FUN_0035f300 modes 0x100..0x1ff: the brain comes from the plug-in DAT_0046e590 (vt+0x14; z128: the
+    // boss overlay's FUN_00aa3090, mode 0x100 only). No plug-in -> AI +0xe0 = 0 and +0xd0 (the mode) = 0.
+    if (mode >= 0x100 && mode < 0x200) {
+      if (!bossPlugin || mode !== 0x100) { ai.brain = null; ai.mode = 0; events.push(`mode ${ai.owner ? ai.owner.id : -1} ${mode}: no brain`); return; }
+      warnOnce('enemy_ai: the boss brain (mode 0x100, boss_z128.js) is not wired on the page (notes/boss-research.md)');
+    }
     ai.brain = { mode };
     if (![0, 1, 2, 5, 6].includes(mode)) warnOnce(`enemy_ai: brain mode ${mode} not translated (empty update)`);
     ai.mode = mode;
@@ -1738,12 +1823,20 @@ export function createEnemyAI(opts) {
   function setCombatLayer(ai, m) {                                            // FUN_0035f9a0 -> FUN_0035fa10
     if (m === ai.cmode && ai.combat) return;
     if (m === 0) stopFire(ai);                                                // FUN_0035fa10 case 0
-    ai.combat = m === 2 ? { mode: 2 } : null;                                 // GUESS: layer 1 (vt 0x4a23a0) not translated
-    if (m === 1) warnOnce('enemy_ai: combat layer 1 not translated');
+    // layer 1 = vt 0x4a23a0, layer 2 = vt 0x4a2370 (FUN_0035fa10); other m: none (+0xd8 = 0)
+    ai.combat = m === 2 || m === 1 ? { mode: m } : null;
     ai.cmode = ai.combat ? m : 0;
     ai.cstate = 0;
     ai.ctime = short(S.now);                                                  // FUN_0035ebc0
-    if (ai.combat) stopFire(ai);                                              // start FUN_00360e30
+    if (m === 2) stopFire(ai);                                                // start FUN_00360e30
+    else if (m === 1) startFire(ai, -1);                                      // start FUN_00360da8 -> FUN_003607a8(ai, -1) (worker 0230)
+  }
+  // Combat layer 1 (worker 0230; cmd 0x19e(1), the e023 helicopter's script 180): update vt+0x1c FUN_00360dc8: magazine not empty
+  // (FUN_003604f0) -> FUN_003607a8(ai, -1) (a timer with no count, kept while one runs), else the reload FUN_00360718. Its vt+0x24
+  // FUN_00360e10 (= FUN_00360820, stop) has no caller found on the page's paths.
+  function combat1(ai) {
+    if (!magEmpty(ai)) startFire(ai, -1);
+    else reload(ai);
   }
   const bTime = ai => short(S.now - (ai.btime & 0xffff));                     // FUN_0035eb30
   const cTime = ai => short(S.now - (ai.ctime & 0xffff));                     // FUN_0035eba0
@@ -2456,7 +2549,7 @@ export function createEnemyAI(opts) {
       //    : motion 0x40 flags -1 (no loop: T k_fire_emp15 #67 f796 lflags 6); no row 0x41: row 0x8a ->
       //    motion 0x8a (-> 1), else motion 0x40 (-1); -> 2.
       // 2: timer > 8 -> done bit, returns 6 (T: #67 r_st_a looped from f804); moving -> 9 (not here).
-      // 1: timer > 30 or the motion done (FUN_003460d8, GUESS false) -> 6.
+      // 1: timer > 30 or the motion done (FUN_003460d8, motionDone) -> 6.
       if (m.phase === 0) {
         m.timer = 0;
         if (clipOf(a, 0x41)) {
@@ -2467,7 +2560,7 @@ export function createEnemyAI(opts) {
         m.timer = f(m.timer + step);
         return;
       }
-      if (m.phase === 2 ? m.timer > 8.0 : m.timer > 30.0) { m.done |= 1; setMotion(a, 6); return; }
+      if (m.phase === 2 ? m.timer > 8.0 : (m.timer > 30.0 || motionDone(a))) { m.done |= 1; setMotion(a, 6); return; }
       m.timer = f(m.timer + step);
       return;
     }
@@ -2477,7 +2570,8 @@ export function createEnemyAI(opts) {
       // not on the page), motion 0x78-0x7a / 0x40-0x42 (flags 0x83) -> 1, then at once:
       // 1: off the ground: done bit (stays). Else timer > 20, or timer >= 10 and the motion is done
       // (FUN_003460d8) -> done bit, returns 0x16 / 6; moving (C+0x1d8 > 0) -> 0x17 / 9 (not on the page).
-      // GUESS: FUN_003460d8 is not decoded (notes §9.7); taken as false here, so they end at timer > 20.
+      // GUESS (kept): FUN_003460d8 after this three-clip request is not decoded (worker 0231: motionDone covers one-clip
+      // requests only, see the shot's phase 2); taken as false here, so they end at timer > 20.
       if (m.phase === 0) {
         m.timer = 0;
         blendSet(a, 1, 10);
@@ -2494,10 +2588,12 @@ export function createEnemyAI(opts) {
     // (motions 0x7b-0x7d, returns 0x16): the same phases.
     const crouch = m.cls === 0xf;
     if (m.phase === 2) {
-      // The game: when the motion ends (FUN_003460d8) or timer > 30, request motions 0x40-0x42 / 0x78-0x7a
-      // (flags 0x83), set the done bit, return 6 / 0x16. GUESS: FUN_003460d8 (FUN_005a9860 -> FUN_005aa200)
-      // is not decoded (two attempts) and no clip frame is kept here, so phase 2 ends on its
-      // first update without the request (a request here would put r_st_a at f787, one frame early).
+      // The game: when the motion ends (FUN_003460d8, motionDone: worker 0231) or timer > 30, request motions 0x40-0x42 /
+      // 0x78-0x7a (flags 0x83), set the done bit, return 6 / 0x16.
+      // GUESS (kept): after the three-clip request FUN_00345818(C, 0x57, 0x58, 0x59, 0x82) the game sees the motion done
+      // on phase 2's first update (T k_fire_emp15 #66: r_st_f pushed f786, r_st_a f788), which motionDone (one layer,
+      // frame < count - 1) does not explain; not decoded after two attempts (worker 0231). So phase 2 ends on its first
+      // update without the request (a request here would put r_st_a at f787, one frame early).
       m.done |= 1;
       setMotion(a, crouch ? 0x16 : 6);                                       // returns 6 / 0x16 (GUESS: return value = next motion state)
       return;
@@ -2617,6 +2713,27 @@ export function createEnemyAI(opts) {
   function clipFrames(a, name) {
     const mc = data.model_clips && data.model_clips[a.model];
     return mc ? mc[name] ?? null : (data.clips ? data.clips[name] ?? null : null);
+  }
+  // worker 0231: FUN_003460d8(C) = 1 without an MP (C+0x7c8), else !FUN_005a9860(MP): MP+0x440 bit 20 -> 0; layer count
+  // MP+0x449 < 1 -> 0, >= 2 -> 1 (a queued layer plays), 1 -> FUN_005aa200(head layer MP+0x200 + 0x30 x MP+0x448): a clip
+  // that does not loop (+0x1e bit 0 clear) with frame (+0x18) >= its count (+0x1c) - 1 -> 0 (frame clamped there). The page
+  // keeps the head layer only (C.mp, replaced by every request, as flags bit 2 does in FUN_005a9398: z128's requests carry
+  // it); L: a request without bit 2 queues a second layer in the game (done = 0 until the head ends), not modelled.
+  // Not covered: three-clip (aim) requests FUN_00345818 (C.mp.partner): the game reads them done at once (T k_fire_emp15
+  // f787); not decoded after two attempts, those callers keep their GUESS.
+  function motionDone(a) {
+    const h = a.C && a.C.mp;
+    if (!h) return true;
+    if (h.loop) return false;
+    const n = clipFrames(a, h.clip);
+    if (n == null || h.frame == null) return false;                          // no frame kept: as playing
+    return n - 1 <= h.frame;
+  }
+  // FUN_00346108(f, C): 1 without an MP, else FUN_005a9120 (2 x the head layer's frame MP+0x218) >= f
+  function motionPast(a, fr) {
+    const h = a.C && a.C.mp;
+    if (!h || h.frame == null) return true;
+    return !(f(h.frame + h.frame) < fr);
   }
   // 4 x 4 rows (p' = p M). FUN_0026125c(out, A, B) = B x A (out row i = sum_k B[i][k] A[k]).
   const mmul = (A, B) => B.map(r => [0, 1, 2, 3].map(c => f(f(f(f(r[0] * A[0][c]) + f(r[1] * A[1][c])) + f(r[2] * A[2][c])) + f(r[3] * A[3][c]))));
@@ -2862,11 +2979,11 @@ export function createEnemyAI(opts) {
     let hit = false;
     for (const e of o.cand) {
       if (!(o.c1 & 4)) { if (e.fl & 1) continue; }
-      else if (e.fl & 2) { if (((S.frame - e.fr) << 24 >> 24) < o.every) continue; e.fl &= ~2; }
+      else if (e.fl & 2) { if (((S.mgr20 - e.fr) << 24 >> 24) < o.every) continue; e.fl &= ~2; }
       const [A, B] = playerCapsule();
       if (!sphereCapsule(o.r, R_PLAYER, c, A, B)) continue;
       e.fl |= 1;
-      if (o.c1 & 4) { e.fl |= 3; e.fr = S.frame & 0xff; }
+      if (o.c1 & 4) { e.fl |= 3; e.fr = S.mgr20 & 0xff; }
       attackApply(o, c, A, B);
       hit = true;
       if (!(o.c1 & 1)) break;
@@ -2952,9 +3069,9 @@ export function createEnemyAI(opts) {
   }
   // FUN_003412d0(C, cue, force): force or more than 14 frames since C+0x810 -> FUN_00341330, C+0x810 = now
   function gatedCue(c, force) {
-    if (!force && !(0xe < S.frame - P.c810)) return;
+    if (!force && !(0xe < S.mgr20 - P.c810)) return;
     playerCue(c);
-    P.c810 = S.frame;
+    P.c810 = S.mgr20;
   }
   // FUN_00341330(C, cue): C+0x7ec table; '' -> nothing; '?' -> event 0x25 (r0 = cue) to the owner C+0x7dc = P;
   // else FUN_00341268 -> FUN_0054b158(P, name, 1). L: FUN_0054b158 taken as "play the name at P" (notes/audio-
@@ -2989,6 +3106,7 @@ export function createEnemyAI(opts) {
     if (!aiPaused()) {                                                        // FUN_0055c7f8: nothing while FUN_00325b40 (bit 6)
       const before = P.hp;
       P.hp = Math.max(0, P.hp - dmg);                                         // FUN_003168c8
+      statAdd(8, dmg);                                                        // FUN_0055c7f8: P+0x28 bit 2 -> FUN_0031d668(8, dmg)
       events.push(`hit player ${before}->${P.hp}`);
       log(`enemy_ai: Vincent HP ${before} -> ${P.hp} (melee #${o.owner.id})`);
       playerHitCues(dmg, dead(P));                                            // vt+0x324 FUN_00576ac8
@@ -3102,6 +3220,7 @@ export function createEnemyAI(opts) {
     // 0x2000 (every bullet here) no hit returns 0: the room was probed once at the countdown end.
     if (b.from === P) {                                                       // Vincent's bullet: the soldiers
       const hit = playerBulletHit(b);
+      if (hit) playerBulletStats(b);                                          // FUN_00554ea8's stat adds (results.js, worker 0232)
       if (!hit && done) wallSound(b);
       return hit || done;
     }
@@ -3225,7 +3344,7 @@ export function createEnemyAI(opts) {
   // opens only with his own melee (P+0x27c), which the page does not have; the angle test is not translated.
   function deflects(b) {
     if (PST.f61 & 1) return false;
-    if (!(S.frame - P.t27c < DEFLECT_TICKS)) return false;                     // DAT_0046e938 +0x20 (S.frame)
+    if (!(S.mgr20 - P.t27c < DEFLECT_TICKS)) return false;                     // DAT_0046e938 +0x20 (S.mgr20, ticks)
     if (b.f120 & 0x800) return false;
     warnOnce('enemy_ai: deflect window open (P+0x27c): its angle test FUN_00573720 is not translated; no deflect');
     return false;
@@ -3252,18 +3371,35 @@ export function createEnemyAI(opts) {
     return 1;
   }
   // FUN_005720c8, after FUN_0055db50 and FUN_00567c08 (worker 0200): DAT_0046ee28 (15) < now - P+0x280 ->
-  // FUN_00336508, P+0x280 = now (DAT_0046e938+0x20 = S.frame). FUN_00336508 = FUN_003366b8(0x1000) alone (no
+  // FUN_00336508, P+0x280 = now (DAT_0046e938+0x20 = S.mgr20). FUN_00336508 = FUN_003366b8(0x1000) alone (no
   // FUN_002e7660): the emitter keeps the spawn's position 0 (FED r0000 emitter 7: the screen flash, type 107, and the
   // frame-buffer zoom, type 110). T: w193_fxsrc f789 / f1011: 0x40c00, 0x1000, 0x41800 in that order.
   function hitFlashGate() {
-    if (!(HIT_FX_GAP < S.frame - P.t280)) return;
+    if (!(HIT_FX_GAP < S.mgr20 - P.t280)) return;
     if (opts.effect && opts.effect.spawn) opts.effect.spawn(0x1000, [0, 0, 0]);
-    P.t280 = S.frame;
+    P.t280 = S.mgr20;
   }
   // FUN_00554ea8 (the bullet's end), bullet +0x120 bit 0x80 clear (never set here): the shooter (+0x128,
   // FUN_0053b978) with an AI counts it: nothing hit (+0x14c == -1) -> FUN_00568e20 -> FUN_00360920 (AI
   // +0x74 += 1, +0x54 = now), else FUN_00568df8 -> FUN_00360900 (+0x78 += 1, +0x5c = now). With
   // enemy damage off a bullet still hits (and counts as +0x78); only Vincent's HP is kept.
+  // ---- worker 0232: the section stats (results.js; notes/results-research.md; T: w232 call log FUN_0031d668 sites)
+  function statAdd(k, n) { if (opts.stats && opts.stats.add) opts.stats.add(k, n); }   // FUN_0031d668
+  // Vincent's vt+0x31c FUN_005726e0(P, victim): FUN_0055e0d0, FUN_00572618(victim +0x9c +0x72) -> FUN_00320f70 (the gil /
+  // EXP add: not on the page), FUN_0031d668(0, 1); then FUN_005694a0(P, 0) unless the victim's status flag 0x19
+  // (FUN_00315738): stat 52 (the kill chain) only while the HUD's chain display is up (FUN_003b3538(HUD, 3)): not on the page
+  function playerKill(a) {
+    statAdd(0, 1);
+    warnOnce('enemy_ai: the kill\'s gil / EXP (FUN_00572618 -> FUN_00320f70) and kill-chain count (FUN_005694a0: the HUD chain FUN_003b3538) not translated');
+  }
+  // FUN_00554ea8 for a bullet that hit an object (+0x14c != -1) with +0x120 bit 2 (Vincent's 0x100004): stat 2 when its
+  // +0x140 hit nibble (bits 7..10) is 0 (the page's bullets end at their first hit: 0), stat 3 with +0x120 bit 0x40000
+  // (hitEnemy: zone flag 8 -> 0x60000). T: w232 f195 / f301 (the game counts it 3 frames after the hit: L)
+  function playerBulletStats(b) {
+    if (!(b.f120 & 4)) return;
+    if ((((b.f140 | 0) >> 7) & 0xf) === 0) statAdd(2, 1);
+    if (b.f120 & 0x40000) statAdd(3, 1);
+  }
   function bulletEnd(b, hit) {
     const ai = b.from && b.from.ai;
     if (!ai) return;
@@ -3322,6 +3458,7 @@ export function createEnemyAI(opts) {
     if (!aiPaused()) {                                                        // FUN_0055c7f8: nothing while FUN_00325b40 (bit 6)
       const before = P.hp;
       P.hp = Math.max(0, P.hp - dmg);                                         // FUN_003168c8 (clamp at 0: L)
+      statAdd(8, dmg);                                                        // FUN_0055c7f8: P+0x28 bit 2 -> FUN_0031d668(8, dmg)
       events.push(`hit player ${before}->${P.hp}`);
       log(`enemy_ai: Vincent HP ${before} -> ${P.hp} (shot by #${b.from.id})`);
       playerHitCues(dmg, dead(P));                                            // vt+0x324 FUN_00576ac8
@@ -3396,6 +3533,7 @@ export function createEnemyAI(opts) {
     // 3 -> 13, else 12] at the pulled-back muzzle (T: w172_sound3 bsj_051)
     const gun = W.flags & 8 ? 'bsj_061' : seName('gun', W.class === 2 ? 14 : W.class === 3 ? 13 : 12);
     if (gun) sound(gun, m0);
+    statAdd(1, 1);                                                            // FUN_00577480 (bullets made): FUN_0031d668(1, 1) (T: w232 f190)
     events.push(`player shot ${W.pellets}`);
   }
 
@@ -3647,11 +3785,11 @@ export function createEnemyAI(opts) {
   // FUN_0055d950(actor, hit value): the stagger flags 0x42 / 0x44 / 0x48. Thresholds 1 / 30 / 60
   // (FUN_00310c40 = G+0x64 < 27 in this save; else status +0x9c -> +0x94..+0x98).
   // The window is FUN_0054cbe8 = DAT_0046e938 +0x20 - actor +0x148 < 60 (the counter the flinch
-  // throttle reads; L: it counts frames, S.frame here).
+  // throttle reads; ticks: S.mgr20).
   function stagger(a, hv) {
-    if (S.frame - a.s148 < 60) { a.s150 += hv; a.s152 += hv; }
+    if (S.mgr20 - a.s148 < 60) { a.s150 += hv; a.s152 += hv; }
     else { a.s150 = hv; a.s152 = hv; a.sphase = 0; }
-    a.s148 = S.frame;
+    a.s148 = S.mgr20;
     let fl = 0;
     if (a.s152 >= 1) { fl = 0x42; a.s152 = 0; if (a.sphase === 0) a.sphase = 1; }
     if (a.sphase === 1 && a.s150 >= 30) { fl = 0x44; a.sphase = 2; }
@@ -3680,7 +3818,9 @@ export function createEnemyAI(opts) {
         if (!(a.f118 & 0x10000)) react(a, b.f148, dir, hitpos, 0);
       } else {
         enemyHP(a, dmg);                                                      // vt+0x1ec FUN_0055c7f8
-        // the shooter's vt+0x314 / +0x31c (Vincent's kill / damage callbacks): not translated
+        // the shooter's vt+0x314 (FUN_00572670: damage callback) not translated; vt+0x31c when the victim is dead now
+        // (FUN_00316cf8): Vincent's FUN_005726e0 (worker 0232)
+        if (b.from === P && dead(a)) playerKill(a);
         let flags = b.f148 | fl;
         if (zf & 2) flags = 0;
         if (!(a.f118 & 0x10000)) react(a, flags, dir, hitpos, 1);
@@ -3726,7 +3866,7 @@ export function createEnemyAI(opts) {
       const wasDead = dead(a);
       dmg = Math.min(defence({ ...ENEMY_STATUS, lvl: a.lvl }, ex.dmg, ex.kind), 9999);
       if (a.f118 & 0x60) dmg = 0;
-      if (!wasDead && dmg >= 0) { enemyHP(a, dmg); aiHit(a, ownerId, dmg); }
+      if (!wasDead && dmg >= 0) { enemyHP(a, dmg); if (owner === P && dead(a)) playerKill(a); aiHit(a, ownerId, dmg); }   // FUN_0055e498: owner vt+0x31c (worker 0232)
       if (!(a.f118 & 0x10000)) react(a, ex.flags, dir, centre, wasDead ? 0 : 1);
       if (a.f118 & 0x2000000) warnOnce('enemy_ai: blast on an actor with +0x118 bit 0x2000000 (FUN_00562898) not translated');
     }
@@ -3752,6 +3892,7 @@ export function createEnemyAI(opts) {
         if ((P.f118 | 0) < 0 && P.hp <= dmg) dmg = P.hp - 1;                  // FUN_0055c7f8
         const before = P.hp;
         P.hp = Math.max(0, P.hp - dmg);
+        statAdd(8, dmg);                                                      // FUN_0055c7f8 -> FUN_0031d668(8, dmg)
         events.push(`blast player ${before}->${P.hp}`);
         log(`enemy_ai: Vincent HP ${before} -> ${P.hp} (explosion)`);
         playerHitCues(dmg, dead(P));
@@ -3797,6 +3938,64 @@ export function createEnemyAI(opts) {
     // worker 0224: the drop (FUN_00316d70 -> FUN_00541688, its effect 0x4800 FUN_00580410; items.js `drop`)
     if (opts.items) opts.items.drop(a);
     else if (opts.effect) warnOnce('enemy_ai: no items.js: the soldier death item drop (FUN_00316d70 / FUN_00541688) left out');
+    // worker 0230: FUN_0055cac8's tail (0x55ce64): status +0x60 bit 1 clear, +0x28 bit 0x20 clear and status +0xc bit 1 clear
+    // (FUN_00315738(s, 1)) -> FUN_0053e9e0(mgr, id, -11, 300, -1, 0): the corpse chain (delayedTick). L: +0x60 = 0 on z128's
+    // actors; +0xc bit 1 is never set on the page (as `gone`); the other branches (+0xbc linked object: code -14 at 0x1a4,
+    // FUN_0055f0e0 / FUN_0056baa8) need data the page has not.
+    // an actor whose +0x38 came from a bit command (cmd 0x16b-0x16f) loses bits 2 and 0x200 as the stand-in does (GUESS as PROBE_BITS_DEAD)
+    if (a.f38own) a.f38 = (a.f38 & ~0x204) >>> 0;
+    if (a.flags28 & 0x20) warnOnce(`enemy_ai: #${a.id} died with +0x28 bit 0x20: FUN_0055cac8's other corpse branch not translated`);
+    else delayedPost(a.id, -11, 300);
+  }
+  // FUN_0053e9e0(mgr, id, code, delay, -1, 0): an entry due at mgr +0x20 + delay. Mgr +0x20 counts ticks, not frames: FUN_0053b500's
+  // end adds the integer part of its accumulator +0x24 (+= DAT_004eeb24, the step: 1.2 on PAL) after FUN_0053fde8 (S.mgr20 / S.mgr24
+  // here; every reader of mgr +0x20 uses S.mgr20; S.frame only counts the page's frames for the hand-off schedule).
+  // T: w230_corpse, 300 + 180 ticks = 400 frames. L: entries with the same due run in posting order
+  // (the list insert, FUN_0053e9e0's walk, keeps that for the page's cases).
+  function delayedPost(id, code, delay) {
+    const e = { id, code, due: S.mgr20 + delay };
+    let i = delayed.length;
+    while (i > 0 && delayed[i - 1].due - e.due > 0) i--;
+    delayed.splice(i, 0, e);
+  }
+  // FUN_0053edb0(mgr, id, code): the object's pending entries of that code leave the list
+  function delayedDrop(id, code) { for (let i = delayed.length - 1; i >= 0; i--) if (delayed[i].id === id && delayed[i].code === code) delayed.splice(i, 1); }
+  // FUN_0053f040: every entry with due - mgr +0x20 < 1, in list order. Codes (switch on code + 0xd3):
+  //  -11 (case 200): object +0x24 == 0x11 takes FUN_0057ce00 (not an actor: L); else the body (vt+0x11c -> +0xe8):
+  //       FUN_00342360(0.0, C, 180) = the fade to 0 over 180 frames (C+0x6b8 = 0, C+0x6bc = -C+0x6b4 / 180, C+0x564 |= 0x800000),
+  //       the weapon MP's FUN_005a78d8 (left out: enemies.js draws the weapon with the body), +0xe4 |= 2;
+  //       then FUN_0053e9e0(mgr, id, -10, 180, -1, 0).
+  //  -10 (case 0xc9): vt+300 (an actor has none: L) -> manager event 9 (FUN_0053fde8 case 10: off, script event 0x20).
+  // Other negative codes: warned. T: w230_corpse (k_hits12's inputs to f1400).
+  function delayedTick() {
+    while (delayed.length && delayed[0].due - S.mgr20 < 1) {
+      const e = delayed.shift(), o = objects.get(e.id);
+      if (!o) continue;
+      if (e.code === -11) {
+        if (o.kind === 'actor' && o.C) {
+          const C = o.C, d = Math.fround(0 - C.f6b4);
+          C.f6b8 = 0;
+          if (Math.abs(d) <= 0.0078125) { C.f6b4 = 0; C.f564 = (C.f564 & ~0x800000) >>> 0; }
+          else { C.f564 = (C.f564 | 0x800000) >>> 0; C.f6bc = Math.fround(d / 180); }
+          o.fe4 = (o.fe4 | 0) | 2;
+        }
+        delayedPost(e.id, -10, 180);
+      } else if (e.code === -10) postManager(9, e.id);
+      else if (e.code === -2) postManager(0x16, e.id);                        // case 0xd1 (cmd 0x113's period)
+      else warnOnce(`enemy_ai: delayed code ${e.code} (FUN_0053f040) not translated`);
+    }
+  }
+  // FUN_00343160's fade step (C+0x564 bit 0x800000): C+0x6b4 += C+0x6bc x step, stopped at C+0x6b8; the corpse's 180-tick
+  // fade (rate -1 / 180 per tick, x 1.2 a frame) takes 150 PAL frames. The draw alpha is
+  // C+0x6b4 x 128 (FUN_00343de8 -> MP FUN_005a86a8). MISSING: enemies.js does not draw it (how the MP alpha blends on the GS is
+  // not decoded; the corpse stays opaque until manager event 9 removes it).
+  function fadeStep(C, step) {
+    if (!(C.f564 & 0x800000)) return;
+    const v = Math.fround(C.f6b4 + Math.fround(C.f6bc * step));
+    C.f6b4 = v;
+    if ((C.f6bc > 0 && v > C.f6b8) || (C.f6bc < 0 && v < C.f6b8)) {
+      C.f6b4 = C.f6b8; C.f6bc = 0; C.f564 = (C.f564 & ~0x800000) >>> 0;
+    }
   }
 
   // FUN_00565480(actor, flags, hitdir, hitpos, wasAlive), the branches z128's soldiers take (notes §10.3)
@@ -3848,9 +4047,9 @@ export function createEnemyAI(opts) {
   // FUN_00561718: no new clip within 12 frames of the last (6 on a coin flip: one FUN_0040b5c0 draw,
   // int(r x 2) != 0); stance (actor +0x100 bits 40-41) 0 -> motion state 0x1e (FUN_00341780)
   function flinchClip(a) {
-    const el = S.frame - a.f144;                                              // FUN_0054cbe8: DAT_0046e938 +0x20 (L: frames)
+    const el = S.mgr20 - a.f144;                                              // FUN_0054cbe8: DAT_0046e938 +0x20 (ticks)
     const r = rng();
-    if (Math.trunc(r * 2) === 0 ? el < 12 : el < 6) { a.f144 = S.frame - 6; return 0; }
+    if (Math.trunc(r * 2) === 0 ? el < 12 : el < 6) { a.f144 = S.mgr20 - 6; return 0; }
     const st = (a.stance ?? 0) & 3;
     if (st !== 0) { warnOnce(`enemy_ai: flinch stance ${st} (motion 0x1f / actor state 0x11) not translated`); return 0; }
     setMotion(a, 0x1e);
@@ -3858,7 +4057,7 @@ export function createEnemyAI(opts) {
     // GUESS (blend): FUN_00598950 phase 0 sets the blend to 5 (FUN_00340bb8(C, 1, 5)) or none
     // (FUN_00340bb8(C, 0, -1)) by motion +0 == +0x70 (not decoded), then restores C+0x6c0 after the
     // request; the page keeps C+0x591 as it is (10)
-    a.f144 = S.frame;
+    a.f144 = S.mgr20;
     return 1;
   }
   // FUN_00560fc8: stop (FUN_003533e0), the death slide FUN_00353340(12, 16, C, dir) + mover 0xb for an
@@ -3939,7 +4138,7 @@ export function createEnemyAI(opts) {
       if (ai.amode === 3) action3(ai);                                        // action layer (+0xe4, FUN_00365110)
       else if (ai.amode === 2) action2(ai);
       else if (ai.amode === 5 || ai.amode === 6) action56(ai, ai.amode);
-      if (ai.combat) combat2(ai);                                             // combat layer (+0xe8)
+      if (ai.combat) { if (ai.combat.mode === 1) combat1(ai); else combat2(ai); }   // combat layer (+0xe8)
     }
     ai.last = S.now;
     ai.due = S.now + ai.interval;
@@ -3988,7 +4187,7 @@ export function createEnemyAI(opts) {
   // ------------------------------------------------ one game frame
   function tick(step, playerOld, playerNew) {
     events.length = 0;
-    S.frame++;                                                                // DAT_0046e938 +0x20 (frames)
+    S.frame++;                                                                // the page's frame count (hand-offs); mgr +0x20 is S.mgr20
     activated.length = 0;
     // 0. the nav search service FUN_00368420 (first in FUN_00323128): queued searches take their 40 steps
     if (G) NG.serviceUpdate(svc);
@@ -4066,10 +4265,14 @@ export function createEnemyAI(opts) {
     // 5. trigger volumes (the player's move this frame)
     if (playerOld && playerNew) for (const o of triggers) triggerCheck(o, playerNew, playerOld);
     // 5b. script timers FUN_0053e868, then FUN_0053f040 (not read), then FUN_0053fde8 (FUN_0053b500's last three calls)
+    for (const a of actors) if (a.C) fadeStep(a.C, step);                    // the bodies' FUN_00343160 (object updates; worker 0230)
     timerTick(step);
+    delayedTick();                                                           // FUN_0053f040 (worker 0230)
     // 6. manager events, FUN_0053fde8 (the last call of FUN_0053b500). L: the page's steps 1-5 are not
     // in the game's exact order, but they all run before this.
     drainManager();
+    // FUN_0053b500's end (worker 0230): mgr +0x24 += step; its integer part moves to +0x20 (the delayed list's clock)
+    { const v = Math.fround(S.mgr24 + step), n = Math.trunc(v); S.mgr24 = v; if (n > 0) { S.mgr20 += n; S.mgr24 = Math.fround(v - n); } }
     // the MP head layers advance as enemies.js's tick does after the AI (FUN_005aa2a8: frame += MP+0x40c x step,
     // the sum rounded toward zero; a looped layer wraps to 0 at n, any other holds n - 1); rootSample reads them
     // next frame. T: k_lunge166 #66 MP+0x218 (r_atk_0): 23.999971 after 40 frames (round to nearest: 24.00001)
@@ -4179,6 +4382,7 @@ export function createEnemyAI(opts) {
     const ti = timerList.indexOf(id); if (ti >= 0) timerList.splice(ti, 1);
     for (let i = mgrQueue.length - 1; i >= 0; i--) if (mgrQueue[i].id === id && mgrQueue[i].type !== 0) mgrQueue.splice(i, 1);
     for (let i = mailbox.length - 1; i >= 0; i--) if (mailbox[i].to === id) mailbox.splice(i, 1);
+    for (let i = delayed.length - 1; i >= 0; i--) if (delayed[i].id === id) delayed.splice(i, 1);   // worker 0230 (L, as the mailbox)
     if (o.kind === 'actor') {
       const i = actors.indexOf(o); if (i >= 0) actors.splice(i, 1);
       if (G) NG.setNode(G, o, -1);
@@ -4209,6 +4413,22 @@ export function createEnemyAI(opts) {
       else if (e.type === 0x11) runEvent(o, 0x26);                             // case 0x12: event 0x26, no args (the node is dropped)
       else if (e.type === 0x12) runEvent(o, 0x27, [e.arg, 0]);                 // case 0x13: event 0x27 (node, 0)
       else if (e.type === 6) runEvent(o, 0x21);                                // case 7: event 0x21, no args (cmd 0x14a; worker 0212)
+      // case 10 (type 9, worker 0230; posted by FUN_0053f040 code -10, the corpse): vt+0x144(o, 0, 1) (FUN_00559748 off), the
+      // object's matrix set upright from its own (FUN_0054a5e8 -> FUN_0054b238; nothing draws it once off), script event 0x20, no
+      // args; then, when the status +0x60 has bit 0x40000, the object is freed (FUN_0053e1e0, FUN_00318ea0). L: +0x60 = 0 on z128's
+      // actors (notes/enemy-ai-hook.md 'Other types'), so that branch is warned.
+      // case 0x17 (type 0x16, cmd 0x113's period; worker 0230): vt+0x22c FUN_0054cca8 = script event 0x18, result != 0 -> +0x36 = 0;
+      // else +0x36 > 0 -> code -2 again at +0x36 (after dropping a pending one), else +0x36 = 0
+      else if (e.type === 0x16) {
+        const res = runEvent(o, 0x18);
+        if (!res && (o.s36 | 0) > 0) { delayedDrop(o.id, -2); delayedPost(o.id, -2, o.s36); }
+        else o.s36 = 0;
+      }
+      else if (e.type === 9) {
+        setActive(o, 0, 1);
+        const q = objects.get(e.id);
+        if (q) runEvent(q, 0x20);
+      }
       // case 1 (cmd 0x10a's FUN_0053fa08; worker 0212): the key (+0x4c << 16 | id) still matches -> FUN_0053e1e0. The page
       // never re-creates an object under the same id, so the id alone is the key.
       else if (e.type === 0) destroyObject(o);
@@ -4219,12 +4439,14 @@ export function createEnemyAI(opts) {
   // boneWorld: (actor) => (bone) => world rows of that bone (the MP's last posed skeleton), set by the
   // page (enemies.js partPose) or a test; the part test needs it. playerShot(muzzle, aim, W): Vincent
   // fired, now; queueShot: the same at this frame's player slot inside the next tick (the page).
-  const world = { S, actors, triggers, bullets, attackObjs, objects, addActor, tick, runEvent, recById, events, activated, setActive, stageLoad, scheduleHandOff, handOffs,
+  const world = { S, actors, triggers, bullets, attackObjs, objects, addActor, tick, runEvent, recById, events, activated, setActive, stageLoad, scheduleHandOff, handOffs, delayed,
                   timerList,                              // script-timer list (FUN_0053e6e8; tests)
                   playerShot, queueShot, lockTargets, pushOut, boneWorld: opts.boneWorld || null,
                   eventFlags: EVFLAGS,
                   // manager +0x260 (cmds 0x40 / 0x10f write, 0x10e and props.js 0x2a / 0x2b / 4 read; worker 0212)
                   get mgr260() { return mgr260; }, set mgr260(v) { mgr260 = v; },
+                  hudGauge: () => hudGauge,               // worker 0231: manager 0x6e / 0x6f / 0x70
+                  get bossPlugin() { return bossPlugin; }, setBossPlugin: on => { bossPlugin = !!on; },   // FUN_00aa30c8 (Zone.boss)
                   playerObj: PLAYER_OBJ,                  // Vincent's script object (worker 0224: items.js runs his event 0x3a)
                   postManager,                            // FUN_0053fbe8 (props.js: cmd 0x14a's event 6)                    // the world's event flags (FUN_003ff738; tests: checkpoint.js)
                   playerBoneWorld: opts.playerBoneWorld || null,

@@ -97,18 +97,18 @@ const bullet = (o = {}) => ({ from: soldier(W0), start: [0, 0, 0], dir: [1, 0, 0
 }
 {
   // FUN_005720c8 (worker 0200): after FUN_0055db50's hit effect, DAT_0046ee28 (15) < now - P+0x280 -> FUN_00336508
-  // (0x1000, FED r0000, no position: 0) and P+0x280 = now. P+0x280 starts at -15 at the save's frame 1575 (S.frame 0).
+  // (0x1000, FED r0000, no position: 0) and P+0x280 = now. P+0x280 starts at -15 at the save's frame 1575 (S.mgr20 0).
   // T: w193_fxsrc f789: 0x40c00, 0x1000, then the bullet-end 0x41800
   const { world, log } = make();
-  const hitAt = fr => { world.S.frame = fr; log.length = 0; world.t.playerHandler(bullet({ cls: 3 }), { point: [1, 2, 3] }); return hex(log.filter(e => e[0] !== 'wall')); };
+  const hitAt = fr => { world.S.mgr20 = fr; log.length = 0; world.t.playerHandler(bullet({ cls: 3 }), { point: [1, 2, 3] }); return hex(log.filter(e => e[0] !== 'wall')); };
   const r = [hitAt(0), hitAt(10), hitAt(15), hitAt(16), hitAt(31), hitAt(32)];
   ok('hit on Vincent: 0x1000 at position 0 after the hit effect, first hit (S.frame 0) passes', r[0] === 'hit:0x40c00 end:0x1000', r[0]);
   ok('hit on Vincent: the 15-frame gate (gap 10 / 15 none, 16 yes; then from that hit: 15 none, 16 yes)',
     !r[1].includes('0x1000') && !r[2].includes('0x1000') && r[3].endsWith('end:0x1000') && !r[4].includes('0x1000') && r[5].endsWith('end:0x1000'), JSON.stringify(r));
-  const z = (() => { world.S.frame = 100; log.length = 0; world.t.playerHandler(bullet({ cls: 3 }), { point: [1, 2, 3] }); return log.find(e => e[1] === 0x1000); })();
+  const z = (() => { world.S.mgr20 = 100; log.length = 0; world.t.playerHandler(bullet({ cls: 3 }), { point: [1, 2, 3] }); return log.find(e => e[1] === 0x1000); })();
   ok('hit on Vincent: 0x1000 spawned at (0, 0, 0) (FUN_00336508 has no FUN_002e7660)', z && z[2].join() === '0,0,0');
   // a soldier's melee hit (FUN_0057a830 -> vt+0x1e4 FUN_005725d8): FUN_0055eac8, then FUN_00336508 with no gate
-  world.S.frame = 101; log.length = 0;
+  world.S.mgr20 = 101; log.length = 0;
   const o = { owner: { id: 66, pos: [10, 0, 0], ai: null }, dmg: 0, kind: 0, type: 0, c1: 0 };
   world.t.attackApply(o, null, null, null); world.t.attackApply(o, null, null, null);
   ok('melee hit on Vincent: 0x1000 each time (FUN_005725d8: no gate)', hex(log) === 'end:0x1000 end:0x1000', hex(log));

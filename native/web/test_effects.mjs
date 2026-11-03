@@ -10,6 +10,7 @@ import { readFileSync, existsSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createEffects, EffectRng, wallImpactId, parseFed, parseCore, _internals, screenClip } from './effects.js';
+import { createRoomOccl } from './room_occl.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const rd = p => { const b = readFileSync(p); return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength); };
@@ -165,7 +166,11 @@ const ok = (what, cond, info = '') => { checks++; if (!cond) { fails++; console.
   if (!(ids.stage || []).every(n => existsSync(S(n))) || !(ids.stage || []).length) console.log('  (no stage FEDs in data/effects: the stage-fire checks are skipped; re-run export_web_effects.py)');
   else {
     const stage = ids.stage.map(n => rd(S(n)));
-    const mkStage = rng => createEffects({ fed: stage[0], stage, core, rng, rand: ids.rand, cull: true, hidden: ids.hidden, models0: true, warn: () => {} });
+    // the room's occluder volumes (room_occl.js, worker 0233; data/scene.json 'occl' or ROOM_OCCL=<room manifest>), or none
+    const occlSrc = process.env.ROOM_OCCL || join(here, 'data/scene.json');
+    const occlData = existsSync(occlSrc) ? JSON.parse(readFileSync(occlSrc, 'utf8')).occl : null;
+    const roomOccl = occlData ? createRoomOccl(occlData) : null;
+    const mkStage = (rng, occl = null) => createEffects({ fed: stage[0], stage, core, rng, rand: ids.rand, cull: true, hidden: ids.hidden, models0: true, occl, warn: () => {} });
     const viewOf = V => ({ toView: p => [0, 1, 2].map(j => f(f(f(p[0] * V[j]) + f(p[1] * V[4 + j])) + f(f(p[2] * V[8 + j]) + V[12 + j]))),
       toViewMatrix: () => Float32Array.from(V), eye: [0, 1, 2].map(i => -(V[12] * V[4 * i] + V[13] * V[4 * i + 1] + V[14] * V[4 * i + 2])) });
     // hand cases (no game data): type 61's envelope and type 62's in-place product
@@ -218,20 +223,45 @@ const ok = (what, cond, info = '') => { checks++; if (!cond) { fails++; console.
     // FUN_002f15d0 -> FUN_002e4e38: the stage-load pass spawns the game's emitter list (FED, emitter, record, place, order)
     let same = 0, cullEq = 0, cullN = 0, alphaBad = '', occl = 0;
     for (const n of st208) {
-      const st = JSON.parse(readFileSync(join(out208, n), 'utf8')), fx = mkStage(undefined), ems = fx.stageLoad();
+      const st = JSON.parse(readFileSync(join(out208, n), 'utf8')), fx = mkStage(undefined, roomOccl), ems = fx.stageLoad();
+      if (roomOccl) roomOccl.frame(Float32Array.from(st.cam.view), [0, 1, 2]);   // every w208 state: slots 0 / 1 / 2 (FUN_00269868 before the cull)
       fx.end(viewOf(st.cam.view));
       if (ems.length === st.emitters.length && ems.every((e, i) => e.F.code === st.emitters[i].code && e.ei === st.emitters[i].ei && e.param === st.emitters[i].rec &&
         [0, 1, 2].every(k => Math.abs(e.m[12 + k] - st.emitters[i].p80[k]) < 1e-3))) same++;
-      // FUN_002ea6a0: +0x0a's cull bits per emitter (0x200: the occluder test, not translated: the page may draw those)
+      // FUN_002ea6a0: +0x0a's cull bits per emitter (0x200: the occluder test, room_occl.js; without its data not compared)
       ems.forEach((e, i) => { const r = st.emitters[i]; cullN++; if (!r || r.code !== e.F.code || r.ei !== e.ei) return; const a = e.f0a & 0x380, b = r.f0a & 0x380;
         if (b === 0x200) occl++;
-        if (a === b || b === 0x200) cullEq++;
+        if (a === b || (b === 0x200 && !roomOccl)) cullEq++;
         if (!a && !b && Math.abs(e.col[3] - r.col[3]) > 1e-5) alphaBad += `${n} #${i} ${e.col[3]} vs ${r.col[3]}; `; });
     }
     if (st208.length) {
       ok(`stage load (FUN_002e4e38): the RAM's emitter list in ${st208.length} states (76 emitters: FED, emitter, param record, position, order)`, same === st208.length, `${same}/${st208.length}`);
-      ok(`emitter cull (FUN_002ea6a0): +0x0a's 0x100 / 0x80 bits equal RAM (${cullEq}/${cullN}; ${occl} occluder-culled 0x200 not compared)`, cullEq === cullN, `${cullEq}/${cullN}`);
+      ok(`emitter cull (FUN_002ea6a0): +0x0a's 0x100 / 0x80 / 0x200 bits equal RAM (${cullEq}/${cullN}; ${occl} occluder-culled 0x200 ${roomOccl ? 'compared' : 'not compared: no occl data'})`, cullEq === cullN && (!!roomOccl || !occl), `${cullEq}/${cullN}`);
       ok('emitter cull: the visible emitters\' alpha +0xbc equals RAM (the screen-size / distance fades)', !alphaBad, alphaBad.slice(0, 300));
+      // the occluder test's corners (worker 0233; LAB_002ea898): a recording stand-in for the room volumes catches the 8
+      // points the cull hands FUN_00269978; each set must be an emitter's param +0x40 box (x +-0.5) through its matrix with
+      // row 3 = the +0x50 centre, in every box mode (0 included: not the clip test's DAT_0046d280 / DAT_004ee780)
+      {
+        const st = JSON.parse(readFileSync(join(out208, st208[0]), 'utf8')), rec = [];
+        const fake = { count: 1, inside(pts, n) { rec.push(Array.from(pts.slice(0, 3 * n))); return false; } };
+        const fx = mkStage(undefined, fake), ems = fx.stageLoad();
+        fx.end(viewOf(st.cam.view));
+        const S8 = [[-1, -1, -1], [-1, -1, 1], [1, -1, 1], [1, -1, -1], [-1, 1, -1], [-1, 1, 1], [1, 1, 1], [1, 1, -1]];
+        const want = ems.map(e => {
+          const F = e.F, r = e.param, b = [0, 4, 8].map(o => F.f32(r + 0x40 + o)), c = [0, 4, 8].map(o => F.f32(r + 0x50 + o)), m = e.m;
+          const t = [0, 1, 2].map(j => c[0] * m[j] + c[1] * m[4 + j] + c[2] * m[8 + j] + m[12 + j]);
+          return { mode: F.u8(r + 0x1e), pts: S8.flatMap(sg => [0, 1, 2].map(j => (b[0] * 0.5 * sg[0]) * m[j] + (b[1] * 0.5 * sg[1]) * m[4 + j] + (b[2] * 0.5 * sg[2]) * m[8 + j] + t[j])) };
+        });
+        const hist = {}; for (const w of want) hist[w.mode] = (hist[w.mode] || 0) + 1;
+        console.log(`  stage emitters by box mode (+0x1e): ${JSON.stringify(hist)}`);
+        let matched = 0, mode0 = 0;
+        for (const p of rec) {
+          const w = want.find(x => x.pts.every((v, k) => Math.abs(v - p[k]) <= 1e-3 * (1 + Math.abs(v))));
+          if (w) { matched++; if (w.mode === 0) mode0++; }
+        }
+        // z128's stage emitters use box modes 1 / 2 only: mode 0's branch (+0x40 / +0x50, not the clip test's box) is not exercised
+        ok(`occluder test (LAB_002ea898): the corners handed to FUN_00269978 are the param +0x40 box through the matrix with the +0x50 centre (${matched}/${rec.length}; ${mode0} in box mode 0, which z128 lacks)`, rec.length >= 5 && matched === rec.length, `${matched}/${rec.length}`);
+      }
     }
     // the draw against the GS dumps of w208_still (camera still; dump = state + 3 frames): the level manager restored from RAM,
     // replayed 3 frames (RNG reseeded from the state's rand()), drawn

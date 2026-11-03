@@ -24,6 +24,7 @@
 
 import { EventRuntime } from './event_rt.js';
 import { EventVM, block } from './event_vm.js';
+import { EventActors } from './event_actor_rt.js';
 
 const f32 = Math.fround;
 
@@ -75,7 +76,10 @@ class StageVM extends EventVM {
 
 export class StageRuntime extends EventRuntime {
   constructor(data, o = {}) {
-    super(data, { warn: o.warn, lang: o.lang });
+    // the actor slots (event +0x1800, 64 x 0x200): worker 0218's EventActors for the slot state and its natives (load_l,
+    // setpos_l, setVisible_l ...). Nothing draws the stage's event-loaded models on the page (left out, warned); the
+    // battle actors below lend the gameplay objects' own models to slots (worker 0229)
+    super(data, { warn: o.warn, lang: o.lang, actors: new EventActors({ warn: o.warn || ((m) => console.warn(m)) }) });
     this.o = o;
     // +0x156c. opts.skip: its value at the hand-off (the opening's runtime, intro.js: 2 when the player skipped it), so
     // main's isSkip() after first_event takes the game's branch (kalm_ld(100)) until battle() clears it (worker 0222)
@@ -139,6 +143,7 @@ export class StageRuntime extends EventRuntime {
   frame(dtMs = 20) {
     this.frameNo++;
     if (this.log.length > 4000) this.log.splice(0, 2000);              // page memory: the log is for tests
+    this.lentUpdate();                                                  // the statuses' update (main thread, before the VM window)
     if (!this.vm.done) this.vm.run();                                   // the VM thread's time this frame
     this.cardStep();
     this.clock = (this.clock + dtMs) >>> 0;                              // FUN_003798a0
@@ -193,13 +198,69 @@ export class StageRuntime extends EventRuntime {
   enterBattle(n) {
     this.warnOnce('stage: FUN_0037cf30\'s sound / effect / HUD calls (FUN_003eebc0, FUN_003e8888, FUN_003e6eb8, FUN_00241760, the event actors\' release FUN_00376890 / FUN_00376c80, FUN_00324128 ...) left out');
     const gs = this.o.gameState && this.o.gameState();
+    // the slot loops: a named slot (+0xa5) keeps its actor for the status that takes it (FUN_00376890 only frees its
+    // attachments); the others are finalized, FUN_00376c80(ev, slot, 1): a lent model is freed (FUN_005a7d88), so
+    // its object builds a new one in its next update (FUN_003159b8's other branch: FUN_00409908 / FUN_00408b30)
+    for (const a of this.actors.slots.slice()) {
+      if (a.tag) continue;
+      this.actors.slots.splice(this.actors.slots.indexOf(a), 1);
+      if (a.lent) { a.lent.release(); this.log.push([this.frameNo, 'battle actor ' + a.id + ' freed']); this.warnOnce('stage: an unnamed battle actor\'s object after battle() (FUN_003159b8 -> FUN_00408b30, a new model at its status place) is drawn by its own system again; where its status is then is not translated'); }
+    }
     if (gs) { gs.clear(2); gs.clear(6); }
+    // FUN_00324e70(FUN_0037cee8() != 0): with DAT_004b8ac8 bit 5 clear (FUN_002419d8(5) == 0 in the z128 states;
+    // player.js DAT_004B8AC8) its second branch runs: FUN_00319190 (each status takes the slot named after it), then
+    // the camera reset FUN_00329f68 -> FUN_003285d0 (angles from render view 1's forward)
+    this.handBackAll();
+    if (this.o.cameraReset) this.o.cameraReset(this.view); else this.warnOnce('stage: battle()\'s camera reset (FUN_00329f68) not wired');
+    this.warnOnce('stage: FUN_00324e70\'s player calls (FUN_00578548, FUN_00574928, FUN_0034b2c8, FUN_00331ab0 ...) left out');
     this.cams.forEach(c => { c.active = false; });
     this.skip = 0;
     this.battle = true;
     this.battleTimer = n > 0 ? n : 0;
     this.log.push([this.frameNo, 'battle ' + n]);
     if (this.o.onMode) this.o.onMode('battle');
+  }
+
+  // ---- battle actors (worker 0229). A slot can hold a gameplay object's own model (getbattleactor); a slot's battle
+  // name (+0xa5, setbattlename) is the 8-char status name (FUN_00316d40: section-1 record +0x44) of the object that
+  // takes the slot's place back. opts.battleObject(name) -> the page's object for that status name, or null:
+  //   matrix() -> the model's 16 floats (rows), lend() / release(), show(bool), place(pos, face)
+
+  // FUN_00376938(name) + FUN_003157b0(status, 0): the slot named `name` is released (FUN_003771e0, FUN_00376890,
+  // FUN_00376c80(.., 0)) and the status takes its place: +0x30 = the model root's row 3 with bone 1's offset (y 0),
+  // +0x40 = -row 2, normalised. Needs the event program running (+0x1558 bit 44).
+  handBack(a) {
+    const obj = this.o.battleObject && this.o.battleObject(a.tag);
+    if (!obj || !this.running) return false;
+    this.actors.slots.splice(this.actors.slots.indexOf(a), 1);
+    const M = a.M, n = Math.hypot(M[8], M[9], M[10]);
+    // GUESS: bone 1's offset is left out (the slot's motion is not posed on the page: its clip is not exported for the
+    // stage); T w229_rescue_pos: x / z = setpos's floats exactly, so it is 0 there (notes/fidelity-audit.md)
+    const pos = [M[12], M[13], M[14]], face = [f32(-M[8] / n), f32(-M[9] / n), f32(-M[10] / n)];
+    obj.place(pos, face);
+    obj.release();                                                      // its model is drawn by its own system again
+    if (a.lent && a.lent.tag !== a.tag) this.warnOnce('stage: a slot lending ' + a.lent.tag + '\'s model was taken by ' + a.tag + ' (left out)');
+    // FUN_00380858(MP) for p_Vin: DAT_0046e290 +0x50 = the model (the camera's player model; no page state)
+    this.log.push([this.frameNo, 'handback ' + a.tag + ' ' + pos.map(v => v.toFixed(2)) + ' face ' + face.map(v => v.toFixed(3))]);
+    return true;
+  }
+
+  // the status update of a lent object (+0x88 == 0 after FUN_0056a5e0): FUN_003159b8 -> FUN_00376938 takes the slot
+  // named after it as soon as there is one (main's setbattlename, before battle())
+  lentUpdate() {
+    for (const a of this.actors.slots.slice()) {
+      if (!a.lent) continue;
+      const b = this.actors.slots.find(s => s.tag && s.tag === a.lent.tag);
+      if (b) this.handBack(b);
+    }
+  }
+
+  // FUN_00319190 (in battle()'s FUN_00324e70): every status (+0xc bit 3; L: the ones the page resolves by name) takes the
+  // slot named after it. GUESS: an object whose model is its own (+0x88 != 0: an event-loaded slot such as main's p000
+  // after rv_matiawase) is placed from the slot too; the decompile places it from its own model (FUN_003157b0), but T
+  // w229_rescue (f1850) has Vincent at that slot's setpos / setdir (notes/fidelity-audit.md)
+  handBackAll() {
+    for (const a of this.actors.slots.slice()) if (a.tag) this.handBack(a);
   }
 
   // FUN_0037e048(ev, n): event mode: +0x9864 = n, waits (the stream FUN_00267358, +0x1560, ...), bit 37 cleared,
@@ -316,6 +377,14 @@ export class StageRuntime extends EventRuntime {
         log('scene_save ' + n);
         if (o().onSceneSave) o().onSceneSave(n); else R.warnOnce('stage: scene_save (the checkpoint save FUN_0023d690 / FUN_003bf250) not translated');
       },
+      // worker 0231 (notes/boss-research.md): boss(Z) (FUN_0039c510 -> FUN_0037fe18(ev, zone, on)): on loads
+      // kel_boss_z<zone>.ovl at 0xaa0000 and runs its entry (z128: 0xaa0080 -> FUN_00aa30c8(0): the plug-in
+      // DAT_0046e590 whose vt+0x14 FUN_00aa3090 makes AI mode 0x100's brain); off -> FUN_00aa30c8(-1) deletes it.
+      // Skipped in mode bit 0 (FUN_002419d8(0): 0 in story mode). The page: enemy_ai world.setBossPlugin.
+      'fake/KerberosZone.boss(Z)V': (vm, [on]) => {
+        log('boss ' + (on ? 1 : 0));
+        if (o().bossOverlay) o().bossOverlay(!!on); else R.warnOnce('stage: Zone.boss: no enemy_ai world (the boss plug-in not set)');
+      },
       'fake/KerberosZone.wait_save()V': () => {},                                  // FUN_0039c6f0: no save in flight on the page
       // load_l (FUN_0039c8e8 -> FUN_0037a3b8): command 4 (zone, a, b); FUN_00381518 runs it (zoneStep)
       'fake/KerberosZone.load_l(III)I': (vm, [z, a, b]) => { log('zone ' + [z, a, b]); return R.cmd(4, { zone: z, a, b, st: 0 }); },
@@ -346,10 +415,61 @@ export class StageRuntime extends EventRuntime {
       },
       'fake/KerberosSound.stopBgAreaSound()V': () => { log('area stop'); const a = o().area && o().area(); if (a) a.stop(); },
       // ---- fake/KerberosIntermission
-      'fake/KerberosIntermission.setSectionStat(II)V': (vm, [k, v]) => { R.sectionStat[k] = v; },   // FUN_003a53e0
+      // FUN_003a53e0 -> FUN_0031d698: results.js's stats when given (o().stats, worker 0232)
+      'fake/KerberosIntermission.setSectionStat(II)V': (vm, [k, v]) => { R.sectionStat[k] = v; const st = o().stats && o().stats(); if (st) st.set(k, v); },
+      // calc FUN_003a55e8 -> FUN_003a9b88: KerberosIntermissionCalc.calc() (results.js runCalc, worker 0232); every
+      // displayStageInfo(I / ILString) of the event library calls it first
+      'fake/KerberosIntermission.calc()V': (vm) => { log('calc'); if (o().calc) o().calc(vm); else R.warnOnce('stage: Intermission.calc (FUN_003a55e8: KerberosIntermissionCalc) not translated'); },
       'fake/KerberosIntermission.endSection()V': () => {                                           // FUN_003a26a8
         log('endSection');
         if (o().onEndSection) o().onEndSection(); else R.warnOnce('stage: endSection (FUN_003a26a8: the level end / results) not translated');
+      },
+      // ---- fake/KerberosActor: battle actors (worker 0229; class registry DAT_004ef498, method +0x0c)
+      // getbattleactor_l(id, name) (FUN_0039e1a8 -> FUN_00376b00): the status by name (FUN_003193c0: 8 chars) -> its
+      // object (FUN_0053bd50) -> FUN_0056a5e0 takes the object's model (+0x180 = 0, +0x28 |= 0x40, status +0x88 = 0 and
+      // +0x60 |= 4: FUN_00315758(s, 1)); MP+0x428 &= ~0x200; a new slot with that model (FUN_00376308(ev, mp, 0, id):
+      // visible + clipped), FUN_005a86a0(mp, 0), the slot matrix = the model's (MP +0x10.. -> slot +0x20..); for p_Vin
+      // FUN_00380858(0). No object by that name: nothing
+      'fake/KerberosActor.getbattleactor_l(ILjava/lang/String;)V': (vm, [id, s]) => {
+        const name = str(s), obj = o().battleObject && o().battleObject(name);
+        log('getbattleactor ' + id + ' ' + name + (obj ? '' : ' (none)'));
+        if (!obj) { R.warnOnce('stage: getbattleactor(' + name + '): no page object by that name (left out)'); return; }
+        const a = R.actors.create(name, id);
+        if (!a) return;
+        a.M = obj.matrix().map(f32);
+        a.lent = obj; obj.lend();
+      },
+      // setbattlename_l(id, name) (FUN_0039d430 -> FUN_003765a0): the frame sync FUN_0037e4e0, then slot +0xa5 = name
+      // (FUN_00422d18, 8 bytes)
+      'fake/KerberosActor.setbattlename_l(ILjava/lang/String;)V': (vm, [id, s]) => {
+        const f0 = R.frameNo;
+        return block(() => R.frameNo > f0, () => { const a = R.actors.get(id); if (a) { a.tag = str(s).slice(0, 8); log('battlename ' + id + ' ' + a.tag); } });
+      },
+      // setdir_l(id, x, y, z, b) (FUN_0039f038; b is popped and not used) -> FUN_0037c300 -> FUN_00383d10(out, M, target):
+      // d = row 3 - target with d.y = 0; row 0 = row 1 x d, row 2 = row 0 x row 1, row 1 = row 2 x row 0, each
+      // normalised (rsqrt), row 3 kept. So row 2 = d / |d|: the actor faces the target (-row 2)
+      'fake/KerberosActor.setdir_l(IFFFZ)V': (vm, [id, x, y, z]) => {
+        const a = R.actors.get(id); if (!a) return;
+        const M = a.M, cr = (p, q) => [f32(f32(p[1] * q[2]) - f32(p[2] * q[1])), f32(f32(p[2] * q[0]) - f32(p[0] * q[2])), f32(f32(p[0] * q[1]) - f32(p[1] * q[0]))];
+        const nz = (v) => { const r = f32(1 / Math.sqrt(f32(f32(f32(v[0] * v[0]) + f32(v[1] * v[1])) + f32(v[2] * v[2])))); return v.map(c => f32(c * r)); };
+        const d = [f32(M[12] - x), 0, f32(M[14] - z)], r1 = [M[4], M[5], M[6]];
+        const r0 = cr(r1, d), r2 = cr(r0, r1), r1n = cr(r2, r0);
+        const [n0, n1, n2] = [nz(r0), nz(r1n), nz(r2)];
+        M[0] = n0[0]; M[1] = n0[1]; M[2] = n0[2]; M[4] = n1[0]; M[5] = n1[1]; M[6] = n1[2]; M[8] = n2[0]; M[9] = n2[1]; M[10] = n2[2];
+      },
+      // finalize_l (FUN_003a3410 -> FUN_00376c80(ev, slot, 0)): the slot goes, a lent model is not freed (param 0); the
+      // object's +0x88 stays 0 and its next update builds a model (FUN_003159b8's other branch): its own drawing again
+      'fake/KerberosActor.finalize_l(I)V': (vm, [id]) => {
+        const a = R.actors.get(id); if (!a) return;
+        R.actors.slots.splice(R.actors.slots.indexOf(a), 1);
+        if (a.lent) a.lent.release();
+        log('finalize ' + id);
+      },
+      // setVisible_l (FUN_003a3478 -> FUN_0037ede8): +0xa8 bit 49 (event_actor_rt.js); a lent model is the object's own
+      'fake/KerberosActor.setVisible_l(IZ)V': (vm, [id, v]) => {
+        const a = R.actors.get(id); if (!a) return;
+        a.visible = !!v;
+        if (a.lent) a.lent.show(!!v);
       },
       'fake/KerberosCamera.setBattleCameraInterpolationTime(F)V': (vm, [t]) => { R.state.battleCamMs = f32(t); R.warnOnce('stage: setBattleCameraInterpolationTime not translated (the follow camera\'s blend from the event camera)'); },
     });

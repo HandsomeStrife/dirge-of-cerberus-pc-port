@@ -610,7 +610,30 @@ for _k, _a in enumerate(x for x in __import__("os").environ.get("TRACE_ITEMS", "
     _a = int(_a, 16)
     ITEMS_FIELDS += [("it%d" % _k, None, _a + 0x20, "bytes:208", "D", "item %#x +0x20 .. +0xf0" % _a)]
 
+# Opt-in set for the level end / Status screen (TRACE_FIELDSET=results, worker 0232; notes/results-research.md): the
+# section stats DAT_0046e228 (0xa09b00 in the z128 states: +0 start, +4 end, +8 KO start, +0x10 + 4k stat k), the play
+# clock DAT_0046b308 / KO counter DAT_0046b304, PTR_0047db90, the stage-info kind / state / box (as 'stageinfo'), the
+# loader request DAT_004f5570 (calc: request 7). TRACE_SIBOX=addr adds the box's timeline and its +0xff0 stats copy.
+RESULTS_FIELDS = [f for f in FIELDS if f[0] in ("step",)] + [
+    ("st_head", None, 0xA09B00, "bytes:16", "D", "stats +0 start, +4 end, +8 KO start, +0xc"),
+    ("st_sect", None, 0xA09B10, "bytes:80", "D", "section stats 0..19 (the box copy has all 54)"),
+    ("clk", None, 0x46B304, "bytes:16", "D", "DAT_0046b304 KOs, 308 play seconds, 30c last second, 310 running"),
+    ("db90", None, 0x47DB90, "u32", "D", "PTR_0047db90"),
+    ("si_kind", None, 0x47DB6C, "bytes:36", "D", "PTR_0047db6c kind .. db8c"),
+    ("si_state", None, 0x4FADBC, "u32", "D", "DAT_004fadbc: FUN_003fdf00 state"),
+    ("si_box", None, 0x479160, "u32", "D", "DAT_00479160: the box (FUN_003c5358)"),
+    ("ldr", None, 0x4F5570, "bytes:8", "D", "DAT_004f5570 loader state, 5572 request"),
+    ("gclock", None, 0x4B8B2C, "u32", "D", "DAT_004b8b2c game state"),
+]
+if __import__("os").environ.get("TRACE_SIBOX"):
+    _b = int(__import__("os").environ["TRACE_SIBOX"], 16)
+    RESULTS_FIELDS += [("sb_tl", None, _b + 0x47C, "bytes:20", "D", "box +0x47c step, +0x480 start, +0x484 hold, +0x488 table, +0x48c kind / mode / result / +0x48f"),
+                       ("sb_stats", None, _b + 0xFF0, "bytes:216", "D", "box +0xff0 stats copy"),
+                       ("sb_1028", None, _b + 0x1028, "u32", "D", "box +0x1028")]
+
 FIELDSET = __import__("os").environ.get("TRACE_FIELDSET")
+if FIELDSET == "results":
+    FIELDS = RESULTS_FIELDS
 if FIELDSET == "items":
     FIELDS = ITEMS_FIELDS
 if FIELDSET == "stage":

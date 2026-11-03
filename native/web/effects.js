@@ -29,7 +29,7 @@
 // Not on the page (warned once, listed in notes/fidelity-audit.md): draw types 100 / 110 (frame-buffer
 // filter), 50 / 53 / 56 (lens flares), type 11 / 20's FUN_002f93d8 (flag 0x2000), type 107's frame-buffer mode,
 // channel types 8 / 26, render categories 2 / 7 / 9, rotation orders 1-5, emitter
-// param +0x1d >= 2, the emitter fade (those are simulated but not drawn), the occluder test (FUN_00269978),
+// param +0x1d >= 2, the emitter fade (those are simulated but not drawn),
 // the cull on the impacts' manager, the depth buckets (FUN_002e1c90: depth-sorted order).
 
 const f = Math.fround;
@@ -1398,7 +1398,7 @@ const SGN_A = [[-1, -1, -1], [-1, -1, 1], [1, -1, 1], [1, -1, -1], [-1, 1, -1], 
 const SGN_B = SGN_A;                                                                                                    // DAT_0046c7c0 (floats +-0.5)
 // the box corners go through one matrix, M . view (FUN_002d8368 first, then FUN_002d8578 per corner, as the game), into
 // module scratch (no allocation per frame: review)
-const CUL = { MV: new Float32Array(16), Mc: new Float32Array(16), p: [0, 0, 0] };
+const CUL = { MV: new Float32Array(16), Mc: new Float32Array(16), p: [0, 0, 0], oc: new Float32Array(24) };
 function boxMV(M, view) {
   const V = view.toViewMatrix(), o = CUL.MV;
   for (let r = 0; r < 4; r++) for (let j = 0; j < 4; j++)
@@ -1482,7 +1482,7 @@ function angleFade(em, r, am, view) {
 // FileCodes 0x20000000 | area << 18), in load order; `cull` = run FUN_002ea6a0's emitter cull in end(view) (`hidden`: the
 // cell numbers whose bit is set in DAT_004e8710 = DAT_004e86f0 | DAT_004e8700, from a save state: tests; `mask`: the live
 // mask object, room_vis.js createVisMask, shared with the room, worker 0225)
-export function createEffects({ fed, fed0 = null, core, warn = console.warn, twister = null, rand = null, rng = null, proj = PROJ, reseed = true, stage = [], cull = false, hidden = null, hiddenScript = null, mask = null, models0 = false } = {}) {
+export function createEffects({ fed, fed0 = null, core, warn = console.warn, twister = null, rand = null, rng = null, proj = PROJ, reseed = true, stage = [], cull = false, hidden = null, hiddenScript = null, mask = null, occl = null, models0 = false } = {}) {
   const rngGiven = !!rng;
   rng ??= new EffectRng(undefined, undefined, twister, rand);
   const F0 = parseFed(fed);
@@ -1822,7 +1822,7 @@ export function createEffects({ fed, fed0 = null, core, warn = console.warn, twi
   // +0x30 of DAT_004e8710 (FUN_00269498); 0x80 when the box (+0x1e: 0 = DAT_0046d280 (100, 100, 100), 2 / 3 = +0x40 size;
   // 1 or > 3: no test) is wholly outside one clip plane (FUN_002da928) or its fade (+0x1f: 0 / 4 the screen size
   // FUN_002daae8 with DAT_0046d2a0 / DAT_0046d2b8, 2 / 3 the eye distance FUN_002dac58 with +0x3c / +0x4c, 1 none) is 0;
-  // 0x200 for an occluder hit (FUN_00269978, not translated: GUESS never occluded); else the alpha +0xbc = +0x15c x +0xd0 x
+  // 0x200 for an occluder hit (FUN_00269978 against the room's volumes: occl = room_occl.js, worker 0233); else the alpha +0xbc = +0x15c x +0xd0 x
   // fade, times the angle fade (+0x06: 2 / 3). Returns true when culled (no FUN_002eacc8, no draw).
   function cullEmitter(em, view) {
     const r = em.param;
@@ -1846,7 +1846,21 @@ export function createEffects({ fed, fed0 = null, core, warn = console.warn, twi
         for (let j = 0; j < 3; j++) Mc[12 + j] = f(f(f(ctr[0] * em.m[j]) + f(ctr[1] * em.m[4 + j])) + f(f(ctr[2] * em.m[8 + j]) + em.m[12 + j]));
         Mc[15] = 1; const c = Mc.subarray(12, 15);
         if (clipOut(Mc, box, view)) { em.f0a |= 0x80; return true; }
-        // GUESS: the occluder test never hits (FUN_00269978, volumes DAT_004e5db0 built per frame by the room renderer FUN_0026c878: not decoded; see notes/fidelity-audit.md)
+        // LAB_002ea898 (worker 0233): the 8 corners FUN_002d9df8 (param +0x40 x DAT_0046c720 = SGN_A x 0.5, w 1; +0x40 / +0x50
+        // in every box mode, also 0) through the matrix with row 3 = the +0x50 centre (FUN_002d8578); all inside one of this
+        // frame's room occluder volumes (FUN_00269978; room_occl.js, built by the room draw before this cull) -> 0x200
+        if (occl && occl.count) {
+          const bx = em.cbox ?? [F.f32(r + 0x40), F.f32(r + 0x44), F.f32(r + 0x48)], cc = em.cctr ?? [F.f32(r + 0x50), F.f32(r + 0x54), F.f32(r + 0x58)];
+          if (mode === 0) { em.cbox = bx; em.cctr = cc; }
+          const Mo = mode === 0 ? CUL.MV : Mc;       // mode 0's Mc has the DAT_004ee780 centre: rebuild with +0x50
+          if (mode === 0) { Mo.set(em.m); for (let j = 0; j < 3; j++) Mo[12 + j] = f(f(f(cc[0] * em.m[j]) + f(cc[1] * em.m[4 + j])) + f(f(cc[2] * em.m[8 + j]) + em.m[12 + j])); Mo[15] = 1; }
+          const oc = CUL.oc;
+          for (let k = 0; k < 8; k++) {
+            const s = SGN_A[k], x = f(f(bx[0] * 0.5) * s[0]), y = f(f(bx[1] * 0.5) * s[1]), z = f(f(bx[2] * 0.5) * s[2]);
+            for (let j = 0; j < 3; j++) oc[3 * k + j] = f(f(f(x * Mo[j]) + f(y * Mo[4 + j])) + f(f(z * Mo[8 + j]) + Mo[12 + j]));
+          }
+          if (occl.inside(oc, 8)) { em.f0a |= 0x200; return true; }
+        }
         const fm = F.u8(r + 0x1f);
         if (fm === 0 || fm === 4) fade = sizeFade(CULL.near[fm >> 2], CULL.far[fm >> 2], Mc, box, view);
         else if (fm === 2 || fm === 3) fade = distFade(F.f32(r + 0x3c), F.f32(r + 0x4c), c, view);

@@ -19,6 +19,7 @@
 //      (HP 1) alive, with the lock he dies (actor state 7, AI mode 0, death clip held);
 //   6. an e048 (record 24, w class 2: stance 0x1e) gets a body and an AI actor, drawn in its stance's
 //      clip (m_gst) and posed for the part test (enemies.js partPose); after 5, so it doesn't shift #66;
+//   6b. e036 (record 80) and e023 (record 87) get bodies and AI actors too (worker 0230);
 //   7. record 51 (Dan's report): mode 1, the fire clip's blend-out against k_fire_emp15;
 //   8. record 69 hit (script event 8 -> AI mode 5) keeps firing; with Vincent close he swings (m_atk drawn)
 //      and the hit volume takes 49 HP off Vincent;
@@ -342,6 +343,21 @@ try {
   });
   ok(e48 && e48.model === 'e048' && e48.ai && e48.drawn === 'm_gst' && e48.clip === 'm_gst' && e48.posed,
      `record 24 (e048): body drawn in its stance clip, AI actor, posed for the part test (${JSON.stringify(e48)})`);
+  // 6b. worker 0230: e036 (record 80, stance 0x1e) and e023 (record 87, the helicopter, stance 0x19) get bodies and AI actors
+  for (const [rec, model, clip] of [[80, 'e036', 'm_gst'], [87, 'e023', 'idle']]) {
+    const r = await pg.evaluate(async rec => {
+      const P = window.__play, ai = P.enemyAI, obj = k => ai.objects.get(k + 22);
+      ai.setActive(obj(rec), 1);
+      const t1 = performance.now();
+      while (!P.enemies.actors.some(a => a.rec === rec) && performance.now() - t1 < 15000) await new Promise(r => setTimeout(r, 100));
+      await new Promise(r => setTimeout(r, 300));
+      const b = P.enemies.actors.find(a => a.rec === rec), s = ai.actors.find(a => a.rec === rec);
+      const out = b ? { model: b.model, drawn: b.clip, clip: s && s.C.clip, ai: !!(s && s.ai) } : null;
+      ai.setActive(obj(rec), 0);
+      return out;
+    }, rec);
+    ok(r && r.model === model && r.ai && r.drawn === clip && r.clip === clip, `record ${rec} (${model}): body drawn in ${clip}, AI actor (${JSON.stringify(r)})`);
+  }
   // 7. Dan's report 20261031T000852Z-9974: the alley guard, record 51 (e027, stance 0x1e). Activated and
   // sent message 2 (trigger 90's wake), script 142 puts him in brain mode 1 (FUN_00362998); he fires
   // (m_st_f). The body plays the game's motion-player blend (enemies.js; k_fire_emp15): each request is

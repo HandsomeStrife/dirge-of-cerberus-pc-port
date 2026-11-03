@@ -15,6 +15,7 @@
 //           chunk already has on that plane loses the tie, as in the game.
 //           ?zunder=0 turns it off.
 import * as THREE from 'three';
+import { createRoomOccl } from './room_occl.js';
 
 export const VS = `
 precision highp float;
@@ -222,7 +223,9 @@ export async function loadRoom({ skip = null, onProgress = null, normals = false
       }
     }
   }
-  return { scene, root, lo, hi, floats, uvAnim };
+  // occluder culling (worker 0233; room_occl.js): the bone trees and occluder quads, per chunk; showChunks' 4th argument
+  const occl = scene.occl ? createRoomOccl(scene.occl) : null;
+  return { scene, root, lo, hi, floats, uvAnim, occl };
 }
 
 // Area streaming (worker 0213): the game draws chunk 00 and the pair in slots 1 / 2 of its chunk
@@ -243,21 +246,23 @@ export function visibleRanges(chunks, want, hidden) {
   }
   return runs;
 }
-export function showChunks(root, loaded, hidden = null) {
+// occl (worker 0233): room_occl.js's per-frame state, or null: a range whose bone-tree node (5th element; -1 = none, the
+// +0x1c objects' chains, which FUN_0026d018 draws without the occluder test) FUN_0026ccc8 skips is not drawn.
+export function showChunks(root, loaded, hidden = null, occl = null) {
   // called every game frame: no allocation unless the loaded set or the mask changed. Chunks as a bit set
   // (z128: 00..0c), the mask as its 4 words (DAT_004e8710).
   const ru = root.userData;
   let bits = 0;
   if (loaded == null) bits = -1;
   else for (const c of loaded) bits |= c >= 0 && c < 31 ? 1 << c : 0;
-  let same = ru.chunkBits === bits && ru.visOn === !!hidden;
+  let same = ru.chunkBits === bits && ru.visOn === !!hidden && ru.occlVer === (occl ? occl.version : -1);
   if (hidden) {
     const w = ru.visWords || (ru.visWords = new Uint32Array(4));
     for (let k = 0; k < 4; k++) { const x = hidden.word(k); if (w[k] !== x) { w[k] = x; same = false; } }
   }
   if (same) return;
   if (ru.chunkBits !== bits) ru.chunksShown = loaded == null ? '*' : [...new Set(loaded)].sort((x, y) => x - y).join(',');
-  ru.chunkBits = bits; ru.visOn = !!hidden;
+  ru.chunkBits = bits; ru.visOn = !!hidden; ru.occlVer = occl ? occl.version : -1;
   ru.visShown = hidden ? Array.from(ru.visWords).join(',') : '-';      // the mask the ranges were cut with
   const stamp = ru.visStamp = (ru.visStamp | 0) + 1;
   for (const m of root.children) {
@@ -269,8 +274,9 @@ export function showChunks(root, loaded, hidden = null) {
     let fl = g.userData.visFlags, changed = false;
     if (!fl) { fl = g.userData.visFlags = new Uint8Array(ch.length).fill(2); }
     for (let i = 0; i < ch.length; i++) {
-      const r = ch[i], c = r[0], grp = r.length > 3 ? r[3] : -1;
-      const on = (bits === -1 || (c >= 0 && c < 31 && (bits >>> c & 1))) && !(hidden && grp >= 0 && hidden.has(grp)) ? 1 : 0;
+      const r = ch[i], c = r[0], grp = r.length > 3 ? r[3] : -1, nd = r.length > 4 ? r[4] : -1;
+      let on = (bits === -1 || (c >= 0 && c < 31 && (bits >>> c & 1))) && !(hidden && grp >= 0 && hidden.has(grp)) ? 1 : 0;
+      if (on && occl && nd > 0) { const D = occl.dropped(c); if (D && D[nd]) on = 0; }   // FUN_0026ccc8: under a skipped node
       if (fl[i] !== on) { fl[i] = on; changed = true; }
     }
     if (!changed) continue;                       // this geometry draws the same triangles: no re-upload

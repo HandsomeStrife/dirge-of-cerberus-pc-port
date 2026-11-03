@@ -37,9 +37,12 @@ export const CHECKPOINT = Object.freeze({
   hp: 780,                                       // status +0x20 (FUN_0030f3d8's status reset; T)
   f118: 0x20209,                                 // P+0x118 (T)
   eventFlags: Object.freeze({}),                 // FUN_004039d0: all 0 (T)
-  // the world's frame counter (DAT_0046e938+0x20 = enemy_ai S.frame) at the placement: 14 in the state saved at the
-  // reload (= w201_reload record 0), + 10 frames to record 10 (L: +1 a frame). The opening cutscenes don't advance it.
+  // the page's frame count at the placement (enemy_ai S.frame: the hand-off schedule below counts frames from it)
   frame: 24,
+  // the world's clock (DAT_0046e938+0x20 = enemy_ai S.mgr20, ticks; worker 0230): FUN_0053b500 adds int(+0x24 += 1.2) a frame.
+  // T: the state saved at the reload holds +0x20 = 14, +0x24 = 0.3999990 (record 0); 10 frames of f32 steps -> 26 / 0.3999996
+  // at record 10, as the trace's AI clock (ai_now 14 -> 26). The opening cutscenes don't advance it.
+  mgr20: 26, mgr24: 0.39999961853027344,
   // the new AI scheduler's clock (FUN_00365008: += int(step) accumulated; DAT_0046f4ec +0): T w201_reload ai_now 14 at
   // record 0, 26 at record 10, so the rebuilt scheduler runs in the frames before the placement. Its fraction: every
   // value in [0.2001, 0.4] gives all 270 traced records (L: 0.3 taken)
@@ -90,7 +93,7 @@ export function vincentStart(data) {
 // (FUN_00322bc8 -> FUN_0053a560 -> FUN_0053a750: frame counter +0x20 = 0) and a new Vincent: FUN_00571ee8 (P+0x27c =
 // -40, P+0x280 = -DAT_0046ee28 = -15) -> FUN_0056f928 -> FUN_00558790 (P+0x142 = 0xff) -> FUN_005596a0 (P+0x148 = counter
 // - 0x78, +0x150 / +0x152 = 0, phase bits 40-43 = 0); his C: FUN_0033ff18 (C+0x810 = -15). The new enemy_ai world's
-// S.frame is set to that counter at the placement (CHECKPOINT.frame). T: the state saved at the reload holds exactly
+// S.mgr20 / S.mgr24 are set to that counter at the placement (CHECKPOINT.mgr20 / mgr24). T: the state saved at the reload holds exactly
 // these values (counter 14). (The page's first life keeps its save-RAM values, offset by the save's 1575.)
 export const PLAYER_STAMPS = Object.freeze({ t27c: -40, t280: -15, part: -1, s148: 0 - 0x78, s150: 0, s152: 0, sphase: 0, c810: -15 });
 
@@ -103,7 +106,7 @@ const warnOnce = m => { if (!warned.has(m)) { warned.add(m); console.warn(m); } 
 //   follow                                  FollowCamera (clearDeath: worker 0199)
 //   php                                     the AI's view of Vincent's status ({ hp, f118, s64, pos, face })
 //   gameOver, weapon, cape, fx, hud, sfx    gameover_layer / aim.js / cloth / effects.js / hud.js / audio.js SoundEmitters
-//   rebuildEnemies(eventFlags, frame, clock) -> world  a new enemy_ai world (S.frame = frame, S.now / S.acc = clock) built as at the start
+//   rebuildEnemies(eventFlags, frame, clock) -> world  a new enemy_ai world (S.frame = frame, S.now / S.acc / S.mgr20 / S.mgr24 = clock) built as at the start
 //   music()                                 the zone music / ambience restart (the stage's ev0100 / ev0101)
 // Returns a summary for the tests.
 export function restoreCheckpoint(sys) {
@@ -154,7 +157,7 @@ export function restoreCheckpoint(sys) {
   // GUESS: sound requests not yet sent are dropped with the old world (the slot teardown is not decoded)
   if (sys.sfx) sys.sfx.pending.length = 0;
   if (sys.rebuildEnemies) {
-    out.enemies = sys.rebuildEnemies(C.eventFlags, C.frame, { now: C.aiNow, acc: C.aiAcc });
+    out.enemies = sys.rebuildEnemies(C.eventFlags, C.frame, { now: C.aiNow, acc: C.aiAcc, mgr20: C.mgr20, mgr24: C.mgr24 });
     // 41-43: the rebuilt world runs the stage-load pass (enemy_ai stageLoad = FUN_00319190 -> FUN_005453b0 ->
     // FUN_00558f68, worker 0204) from play.js rebuildEnemies; at their battle clips' end (SOLDIER_RELEASE frames after
     // Vincent's) FUN_00344d68 -> FUN_00558cc0 moves them to the hand-off (enemy_ai scheduleHandOff)

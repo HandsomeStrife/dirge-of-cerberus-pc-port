@@ -49,7 +49,7 @@ export const START_GIL = 0;
 export const RESTART_INVENTORY = [[0x69300000, 2], [AMMO_ID, 234], [0x62300001, 0], [0x62300002, 0], [0x70300000, 1], [0x70310000, 1]];
 export const RESTART_OTHER_LOADED = 36;
 export const RESTART_GIL = 0;
-// the game frame counter (DAT_0046e938 +0x20) is 1575 at the save; the page's world frame S.frame starts at 0
+// the game frame counter (DAT_0046e938 +0x20, ticks) is 1575 at the save; the page's world clock S.mgr20 starts at 0
 export const FRAME0 = 1575;
 // GUESS: the items active at the save keep their spin clock +0xdc from the save RAM (FUN_005804a8 set it when they
 // were activated at the stage load, frame 27); the page cannot replay that load. Section-15 record -> +0xdc.
@@ -152,7 +152,7 @@ export function createItems({ data, effect = null, warn = console.warn, ground =
   const byRec = new Map();
   let W = null, nextDrop = 0;
   const push = s => { if (W) W.events.push(s); };
-  const frame = () => (W ? W.S.frame : 0) + FRAME0;          // DAT_0046e938 +0x20
+  const frame = () => (W ? W.S.mgr20 : 0) + FRAME0;          // DAT_0046e938 +0x20 (ticks: enemy_ai S.mgr20; worker 0230)
   const rng = () => (W && W.rng ? W.rng() : 0);
   const sound = (name, pos) => { if (W && W.sound && name) W.sound(name, pos); };
 

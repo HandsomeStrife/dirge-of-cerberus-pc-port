@@ -112,7 +112,7 @@ const flag = (ai, n) => ai.eventFlags[n] ?? 0;
   for (let i = 0; i < 200; i++) ai.tick(STEP, null, null);
   ok(Math.abs(d.mdl.vy - (-0.0461)) < 2e-4 && d.mdl.pos[1] === d.pos[1], `the fall settles on the place, +0xd8 ${d.mdl.vy.toFixed(4)} (save RAM -0.0461)`);
   // r02_barrier: frame 5954, +0xdc 3862 -> t 2091 (the update ran before the frame counter's step): colour 0xd4, row 0 (-0.493, 0, 0.87)
-  const w = ai.S.frame;
+  const w = ai.S.mgr20;
   d.mdl.dc = w + I.FRAME0 - 2091;
   items.update(STEP);
   ok(d.mdl.col === 0xd4, `colour (table[2091 & 31] + 100) = 0x${d.mdl.col.toString(16)} (save RAM 0xd4)`);

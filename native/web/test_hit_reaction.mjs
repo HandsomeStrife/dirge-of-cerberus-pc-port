@@ -97,11 +97,17 @@ const ctrlAt = (p, face) => {
   ok(data.weapons.every(w => w.react != null) && data.weapons[0].react === 0 && data.weapons[12].react === 8,
      `ai.json weapons carry W+0xc (react): w0 ${data.weapons[0].react} (0), w12 ${data.weapons[12].react} (8)`);
   const shot = () => ({ damage: 1, kind: 0, hit: 6, f148: data.weapons[0].react, dir: [1, 0, 0], pos: [0, -9, 0], from: { id: 66 } });
-  for (let i = 0; i < 10; i++) { W.S.frame = 100 + 10 * i; W.t.damagePlayer(shot()); }
+  for (let i = 0; i < 10; i++) { W.S.mgr20 = 100 + 10 * i; W.t.damagePlayer(shot()); }   // the manager clock (ticks)
   ok(calls.join(',') === [0x42, 0x42, 0x42, 0x42, 0x44, 0x42, 0x42, 0x42, 0x42, 0x48].join(','),
      `ten hits 10 frames apart (hit value 6): flags ${calls.map(x => x.toString(16)).join(',')} (42 x4, 44, 42 x4, 48)`);
-  calls.length = 0; W.S.frame = 400; W.t.damagePlayer(shot()); W.S.frame = 470; W.t.damagePlayer(shot());
+  calls.length = 0; W.S.mgr20 = 400; W.t.damagePlayer(shot()); W.S.mgr20 = 470; W.t.damagePlayer(shot());
   ok(calls.join(',') === '66,66', `hits 70 frames apart restart the sum: ${calls.map(x => x.toString(16))} (42, 42)`);
+  // worker 0230: the window is mgr +0x20 ticks (FUN_0054cbe8): four hits 10 ticks apart (sum 24, phase 1), then one 70 ticks
+  // later restarts the sum (0x42); inside the window it would reach 30 (0x44)
+  calls.length = 0; Object.assign(player, { s148: -100000, s150: 0, s152: 0, sphase: 0 });   // a fresh window
+  for (let i = 0; i < 4; i++) { W.S.mgr20 = 1000 + 10 * i; W.t.damagePlayer(shot()); }
+  W.S.mgr20 = 1030 + 70; W.t.damagePlayer(shot());
+  ok(calls.at(-1) === 0x42, `four hits then one 70 ticks later: ${calls.map(x => x.toString(16))} (the last 42: the sum restarted)`);
 }
 
 // ------------------------------------------------ frame order: a hit after the step (page) = before the C update (game)

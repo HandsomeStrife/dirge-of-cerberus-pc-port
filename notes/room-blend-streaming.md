@@ -137,6 +137,10 @@ defect, the geometry, stall and lights line up (scratchpad w0213_chunk06_game_vs
       effects.js's 'occluder test never hits' GUESS row (FUN_00269978).
    Until (b) lands, the deck shows those battlements ~8 levels brighter than the game in the
    y 64..191 band (before streaming, chunk 09's dark copy happened to cover them).
+   **Correction (worker 0233, 2026-11-03):** (b) does NOT drop group 69 at the hero camera; the game's own walk
+   keeps its nodes (and the RAM marks agree). The hero dump lacks group 69's vertices because they are back faces:
+   worker 0227's back-face cull already hides them on the page (with both sides drawn they cover 802 px of rows
+   64..191; culled, none). See 'Occluder culling' below.
 4. Blend order (audit row corrected): additive draws write no depth, so a later blended surface behind
    one still blends over it: order matters for every overlap. The game's order: buckets ascending
    (0 -> index 0x17, last), inside a bucket the chains newest-first as FUN_0026ce60 pushed them (slot
@@ -318,3 +322,70 @@ Still open: occluders (3b; group 69 on the deck), the VU0 ray test (GUESS row), 
    index is rebuilt and uploaded (addUpdateRange: the used part) only when its drawn ranges changed (per-range flags).
 New test: test_room_vis_page (the hidden-group triangle is neither drawn nor hit on play.html / play.html without area
 boxes / index.html; Restart without the stage fire clears the script half).
+
+## Occluder culling (worker 0233, 2026-11-03)
+
+'Review fixes' 3b, decoded from the assembly (the C output loses the VU0 macro code; scratch disassembler: capstone +
+a COP2 macro decoder) and ported. Every frame, in the room draw FUN_00264f68, after the probe FUN_00264ee0:
+- **Volumes.** FUN_00269868 clears DAT_0046bff8 and, per loaded slot (DAT_004e4c60), FUN_00268b58 -> FUN_0026c878 per
+  model of the slot's resource. The model (= the BMD payload) has its occluder list at header +0x18: +0 count, +0x10
+  entries of 0xe0 bytes, each starting with the quad's 4 world-space corners (strip order). Per quad:
+  FUN_0040d6f8(clip = 0x4fcbd0 x 0x4fcb10, the 4 corners): skip when the CLIP flags AND to non-zero (all outside one
+  plane); FUN_0026c728(screen = 0x4fcb50 x 0x4fcb10, corners 0..2): build when some w < 0.1, else skip when
+  |(p1 - p0) x (p1 - p2)|.z < 4096 after the divide; stop at 15 volumes. The eye = row 3 of FUN_002610e0 (the rigid
+  inverse of 0x4fcb10). Planes (0x50 bytes at DAT_004e5db0 + 0x50 k): side p = (a - b) x (a - eye), w = -n.eye with
+  (a, b) = (1, 0), (3, 1), (2, 3), (0, 2); own = (c0 - c2) x (c0 - c1), w = -n.c0; all five negated when
+  n_own.eye + w >= 0; FUN_00444b08 (sceVu0TransposeMatrix, MMI pext) transposes the first four.
+- **Inside.** FUN_00269978(points, n) -> FUN_002698d0 per volume: a point is inside when the own plane (vmul.xyz, then
+  w + x + y + z) and the four side planes (ACC = col0 x + col1 y + col2 z + col3) are all >= 0 (MAC sign flags).
+- **The walk.** FUN_0026c670 -> FUN_0026ccc8(root = header +0x20): a node is 8 box corners (+0x00..+0x7f), 8 child
+  offsets (+0x80), chain count (+0xa0), chain list (+0xb0, 16 bytes per entry). A child is visited when it passes
+  FUN_0026cc80 (VU0 micro 0x6d8: box from corners 0 / 7 through VU0 matrix 0 = 0x4e4650 = view x clip, CLIP AND) and
+  not FUN_00269978(child, 8). The root is never tested. Chains get their own box test (matrix +0x96 + 1) and the
+  group mask. The +0x1c objects (FUN_0026d018) are drawn after the walk with a box test and their group byte +0xc7, no
+  occluder test: 62 ranges (their chains are in no tree node).
+- **Effects.** FUN_002ea6a0 LAB_002ea898 (after the clip test passes): box modes 0 / 2 / 3, the param +0x40 box (x the
+  +-0.5 table DAT_0046c720, w 1) through the emitter matrix with row 3 = +0x50 . M, FUN_00269978 -> 0x200. The
+  effects cull runs after the room draw, so it sees this frame's volumes.
+- **Matrices.** FUN_0040d478 builds view-clip (+0x400, FUN_00263a48) and view-screen (+0x380, FUN_00263c70) from the
+  display struct 0x4fc7d0: clip x = scrz / 448, y = scrz / 512, z = (f + n) / (f - n), w row -2 f n / (f - n) with
+  n = max(+0x2c, +0x308) = 1, f = +0x30c = 30000; screen x = scrz x + cx z, y = 1.5 scrz y + cy z, w = z. The save's
+  matrices equal these.
+
+Checks: the volumes rebuilt from each save state's 0x4fcb10 and slots = DAT_004e5db0 in 10 / 10 states (start, 5 route
+states, r06_tp, npc_s100, tp09, tp0b with the 15 cap; worst relative 7e-6). FUN_0026ce60 overwrites a drawn chain's +0xa4
+(the file's self pointer), so a chain still holding it was never drawn since its chunk loaded: at the start save, chunk
+00's 136 culled chains are all never drawn; in the chunks a teleport streamed in (r06_tp 06 / 08, tp0b 0b) the 43
+dropped nodes are all never drawn. (The route states walked: their marks include earlier frames.) play.html at the
+start camera: 6 volumes, the stage fire's emitters 4 and 63 get 0x200 = the start save's RAM.
+
+Page: native/assets/models/bmd_occl.py (tree + quads) -> export_z128_room.py ranges [chunk, first, count, group, node]
+(runs split by node; room.list's @group lines merged back) + manifest 'occl' -> export_web_room.py scene.json 'occl'.
+native/web/room_occl.js `createRoomOccl` (frame(V, loaded): the volumes and per-node dropped flags, allocation-free;
+inside(); `viewOf(camera, out)`), room.js loadRoom returns `occl`, showChunks(root, loaded, mask, occl); play.js
+roomProbe(eye, cam) builds them from the probe's camera; fxStage gets `occl`. **Data re-exported and installed**
+(out/z128_room_w233 from the same arguments as 0227's, meshes byte-identical; backup scene.json out/w0233_backup).
+Visible effect: none in the dumped views (0 px at hero / c09 / c0b / npc): what the game culls is behind the walls. At
+the hero camera 11957 triangles are no longer drawn (npc 15249, c0b 827, c09 0).
+
+Cost (node, 10 state cameras): frame() 2-37 us, 0 B per frame; showChunks re-index on a change ~260 us (6883 ranges,
+was 2387), 0.1 us unchanged.
+
+Tests: `node --import ./native/web/test_hooks.mjs native/web/test_room_occl.mjs` (fixture
+`tools/trace/room_occl_fixture.py STATE.p2s...` -> tools/trace/out/room_occl/states.json; `ROOM_DATA=<dir>` /
+`ROOM_OCCL=<manifest>` for other exports), test_room_grade section 3 (new fixture `hero` = z128_hero_163235.bin + the
+start save), test_effects (0x200 compared; corner check), `node native/web/test_room_occl_page.mjs`.
+Mutants: 24 / 26 killed (both survivors equivalent). room_occl.js 14 / 15 (flip, own / side planes, edge order x 2, cap, size skip, near rule,
+clip skip, sub-tree rule, eye sign, all-8 rule, clip scale, screen ay; survivor: testing the root, equivalent: its flag
+is never read); room.js 1 / 1; effects.js 2 / 3 (survivor: mode 0's centre, z128 has no mode-0 emitters); play.js 3 / 3
+(page); exporter 4 / 4 (no tags, corner order, runs not split, chain object offset).
+
+Open: the frustum box tests (no visible effect; the chains' matrix slot is unresolved); the +0x1c objects' +0xc7 group
+(not compared); main.js (index.html) and the native renderer draw without occluders; per-chain blend order (unchanged).
+
+**Page test of the emitter 0x200 (worker 0234, 2026-11-03).** test_effects_page's "start view cull flags" ran
+FUN_002ea6a0 with the save's camera against occluder volumes the page had built from its own camera (the last
+roomProbe), so #72 came out 0x200 on the page vs 0x80 in the save whenever the page camera was far enough off. Not a
+rule error: the test now rebuilds the volumes from the save's camera and slots 0 / 1 / 2 first (FUN_00269868 then
+FUN_002ea6a0, as test_effects), compares 0x200 exactly (the old "listed, not failed" exemption is gone) and asserts the
+volumes' eye = the save's eye (mutant without the rebuild: killed, eye 4.9 u off).

@@ -1,0 +1,50 @@
+{
+ "name": "w231_boss3",
+ "frames": 3000,
+ "log_from": 2010,
+ "doc": "worker 0231: the save with stage flag 0 poked to 36 (TRACE_POKE=a06338=91309a24): main falls through to the boss beat (scene_save(5) ~f186); the save box is answered as worker 0229's w229_rescue (right + cross = CANCEL, left + cross = continue without saving, cross x2 = the map screen), shifted to f400-700. Then heri_lastst -> Zone.boss(true). TRACE_FIELDSET=stage TRACE_CALLLOG=boss.",
+ "events": [
+  {
+   "from": 400,
+   "to": 404,
+   "buttons": [
+    "right"
+   ]
+  },
+  {
+   "from": 420,
+   "to": 424,
+   "buttons": [
+    "cross"
+   ]
+  },
+  {
+   "from": 480,
+   "to": 484,
+   "buttons": [
+    "left"
+   ]
+  },
+  {
+   "from": 500,
+   "to": 504,
+   "buttons": [
+    "cross"
+   ]
+  },
+  {
+   "from": 600,
+   "to": 604,
+   "buttons": [
+    "cross"
+   ]
+  },
+  {
+   "from": 700,
+   "to": 704,
+   "buttons": [
+    "cross"
+   ]
+  }
+ ]
+}

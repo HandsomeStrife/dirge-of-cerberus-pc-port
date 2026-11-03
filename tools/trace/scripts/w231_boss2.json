@@ -1,0 +1,57 @@
+{
+ "name": "w231_boss2",
+ "frames": 2400,
+ "log_from": 1350,
+ "doc": "worker 0231: as w231_boss (stage flag 0 poked to 36: TRACE_POKE=a06338=91309a24), with cross taps 300-900 in case the checkpoint save after scene_save(5) waits on a prompt. TRACE_FIELDSET=stage TRACE_CALLLOG=boss.",
+ "events": [
+  {
+   "from": 300,
+   "to": 304,
+   "buttons": [
+    "cross"
+   ]
+  },
+  {
+   "from": 400,
+   "to": 404,
+   "buttons": [
+    "cross"
+   ]
+  },
+  {
+   "from": 500,
+   "to": 504,
+   "buttons": [
+    "cross"
+   ]
+  },
+  {
+   "from": 600,
+   "to": 604,
+   "buttons": [
+    "cross"
+   ]
+  },
+  {
+   "from": 700,
+   "to": 704,
+   "buttons": [
+    "cross"
+   ]
+  },
+  {
+   "from": 800,
+   "to": 804,
+   "buttons": [
+    "cross"
+   ]
+  },
+  {
+   "from": 900,
+   "to": 904,
+   "buttons": [
+    "cross"
+   ]
+  }
+ ]
+}

@@ -41,7 +41,10 @@ let fails = 0;
     console.log((ok ? 'ok   ' : 'FAIL ') + 'order ' + what + ': ' + at.map(([t, i, once]) => `${t}${i < 0 ? ' (missing)' : once ? '' : ' (twice)'}`).join(' -> '));
     if (!ok) fails++;
   };
-  order('play.js frame', region(src('./play.js'), 'while (acc >= TICK', 'acc -= TICK; n++; stats.ticks++;'), ['follow.tick(', 'ctrl.step(']);
+  // the frame loop's own end is the last `acc -= TICK; n++; stats.ticks++;` without `continue` (early-out branches such as
+  // the intro and the results box have their own, followed by `continue`)
+  const loopEnd = (s, a, b) => { const i = s.indexOf(a); if (i < 0) return ''; for (let k = s.indexOf(b, i); k >= 0; k = s.indexOf(b, k + 1)) if (!s.slice(k + b.length).trimStart().startsWith('continue')) return s.slice(i, k); return ''; };
+  order('play.js frame', loopEnd(src('./play.js'), 'while (acc >= TICK', 'acc -= TICK; n++; stats.ticks++;'), ['follow.tick(', 'ctrl.step(']);
   order('player.js step', region(src('./player.js'), 'if (owned) this.locate();', 'this.frames++;'),
         ['this.weaponHook.pre(', 'this.stickInput(', 'this.intent(', 'this.weaponHook.weapon(', 'this.runC(']);
   // the character's C update (step -> runC; hitReact runs it again after a hit)

@@ -75,6 +75,43 @@ try {
   }, null, { timeout: 30000 }).then(h => h.jsonValue()).catch(() => null);
   ok(!!slid && [-1081.11, -0.01, -1280.13].every((v, i) => Math.abs(v - slid.body[i]) < 0.05),
      `113 slid along path 96 and is drawn at its end: ${slid ? slid.body.map(v => v.toFixed(2)) : 'no'}`);
+  // worker 0229: ev0100 main's rescue beat on the page. Stage flag 0 = 2 (rv_matiawase; main then puts its p000 slot named
+  // p_Vin at (-889.2, 0, -599) and battle(1500) hands it to Vincent), then flag 1 = 5 (pc 0x849: getbattleactor p_Vin / n_CupM /
+  // n_CupW, roji02_01 auto-skipped, setpos / setdir, Camera.set, setbattlename p_Vin, battle()). T w229_rescue_pos (PCSX2, the
+  // same flags poked from w223's s826): f1850 Vincent (-889.2, -0.064, -599) facing (-1, 0, 0); record 2126 (-1120.2, -0.0623,
+  // -1277.3) facing (0.98894, 0, -0.14831), the camera's forward (0.75641, 0.64547, -0.10588) = main's event camera, eye
+  // (-1136.096, -31.009, -1275.074). The townspeople's lent models are freed at battle() (they are drawn again).
+  if (!process.env.NPC_SHOT) {
+    const beat = async (k, v, want) => pg.evaluate(async ([k, v, want]) => {
+      const P = window.__play, rt = P.stage && P.stage.rt;
+      if (!rt) return { err: 'no stage controller' };
+      const cams = [], f = P.follow, reset = f.reset;
+      f.reset = function (...a) { const r = reset.apply(this, a); cams.push({ eye: this.eye.slice(), fwd: this.M[2].slice() }); return r; };
+      P.enemyAI.eventFlags[k] = v;
+      const t0 = Date.now();
+      while (!rt.log.some(([, m]) => m.startsWith('handback p_Vin ' + want)) && Date.now() - t0 < 30000) await new Promise(r => setTimeout(r, 50));
+      const t1 = P.stats.ticks; while (P.stats.ticks < t1 + 3) await new Promise(r => setTimeout(r, 50));
+      f.reset = reset;
+      const E = P.enemies.actors, vis = k => { const a = E.find(x => x.rec === k); return a ? a.body.visible : null; };
+      return { pos: [P.ctrl.pos.x, P.ctrl.pos.y, P.ctrl.pos.z], face: [P.ctrl.C.face.x, P.ctrl.C.face.z], cams, vis: [vis(113), vis(114)], vin: P.vin.body.visible,
+               log: rt.log.filter(([, m]) => /getbattleactor|battlename|handback|freed|^battle /.test(m)).map(x => x.join(' ')).slice(-8) };
+    }, [k, v, want]);
+    const near = (a, b, e) => a.every((x, i) => Math.abs(x - b[i]) <= e);
+    const b1 = await beat(0, 2, '-889.20');
+    ok(b1 && !b1.err && near(b1.pos, [-889.2, -0.064, -599], 0.02) && near(b1.face, [-1, 0], 1e-5),
+       `rv_matiawase: main's p000 slot named p_Vin hands Vincent its place (T f1850 (-889.2, -0.064, -599) facing -x): ${b1 && b1.pos ? b1.pos.map(v => v.toFixed(3)) + ' face ' + b1.face.map(v => v.toFixed(4)) : JSON.stringify(b1)}`);
+    const b2 = await beat(1, 5, '-1120.20');
+    const c = b2 && b2.cams && b2.cams.at(-1);
+    ok(b2 && !b2.err && near(b2.pos, [-1120.2, -0.0623, -1277.3], 0.02) && near(b2.face, [0.98894, -0.14831], 1e-4),
+       `the rescue (getbattleactor p_Vin, setpos, setdir, setbattlename): Vincent at T record 2126 (-1120.2, -0.0623, -1277.3) facing (0.98894, -0.14831): ${b2 && b2.pos ? b2.pos.map(v => v.toFixed(4)) + ' face ' + b2.face.map(v => v.toFixed(5)) : JSON.stringify(b2)}`);
+    ok(!!c && near(c.fwd, [0.75641, 0.64547, -0.10588], 2e-4),
+       `battle()'s camera reset (FUN_00329f68 -> FUN_003285d0): forward from main's event camera ${c ? c.fwd.map(v => v.toFixed(5)) : '-'} (T 0.75641 0.64547 -0.10588)`);
+    // KNOWN GAP (not this work's): the eye's distance along that forward. T: 21.05 u from the aim point (feet - 17.4 in y),
+    // the page's FollowCamera places it 36.1 u out at this pitch (-0.70 rad); the reset's angles above are the translated part
+    if (c) console.log(`GAP  camera eye after the reset ${c.eye.map(v => v.toFixed(3))} (T -1136.096 -31.009 -1275.074): FollowCamera distance at pitch -0.70`);
+    ok(b2 && b2.vin === true && b2.vis && b2.vis.every(v => v !== false) && b2.log.some(m => /battle actor \d+ freed/.test(m)),
+       `after battle(): Vincent drawn, 113 / 114 lent models freed and drawn again (${b2 && b2.vis}); log: ${b2 && b2.log && b2.log.join(' | ')}`);
+  }
   // (skipped with NPC_SHOT: the image wants 114 alive)
   if (!process.env.NPC_SHOT) {
   const kill = await pg.evaluate(async () => {

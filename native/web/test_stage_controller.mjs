@@ -3,7 +3,7 @@
 // Needs data/event/ev0100_stage.json (build step stage). The trace checks need tools/trace/out/w219_beat / w219_skip
 // (.jsonl + .calls.jsonl, TRACE_FIELDSET=stage TRACE_CALLLOG=stage) and w219_keys.json (tools/trace/stage_keys.py);
 // without them those checks are skipped (reported).
-// MUTATE=getflag|setflag|skip|sleep|preempt|opening|skipinit|bit6|card|wait runs one mutant of stage_controller.js (a scratch copy) and expects a failure.
+// MUTATE=getflag|setflag|skip|sleep|preempt|opening|skipinit|bit6|card|wait|setpos|camset|setdir|bname|lent|running runs one mutant of stage_controller.js (a scratch copy) and expects a failure.
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -26,6 +26,16 @@ if (MUT) {
     bit6: ["if (gs) { gs.set(6); gs.set(2); }", "if (gs) { gs.set(2); }"],
     card: ["return this.running && !this.battle && !this.skipOff && !this.cardOn;", "return this.running && !this.battle && !this.skipOff;"],
     wait: ["if (o.openingDone && !o.openingDone()) return block(() => o.openingDone(), end);", ""],
+    // worker 0229 (battle actors): the hand-back's place (row 3 = setpos), the camera reset's view (main's Camera.set),
+    // setdir's d, setbattlename's frame sync
+    setpos: ["const pos = [M[12], M[13], M[14]], face", "const pos = obj.matrix().slice(12, 15), face"],
+    camset: ["if (this.o.cameraReset) this.o.cameraReset(this.view);", "if (this.o.cameraReset) this.o.cameraReset(null);"],
+    setdir: ["const d = [f32(M[12] - x), 0, f32(M[14] - z)]", "const d = [f32(x - M[12]), 0, f32(z - M[14])]"],
+    // worker 0230: the lent status's per-frame update in frame() (FUN_003159b8 -> FUN_00376938) and handBack's +0x1558 bit 44 gate
+    lent: ["    this.lentUpdate();                                                  // the statuses' update", "    // lentUpdate off"],
+    running: ["if (!obj || !this.running) return false;", "if (!obj) return false;"],
+    bname: ["return block(() => R.frameNo > f0, () => { const a = R.actors.get(id); if (a) { a.tag = str(s).slice(0, 8); log('battlename ' + id + ' ' + a.tag); } });",
+            "const a = R.actors.get(id); if (a) { a.tag = str(s).slice(0, 8); log('battlename ' + id + ' ' + a.tag); } return undefined;"],
   }[MUT];
   if (!sub || !s.includes(sub[0])) throw new Error('mutant ' + MUT + ': anchor not found');
   s = s.replace(sub[0], sub[1]).replaceAll("from './", "from '" + HERE + '/');
@@ -214,6 +224,84 @@ const gf = (c) => Object.fromEntries([...c.globalFlags].map((v, i) => [i, v]).fi
       ok(r1 && r2 && r2.frame === r1.frame + 1, 'game: +0x156c 1 -> 2 the next frame');
     }
   }
+}
+
+// 5. worker 0229: the battle actors and the hand-back by name (notes/stage-controller.md "Battle actors"). Stand-in objects
+// for the page's (play.js battleObject): Vincent (p_Vin, record 0) and the townspeople n_CupM / n_CupW (records 113 / 114).
+// From the save's flags: stage flag 0 = 2 (rv_matiawase: main's p000 slot named p_Vin, battle(1500)), then 1 = 5 (pc 0x849:
+// getbattleactor x3, roji02_01 skipped, setpos / setdir, Camera.set, setbattlename p_Vin, battle()).
+{
+  const ev = [];
+  const mk = (tag, pos, face) => ({ tag, pos, face, lent: 0, shown: true,
+    matrix() { return [-this.face[2], 0, this.face[0], 0, 0, -1, 0, 0, -this.face[0], 0, -this.face[2], 0, ...this.pos, 1]; },
+    lend() { this.lent++; ev.push(['lend', tag]); }, release() { this.lent = 0; this.shown = true; ev.push(['release', tag]); },
+    show(v) { this.shown = v; ev.push(['show', tag, v]); }, place(p, f) { this.pos = p.slice(); this.face = f.slice(); ev.push(['place', tag, p.slice(), f.slice()]); } });
+  const objs = { p_Vin: mk('p_Vin', [-1000, 0, -1080], [1, 0, 0]), n_CupM: mk('n_CupM', [-1081.11, -0.01, -1280.13], [-0.411, 0, 0.911]), n_CupW: mk('n_CupW', [-1074.37, -0.13, -1274.05], [0.684, 0, 0.729]) };
+  const F = { v: { 2: 7, 46: 1 } };
+  const B = make(F, { battleObject: (n) => objs[n] || null, cameraReset: (v) => ev.push(['camreset', v ? { eye: v.eye.slice(), aim: v.aim.slice() } : null]) });
+  const L = () => B.c.rt.log.map(([, m]) => m);
+  run(B, 10); F.v[0] = 2;
+  run(B, 120, () => {});
+  const p1 = ev.filter(e => e[0] === 'place');
+  ok(p1.length === 1 && p1[0][1] === 'p_Vin' && p1[0][2].every((v, i) => v === Math.fround([-889.2, 0, -599][i])) && p1[0][3].join() === '-1,0,0',
+     'rv_matiawase: the p000 slot named p_Vin hands Vincent (-889.2, 0, -599) facing -x at battle(1500) (T w229_rescue_pos f1850): ' + JSON.stringify(p1[0]));
+  const lb = L().findIndex(m => m.startsWith('handback p_Vin -889')), bt = L().findIndex(m => m === 'battle 1500');
+  ok(lb >= 0 && bt > lb, 'FUN_00319190 runs inside battle(1500) (the handback is logged with it, before the mode)');
+  ev.length = 0; F.v[1] = 5; const n0 = B.c.rt.log.length;
+  let held = null, hidden = null;
+  run(B, 120, () => { if (held === null && objs.p_Vin.lent) held = B.c.rt.frameNo; if (hidden === null && ev.some(e => e[0] === 'show' && e[1] === 'n_CupM' && e[2] === false)) hidden = true; });
+  const gba = L().slice(n0).filter(m => m.startsWith('getbattleactor')).map(m => m.split(' ')[2]);
+  ok(gba.join() === 'p_Vin,n_CupM,n_CupW', 'the rescue takes p_Vin / n_CupM / n_CupW as battle actors (FUN_00376b00): ' + gba.join());
+  ok(hidden === true, 'setVisible(false) hides the lent townspeople (the slot draws their own model)');
+  const pl = ev.filter(e => e[0] === 'place');
+  const want = [Math.fround(-1120.2), 0, Math.fround(-1277.3)];
+  ok(pl.length === 1 && pl[0][2].every((v, i) => v === want[i]), 'Vincent placed at setpos (-1120.2, 0, -1277.3) exactly (T record 2126 x / z = the same floats): ' + JSON.stringify(pl[0] && pl[0][2]));
+  ok(pl.length === 1 && Math.abs(pl[0][3][0] - 0.9889416694641113) < 1e-6 && Math.abs(pl[0][3][2] + 0.1483050286769867) < 1e-6 && pl[0][3][1] === 0,
+     'setdir toward (-1118.2, 0, -1277.6): facing (0.98894, 0, -0.14831) (T record 2126 C row 2): ' + JSON.stringify(pl[0] && pl[0][3]));
+  const iPlace = ev.findIndex(e => e[0] === 'place'), iCam = ev.findIndex(e => e[0] === 'camreset' && e[1]);
+  // main: Camera.active (logged 'camera 0') then setbattlename at once (pc 0x963 / 0x96a)
+  const bi = B.c.rt.log.findIndex(([, m], i) => i >= n0 && m.startsWith('battlename ')), ca = B.c.rt.log.slice(0, bi).map(([f, m]) => [f, m]).filter(([, m]) => m === 'camera 0').at(-1);
+  ok(bi > 0 && ca && B.c.rt.log[bi][0] === ca[0] + 1, 'setbattlename waits a frame (FUN_0037e4e0) before writing +0xa5: camera f' + (ca && ca[0]) + ', name f' + (bi > 0 && B.c.rt.log[bi][0]));
+  const cr = ev[iCam];
+  ok(iCam > iPlace && cr && cr[1] && cr[1].eye.join() === [-1135.5, -31.8, -1275.0999755859375].map(Math.fround).join() && cr[1].aim.join() === [-1134.75, -31.15999984741211, -1275.2049560546875].map(Math.fround).join(),
+     'battle()\'s camera reset after the placement, from main\'s Camera.set view (eye (-1135.5, -31.8, -1275.1), aim (-1134.75, -31.16, -1275.205)): ' + JSON.stringify(cr && cr[1]));
+  if (cr && cr[1]) { const d = cr[1].aim.map((v, i) => v - cr[1].eye[i]), n = Math.hypot(...d);
+    ok([0.7564113140106201, 0.6454702615737915, -0.1058778241276741].every((v, i) => Math.abs(d[i] / n - v) < 1e-6), 'its forward = the game\'s CAM+0x80 after the beat (T record 2126): ' + d.map(v => (v / n).toFixed(6))); }
+  ok(objs.n_CupM.lent === 0 && objs.n_CupW.lent === 0 && objs.n_CupM.shown && L().filter(m => / freed$/.test(m)).length === 2,
+     'unnamed battle actors are finalized at battle() (FUN_00376c80(.., 1): their models freed, the objects draw a new one)');
+  ok(!objs.n_CupM.pos.some((v, i) => v !== [-1081.11, -0.01, -1280.13][i]), 'the townspeople are not moved by main (no setbattlename for them)');
+  // the trace (PCSX2 w229_rescue_pos, TRACE_FIELDSET=enemy: Vincent's C matrix)
+  const tp = path.join(OUT, 'w229_rescue_pos.jsonl');
+  if (fs.existsSync(tp)) {
+    const R = Object.fromEntries(fs.readFileSync(tp, 'utf8').trim().split('\n').slice(1).map(l => JSON.parse(l)).map(r => [r.frame, r]));
+    const m1 = R[1850] && R[1850].matrix, m2 = R[2126] && R[2126].matrix, m0 = R[2125] && R[2125].matrix;
+    ok(m1 && m1[3][0] === Math.fround(-889.2) && m1[3][2] === -599 && m1[2][0] === -1, 'T f1850: Vincent at the p000 slot (-889.2, -599) facing -x');
+    ok(m0 && pl[0] && m0[3][0] !== m2[3][0] && m2[3][0] === pl[0][2][0] && m2[3][2] === pl[0][2][2] && Math.abs(m2[2][0] - pl[0][3][0]) < 1e-6 && Math.abs(m2[2][2] - pl[0][3][2]) < 1e-6,
+       'T record 2126: the game\'s Vincent = the page\'s placement (x / z exact, facing < 1e-6)');
+    const cf = R[2126].cam_fwd;
+    ok(cf && Math.abs(cf[0] - 0.7564113140106201) < 1e-6, 'T record 2126: CAM+0x80 forward = main\'s event camera');
+  } else console.log('SKIP the w229 trace checks (tools/trace/out/w229_rescue_pos.jsonl: tools/trace/scripts/w229_rescue_pos.json)');
+}
+
+// 6. worker 0230 (the manager's review of 0229's guards): a slot lending p_Vin's model and a second slot named p_Vin: the next
+// frame's lentUpdate (FUN_003159b8 -> FUN_00376938) hands Vincent back to the named slot's place without a battle(); with the
+// event program not running (+0x1558 bit 44 clear) handBack does nothing
+{
+  const ev = [];
+  const vin = { tag: 'p_Vin', matrix: () => [0, 0, 1, 0, 0, -1, 0, 0, -1, 0, 0, 0, -1000, 0, -1080, 1], lend() {}, show() {},
+    release() { ev.push(['release']); }, place(p, f) { ev.push(['place', p.slice(), f.slice()]); } };
+  const M = [0, 0, 1, 0, 0, -1, 0, 0, -1, 0, 0, 0, -900, 0, -600, 1];       // row 2 (-1, 0, 0) -> facing (1, 0, 0)
+  const B = make({ v: { 2: 7, 46: 1 } }, { battleObject: n => (n === 'p_Vin' ? vin : null) });
+  const rt = B.c.rt;
+  const lender = { id: 90, tag: null, lent: vin, M: vin.matrix() }, named = { id: 91, tag: 'p_Vin', lent: null, M };
+  rt.actors.slots.push(lender, named);
+  rt.running = false;
+  ok(rt.handBack(named) === false && !ev.length && rt.actors.slots.includes(named), 'handBack with the event program off (+0x1558 bit 44 clear): nothing (the slot stays, no place)');
+  rt.running = true;
+  rt.frame(20);
+  const pl = ev.find(e => e[0] === 'place');
+  ok(pl && pl[1].join() === '-900,0,-600' && pl[2].join() === '1,0,0' && !rt.actors.slots.includes(named),
+     'frame(): lentUpdate hands the lent p_Vin back to the named slot\'s place (-900, 0, -600) facing +x, no battle(): ' + JSON.stringify(pl));
 }
 
 console.log((fails ? 'FAILED ' : 'ok ') + oks + ' / ' + (oks + fails) + (MUT ? ' (mutant ' + MUT + ')' : ''));

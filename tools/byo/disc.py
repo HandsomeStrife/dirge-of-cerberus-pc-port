@@ -256,6 +256,7 @@ INPUTS = {
     '07650041.bin': '5cf8aacbbf8180e64596cba5a8f21dd09a5ab841008bcecd6e489cdd55897484',   # e001 model
     '07650042.bin': 'c32c4a27b524a8ed7bff7cb2fe9e809a265dc350f25943963478d46893978a84',   # e001 textures
     '07650040.bin': 'c6fdc70867907cbf2b423e4bd8239f4ab98e69fdd1157eaf1a18aed373bde697',   # e001 clips m000 (n_st)
+    '0765004b.bin': 'cbb669695daf5c1ca1ea1e1e32da65039bb648e845edd1fbe1a36864ce3c7970',   # e001 clips m001 (a_*: its stance 0x10 rows; worker 0230)
     '07703201.bin': '9b5570610fb12e2eaf834cec0025c3cc18f7c8a64ba5f92d416d0b78e5d315d9',
     '07703202.bin': '06cfcf6ce98c8e60abb4ba119489c67da2a70429bfd32df3c44acd271cb137c3',
     '07703200.bin': 'bac21ed575aa60e3742de4b0c1c36b787444de612f566b4d4e24f1a842181a75',
@@ -276,6 +277,7 @@ INPUTS = {
     '../data/bgd/bgd.bin': 'cab126367d9fb61865d03323938cc422a450f15e4ab72de5999f6d2a6e21a9a3',
     # outside noPath (data/etc): the HUD 'menu2' texture (reticle) for export_web_aim.py
     '../data/etc/menudata.bin': 'b851a405451880e46a9f95c4be406b958ac81c44a9ac8de7bd7b8e7dccd74eb6',
+    '../data/etc/KerberosIntermissionCalc.class': '03ddeb380b451fac6f9e4d8901a3bfcb858382a6a39d8060ce31a315557c86b1',   # export_web_results.py (worker 0232)
     # z128 sound: SE programs sep.bin (06zz0005) and names sdb.bin (06zz0008) for tools/audio/extract.py / bgm.py
     '06800005.bin': '519b914c16e6ab40592cb59c7a5f1270b772c65dc62778cd5cb08c0e3cc8ce28',
     '06800008.bin': 'e5854eb93c8e80479cda8935879d40dbdbab5fc5dbb5e81793c8227028bfeb3d',

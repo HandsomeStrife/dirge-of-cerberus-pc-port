@@ -116,7 +116,7 @@ try {
     // 0x40c00, 0x1000, 0x41800 (w193_fxsrc f789), so the flash draws after the hit's sprites and before the bullet-end's
     const o = await pg.evaluate(async () => {
       const { fx, layer } = window.__fx, AI = window.__play.enemyAI, P = [-1066.5, -157.1, -1103.2];
-      window.__play.enemyAI.S.frame += 100;                      // past the 15-frame gate of the hit above
+      window.__play.enemyAI.S.mgr20 += 100;                      // past the 15-tick gate of the hit above (the manager clock)
       AI.t.playerHandler({ f120: 0, start: [-1000, -160, -1100], dir: [-1, 0, 0], from: { ai: { W: { cls: 3 } } } }, { point: P });
       fx.spawn(0x41800, P);                                      // FUN_00554ea8's bullet-end effect (as enemy_ai endEffect)
       const t0 = window.__play.stats.ticks;
@@ -216,22 +216,30 @@ try {
         const R = JSON.parse(fs.readFileSync(save, 'utf8')).emitters;
         ok(R.length === S0.n && R.every((e, i) => e.code === S0.list[i][0] && e.ei === S0.list[i][1] && e.rec === S0.list[i][2]), 'stage load: the sea-of-flames save\'s emitter list, in order (FED, emitter, param record)');
         // the page engine's cull (FUN_002ea6a0) run once with the save's own camera (the engine paused around it, so the earlier
-        // steps' camera / position don't matter), compared both ways with the save's +0x0a flags. 0x200 (the occluder test
-        // FUN_00269978) is not translated (GUESS row): those may be unculled on the page and are listed, not failed.
+        // steps' camera / position don't matter), compared both ways with the save's +0x0a flags, 0x200 included: as in the
+        // game (FUN_00269868 in the room draw, then FUN_002ea6a0) the room occluder volumes are first rebuilt from the same
+        // camera, with the save's slots 0 / 1 / 2 (as test_effects); the page's next frame rebuilds them from its own camera.
         const SV = JSON.parse(fs.readFileSync(save, 'utf8')).cam.view;
         const pf = await pg.evaluate(V => {
-          const st = window.__fx.stage, f = Math.fround;
+          const st = window.__fx.stage, f = Math.fround, occl = window.__play.roomOccl;
+          if (!occl) return null;
+          occl.frame(Float32Array.from(V), [0, 1, 2]);
           const view = { toView: p => [0, 1, 2].map(j => f(f(f(p[0] * V[j]) + f(p[1] * V[4 + j])) + f(f(p[2] * V[8 + j]) + V[12 + j]))),
             toViewMatrix: () => Float32Array.from(V), eye: [0, 1, 2].map(i => -(V[12] * V[4 * i] + V[13] * V[4 * i + 1] + V[14] * V[4 * i + 2])) };
           const keep = st.emitters.map(e => [e.f0a, e.col.slice()]);
           st.end(view);
           const flags = st.emitters.map(e => e.f0a & 0x380);
           st.emitters.forEach((e, i) => { e.f0a = keep[i][0]; e.col = keep[i][1]; });
-          return flags;
+          return { flags, eye: [...occl.eye], count: occl.count, want: view.eye };
         }, SV);
-        const bad = [], occl = [];
-        R.forEach((e, i) => { const a = pf[i], b = e.f0a & 0x380; if (b === 0x200) { if (a !== b) occl.push(i); } else if (a !== b) bad.push(`#${i} page ${a.toString(16)} save ${b.toString(16)}`); });
-        ok(bad.length === 0, `start view (the save's camera): the page's cull flags = the save's, both ways (${bad.join(', ') || 'all equal'}; occluder-culled in the save, drawn on the page: ${occl.join(', ') || 'none'})`);
+        if (!pf) ok(false, 'start view: window.__play.roomOccl missing (data/scene.json has no occl? re-run the room export)');
+        else {
+          const bad = []; let occl = 0;
+          const de = Math.max(...pf.eye.map((v, j) => Math.abs(v - pf.want[j])));
+          ok(de < 1e-2, `start view: the occluder volumes the cull tested were built from the save's camera (eye off by ${de.toExponential(1)} u, ${pf.count} volumes)`);
+          R.forEach((e, i) => { const a = pf.flags[i], b = e.f0a & 0x380; if (b === 0x200) occl++; if (a !== b) bad.push(`#${i} page ${a.toString(16)} save ${b.toString(16)}`); });
+          ok(bad.length === 0, `start view (the save's camera and its occluder volumes): the page's cull flags = the save's, both ways, 0x200 included (${bad.join(', ') || 'all equal'}; ${occl} occluder-culled in the save)`);
+        }
       } else console.log('  (no tools/trace/out/w208_fire/save.json: the save comparison is skipped)');
       // the frame order on the real page (play.js): per game frame fx.begin (the reseed) < fxStage.begin < fx.end < fxStage.end, and
       // the stage's begin draws no random numbers once its timeline has spawned (FUN_002efc78 ages; the evals draw in end)

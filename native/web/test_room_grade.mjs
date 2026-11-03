@@ -12,6 +12,12 @@
 //           (room.js RoomUVAnim, worker 0226) set from the state's times (tools/trace/uvanim_fixture.py).
 //      Both views hide the chain groups the page's own visibility probe gives from the fixture camera's eye
 //      (room_vis.js, worker 0225; the export no longer drops the start mask), checked against the state's DAT_004e8710.
+//   3. Occluders (worker 0233; room_occl.js): every view also runs the occluder culling from its camera (opts.noOccl: off).
+//      At hero (the start camera; fixture from tools/gsdump/dumps/z128_hero_163235.bin + the start save), c09, c0b, npc:
+//      the pixels it changes must not move away from the game; the start-deck battlement band (rows 64..191) must not get
+//      worse; group 69 (chunk 00's bright ff31 battlements) is not occluder-culled at the hero camera (the game's walk keeps
+//      it too): the dump has none of its vertices because they are back faces (worker 0227's cull), which the band check
+//      shows with the cull off.
 // Run: node native/web/test_room_grade.mjs   (needs playwright and the three.js CDN)
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
@@ -97,11 +103,13 @@ try {
       return [at(5), at(15)];
     };
     let R = null;
+    const occlMod = await import('./room_occl.js'), occlV = new Float32Array(16);
     window.roomShot = async (meta, opts = {}) => {
       if (!R) { R = await room.loadRoom({ skip: d => d.kind === 'char' }); renderer.setClearColor(new THREE.Color().setRGB(...R.scene.clear, THREE.LinearSRGBColorSpace), 1); }
       // FUN_00264ee0 from the fixture camera's eye over its loaded chunks (opts.noMask: every group drawn)
       const vm = rv.createVisMask();
       if (roomVis) vm.setCamera(roomVis.probe(meta.cam.slice(0, 3), meta.chunks).mask);
+      if (opts.hide69) vm.setScript(69, true);
       window.probeBits = roomVis ? vm.bits() : null;
       room.showChunks(R.root, meta.chunks, opts.noMask || !roomVis ? null : vm);
       // scrolling UVs (room.js RoomUVAnim; worker 0226): the state's times (meta.uv = uvanim_NAME.json's slots), then
@@ -140,6 +148,18 @@ try {
       cam.aspect = (2 * hw / SCRZ) / (2 * hh / (SCRZ * AY)); cam.near = Math.max(0.5, cam.far * 0.0005);
       const v = meta.cam; cam.position.set(v[0], v[1], v[2]); cam.up.set(v[6], v[7], v[8]); cam.lookAt(v[3], v[4], v[5]);
       cam.updateProjectionMatrix(); cam.updateMatrixWorld();
+      // FUN_00269868 + FUN_0026ccc8's occluder skip (room_occl.js) from this camera, then the drawn ranges again
+      window.occlInfo = null;
+      if (R.occl && !opts.noOccl) {
+        R.occl.frame(occlMod.viewOf(cam, occlV), meta.chunks);
+        room.showChunks(R.root, meta.chunks, opts.noMask || !roomVis ? null : vm, R.occl);
+        let tris = 0, g69 = 0;
+        for (const d of R.scene.draws) for (const r of d.chunks || []) {
+          const D = r.length > 4 && r[4] > 0 && meta.chunks.includes(r[0]) ? R.occl.dropped(r[0]) : null;
+          if (D && D[r[4]]) { tris += r[2] / 3; if (r[0] === 0 && r[3] === 69) g69 += r[2] / 3; }
+        }
+        window.occlInfo = { count: R.occl.count, tris, g69 };
+      }
       renderer.clear(); renderer.render(R.root, cam);
       return [...read()];
     };
@@ -324,6 +344,44 @@ try {
         n++; eOn += a / 3; eOff += b / 3; better += a < b; worse += a > b;
       }
       ok(n > 0 && eOn < eOff, `back faces at ${name}: ${n} px change; |page - game| there ${(eOn / Math.max(n, 1)).toFixed(1)} culled vs ${(eOff / Math.max(n, 1)).toFixed(1)} both sides (${better} px nearer, ${worse} farther)`);
+    }
+  }
+  // 3. occluders (worker 0233)
+  if (existsSync(path.join(here, 'data/scene.json')) && !JSON.parse(readFileSync(path.join(here, 'data/scene.json'), 'utf8')).occl) console.log('SKIP occluders: no occl in data/scene.json');
+  else {
+    const haveF = n => existsSync(path.join(FIX, n + '.json')) && existsSync(path.join(FIX, n + '_game.png'));
+    for (const name of ['hero', 'c09', 'c0b', 'npc']) {
+      if (!haveF(name)) { console.log(`SKIP occluders at ${name}: no fixture (room_grade_fixture.py)`); continue; }
+      const m = JSON.parse(readFileSync(path.join(FIX, name + '.json'), 'utf8'));
+      const uvf = path.join(FIX, `uvanim_${name}.json`);
+      if (existsSync(uvf)) m.uv = { slots: JSON.parse(readFileSync(uvf, 'utf8')).slots, frames: 3 };
+      const game = await pg.evaluate(u => window.png(u), `xfix/${name}_game.png`);
+      const on = await pg.evaluate(mm => window.roomShot(mm), m), info = await pg.evaluate(() => window.occlInfo);
+      const off = await pg.evaluate(mm => window.roomShot(mm, { noOccl: true }), m);
+      let n = 0, eOn = 0, eOff = 0, bOn = 0, bOff = 0, nb = 0;
+      for (let i = 0; i < 432 * 512; i++) {
+        let d = 0, a = 0, b = 0;
+        for (let c = 0; c < 3; c++) { d += Math.abs(on[i * 3 + c] - off[i * 3 + c]); a += Math.abs(on[i * 3 + c] - game[i * 3 + c]); b += Math.abs(off[i * 3 + c] - game[i * 3 + c]); }
+        const y = Math.floor(i / 432);
+        if (y >= 64 && y < 192) { bOn += a / 3; bOff += b / 3; nb++; }
+        if (d <= 6) continue;
+        n++; eOn += a / 3; eOff += b / 3;
+      }
+      // c09 (the tp09 state): one volume that hides no node (test_room_occl: the state's RAM drops none either)
+      ok(info && (name === 'c09' ? info.tris === 0 : info.tris > 0), `occluders at ${name}: ${info && info.count} volumes, ${info && info.tris} triangles not drawn`);
+      ok(n === 0 || eOn <= eOff, `occluders at ${name}: ${n} px change; |page - game| there ${(eOn / Math.max(n, 1)).toFixed(1)} with vs ${(eOff / Math.max(n, 1)).toFixed(1)} without`);
+      if (name === 'hero') {
+        ok(bOn / nb <= bOff / nb + 0.05, `hero: the battlement band (rows 64..191) |page - game| ${(bOn / nb).toFixed(2)} with the occluders, ${(bOff / nb).toFixed(2)} without`);
+        ok(info.g69 === 0, `hero: group 69 (ff31 battlements, chunk 00) is not occluder-culled (${info.g69} tris dropped; FUN_0026ccc8 keeps its nodes from this camera)`);
+        // the battlements are back faces: with the cull off (the page before worker 0227) group 69 shows in the band
+        const nc = await pg.evaluate(mm => window.roomShot(mm, { noCull: true }), m), nc69 = await pg.evaluate(mm => window.roomShot(mm, { noCull: true, hide69: true }), m);
+        let px69 = 0;
+        for (let i = 64 * 432; i < 192 * 432; i++) { let d = 0; for (let c = 0; c < 3; c++) d += Math.abs(nc[i * 3 + c] - nc69[i * 3 + c]); px69 += d > 6; }
+        const c69 = await pg.evaluate(mm => window.roomShot(mm, { hide69: true }), m);
+        let pxc = 0;
+        for (let i = 64 * 432; i < 192 * 432; i++) { let d = 0; for (let c = 0; c < 3; c++) d += Math.abs(on[i * 3 + c] - c69[i * 3 + c]); pxc += d > 6; }
+        ok(px69 > 200 && pxc === 0, `hero: with back faces drawn, group 69 covers ${px69} px of the band (the old bright battlements); culled (the game's rule) ${pxc}`);
+      }
     }
   }
   ok(errs.length === 0, `no page errors (${errs.slice(0, 2).join(' | ')})`);

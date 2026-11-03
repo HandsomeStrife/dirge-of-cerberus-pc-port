@@ -67,7 +67,7 @@ const LOAD = PJ ? (t => PJ.load_flag_records.filter(r => t.has(r.tag) && r.rec !
 ok(JSON.stringify(LOAD) === '[41,42,43]', `stage-load records ${JSON.stringify(LOAD)} (41-43: bit 3 + e_Sol_11 / 12 / 13)`);
 // play.js rebuildEnemies: nothing dead, 44 / 66 (active in the reload state), the stage-load pass, then 45-49
 const rebuild = (opts, flags, frame, clock, load = LOAD) => {
-  const W = AI.createEnemyAI({ ...opts, eventFlags: flags, deadRecs: [], now: clock.now, acc: clock.acc }); W.S.frame = frame;
+  const W = AI.createEnemyAI({ ...opts, eventFlags: flags, deadRecs: [], now: clock.now, acc: clock.acc, mgr20: clock.mgr20, mgr24: clock.mgr24 }); W.S.frame = frame;
   for (const k of [44, 66]) W.addActor({ rec: k, astate: AWAKE_STATE[k], f118: AWAKE_F118[k] });
   W.stageLoad(load);
   for (const k of [45, 46, 47, 48, 49]) W.addActor({ rec: k, astate: AWAKE_STATE[k], f118: AWAKE_F118[k] });
@@ -126,7 +126,12 @@ function page() {
   ok(JSON.stringify(PLAYER_STAMPS) === JSON.stringify({ t27c: -40, t280: -15, part: -1, s148: -120, s150: 0, s152: 0, sphase: 0, c810: -15 }),
      'PLAYER_STAMPS = the traced reload state (frame counter 0 based)');
   ok(P.W.S.now === 26 && Math.abs(P.W.S.acc - 0.3) < 1e-6, `the new AI clock ${P.W.S.now} + ${P.W.S.acc} (26 at the placement, T)`);
-  ok(P.W.S.frame === CHECKPOINT.frame && CHECKPOINT.frame === 24, `the new world's frame counter ${P.W.S.frame} (24: traced 14 at the reload + 10)`);
+  ok(P.W.S.frame === CHECKPOINT.frame && CHECKPOINT.frame === 24, `the page's frame count ${P.W.S.frame} (24: the hand-off schedule's base)`);
+  // worker 0230: the manager clock mgr +0x20 / +0x24 (ticks): the reload state's 14 / 0.3999990 at record 0, 10 PAL frames of 1.2
+  // (f32, FUN_0053b500) -> 26 / 0.3999996 at the placement, as the trace's AI clock 14 -> 26
+  { let a = Math.fround(0.3999990224838257), c = 14;
+    for (let i = 0; i < 10; i++) { const v = Math.fround(a + Math.fround(1.2)), n = Math.trunc(v); a = v; if (n > 0) { c += n; a = Math.fround(v - n); } }
+    ok(P.W.S.mgr20 === c && c === 26 && P.W.S.mgr24 === a, `the new world's manager clock ${P.W.S.mgr20} + ${P.W.S.mgr24} (reload 14 + 10 frames -> ${c} + ${a})`); }
   ok(JSON.stringify(P.flagsSeen) === '{}', 'event flags: all 0 (FUN_004039d0)');
   const b44 = P.W.actors.find(a => a.rec === 44);
   ok(r.enemies === P.W && b44 && b44 !== a44 && b44.hp > 0 && P.W.actors.length === AWAKE.length + 3, `a new enemy world: ${P.W.actors.length} soldiers, 44 alive again (hp ${b44 && b44.hp})`);
@@ -230,15 +235,15 @@ function page() {
   const hitOnce = P => {
     P.sounds.length = 0; const ev0 = P.W.events.length;
     P.W.t.damagePlayer({ damage: 10, kind: 1, hit: 0, f148: 0, dir: [1, 0, 0], pos: [...P.php.pos], from: { id: 66 } });
-    const f = P.W.S.frame;
+    const f = P.W.S.mgr20;
     return { sounds: P.sounds.slice(), events: P.W.events.slice(ev0).filter(e => !/frame/.test(e)),
              c810: P.php.c810 - f, t280: P.php.t280 - f, s148: P.php.s148 - f, s150: P.php.s150, s152: P.php.s152, hp: P.php.hp };
   };
   const first = page(); restoreCheckpoint(first.sys());          // the restored state on a fresh page (the reference)
   const ref = hitOnce(first);
   const late = page();
-  late.W.S.frame = 3000;                                            // die late: hits near frame 3000 stamp everything
-  for (let i = 0; i < 3; i++) { late.W.t.damagePlayer({ damage: 10, kind: 1, hit: 0, f148: 0, dir: [1, 0, 0], pos: [...late.php.pos], from: { id: 66 } }); late.W.S.frame += 2; }
+  late.W.S.mgr20 = 3000;                                            // die late: hits near tick 3000 stamp everything
+  for (let i = 0; i < 3; i++) { late.W.t.damagePlayer({ damage: 10, kind: 1, hit: 0, f148: 0, dir: [1, 0, 0], pos: [...late.php.pos], from: { id: 66 } }); late.W.S.mgr20 += 2; }
   ok(late.php.c810 > 2990 && late.php.s148 > 2990, `late hits stamped (C+0x810 ${late.php.c810}, P+0x148 ${late.php.s148})`);
   late.php.hp = 0;
   restoreCheckpoint(late.sys());

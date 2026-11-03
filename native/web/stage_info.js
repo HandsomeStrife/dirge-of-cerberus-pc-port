@@ -357,7 +357,9 @@ export class StageInfo {
     if (this.kind >= 0) { this.stop(); return this.begin(kind); }
     if (kind === 3) { warnOnce('k3', 'stage info: kind 3 (the game over) belongs to gameover.js', this.warn); return; }
     this.kind = kind; this.state = 0; this.wait = 0;
-    if (kind === 0 || kind === 2) warnOnce('k02', 'stage info: kind ' + kind + '\'s FUN_003fdaa0 / FUN_003fdb00 (stat 0xe) not translated', this.warn);
+    // FUN_003fdb48(2): FUN_003fdb00 (results.js, worker 0232: the section's end on the stats) through onBegin
+    if (this.onBegin) this.onBegin(kind);
+    if (kind === 0 || (kind === 2 && !this.onBegin)) warnOnce('k02', 'stage info: kind ' + kind + '\'s FUN_003fdaa0 / FUN_003fdb00 (stat 0xe) not translated', this.warn);
     this.events.push({ begin: kind });
   }
   // FUN_003fdd30: k >= 0: is k the current kind; k < 0: any
@@ -381,8 +383,11 @@ export class StageInfo {
       this.state = 4;
     }
     if (this.state === 4) {                        // FUN_003b66c0(DAT_00472a80, DAT_004a8250[kind], ...)
-      const bk = this.D ? this.D.si.kinds[this.kind] : (this.kind === 6 ? BOX_KIND_ITEM : this.kind === 1 ? BOX_KIND_OBJECTIVE : 0);
-      if (this.D && this.D.si.scripts[String(bk)]) {
+      const bk = this.D ? this.D.si.kinds[this.kind] : (this.kind === 6 ? BOX_KIND_ITEM : this.kind === 1 ? BOX_KIND_OBJECTIVE : this.kind === 2 ? 0x1d : 0);
+      // box kind 0x1d (stage-info kind 2, the Status results screen) is results.js's (worker 0232) through makeBox
+      const made = this.makeBox ? this.makeBox(bk, now) : null;
+      if (made) this.box = made;
+      else if (this.D && this.D.si.scripts[String(bk)]) {
         this.box = new StageBox(this.D, bk, now, { event: n => (this.flags ? this.flags.event(n) : 0), text: this.text });
       } else {
         warnOnce('nobox' + bk, 'stage info: box kind 0x' + bk.toString(16) + ' has no data: closed at once', this.warn);

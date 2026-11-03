@@ -139,7 +139,9 @@ function world({ ppos = [0, 0, 0], at = [0, -9, -3], c1, every, rec = 44, mutVol
   const drops = [];
   let last = player.hp;
   for (let i = 0; i < 13; i++) { W.tick(1.2, player.pos, player.pos); if (player.hp !== last) drops.push(i); last = player.hp; }
-  ok(drops.join() === '0,5,10', `repeat bit 2, +0x13c 5: hits at updates ${drops} (0,5,10), life 16 ends it at 14`);
+  // worker 0230: the frame byte is the manager clock mgr +0x20 (ticks, 1.2 a PAL frame): 5 ticks after the save's +0x24 0.5999
+  // are 4 frames (+1 +1 +2 +1), so the hits come at updates 0, 4, 8
+  ok(drops.join() === '0,4,8', `repeat bit 2, +0x13c 5: hits at updates ${drops} (0,4,8: every 5 ticks), life 16 ends it at 14`);
 }
 {
   // +0x13c is a signed char (FUN_0057a428): 0xfb = -5, so a repeat entry hits again on the very next update
