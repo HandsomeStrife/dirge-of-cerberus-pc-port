@@ -92,6 +92,10 @@ export class StageRuntime extends EventRuntime {
     this.battle = true;               // +0x1558 bit 37. T: set in the save and at the hand-off (trace_w205_reload)
     this.running = true;              // +0x1558 bit 44: the event program runs (FUN_00374d08), set before main
     this.skipOff = false;             // DAT_004f3044 bit 0x2000 (FUN_003e0cc8 / FUN_003e0d00)
+    // DAT_0046e290 != 0: the stage object (FUN_003245e8 builds it in the stage init). A new controller = a stage (re)load:
+    // not yet. T w240_init (a Restart's reload): main's battle() after first_event (f2264) comes before the stage init
+    // (f2276-2278), so that battle's FUN_00324e70 finds none (worker 0240)
+    this.stageObj = false;
     this.autoSkip = o.autoSkip !== false;
     // DAT_0050db20 (stored XOR DAT_0046f608; kept plain here). A new controller = a stage (re)load: all 0. The clearing is
     // traced only (w210 start1704: 0 mid stage load); its writer is not decoded
@@ -211,6 +215,15 @@ export class StageRuntime extends EventRuntime {
     // player.js DAT_004B8AC8) its second branch runs: FUN_00319190 (each status takes the slot named after it), then
     // the camera reset FUN_00329f68 -> FUN_003285d0 (angles from render view 1's forward)
     this.handBackAll();
+    // worker 0240: then FUN_005453b0, the stage-load pass: its per-status loop and FUN_005459d8 (script event 0x23 to every
+    // object: the z128 boss's HP / gauge / activation at stage flag 0 = 36). T w240_boss (w231_boss4's route): f1373
+    // FUN_0037cf30 -> FUN_00324e70(1) -> FUN_00319190, FUN_005453b0 -> FUN_005459d8. All of FUN_00324e70 is inside
+    // `DAT_0046e290 != 0`: the battle() before the stage init (above) sends nothing. L: the hand-back / camera reset of that
+    // battle stay as they were (the page's settle and hand-off rely on them; in the game they are inside the same test)
+    if (!this.stageObj) this.log.push([this.frameNo, 'battle: no stage object yet (FUN_00324e70: nothing)']);
+    else if (this.o.stagePass) this.o.stagePass();
+    else this.warnOnce('stage: battle()\'s stage-load pass FUN_005453b0 (event 0x23) not wired');
+    this.stageObj = true;             // the stage init follows that first battle (FUN_003245e8, T w240_init)
     if (this.o.cameraReset) this.o.cameraReset(this.view); else this.warnOnce('stage: battle()\'s camera reset (FUN_00329f68) not wired');
     this.warnOnce('stage: FUN_00324e70\'s player calls (FUN_00578548, FUN_00574928, FUN_0034b2c8, FUN_00331ab0 ...) left out');
     this.cams.forEach(c => { c.active = false; });

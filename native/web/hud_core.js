@@ -343,8 +343,10 @@ function textElement(out, data, st, e, metrics) {
   spriteElement(out, data, st, e);
   if (!e.text || !e.text.length) return;
   if (e.tflags & 0x80) numberText(out, data, st, e, metrics);
-  else if (e.t5c !== 0) plainText(out, data, st, e, metrics);
-  else warn('hud: text renderer FUN_003cd7e8 (+0x5c == 0) not translated');
+  // +0x5c == 0: FUN_003cd7e8 (worker 0237). It is FUN_003cc208 with a plain byte string for the ring buffer (+0x5c - 1 masked
+  // reads); for single-byte glyphs (no control codes / '$' pairs: plainText warns on those) the draw is the same code: T the boss
+  // gauge's label (element 0x45, 'r0b_boss2' GS dump: 55 / 55 glyph sprites equal, test_hud)
+  else plainText(out, data, st, e, metrics);
 }
 
 // ------------------------------------------------------------------ state + the frame's draw list
@@ -564,6 +566,12 @@ export class HudState {
     this.ringData = data.ring || null;
     this.ring = new HitRing(data.values.ring || null);
     if (!this.ringData) warn('hud: hud.json has no ring (rebuild data/hud with export_web_hud.py): no hit-direction ring');
+    // worker 0237: the top-right gauge (panel 4 = slot 4; the boss gauge 13). HUD +0xc58 id, +0xc59 shown (0 / 1 shown /
+    // 2 going), +0xc5c / +0xc60 / +0xc64 the request, +0x7c the gauge (cur, max +0x7e, from, shown, timer), +0x88 the backing
+    // gauge, txtObj = DAT_00471384 exists. As FUN_003b52c8 (from FUN_003ad618) leaves them: all 0, +0x88 = FUN_003aec10(1, no
+    // lag) with max +0x8a = 1, element 0x45's text = +0xbd8 (empty). hud.json `gauge`: show lists, widths, labels (disc).
+    this.gaugeData = data.gauge || null;
+    this.g = { c58: 0, c59: 0, c5c: 0, c60: 0, c64: 0, v: [0, 0, 0, 0, 0], back: [1, 1, 1, 1, 0], txtObj: false };
   }
   // a bullet hit Vincent (FUN_005720c8 -> FUN_00567c08): vpos = his P+0x90, from = the bullet's +0xc0
   hit(vpos, from) {
@@ -624,9 +632,10 @@ export class HudState {
     this.slidePanel(0, true);                                  // FUN_003afe10
     this.slidePanel(1, true);                                  // FUN_003afe30 (+ HUD +0xd8 = 1: read by FUN_003b0288, not translated)
     // FUN_003afe60: panel 2 (slot 7) and +0xdc = 1 only with HUD +0xac set (FUN_003af860's message panel, not on the page: 0)
-    // FUN_003afec0: panel 4 only with HUD +0xc59 == 1 (0 on the page), then FUN_003b4d50: DAT_00471388 is 0 here
+    // FUN_003afec0: panel 4 only with HUD +0xc59 == 1 (worker 0237: the top-right gauge shown), then FUN_003b4d50: DAT_00471388 is 0 here
     // (no sound / effect to stop) -> FUN_003b4db0: +0xbb4 = 0 (the CHAIN draw's) and +0xbb0 = 0 (read by FUN_003b4aa8 /
     // 003b4b68 / 003b4c20 / 003b4cc8 / 003b4f28, the CHAIN count updates, not translated: not kept)
+    if (this.g.c59 === 1) this.slidePanel(4, true);
     this.chainBB4 = 0;
     for (const p of [8, 9, 10, 5]) this.slidePanel(p, true);
     // FUN_003b4768: the item list closes only when open (HUD +0x564; never on the page)
@@ -652,6 +661,83 @@ export class HudState {
     for (const e of this.chain) if (e.depth === 0 && e.slide[0] === 2) { e.slide[0] = 0; e.slide[6] = 0; }
   }
   find(slot, id) { return this.chain.find(e => e.inSlot === slot && e.id === id && e.depth > 0) || null; }
+  // ---- the top-right gauge (worker 0237; notes/boss-research.md 'The boss HUD gauge')
+  // FUN_003b56f0: DAT_004729a0's [id, width] for slot 4's elements (0x44 line, 0x45 label, 0x46 bar); gauge 13 (+0xc58 == '\r')
+  // takes width + 0x3c. FUN_003cb450(e, w, h): +0xa = w, then vt+0x3c (FUN_003ca160: the box = the rect plus the sprite's
+  // edges, so it widens by the same amount)
+  gaugeWidths() {
+    for (const [id, w0] of this.gaugeData.widths) {
+      const e = this.find(4, id);
+      if (!e) continue;
+      const w = s16(this.g.c58 === 13 ? w0 + 0x3c : w0);
+      if (e.rect[2] !== w) { e.box[2] = s16(e.box[2] + w - e.rect[2]); e.rect[2] = w; }
+    }
+  }
+  // FUN_003b58e0(HUD, id, v, max, f): the gauge request (manager 0x6e; the boss brain's FUN_00aa11b8). Translated: id 13
+  // (case 0xc): label = FUN_003fd578(DAT_004729f8[f & 0xff]) into +0xbd8 (FUN_00422d18, 0x7f; f byte 0x80: none),
+  // FUN_003aec10(+0x7c, (short) |v|, lag 1), then +0x7e = max (so the first request has no lag). FUN_003b5488 makes the text
+  // object DAT_00471384 (FUN_002f51d8; L: never fails) and for id 13 sets its mode 0 (FUN_002dcd40(obj, 0), the default case):
+  // it draws nothing then. FUN_003b5838 acts on ids 1, 2, 8, 0xe only. Then FUN_003b5d58(HUD, 0) (the text object's part).
+  gaugeRequest(id, v, max, f) {
+    const G = this.g;
+    if (!this.gaugeData) { warn('hud: hud.json has no gauge data (rebuild data/hud with export_web_hud.py): the top-right gauge is not drawn'); return; }
+    G.c5c = v | 0; G.c60 = max | 0; G.c58 = id & 0xff; G.c64 = f >>> 0;
+    this.gaugeWidths();
+    if (G.c58 !== 0) G.txtObj = true;
+    this.gaugeWidths();
+    if (G.c58 === 13) {
+      const k = G.c64 & 0xff, lab = k === 0x80 ? [] : this.gaugeData.labels[k];
+      if (!lab) warn(`hud: gauge label ${k} (DAT_004729f8) not exported`);
+      const e = this.find(4, 0x45);
+      if (e) e.text = (lab || []).slice(0, 0x7f);                               // element 0x45 shows +0xbd8 (FUN_003b52c8)
+      gaugeSet(G.v, s16(Math.abs(G.c5c)), 1, this.mnow);                       // FUN_003aec10 reads FUN_0023c1f0 (mnow)
+      G.v[1] = s16(G.c60);
+    } else warn(`hud: top-right gauge ${G.c58} (FUN_003b58e0 cases other than 0xc) not translated`);
+    this.gaugeObj();
+  }
+  // FUN_003b5378 (manager 0x6f): FUN_003afcf8(HUD, 4) = panel 4 slides in (FUN_003d5d68) and its show list
+  // PTR_DAT_00471d80[4] is unhidden (FUN_003afbf8(HUD, 4, 0) -> FUN_003cb360(e, 0)); +0xc59 = 1; FUN_003b5838; FUN_003b5d58(HUD, 0).
+  // FUN_003afcf8's FUN_003d46d0 (the HUD root hidden: nothing) never holds on the page.
+  gaugeShow() {
+    if (!this.gaugeData) return;
+    // only a translated request is shown (gauge 13): another id's case (numbers / timers, scripts 219 / 272) is not, so its
+    // panel would be half drawn; left out instead (warned)
+    if (this.g.c58 !== 13) { warn(`hud: top-right gauge ${this.g.c58}: not shown (only gauge 13 is translated)`); return; }
+    this.slidePanel(4, false);
+    for (const id of this.gaugeData.show[4]) { const e = this.find(4, id); if (e) e.flags &= ~1; }
+    this.g.c59 = 1;
+    this.gaugeObj();
+  }
+  // FUN_003b53c0 (manager 0x70): shown -> panel 4 slides out (FUN_003afc98), +0xc58 = 0, +0xc59 = 2
+  gaugeHide() {
+    if (this.g.c59 !== 1) return;
+    this.slidePanel(4, true);
+    this.g.c58 = 0; this.g.c59 = 2;
+  }
+  // FUN_003b5d58's first half (the text object DAT_00471384): with element 0x44 shown and slot 4's slide over (FUN_003d5dd8 =
+  // FUN_003d1098(group +0x48): +0x54 != 0), +0xc59 == 2 frees it (FUN_003b56b8) and +0xc59 = 0. Its position / scale writes
+  // (FUN_002dcdf8 / FUN_002dce08) are left out: in mode 0 (gauge 13) it draws nothing. L: the HUD root is never hidden here.
+  gaugeObj() {
+    const G = this.g;
+    if (!G.txtObj) return;
+    const e44 = this.find(4, 0x44);
+    if (!e44 || (e44.flags & 1)) return;
+    if (this.slides && this.chain[this.groupOf[4]].slide[6] !== 0) return;
+    if (G.c59 === 2) { G.txtObj = false; G.c59 = 0; }
+  }
+  // FUN_003b5d58(HUD, e): callback 0x46 of slot 4, the bar. Shown with a max: FUN_003aec78 on +0x7c, FUN_003aed60 rows 0xb
+  // (the backing +0x88) and 9 (+0xc64 < 0x100, else 0xf) on e's rect; below a quarter of the max (rounded toward 0) and not 0
+  // the pulse FUN_003af1e0 (rows 10 / 0x10: not translated, warned, as the HP one)
+  gaugeBar(out, e) {
+    const G = this.g;
+    this.gaugeObj();
+    if (G.c59 === 0 || G.v[1] === 0) return;
+    gaugeTick(G.v, this.mnow);
+    bar(out, this.data, G.back, 0xb, e.rect);
+    const lo = (G.c64 >>> 0) < 0x100;
+    bar(out, this.data, G.v, lo ? 9 : 0xf, e.rect);
+    if (G.v[0] < Math.trunc(G.v[1] / 4) && G.v[0] !== 0) warn(`hud: gauge pulse FUN_003af1e0 (row ${lo ? 10 : 0x10}) not translated`);
+  }
   // FUN_00339988 -> FUN_003adda8(HUD, P+0x20, P+4, 1) when the status HP changes: FUN_003aec10 with the
   // lag, max -> HUD+0x66, FUN_003aed00: text element 5 = FUN_003cbb58(cur, max)
   setHP(cur, max) {
@@ -705,10 +791,11 @@ export class HudState {
           else if (e.inSlot === 5 && e.id === 0x09) mpBar(out, this.data, this, e);  // +0x3c = 0x3ae9e8
           else if (e.inSlot === 6 && e.id === 0x2e) this.chainGauge(e, 0);           // LAB_003b4f50
           else if (e.inSlot === 6 && e.id === 0x32) this.chainGauge(e, 1);           // LAB_003b4f78
+          else if (e.inSlot === 4 && e.id === 0x46) this.gaugeBar(out, e);           // FUN_003b5d58 (worker 0237)
           else if (e.inSlot === 'root' && e.id === 0x3f) ringPrims(this.ringData, this.ring.M, this.ring.draw, this.ringData ? this.ringData.frames : {}, out);
           // root 0x3f = FUN_003b0ac0: kinds 1-4 (the reticle) are aim.js's (drawn before this layer), kind 5 (the ring) here
           // other callbacks are not translated: slot 3 0x4e,
-          // slot 4 0x46, slot 8 0x70, slot 9 0x74, slot 10 0x77 (their panels are off screen or empty at the save)
+          // slot 8 0x70, slot 9 0x74, slot 10 0x77 (their panels are off screen or empty at the save)
           break;
         default: break;                                        // type 10 (hidden in the save) not translated
       }

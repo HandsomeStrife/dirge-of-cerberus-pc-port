@@ -8,6 +8,7 @@
 
 # names cleared by Dan
 Sea of Flames      # stage name, used as the project's name (allowlisted by the manager 2026-11-03, pending Dan's OK)
+Vincent:           # the main character's name + colon: the '$h' speaker label (kelstr 0x2800, exported by worker 0239 for the subtitles) matches the name followed by a colon in 48 older notes / comments (added by worker 0239 2026-11-03, pending Dan's OK, NOT cleared)
 
 # generic words
 Potion

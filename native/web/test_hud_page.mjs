@@ -423,7 +423,7 @@ try {
       P.gameHud.tick = () => {
         t0();
         const st = P.gameHud.state, g = s => st.chain[st.groupOf[s]];
-        log.push({ now: st.now, y5: g(5).rect[1], st5: g(5).slide[0], t5: g(5).slide[6], x8: g(8).rect[0], begin: P.gameOver.go.events.includes('begin'), restarts: P.restart.count });
+        log.push({ now: st.now, y5: g(5).rect[1], st5: g(5).slide[0], t5: g(5).slide[6], x8: g(8).rect[0], begin: P.gameOver.go.events.includes('begin'), restarts: P.restart.count, hp: P.php.hp });
       };
       window.__ref = { H, data };
       return null;
@@ -459,13 +459,17 @@ try {
       // H during a new slide-out (5 frames in): back in, then the start layout
       await pg4.evaluate(() => { window.__hlog.length = 0; window.__play.php.hp = 0; });
       await pg4.waitForFunction(() => { const L = window.__hlog, i = L.findIndex(r => r.begin); return i >= 0 && L.length > i + 5; }, null, { timeout: 60000 });
+      await pg4.evaluate(() => { window.__hlog.length = 0; });
       await pg4.keyboard.press('KeyH');
       await pg4.waitForTimeout(1500);
       const Hh = await pg4.evaluate(() => {
         const P = window.__play, { H, data } = window.__ref, ref = new H.HudState(data), st = P.gameHud.state;
-        return { hp: P.php.hp, same: st.chain.every((e, k) => e.rect.join() === ref.chain[k].rect.join() && e.box.join() === ref.chain[k].box.join() && e.flags === ref.chain[k].flags) };
+        return { hp: P.php.hp, hp1: window.__hlog.length ? window.__hlog[0].hp : null,
+                 same: st.chain.every((e, k) => e.rect.join() === ref.chain[k].rect.join() && e.box.join() === ref.chain[k].box.join() && e.flags === ref.chain[k].flags) };
       });
-      ok(Hh.hp === 780 && Hh.same, 'H during the slide-out: the HUD comes back to the start layout');
+      // worker 0240: HP 780 on the first frame after H; 41-43 / 44 / 66 are active after the Restart and may hit him in the
+      // 1.5 s after (the stage init's draws moved the soldiers' random sequence)
+      ok(Hh.hp1 === 780 && Hh.same, `H during the slide-out: the HUD comes back to the start layout (HP ${Hh.hp1} after H, ${Hh.hp} 1.5 s later)`);
       // the pause during the slide-in: FUN_0023c1f0 (the slides' clock) runs on through the game's pause, so after a
       // 1.5 s pause the first game frame has the slide done (the page's game frames stop while paused)
       await pg4.evaluate(() => { window.__hlog.length = 0; });
@@ -482,6 +486,34 @@ try {
     }
     ok(errs4.length === 0, 'no page errors (play.html game over)' + (errs4.length ? ': ' + errs4.join('; ') : ''));
     await pg4.close();
+  }
+  // 9. play.html, the top-right gauge (worker 0237): manager 0x6e(13, 7000, 7000, 1) / 0x6f as script 242's event 0x23 sends them
+  // (harness: sent through enemy_ai's command handler from the stage object; the page has no route to the boss's 0x23 yet) ->
+  // play.js hudGauge -> hud.js gauge -> hud_core (FUN_003b58e0 / FUN_003b5378): the panel slides in and the gauge draws.
+  // HUD_GAUGE_SHOT=<png> saves the page then (the game-vs-page image).
+  {
+    const pg5 = await browser.newPage({ viewport: { width: 640, height: 480 } });
+    const errs5 = [];
+    pg5.on('pageerror', e => errs5.push(e.message));
+    await pg5.goto(base + 'play.html?intro=0&sound=0&widehud=0', { waitUntil: 'load' });
+    await pg5.waitForFunction(() => window.__play && window.__play.stats.ticks > 30 && window.__play.gameHud, null, { timeout: 120000 });
+    const g0 = await pg5.evaluate(() => {
+      const P = window.__play, W = P.enemyAI, o = W.stageObj;
+      W.t.send(o, -2, 0x6e, [13, 7000, 7000, 1]); W.t.send(o, -2, 0x6f, [0, 0, 0, 0]);
+      return { t: P.stats.ticks };
+    });
+    await pg5.waitForFunction(t0 => window.__play.stats.ticks > t0 + 40, g0.t, { timeout: 60000 });
+    const g = await pg5.evaluate(() => {
+      const st = window.__play.gameHud.state, gi = st.groupOf[4];
+      const prims = st.prims().filter(p => p.panel === gi && p.kind !== 'line');
+      return { c59: st.g.c59, label: String.fromCharCode(...st.find(4, 0x45).text), y: st.chain[gi].rect[1], n: prims.length,
+               bar: prims.some(p => p.kind === 'strip' && p.tex == null && p.c[0].join() === '151,141,224,78') };
+    });
+    ok(g.c59 === 1 && g.label.length === 12 && g.y === 0 && g.n === 61 && g.bar,
+       `play.html: manager 0x6e / 0x6f -> the top-right gauge shown, slid in, 61 primitives, label from the disc (${JSON.stringify({ ...g, label: g.label.length })})`);
+    if (process.env.HUD_GAUGE_SHOT) { await pg5.screenshot({ path: process.env.HUD_GAUGE_SHOT }); console.log('saved ' + process.env.HUD_GAUGE_SHOT); }
+    ok(errs5.length === 0, 'no page errors (play.html gauge)' + (errs5.length ? ': ' + errs5.join('; ') : ''));
+    await pg5.close();
   }
 } finally {
   await browser.close();

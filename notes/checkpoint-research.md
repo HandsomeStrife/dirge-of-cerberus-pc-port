@@ -194,3 +194,42 @@ The positions are the opening event's battle clips' last frames (not cutscene ke
 - **First hit (T w205_rng, TRACE_RNG=1):** the game's 41 fires at record 96 and hits Vincent at 100 (44 damage). The
   page's 41 fires from the hand-off at record 95 (worker 0204's one-frame-early fire); its twister is off by then and
   the hooked run has no body poses, so the shot misses there (even with the game's words forced). Not reproduced.
+
+## The stage-init pass (worker 0240, 2026-11-03)
+**Traced order** (call-log set `w240` / `w240b` in tools/trace/calllog.py; logs are written at each call's return):
+- **w240_init** (from worker 0210's scratch start1704.p2s, mid stage load after a Restart, no input, 2300 frames):
+  f2264 FUN_0037cf30 -> **FUN_00324e70(1) does nothing** (no FUN_00319190 / FUN_005453b0: DAT_0046e290 == 0, the stage object
+  is not built yet); f2276-2278 **FUN_003245e8 (stage init) -> FUN_0053c140 -> FUN_0053ca50(mgr, 1) -> FUN_005459d8**, manager
+  +0x20 = 0 / +0x24 = 0; 44 / 66's activation magazines (FUN_00360418, rounds 6 / 9) inside that pass; f2291 (= reload0's
+  record 10) the 8 activations of 41-43 / 45-49.
+- **w240_reload / w240_act** (from worker 0201's reload0.p2s): no FUN_00324e70 / FUN_005453b0 / FUN_005459d8 in 120 frames;
+  the record-10 activations are actor vt+0x144(1, 1) called from **0x55a124 = FUN_0055a0d8** = actor vt+0x14c (the area
+  switch FUN_0054ef68 passes an area's state to its children: worker 0223's areas.js onSwitch, here for actors), which
+  activates unless status override bit 5 (FUN_00315738(st, 5)) is set without +0x28 bit 1. So 0204's "stage-load pass" for
+  41-43 is the area switch in the game; the page keeps 0204's FUN_00558f68 translation as a labelled stand-in (loadPass).
+- **w240_boss** (w231_boss4's route, flags poked, 1700 frames): f1373 FUN_0037cf30 -> FUN_00324e70(1) -> FUN_00319190,
+  FUN_005453b0 -> FUN_005459d8: the boss's 0x23 on that route is battle()'s stage-load pass.
+**FUN_0053ca50(mgr, 1)** (decomp): +0x4e = k on FUN_0053bdb8(mgr, k) for k < FUN_00310b90(0x12) (FUN_00310c40() = 48 > 12);
+vt+0x2ec(o, 1) over lists DAT_0058b040 = 0xc, 1, 2, 3, 8, 0xa, 0xf, 0x10, 0x13, 0xb, 0xe (ELF): stage object 0x592600 / type 8 =
+FUN_0054b110 (script event 0x22); actors FUN_0055f028 (status +0xa0 +0x4f), triggers / 0xb / 0xe FUN_00551b18 (+0xd4 +0xab),
+props FUN_00585a48 (+0x10c +0x4e) first attach the object to FUN_0053bdb8(mgr, byte) when the byte != 0xff: all 0xff in
+reload0 (216 / 195 / 95), so every object just gets event 0x22. FUN_0053cc00: FUN_0053ccc8 (stage object event 0x2a + list
+DAT_0058b070) only for DAT_004eeb30[k] == 0: all 1 (start1704, reload0). Then FUN_005459d8.
+**FUN_00324e70** (decomp): everything inside `DAT_0046e290 != 0`; branch (param 0 && DAT_004b8ac8 bit 5) skips; else
+FUN_00319190, FUN_00328640, **FUN_005453b0**, the player calls, camera FUN_00329f68. FUN_005453b0: 256 slots (vt+0x36c
+for +0x28 bit 0x40 / status +0x60 bit 0, else vt+0x144(0, 0) for +0x118 bit 0x400), FUN_005459d8, then FUN_00325818 /
+FUN_0055f338 / FUN_0053d510 / FUN_0053d590 / FUN_0053c4c8.
+**Manager step**: DAT_004eeb24 = 0x3f999999 (FUN_00322f88; RAM of reload0 / the save / r0b_boss2). CHECKPOINT.mgr24 is now
+0.3999983 (0230's 0.3999996 used f32 1.2), and test_checkpoint steps with player.js STEP.
+**On the page**: checkpoint.js `initWorld` (play.js rebuildEnemies, the Restart and the hand-off): enemy_ai `stageInit`
+(0x22 then 0x23) at clock 0, then the placement's clocks, loadPass for 41-43 (GUESS stand-in), wakeSave for 45-49. 44 / 66:
+no wakeSave. stage_controller.js `enterBattle` -> opts.stagePass (play.js -> enemy_ai `stageLoad([])`: loop (no statuses
+tracked, warned) + 0x23), except the first battle() of a controller (no stage object yet).
+**Checks**: test_checkpoint (pass order, 44 / 66 states / modes / active = w201_reload records 11-110, 81-86's event 0x18
+at w205_rng's records 39 / 45 / 50 / 54 / 88 / 101 / 111 / 118, records 1 / 2's own 0x22 at flag 0 = 20, no 0x23 at the
+placement, stageLoad vs loadPass), test_checkpoint_page (both Restarts), test_stage_controller block 7, test_boss_page
+(from the route, no harness). Mutants: 10 / 10 on the pass order (test_checkpoint), 2 / 2 stage_controller, 1 / 1 play.js
+stagePass (test_boss_page).
+**Open**: actors on the area switch (FUN_0055a0d8; needs the records' area index) for 41-43 / 45-49 (and 45-49's 5 record-10
+magazine draws); the frames between the stage init and the placement; FUN_005453b0's per-status loop on the page; 41's first
+shot (page record 106 now vs the game's 96: the twister is 2 words ahead from record 12, 42's first shot draws 3 vs 1).

@@ -1,0 +1,1 @@
+{"name": "w240_reload", "frames": 120, "log_from": 0, "doc": "worker 0240: from worker 0201's scratch reload state (reload0.p2s, the stage reload after game over -> Restart), no input; TRACE_CALLLOG=w240 (stage init / 0x22 / 0x23 / stage-load pass / battle end / op 42 / magazine draws).", "events": []}

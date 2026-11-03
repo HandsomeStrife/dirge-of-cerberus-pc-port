@@ -14,7 +14,9 @@ const ok = (c, m) => { console.log((c ? 'ok   ' : 'FAIL ') + m); if (!c) fail++;
 const done = () => { console.log(fail ? `${fail} FAILED` : 'all ok'); process.exit(fail ? 1 : 0); };
 const HUD = path.join(here, 'data/hud/hud.json'), DUMP = path.join(here, 'data/hud/dump_z128_hero_163235.json');
 if (!existsSync(HUD) || !existsSync(DUMP)) { console.log('SKIP: data/hud missing (export_web_hud.py --dump ...)'); done(); }
-const { HudState, hpText, pulse, scissorFb, mapA, hitAngle } = await import('./hud_core.js');
+// MUTATE_HUD = the path of a mutated hud_core.js copy (mutation runs; worker 0237)
+const HUD_MOD = process.env.MUTATE_HUD ? (await import('node:url')).pathToFileURL(path.resolve(process.env.MUTATE_HUD)).href : './hud_core.js';
+const { HudState, hpText, pulse, scissorFb, mapA, hitAngle } = await import(HUD_MOD);
 const data = JSON.parse(readFileSync(HUD, 'utf8')), dump = JSON.parse(readFileSync(DUMP, 'utf8'));
 const warnings = [];
 console.warn = m => warnings.push(String(m));
@@ -213,7 +215,7 @@ ok(scissorFb(16, 402, 37, 11).join() === '13,43,459,470' && scissorFb(16, 370, 0
 // tools/trace/out/w203_hudslide.jsonl (w192 death route, request f880) and w203_reload_hud.jsonl (worker 0201's reload
 // state); GS dumps (export_web_hud.py --dump tools/trace/out/w203/w203_slide.gs / w192_menu.gs -> data/hud/dump_*.json).
 {
-  const { slideStart, slideAt, restartedHud, RELOAD_SHOW_LEAD } = await import('./hud_core.js');
+  const { slideStart, slideAt, restartedHud, RELOAD_SHOW_LEAD } = await import(HUD_MOD);
   ok(data.slides && data.slides.length === 11 && data.chain.every(e => e.rel) && data.chain.filter(e => e.depth === 0).every(e => e.slide),
      'hud.json: the slide table (DAT_00471db0 / DAT_00471dc0), each element\'s +0x1c / +0x1e and each group\'s +0x48');
   const T = data.slides;
@@ -352,4 +354,70 @@ ok(scissorFb(16, 402, 37, 11).join() === '13,43,459,470' && scissorFb(16, 370, 0
   ok(sr.ring.phase === 3 && sr.ring.end === 3000 + data.ring.len_show && sr.chainBB4 === 0, 'FUN_003aff20 also hides the hit ring (kind 5, 100 ms) and zeroes +0xbb4 (FUN_003b4db0)');
 }
 ok(!warnings.some(w => /tiled|selectable|multi-frame|not exported/.test(w)), `no untranslated path hit by the drawn panels (${warnings.filter(w => !/FUN_003cd7e8/.test(w)).join('; ') || 'only the off-screen FUN_003cd7e8 text'})`);
+// 8. the top-right gauge (worker 0237): the boss gauge 13 (manager 0x6e / 0x6f -> FUN_003b58e0 / FUN_003b5378, callback 0x46 =
+// FUN_003b5d58, label text FUN_003cd7e8) against the r0b_boss2 GS dump (tools/trace/out/route/r0b_boss2.gs.zst, the fight on:
+// export_web_hud.py --dump <it, unpacked as r0b_boss2.gs> -> data/hud/dump_r0b_boss2.json). The dump's list starts with slot 4.
+{
+  const DB = path.join(here, 'data/hud/dump_r0b_boss2.json');
+  const gaugeOn = (o = {}) => {
+    const st = new HudState(data);
+    st.now = st.mnow = 500000;
+    st.gaugeRequest(13, o.v ?? 7000, o.max ?? 7000, o.f ?? 1);
+    if (o.show !== false) st.gaugeShow();
+    st.mnow += 1000; st.slideFrame();                    // the slide-in (panel 4: 500 ms) is over
+    return st;
+  };
+  const slot4 = st => { const g = st.groupOf[4]; return st.prims().filter(p => p.panel === g && p.kind !== 'line'); };
+  if (!data.gauge || data.bars.length < 17) ok(false, 'hud.json has the gauge data and 17 bar rows (re-run export_web_hud.py)');
+  else {
+    const st = gaugeOn();
+    ok(String.fromCharCode(...st.find(4, 0x45).text) === data.gauge.labels.map(l => String.fromCharCode(...l))[1] && st.find(4, 0x45).text.length > 0,
+       `label = kelstr DAT_004729f8[1] (from the disc): ${st.find(4, 0x45).text.length} bytes`);
+    ok([0x44, 0x45, 0x46].map(id => st.find(4, id).rect[2]).join() === [0x9c + 0x3c, 0x9c + 0x3c, 0xa0 + 0x3c].join(), `gauge 13 widens 0x44 / 0x45 / 0x46 by 0x3c (FUN_003b56f0): ${[0x44, 0x45, 0x46].map(id => st.find(4, id).rect[2])}`);
+    ok(st.g.v[0] === 7000 && st.g.v[1] === 7000 && st.g.v[4] === 0, `gauge +0x7c = 7000 / 7000, no lag on the first request: ${st.g.v}`);
+    const ours = slot4(st);
+    if (!existsSync(DB)) console.log('SKIP r0b_boss2 dump part: no ' + DB);
+    else {
+      const dB = JSON.parse(readFileSync(DB, 'utf8'));
+      let n = 0, bad = [];
+      for (let i = 0; i < ours.length; i++) {
+        const o = ours[i], d = dB[i];
+        const tex = o.tex == null ? null : TBP[o.tex];
+        const sameTex = (o.tex == null) ? !d.tme : (d.tme && d.tbp === tex && (o.tex !== 'font' || d.cbp === CBP_FONT(o.clut)));
+        const same = sameTex && key(verts(o)) === key(d.v.map(v => [v[0], v[1], o.tex == null ? 0 : v[2], o.tex == null ? 0 : v[3], v[4]])) && (o.scissor || FULL).join() === d.sc.join();
+        if (same) n++; else bad.push(i);
+      }
+      const glyphs = ours.filter(p => p.tex === 'font').length;
+      ok(bad.length === 0 && n === ours.length && ours.length === 61 && glyphs === 55,
+         `r0b_boss2: the gauge's ${n} / ${ours.length} primitives equal the dump's first ${ours.length} (3 icons, the line, ${glyphs} label glyph sprites, backing + bar; vertices, uv, rgba, CLUT, scissor)` + (bad.length ? `; differ at ${bad.slice(0, 8)}` : ''));
+      const nxt = dB[ours.length];
+      ok(nxt && !(box(nxt.v)[0] >= 230 && box(nxt.v)[1] < 52), 'the dump has no further gauge primitive after ours');
+    }
+    // hand cases
+    const half = slot4(gaugeOn({ v: 3500 })).filter(p => p.kind === 'strip' && p.tex == null && p.c[0].join() === '151,141,224,78');
+    // FUN_003aed60: right end x + (w - 1) cur / max = 280 + 219 x 3500 / 7000 (109) = 389 HUD px -> 389 x 0x1b0 >> 9 frame px
+    ok(half.length === 1 && Math.abs(box(verts(half[0]))[2] - (389 * 0x1b0) / 512) < 0.07,
+       `3500 / 7000: the row-9 bar is half the backing (${half.length && box(verts(half[0])).map(x => x.toFixed(2))})`);
+    { const w = []; const ow = console.warn; console.warn = m => w.push(String(m)); slot4(gaugeOn({ v: 1000 })); console.warn = ow;
+      ok(w.some(m => /FUN_003af1e0 \(row 10\)/.test(m)), 'below a quarter: the pulse (row 10) is warned, not drawn'); }
+    ok(slot4(gaugeOn({ show: false })).length === 0, 'requested but not shown (no 0x6f): nothing in slot 4 (all hidden)');
+    { const s2 = gaugeOn(); s2.gaugeRequest(13, 6000, 7000, 1);
+      ok(s2.g.v[0] === 6000 && s2.g.v[3] === 7000 && s2.g.v[4] === s2.mnow + 1000, `a second request lags (FUN_003aec10 with +0x7e set): ${s2.g.v}`); }
+    { const s3 = gaugeOn({ f: 0x100 }); ok(slot4(s3).some(p => p.kind === 'strip' && p.c[0].join() === '64,64,64,78'), '+0xc64 >= 0x100: bar row 0xf'); }
+    { const s4 = gaugeOn({ f: 0x80 }); ok(s4.find(4, 0x45).text.length === 0, 'f byte 0x80: no label'); }
+    { const s5 = gaugeOn(); s5.gaugeHide();
+      ok(s5.g.c58 === 0 && s5.g.c59 === 2 && s5.chain[s5.groupOf[4]].slide[0] === 3, `0x70: slides out (state ${s5.chain[s5.groupOf[4]].slide[0]}), +0xc58 0, +0xc59 2`);
+      s5.mnow += 1000; s5.slideFrame(); s5.prims();
+      ok(s5.g.c59 === 0 && !s5.g.txtObj, `after the slide the text object goes, +0xc59 = 0 (FUN_003b56b8): ${s5.g.c59}`);
+      s5.gaugeHide(); ok(s5.g.c59 === 0, '0x70 again: nothing (+0xc59 != 1)'); }
+    { const s8 = new HudState(data); s8.mnow = 500000; s8.gaugeRequest(13, 7000, 7000, 1); s8.gaugeShow();
+      const g = s8.chain[s8.groupOf[4]];
+      ok(g.slide[0] === 1 && g.rect[1] === -100, `0x6f: panel 4 starts its slide-in from 100 px up (FUN_003afcf8 -> DAT_00471dc0[4]): state ${g.slide[0]}, y ${g.rect[1]}`); }
+    { const s9 = gaugeOn({ v: -3500 }); ok(s9.g.v[0] === 3500, `a negative value is drawn as |v| (FUN_003b58e0 case 0xc): ${s9.g.v[0]}`); }
+    { const s7 = new HudState(data); s7.gaugeRequest(5, 10, 0, 0); s7.gaugeShow();
+      ok(s7.g.c59 === 0 && s7.find(4, 0x46).flags & 1, 'an untranslated gauge id (5): not shown (warned)'); }
+    { const s6 = gaugeOn(); s6.hideAll(); ok(s6.chain[s6.groupOf[4]].slide[0] === 3, 'game over hideAll: panel 4 slides out while shown (FUN_003afec0)'); }
+  }
+}
+
 done();

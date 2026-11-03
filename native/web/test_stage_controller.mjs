@@ -3,7 +3,7 @@
 // Needs data/event/ev0100_stage.json (build step stage). The trace checks need tools/trace/out/w219_beat / w219_skip
 // (.jsonl + .calls.jsonl, TRACE_FIELDSET=stage TRACE_CALLLOG=stage) and w219_keys.json (tools/trace/stage_keys.py);
 // without them those checks are skipped (reported).
-// MUTATE=getflag|setflag|skip|sleep|preempt|opening|skipinit|bit6|card|wait|setpos|camset|setdir|bname|lent|running runs one mutant of stage_controller.js (a scratch copy) and expects a failure.
+// MUTATE=getflag|setflag|skip|sleep|preempt|opening|skipinit|bit6|card|wait|setpos|camset|setdir|bname|lent|running|stageobj|nopass runs one mutant of stage_controller.js (a scratch copy) and expects a failure.
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -34,6 +34,9 @@ if (MUT) {
     // worker 0230: the lent status's per-frame update in frame() (FUN_003159b8 -> FUN_00376938) and handBack's +0x1558 bit 44 gate
     lent: ["    this.lentUpdate();                                                  // the statuses' update", "    // lentUpdate off"],
     running: ["if (!obj || !this.running) return false;", "if (!obj) return false;"],
+    // worker 0240: the battle() before the stage init (no stage object yet) runs the pass too; or no pass at all
+    stageobj: ["if (!this.stageObj) this.log.push(", "if (false) this.log.push("],
+    nopass: ["else if (this.o.stagePass) this.o.stagePass();", "else if (false) this.o.stagePass();"],
     bname: ["return block(() => R.frameNo > f0, () => { const a = R.actors.get(id); if (a) { a.tag = str(s).slice(0, 8); log('battlename ' + id + ' ' + a.tag); } });",
             "const a = R.actors.get(id); if (a) { a.tag = str(s).slice(0, 8); log('battlename ' + id + ' ' + a.tag); } return undefined;"],
   }[MUT];
@@ -302,6 +305,24 @@ const gf = (c) => Object.fromEntries([...c.globalFlags].map((v, i) => [i, v]).fi
   const pl = ev.find(e => e[0] === 'place');
   ok(pl && pl[1].join() === '-900,0,-600' && pl[2].join() === '1,0,0' && !rt.actors.slots.includes(named),
      'frame(): lentUpdate hands the lent p_Vin back to the named slot\'s place (-900, 0, -600) facing +x, no battle(): ' + JSON.stringify(pl));
+}
+
+// 7. worker 0240: battle()'s FUN_00324e70 -> FUN_005453b0 (opts.stagePass: the stage-load pass, event 0x23). A new controller
+// is a stage (re)load: main's battle() after first_event comes before the stage init (DAT_0046e290 == 0, T w240_init f2264)
+// and sends nothing; every later battle() runs the pass (T w240_boss: f1373)
+{
+  let n = 0;
+  const A = make({ v: {} }, { stagePass: () => n++ });                     // from the save: settled through that battle
+  ok(n === 0 && A.c.rt.stageObj && A.c.rt.log.some(([, m]) => m === 'battle: no stage object yet (FUN_00324e70: nothing)'),
+     `settle: the battle() after first_event sends no stage pass (${n})`);
+  A.c.rt.enterBattle(0);
+  ok(n === 1, `the next battle(): the stage pass (${n})`);
+  let done = false, m = 0;
+  const O = make({ v: {} }, { openingDone: () => done, stagePass: () => m++ });
+  run(O, 30); done = true; run(O, 20);
+  ok(O.c.battle && m === 0 && O.c.rt.log.some(([, x]) => x.startsWith('battle ')), `with the opening: the hand-off's battle() sends none either (${m})`);
+  O.c.rt.enterBattle(0); O.c.rt.enterBattle(0);
+  ok(m === 2, `later battles: one pass each (${m})`);
 }
 
 console.log((fails ? 'FAILED ' : 'ok ') + oks + ' / ' + (oks + fails) + (MUT ? ' (mutant ' + MUT + ')' : ''));

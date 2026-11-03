@@ -609,6 +609,12 @@ def main():
     # + script 0 = the stage controller (events 0x22 / 0x23 stage start / restart, L; it arms the
     # bit-0x20000 triggers by difficulty and event flag: notes/enemy-activation.md §1)
     want = {t['script'] for t in trig} | {r['script'] for r in recs} | {0}
+    # worker 0237: the stage object (manager type 0xc, built first by FUN_0053c140) takes script = section 4 +0x18
+    # (FUN_00311038 -> FUN_0054e3d8): ai.json stage_script. L: FUN_00310c40() (DAT_0046dd68 +100) >= 0xc taken as
+    # true (else -1: no script); where DAT_0046dd68 points is not decoded. z128: script 0.
+    s4 = SE.sections(d)[4][0]
+    stage_script = struct.unpack_from('<h', d, s4 + 0x18)[0]
+    want |= {stage_script}
     # worker 0174: Vincent's own script (P+0x34) and the parameter-set fallback scripts (section 0 +0x7c,
     # FUN_00568f98: run when the object's own script has no such event): his pain cue event 0x25.
     sec0, n0, sz0 = SE.sections(d)[0]
@@ -632,7 +638,8 @@ def main():
                sizes={str(r['zones']): zone_size(d, r['zones']) for r in recs if r['zones'] >= 0},
                lock_bones={str(r['zones']): lock_bone(d, r['zones']) for r in recs if r['zones'] >= 0},
                paths=paths(d), locators=locators(d), areas=areas(d), nav=nav_graph(d), markers={m: markers(m) for m in boxes}, se=se_tables(elf),
-               pset_script=pset_script, player=dict(script=PLAYER_SCRIPT, pset=PLAYER_PSET, cues=PLAYER_CUES, death=death_cues(elf)), cues=cue_tables(d), names=names(d), values32=values32(d))
+               pset_script=pset_script, player=dict(script=PLAYER_SCRIPT, pset=PLAYER_PSET, cues=PLAYER_CUES, death=death_cues(elf)), cues=cue_tables(d), names=names(d), values32=values32(d),
+               stage_script=stage_script)
     res['hitboxes']['p000'] = pbox
     path = os.path.join(out, 'ai.json')
     with open(path, 'w') as fh:

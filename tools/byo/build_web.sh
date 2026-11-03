@@ -341,11 +341,12 @@ run props_e057 $PY export_web_enemy.py export --model e057 --out "$DATA/props" -
 grep '^wrote' "$LOGS/props.log" "$LOGS/props_e057.log" | sed "s#$REPO/##" | cut -c1-160
 echo "ok"
 
-step "item pickups and drops (stage sections 0/1/14/15, bgd.bin items, ELF tables -> data/items/items.json; models g038 g039 g040 g041 g067 g068)"
+step "item pickups and drops (stage sections 0/1/14/15, bgd.bin items, ELF tables -> data/items/items.json; models g038 g039 g040 g041 g058 g067 g068)"
 # items.js / items_view.js; notes/items-research.md (worker 0224). The models have no clips (--clips '').
 run items $PY export_web_items.py --elf "$ELF" --stage "$NOPATH/06800001.bin" --bgd "$KEL/data/bgd/bgd.bin" -o "$DATA/items/items.json"
 [ -s "$DATA/items/items.json" ] || fail "data/items/items.json missing (log: $LOGS/items.log)"
-for m in g038 g039 g040 g041 g067 g068; do
+# g058: the boss e024's death drop (worker 0237; notes/boss-research.md)
+for m in g038 g039 g040 g041 g058 g067 g068; do
   run items_$m $PY export_web_enemy.py export --model $m --out "$DATA/items" --clips ''
   [ -s "$DATA/items/$m.glb" ] || fail "data/items/$m.glb missing (log: $LOGS/items_$m.log)"
 done

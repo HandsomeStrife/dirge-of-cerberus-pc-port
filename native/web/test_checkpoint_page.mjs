@@ -62,7 +62,10 @@ const watchFirstTick = pg => pg.evaluate(() => {
     if (W && W !== old && !window.__first) window.__first = { frame: W.S.frame, bodies: E.actors.map(a => a.rec).sort((p, q) => p - q).join(), hp: window.__play.php.hp,
       state: window.__play.ctrl.P.state, pos: [window.__play.ctrl.pos.x, window.__play.ctrl.pos.y, window.__play.ctrl.pos.z],
       hud: window.__play.gameHud ? window.__play.gameHud.state.hp.slice() : null,
-      l: [41, 42, 43].map(k => { const a = W.actors.find(x => x.rec === k); return a && { astate: a.astate, mode: a.ai.mode, hp: a.hp, pos: a.pos.slice(), t: a.t3c[1] }; }) };
+      l: [41, 42, 43].map(k => { const a = W.actors.find(x => x.rec === k); return a && { astate: a.astate, mode: a.ai.mode, hp: a.hp, pos: a.pos.slice(), t: a.t3c[1] }; }),
+      // worker 0240: the stage init's pass (checkpoint.js initWorld): 81-86's 0x113 periods (objects 103-108) and 44 / 66
+      per: W.delayed.filter(e => e.code === -2 && e.id >= 103 && e.id <= 108).map(e => [e.id - 22, e.due]), mgr20: W.S.mgr20,
+      a4466: [44, 66].map(k => { const a = W.actors.find(x => x.rec === k); return a ? a.flags28 & 1 : -1; }) };
     return tick(W);
   };
 });
@@ -114,6 +117,10 @@ function check(s, how, n, f) {
      `${how}: 41-43 active at the first tick: state ${l && l.map(a => a && a.astate)}, brain mode ${l && l.map(a => a && a.mode)}, HP ${l && l.map(a => a && a.hp)}`);
   ok(l && l.every((a, i) => a && a.pos.every((v, j) => Math.abs(v - PLACE[i][j]) < 1e-3)), `${how}: 41-43 at their placements at the first tick (their hand-off comes at S.frame 38)`);
   ok(l && l.map(a => a && a.t).join() === '79,0,149', `${how}: their script timers after the first tick ${l && l.map(a => a && a.t)} (80 / 0 / 150 set by event 3, minus one frame)`);
+  // the stage init's 0x22 / 0x23 (FUN_0053ca50(mgr, 1), T w240_init): 44 / 66 active, 81-86's periods due at clock 0 + 59 /
+  // 67 / 73 / 77; still those at the first tick: no later 0x23 re-armed them (main's battle() at the hand-off sends none)
+  ok(f && f.a4466.join() === '1,1' && JSON.stringify(f.per) === '[[85,59],[81,67],[82,73],[83,77]]' && f.mgr20 < 59,
+     `${how}: the stage init's pass: 44 / 66 active ${f && f.a4466}, 81-86's periods ${f && JSON.stringify(f.per)} at clock ${f && f.mgr20}`);
   ok(s.flags === '{}', `${how}: the new world's event flags ${s.flags} ({}: FUN_004039d0)`);
   ok(s.frame >= 24 && s.frame < 24 + 200, `${how}: its frame counter started at the placement's 24 (now ${s.frame})`);
   ok(s.a44 && s.a44.hp > 0 && Math.abs(s.a44.x - SAVE44) < 0.05, `${how}: soldier 44 back alive at its place (${JSON.stringify(s.a44)})`);

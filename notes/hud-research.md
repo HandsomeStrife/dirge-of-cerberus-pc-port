@@ -115,8 +115,8 @@ play.js passes it and `camYaw: () => follow.yaw`. On with the game HUD (?gamehud
 - Open: the clock order within a frame (fidelity-audit GUESS row); FUN_00570eb8's ring.
 
 ## Not done
-- FUN_003cd7e8 text, low-HP / MP pulses FUN_003af1e0, type-10 elements, the other callbacks (slots 3,
-  4, 8, 9, 10), weapon icon / ammo / item / CHAIN value updates (static at the save values: the page
+- low-HP / MP pulses FUN_003af1e0, type-10 elements, the other callbacks (slots 3,
+  8, 9, 10; slot 4 = the top-right gauge, done below), weapon icon / ammo / item / CHAIN value updates (static at the save values: the page
   has no ammo, items or CHAIN).
 
 ## Set-up from the disc (worker 0195, 2026-11-02)
@@ -264,3 +264,11 @@ DAT_00471dc0), every element's `rel` (+0x1c / +0x1e) and each top group's `slide
     canvas x ~1200 on 1600 x 900; for shifted panels its x bounds now go (narrower clips stay). Off: the game's clip.
   - Tests: slideStart's `t < now` branch (the always-mirror mutant), the two clocks, the scissor (on: drawn past the
     frame's edge; off: 0 px), the pause. Mutants 5 / 5 killed.
+
+## The top-right gauge (worker 0237, 2026-11-03)
+Slot 4 (panel 4): icons 0x41-0x43, line 0x44, label text 0x45 (+0x5c 0: FUN_003cd7e8, now plainText), bar callback 0x46 =
+FUN_003b5d58. hud_core `gaugeRequest` (FUN_003b58e0, gauge 13 only), `gaugeShow` (FUN_003b5378), `gaugeHide` (FUN_003b53c0),
+`gaugeBar`; hud.js `gauge(cmd, g)` from play.js `hudGauge` (enemy_ai manager 0x6e / 0x6f / 0x70, the boss brain's FUN_00aa11b8).
+hud.json: `bars` now 17 rows, `gauge` = { show (PTR_DAT_00471d80 per panel), widths (DAT_004729a0), labels (kelstr DAT_004729f8) }:
+**re-run export_web_hud.py**. Test reference: `export_web_hud.py --dump r0b_boss2.gs` (tools/trace/out/route/r0b_boss2.gs.zst
+unpacked) -> data/hud/dump_r0b_boss2.json; test_hud section 8: 61 / 61. Details: notes/boss-research.md.

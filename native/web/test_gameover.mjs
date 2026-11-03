@@ -396,7 +396,7 @@ else {
       // dump that is not one of type 35's frame-buffer passes (or type 11's texture 0 mesh) is one of ours
       const blendOf = a => [a & 3, (a >> 2) & 3, (a >> 4) & 3, (a >> 6) & 3];
       for (const [k, name] of Object.entries(dumps)) {
-        const all = res[name], sp = all.filter(s => !s.glow && s.model === undefined), T = JSON.parse(fs.readFileSync(path.join(W, name + '.json')));
+        const all = res[name], sp = all.filter(s => !s.glow && s.model === undefined && !s.line), T = JSON.parse(fs.readFileSync(path.join(W, name + '.json')));
         // ours: the tex2 sprites and the letters (tex1, ALPHA 0x44); type 35's tex1 passes go through its 64 x 64 page
         const own = T.filter(r => r.tex0 === '0x4006388621313000' || (r.tex0 === '0x4006380621312e00' && r.blend.slice(0, 4).join() === '0,1,0,1' && !r.v.some(v => v[0] === 2016 || v[0] === 2080)));
         let worst = 0, bad = 0;
@@ -423,6 +423,26 @@ else {
         if (ourRuns !== dumpRuns) { bad++; console.log(`  sprite order: page ${ourRuns} / dump ${dumpRuns}`); }
         ok(sp.length > 0 && bad === 0 && worst < 0.15 && used.size === own.length,
           `${name} (f${k}): our ${sp.length} sprites = the dump's ${own.length / 2} type-10 sprites (${used.size} / ${own.length} triangles; corners ${worst.toFixed(3)} px; RGBA / ALPHA / TEX0 exact; TEX0 runs in the dump's order; ${T.length - own.length} triangles of other types)`);
+        // worker 0241: type 103's strands (effects.js drawStrands = FUN_002aa120) against the dump's blended LINE segments
+        // (dumpfx.py --lines -> linesN.json; the HUD's unblended ones left out): head / tail XY, RGBA, ALPHA, count
+        {
+          const lp = path.join(W, 'lines' + name.slice(4) + '.json');
+          if (!fs.existsSync(lp)) console.log(`SKIP ${name} strands: no ${lp} (dumpfx.py --lines)`);
+          else {
+            const G = JSON.parse(fs.readFileSync(lp)).lines.filter(l => l.alpha[1] === 2);
+            const mine = all.filter(s => s.line && s.type === 103), left = new Set(G.keys());
+            let worst = 0, bad = 0;
+            for (const s of mine) {
+              const d = (l, j) => Math.hypot(l.v[j][0] - s.verts[j].gs[0], l.v[j][1] - s.verts[j].gs[1]);
+              const i = [...left].find(i => Math.max(d(G[i], 0), d(G[i], 1)) < 0.2);
+              if (i === undefined) { bad++; continue; }
+              left.delete(i); worst = Math.max(worst, d(G[i], 0), d(G[i], 1));
+              if (G[i].v[0][3].join() !== s.verts[0].rgba.join() || G[i].v[1][3].join() !== s.verts[1].rgba.join()) bad++;
+              if (blendOf(s.alpha).join() !== G[i].alpha.slice(0, 4).join()) bad++;
+            }
+            ok(mine.length === G.length && bad === 0 && left.size === 0, `${name} (f${k}): our ${mine.length} type 103 strand lines = the dump's ${G.length} blended LINE segments (ends ${worst.toFixed(3)} px; RGBA / ALPHA exact${bad ? '; ' + bad + ' bad' : ''})`);
+          }
+        }
         // worker 0206: types 11 / 20's FED models (effects.js drawModel = FUN_002f5c50) against the dump, triangle for
         // triangle in draw order (a quad = a strip of two): the textured ones (TEX0 0x40063a0621312f00, the FED's texture
         // 0; dumpN.json) and the untextured ones (untexN.json: dumpfx.py --untex): XY, Z, RGBA, ST (= S / Q), ALPHA

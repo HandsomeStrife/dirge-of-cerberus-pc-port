@@ -6,6 +6,9 @@ no game data (and no decrypted script text) is stored in the repo.
 
   python3 -I export_web_event.py --elf ELF --nopath extract/_KEL/noPath -o native/web/data/event/ev0100_scr001.json
 
+Also `messages` (worker 0239): the script's 'MES_' keys resolved in ev0100's message file (noPath/0c0641ca.bin, the
+stage-info exporter's decode), for KerberosWindow.open_l (native/web/event_window.js).
+
 What the game does (decoded):
   Event scripts are Java class files run by the game's JVM subset (dispatcher FUN_003ad288, handler table 0x470b80).
   A call `invoke* fake/KerberosX.name(desc)` is resolved by FUN_003a6bb8: the class by name in the 32-slot registry
@@ -165,8 +168,15 @@ def main():
         cams[n] = dict(file='%08x' % (0x0C000200 + (EVENT << 12) + n), hdr8=w2, channels=chans)
     # DAT_0046be00: the spline's flat-segment threshold (FUN_002616f0 stores it, FUN_00261a90 compares |dv| with it)
     eps = struct.unpack('<f', K.elf_bytes(a.elf, 0x46BE00, 4))[0]
+    # the window texts (worker 0239): KerberosWindow.open_l's key -> FUN_003a6698 in the event's message file (ev0100's
+    # 0c0641ca, the one the game has loaded; worker 0220's decode in export_web_stageinfo.messages). Every 'MES_' string
+    # constant of the script class, as bytes (hex); FUN_003a6698 misses -> null.
+    import export_web_stageinfo as SI       # noqa: E402
+    keys = sorted({c[1] for c in scr['cp'] if isinstance(c, list) and len(c) == 2 and isinstance(c[1], str) and c[1].startswith('MES_')})
+    msgs = SI.messages(os.path.join(a.nopath, '%08x.bin' % (0x0C0001CA + (EVENT << 12))), a.elf,
+                       SI.Elf(open(a.elf, 'rb').read()), keys)
     out = dict(source='ev%04d/scr%03d (FileCode %08x) + the ELF event library; export_web_event.py' % (EVENT, SCRIPT, CLASS_ID),
-               main=scr['name'], splineEps=eps, cameraFiles=cams, classes=classes)
+               main=scr['name'], splineEps=eps, cameraFiles=cams, classes=classes, messages=msgs)
     os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
     json.dump(out, open(a.out, 'w'), separators=(',', ':'))
     print('wrote %s: script class %s, %d library classes (%s), camera files %s' % (

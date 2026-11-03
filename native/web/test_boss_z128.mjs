@@ -115,5 +115,71 @@ ok(choose({ aiFlags: 2 }, 1, 0).ai.st === 5, 'outside, AI bit 1, alt 1 -> volley
 { const w = world(); toState2(w); w.status.hp = 15000; run(w, 1); ok(w.io.log.includes('gauge 13 5000 7000'), 'gauge 5000 / 7000');
   ok(w.b.acc === 2000, 'damage counted'); }
 
+// ---------------------------------------------------------------- worker 0237: checks for the mutants that survived
+// the gauge floor (FUN_00aa11b8: HP - 10000, at least 0)
+{ const w = world(); toState2(w); w.status.hp = 9000; run(w, 1); ok(w.io.log.includes('gauge 13 0 7000'), 'gauge floor: HP 9000 -> 0 / 7000'); }
+// the turn clip (overlay asm 0xaa1aac-0xaa1b88): me = nearest box of the boss, p = of the player, to = p + 2 (mod 4) unless
+// |me - p| == 2. l_trn (0xaa3428) when: me 0: to != 3; me 1 / 2: to >= me; me 3: to != 0; else r_trn (0xaa3430).
+{
+  const BOX = [[0, 0, 0], [100, 0, 0], [100, 0, 100], [0, 0, 100]];
+  const asmLeft = (me, to) => me === 0 ? to !== 3 : me === 3 ? to !== 0 : to >= me;
+  let cases = 0, bad = [];
+  for (let me = 0; me < 4; me++) for (let p = 0; p < 4; p++) {
+    let to = Math.abs(me - p) !== 2 ? (p + 2) % 4 : me;
+    const w = world(); toState2(w); w.io.log.length = 0;
+    w.actor.pos = BOX[me].slice(); w.io.P.pos = BOX[p].slice();
+    run(w, 1);
+    const clip = w.io.log.find(x => x.startsWith('clip ')), fly = w.io.log.find(x => x.startsWith('fly '));
+    if (to === me) { if (clip || fly) bad.push(`me ${me} p ${p}: moved`); continue; }
+    cases++;
+    const want = asmLeft(me, to) ? 'clip l_trn' : 'clip r_trn';
+    if (clip !== want || fly !== 'fly ' + BOX[to].join(',')) bad.push(`me ${me} p ${p} to ${to}: ${clip} ${fly} (want ${want})`);
+  }
+  ok(cases === 12 && bad.length === 0, `turn clip / destination for every (me, player) pair (${cases} moves): ${bad.join('; ') || 'all as the asm'}`);
+}
+// the nearest-box tie (FUN_00aa2ac8: strictly closer replaces, so a tie keeps the earlier box). The boss halfway between
+// btbox0 and btbox1 is at 0; with the player at btbox2 (p 2) |0 - 2| = 2: no move (a tie taken as 1 would fly to btbox0)
+{ const w = world(); toState2(w); w.io.log.length = 0; w.actor.pos = [50, 0, 0]; w.io.P.pos = [100, 0, 100]; run(w, 1);
+  ok(!w.io.log.some(x => x.startsWith('fly ')), `nearest-box tie keeps the earlier box (no move): ${w.io.log.filter(x => x.startsWith('fly') || x.startsWith('clip')).join(' ') || 'none'}`); }
+// homing shots in flight (FUN_00aa16f8's tail): slot i steers to the player + (sin, 0, cos)(i x pi / 4) x r, r = 40 + 20 rand
+// (slots 0 / 4: 10 + 10 rand); within 80 u of the player homing ends (+0x154 = 0) and the slot frees
+const retarget = (rnd, dist = 1e4) => {
+  const w = world(); toState2(w); w.io.setRand(rnd);
+  const S = [];
+  for (let i = 0; i < 8; i++) { const sh = { id: 100 + i, home: 1, speed: 100, pos: [w.io.P.pos[0] + dist, w.io.P.pos[1], w.io.P.pos[2]] }; w.io.shots.set(sh.id, sh); w.b.miss[i] = sh.id; S.push(sh); }
+  run(w, 1);
+  return { w, S, P: w.io.P.pos };
+};
+const radii = rnd => { const { S, P } = retarget(rnd); return S.map(s => Math.hypot(s.target[0] - P[0], s.target[2] - P[2])); };
+{
+  const { S, P } = retarget(0.5);
+  ok(S.every((s, i) => Math.abs(Math.atan2(s.target[0] - P[0], s.target[2] - P[2]) - (((i + 4) % 8) - 4) * Math.PI / 4) < 1e-5 && s.target[1] === P[1]),
+     'homing target angle i x pi / 4 (x = sin, z = cos), at the player\'s height');
+  const r0 = radii(0), r1 = radii(0.999999);
+  ok(r0.every((r, i) => Math.abs(r - (i % 4 === 0 ? 10 : 40)) < 1e-4) && r1.every((r, i) => Math.abs(r - (i % 4 === 0 ? 20 : 60)) < 1e-3),
+     `homing radius: slots 0 / 4 in [10, 20), others [40, 60): ${r0.map(v => v.toFixed(0))} .. ${r1.map(v => v.toFixed(0))}`);
+  // against the game: trace w235_missile (r0b_boss2): every homing missile's target point +0xd0 around Vincent (pinned there)
+  const T = process.env.TRACE_OUT ?? new URL('../../tools/trace/out/', import.meta.url).pathname;
+  const fs = await import('node:fs');
+  if (!fs.existsSync(T + 'w235_missile.calls.jsonl') || !fs.existsSync(T + 'w235_missile.jsonl')) console.log('SKIP: trace w235_missile missing');
+  else {
+    const vp = JSON.parse(fs.readFileSync(T + 'w235_missile.jsonl', 'utf8').split('\n')[1]).matrix[3];
+    const E = fs.readFileSync(T + 'w235_missile.calls.jsonl', 'utf8').trim().split('\n').slice(1).map(l => JSON.parse(l.replace(/\bNaN\b/g, 'null')));
+    const seen = {}; let n2 = 0, off = [];
+    for (const e of E) {
+      if (((parseInt(e['a3+0x150'].u[0], 16) >> 20) & 0xf) !== 1 || !e['a3+0x150'].f[1]) continue;   // homing (mode 1, +0x154 > 0)
+      const t = e['a3+0xd0'].f, dx = t[0] - vp[0], dz = t[2] - vp[2], a = Math.atan2(dx, dz), i = ((Math.round(a / (Math.PI / 4)) % 8) + 8) % 8, r = Math.hypot(dx, dz);
+      n2++;
+      if (Math.abs(a - Math.round(a / (Math.PI / 4)) * Math.PI / 4) > 1e-3 || Math.abs(t[1] - vp[1]) > 1e-3 || r < r0[i] - 1e-3 || r > r1[i] + 1e-3) off.push(`slot ${i} r ${r.toFixed(2)}`);
+      (seen[i] ??= []).push(r);
+    }
+    const span = Object.entries(seen).map(([i, v]) => `${i}: ${Math.min(...v).toFixed(1)}-${Math.max(...v).toFixed(1)}`);
+    ok(n2 > 400 && off.length === 0 && Object.keys(seen).length >= 4,
+       `w235_missile: ${n2} homing targets at the brain's angle / height, radius inside its slot's range (${span.join(', ')})${off.length ? ': off ' + off.slice(0, 4) : ''}`);
+  }
+}
+{ const { w, S } = retarget(0.5, 80); ok(S.every(s => s.home === 0) && w.b.miss.every(id => id === -1), 'a shot 80 u from the player stops homing, slot freed (<= 80)'); }
+{ const { w, S } = retarget(0.5, 80.01); ok(S.every(s => s.home === 1) && w.b.miss.every(id => id > 0), 'a shot 80.01 u away keeps homing'); }
+
 console.log(`test_boss_z128: ${n - fails} / ${n} ok`);
 process.exit(fails ? 1 : 0);

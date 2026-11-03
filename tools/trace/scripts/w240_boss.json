@@ -1,0 +1,1 @@
+{"name": "w240_boss", "frames": 1700, "log_from": 1690, "doc": "worker 0240: w231_boss4 (TRACE_POKE a06338=91309a24,50db30=98cc32cf) with TRACE_CALLLOG=w240: where the boss route's 0x23 pass comes from (battle() -> FUN_00324e70 -> FUN_005453b0 -> FUN_005459d8?).", "events": []}

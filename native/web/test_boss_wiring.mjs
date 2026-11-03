@@ -49,6 +49,8 @@ ok(['nwe024ge', 'nwe024gn', 'nwe024gh', 'nwe024me', 'nwe024mn', 'nwe024mh'].ever
 ok(aiData.records[32].weapon === aiData.names.nwe024gn[1], 'record 32 carries nwe024gn (weapon 15)');
 ok(Array.isArray(aiData.values32) && aiData.values32[0] === 0xc3 && aiData.names.bshv0[0] === 32, 'bshv0 = section 32 entry 0 = 0xc3');
 ok(aiData.scripts['242'], 'ai.json carries record 32\'s script 242');
+// worker 0237: the item model the boss fight loads at its death drop (worker 0235 saw a 404): g058 (build_web.sh item models)
+ok(existsSync(D('items/g058.glb')), 'data/items/g058.glb exported (the boss\'s death drop model)');
 
 const P = { pos: [0, 0, 0], face: [1, 0, 0], hp: 780, id: 0x16, f118: 0x20209, s64: 0 };
 const gauges = [];
@@ -132,5 +134,40 @@ function mk(o = {}) { return createEnemyAI({ data: aiData, player: P, quiet: tru
   ok(Math.abs(c1[0] - c0[0] - 30) < 1e-3 && Math.abs(c0[0] - (a.pos[0] - 30) - 71.93) < 1e-2, `the volume follows marker 1 (71.9, -8.5, 0 on bone 2): ${c0.map(v => v.toFixed(1))} -> ${c1.map(v => v.toFixed(1))}`);
 }
 
+// worker 0237: the homing turn's matrix FUN_00259f60 in its asm order (0x259fa0-0x25a048): pair products, then x (1 - cos),
+// then the sin / cos terms, each f32. Reference homing step (the rest as enemy_ai.js homingStep) against the page, exactly,
+// over seeded random bullets (the trace w235_missile cannot see this order: its error is the same either way).
+{
+  const f = Math.fround, W = mk();
+  const unit = v => { const l = Math.hypot(v[0], v[1], v[2]); return l ? [f(v[0] / l), f(v[1] / l), f(v[2] / l)] : v.slice(); };
+  const ref = (b, step) => {
+    const d = unit([b.end[0] - b.pos[0], b.end[1] - b.pos[1], b.end[2] - b.pos[2]]), u = b.dir;
+    const ax = [f(f(u[1] * d[2]) - f(u[2] * d[1])), f(f(u[2] * d[0]) - f(u[0] * d[2])), f(f(u[0] * d[1]) - f(u[1] * d[0]))];
+    const dot = f(f(f(d[0] * u[0]) + f(d[1] * u[1])) + f(d[2] * u[2]));
+    const c = f(dot / f(Math.sqrt(f(f(f(f(d[0] * d[0]) + f(d[1] * d[1])) + f(d[2] * d[2])) * f(f(f(u[0] * u[0]) + f(u[1] * u[1])) + f(u[2] * u[2]))))));
+    let ang = !(c < 1) ? 0 : !(-1 < c) ? f(Math.PI) : f(Math.acos(c));
+    const lim = f(b.home * f(0.016666668)); if (lim < Math.abs(ang)) ang = ang < 0 ? -lim : lim;
+    let dir = u;
+    if (0.001 < Math.abs(ang)) {
+      const sn = f(Math.sin(ang)), cs = f(Math.cos(ang)), t = f(1 - cs), [x, y, z] = ax;
+      const M = [f(f(t * f(x * x)) + cs), f(f(t * f(x * y)) + f(z * sn)), f(f(t * f(z * x)) - f(y * sn)),
+                 f(f(t * f(x * y)) - f(z * sn)), f(f(t * f(y * y)) + cs), f(f(t * f(y * z)) + f(x * sn)),
+                 f(f(t * f(z * x)) + f(y * sn)), f(f(t * f(y * z)) - f(x * sn)), f(f(t * f(z * z)) + cs)];
+      dir = unit([0, 1, 2].map(k => f(f(f(u[0] * M[k]) + f(u[1] * M[3 + k])) + f(u[2] * M[6 + k]))));
+    }
+    return dir;
+  };
+  let seed = 12345; const rnd = () => (seed = (seed * 1103515245 + 12345) >>> 0) / 4294967296;
+  let same = 0, N = 300;
+  for (let i = 0; i < N; i++) {
+    const dir = unit([rnd() - 0.5, rnd() - 0.5, rnd() - 0.5].map(f));
+    const b = { pos: [f(rnd() * 2000 - 1000), f(rnd() * -300), f(rnd() * 2000)], dir, end: [f(rnd() * 2000 - 1000), f(-100), f(rnd() * 2000)],
+                target: null, home: f(30 + rnd() * 600), speed: f(5), d158: 0, range: 3000, age: 0, f120: 0 };
+    const want = ref(b, f(1.2));
+    W.t.homingStep(b, f(1.2));
+    if (b.dir.every((v, k) => v === want[k])) same++;
+  }
+  ok(same === N, `homing turn = FUN_00259f60's f32 order, exactly, on ${same} / ${N} random bullets`);
+}
 finish();
 function finish() { console.log(fail ? `${fail} FAILED` : 'all ok'); process.exit(fail ? 1 : 0); }

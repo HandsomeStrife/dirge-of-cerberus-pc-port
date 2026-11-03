@@ -10,7 +10,7 @@
 //
 // This module is the brain's logic only. Every engine call it makes goes through `io` (motion, mover,
 // shots, sounds, effects, HUD gauge); the names below cite the game function each one stands for.
-// Not wired into play.html yet (notes/boss-research.md "Open").
+// Wired into play.html through boss_io.js (enemy_ai.js AI mode 0x100, worker 0235; notes/boss-research.md "Hookup").
 
 export const DEFEATED_HP = 10000;          // FUN_00aa2c30: HP < 0x2711 = beaten; the bar shows HP - 10000
 export const LOW_HP_PCT = 30;              // FUN_00aa2f78

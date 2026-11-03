@@ -16,6 +16,9 @@ Decoded from the game's EE code (worker 0222, notes/event-vm-research.md "Event 
     FUN_003eaf90 -> FUN_003eab20 decodes the next 0x60-byte frame with libat3dec (FUN_00458e80: plain ATRAC3, mono,
     not scrambled) and returns no block for the frame at offset 0; FUN_003eb330 adds block x gain >> 12 to L and R
     (pmulth / psraw 12 / paddsh). So: 48 kHz, sample for sample (no resampling), the first decoded frame dropped.
+  - assumed: DAT_0047d748 = 1. FUN_003ed000 calls FUN_003eaf90 DAT_0047d748 times per channel per 1024-sample frame and
+    mixes only the last block; 1 is its initial value in the ELF data (worker 0237) and the decomp has no writer, so one
+    0x60-byte frame per 1024 samples. L: a write through a pointer is not ruled out; with N > 1 every Nth frame would play.
   - sign: libat3dec's output is libavcodec's negated (tools/audio/bgm.py), kept here.
 """
 import argparse

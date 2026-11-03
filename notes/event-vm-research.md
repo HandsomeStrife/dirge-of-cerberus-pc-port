@@ -177,3 +177,39 @@ music (+ bgm_274) and voice.
   KerberosSound: enableDucking 39f9f8, enableSoundEffectEarCamera 39faa8, enableSoundControl 39fa40, loadVoice 3a07d8, loadMusic 3a0750, loadSoundEffect 3a0b90, loadSoundEffectBySituationId 3a0c68, loadOnlineQuestSoundEffect 3a0b38, loadWave 3a07a0, setReverb 3a0b08, playMusic 3a0378, setVoiceBufferType 3a0ac8, setBgSoundVolume 39deb8, setDatabaseZoneNum 39fa20, changeSoundEffectVol 39dd58, loadSoundEffectEx_l 3a0be8, changeMusicVol 3a5308, stopMusic 3a0148, stopBgAreaSound 39ddf0, flushSoundEffect 39dd10, isCrossfadeBusy 3a0168, setSoundEffectEarPos_l 39fb00, setSoundEffect_l 39fd60, setSoundEffect2_l 39ff68, playBgSound 39de38, playBgAreaSound_l 39dd80, playVoiceWithPanning 3a0808, playMusic3 3a0198, playVoice2 3a0880, isVoicePlaying 3a0a38, playVoice 3a0900, stopVoice 3a0aa0, playMusic2 3a02b8, waitVoiceFinish 3a09b8, unsetSoundEffect 39ff08, loadVoice2 3a0968.
   KerberosEffect: workaround_problem 3a1510, load 3a2580, loadPadVibData 3a1598, stop_l 3a28d8, unload 3a24c0, playEventEffect_l 3a2548, test 3a2978, isPlayingEventEffect 3a24f8, setFocusBlur 3a2090, fadeout 3a2420, fadein 3a22e0, shake 3a2140, cblur_out 3a1bf8, playActor 3a25d8, flash_out 3a1810, fadein_noskip 3a2380, setVisible_l 3a21c0, stop2_l 3a1638, changeTargetActor 3a15e8, cblur_off 3a1bb0, shake_off 3a2118, flash_off 3a17c8, reset_field 3a2890, stopfadeinout 3a2228, unloadPadVibData 3a1538, deleteBulletMark 3a2958, play_l 3a2640, enableloop_l 3a2038, setPadVibration 3a28e0, isfadeinout 3a2278, playseq_l 3a1f78, cblur_in 3a1a70, flash_in 3a1688, cblur_smooth 3a1ca0, flash_smooth 3a18b8, playseqstr_l 3a1ea8, playPadVibration 3a1560, strid2numid 3a1e58.
   KerberosLight: set_shadowalpha 3a5048, set_ambientcolor 3a50a8, set_directionvector_l 3a5248, set_directioncolor 3a5140, reset 3a5200.
+
+## Event windows (subtitles), the event pause's screen, fade / title card findings (worker 0239, 2026-11-03)
+Code: native/web/event_window.js (new), stage_info.js (`$h` in renderCodes, `speakerCode`, `MENU_CONFIG_BITS`),
+play.js (`introMenuDraw`, the keydown's `pausePrompt`), exporters export_web_event.py (`messages`) and
+export_web_pause.py (layouts `window4` / `eventpause`, images 0x10c / 0x35 / 0x36, `speakers`). Tool:
+tools/trace/window_ref.py; script tools/trace/scripts/w239_sub.json; dumps / states in tools/trace/out/w239 (gitignored).
+- **open_l**'s last int is not unused: FUN_0039ec20 pops it first (s6) and stores it as FUN_0037c3c8's 9th argument
+  (sw s6, 0(sp) at 0x39ecf0) = command +0x38 = t. FUN_00383408: t != 0 -> FUN_003b66c0 param_6 -> FUN_003b72b8 ->
+  FUN_003d50b8: the box opens over t ms. scr001 passes 0 (args id, 4, 0, 380, 512, 448, key, 0).
+- **Box kind 4** (FUN_003b8598, param_7 0): layout 0x472c48 = root 0x13 (type 1, no image) + type-9 text 0x14 (flags
+  0x212); FUN_003e1d80 drops the open sound; param_6 = (FUN_003e15c0() == 0); FUN_003e15c0 = DAT_004f3044 bit 11 (story
+  mode) = 1 in the states -> flags & 0xfffd | 0x4000 (the 11-sprite outline; T: the dump's glyphs have 11 shadows + 1).
+  FUN_003d0a70(0x13, 1): no clip while opening; FUN_003d4720 screen flag 0x200. vtable DAT_004a5550: +0x1c
+  FUN_003b8850 (text flag 0x200 -> result 5), +0x34 FUN_003b88d8 (close 100 ms, silent).
+- **Text**: FUN_003b6ab8 -> vt+0xd4 = FUN_003d03a0 with a string (not an id) -> FUN_003cf338. **'$h' + two letters**
+  (FUN_003d1d98 code 8): FUN_003d1c08 looks the letters up in PTR_DAT_0047a8c8 (24 rows, kelstr ids 0x2800..0x2812,
+  0x282d..0x2831; the speakers' names) -> length 4; no row -> length 2 (3 when the first letter is '$'), the letters are
+  then text. FUN_003cd7e8 case 8 (and FUN_003cf338) draw the name when FUN_003e1550() (DAT_004f3044 bit 10), then return
+  to the string with the line start moved to the x after the name (iStack_128 / iStack_104: a hanging indent); the
+  measure's width adds half that start. DAT_004f3044 = 0xc00 (both bits) in w218 / w239 states; FUN_003e1770 sets them
+  from the config, FUN_003dd810 / FUN_003e1668 by language.
+- **The event pause's screen**: FUN_003bfe28(param 1) builds layout 0x4779c0 (root 0x21 0..512 x 0..448; 0x22 type 4
+  image 0x10c at (236, 217); 0x23 type 4 image 0x35 at (224, 217); 0x24 type 3, nothing drawn), language override
+  0x51fc60[2] = 0; FUN_003e2790() (DAT_0046b2fc = 2) -> 0x23 +0x1a (image) = 0x36; dim FUN_003d5c08(root, 2, 200, 0x60);
+  bilinear ids 0x477c30. FUN_003c0520 state 1 pulses both with FUN_003d0ad0(+0x60, 0x200, 0x20, 0x80, now).
+- **T** (GS dumps w239, grab_gs.py from 0210's start1704, TRACE_FIELDSET=event TRACE_LOG_AT=B4000; grabs at 596, 1400,
+  1453; Start at f1420): VN2 264 / SK 108 glyph sprites and the pause's 3 draws equal the page's (test_event_vm). The
+  old w218_gs dumps show no subtitle (their bottom font line at y 523 is an off-screen options help text).
+- **Fade draw (stopped after two attempts)**: DAT_0050d310[DAT_0050d718 = 0] = 0x2df5f0, inside the ELF and not a
+  FED v8 (no header; FUN_002f55d0 indexes +0x8 / +0xc / +0x18 tables); it runs on the manager DAT_0050d710 through
+  FUN_002f3f50 (FUN_00306cd8, FUN_002f3c98, particle rows DAT_0050b500) and draws via FUN_002f2238 -> FUN_002f4698 ->
+  FUN_002f4270. effects.js does not run this system; the black veil stays a GUESS. Next: FUN_002f4270 + the manager.
+- **Title card**: scr001 calls displayStageInfo(0) at frame 1 and isDisplayStageInfo(0) once. Kind 0 -> box kind
+  DAT_004a8250[0] = 0x1e, step table 0x47a028: [0, 0, -26, 16], effect slot 0 = FED 0x818c0000 (3000 ms), slot 2 =
+  0x818c0400 (3000 ms), [500, 3000, -3, 0x27], [4000, 0, -2] end. Not on the page (FED effects, as 0220's boxes).
+- Not started: the scope view (SCOPE01 sequences) and the actors' effect sequences.

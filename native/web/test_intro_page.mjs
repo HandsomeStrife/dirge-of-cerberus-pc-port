@@ -40,12 +40,13 @@ try {
   const a = await pg.evaluate(() => {
     const P = window.__play, rt = P.intro.rt, v = rt.view, c = P.camera.position;
     return { active: P.intro.active, ticks: P.stats.ticks, view: v && { cam: v.cam, eye: v.eye },
-             cam: [c.x, c.y, c.z], hud: !!P.output.hud, vin: P.vin.body.visible, restarts: P.restart.count };
+             cam: [c.x, c.y, c.z], hud: P.intro.hudParked ? null : 'game', vin: P.vin.body.visible, restarts: P.restart.count };
   });
   ok(a.active && a.ticks === 0, `the event runs first; play has not ticked (${a.ticks} ticks)`);
   ok(a.view && a.view.cam === 1, `event camera 1 drives the view (${a.view && a.view.cam})`);
   ok(a.view && a.cam.every((x, i) => Math.abs(x - a.view.eye[i]) < 1e-3), `the render camera sits at the event camera's eye (${a.cam.map(x => x.toFixed(2))})`);
-  ok(!a.hud && !a.vin, 'the game HUD and Vincent\'s gameplay body are hidden while it runs');
+  // worker 0239: output.hud is the opening's menu draw (event windows + the event pause's screen), not the game HUD
+  ok(a.hud === null && !a.vin, `the game HUD and Vincent's gameplay body are hidden while it runs (hud ${a.hud})`);
   // the event's actors (worker 0218; event_actor_rt.js / event_actors.js): with data/event/actors, p005 (Vincent on the
   // railing) plays km0102vn and its body is drawn in the 'event actors' group
   if (fs.existsSync(path.join(here, 'data/event/actors/actors.json'))) {
@@ -58,13 +59,23 @@ try {
     ok(e.n >= 6 && e.clip === 'km0102vn' && e.frame > 256, `event actors: ${e.n} slots, p005 plays ${e.clip} at ${e.frame && e.frame.toFixed(1)}`);
     ok(e.bodies >= 6 && e.meshes > 0, `event actor bodies drawn (${e.bodies} bodies, ${e.meshes} visible meshes)`);
   } else console.log('SKIP event actors: no data/event/actors (export_web_event_actors.py)');
+  // worker 0239: the subtitle windows (event_window.js): MES_10109VN2 opens at page frame 226 (open_l -> command 10 ->
+  // FUN_00383408, box kind 4), drawn through the pause layer with the speaker's name (264 sprites = 22 glyphs x 12)
+  {
+    await pg.waitForFunction(() => window.__play.intro.rt && window.__play.intro.rt.frameNo >= 240, null, { timeout: 120000 });
+    const w = await pg.evaluate(() => { const P = window.__play, W = P.intro.windows;
+      return W && { keys: W.screens.map(x => x.key), prims: W.draw().length, layer: !!(P.pause && P.pause.layer), hud: P.intro.hudParked && !!P.output.hud, log: W.log.slice() }; });
+    ok(w && w.keys.join() === 'MES_10109VN2' && w.prims === 264 && w.layer && w.hud,
+      `subtitle window: ${w && w.keys} drawn (${w && w.prims} sprites, layer ${w && w.layer}, hud ${w && w.hud})`);
+    ok(w && w.log.map(x => x[1]).join('|') === 'open 1 MES_10109VN1|close 1|open 2 MES_10109VN2', `window log ${w && JSON.stringify(w.log)}`);
+  }
   // every rendered frame from here: what the page shows (sampled between renders, so each sample = the last frame drawn)
   await pg.evaluate(() => {
     const P = window.__play, rec = window.__rec = [];
     const step = () => {
       const c = P.camera.position, p = P.ctrl.pos;
       const W = P.enemyAI, sol = W && P.intro.ended >= 1 ? W.actors.filter(a => [41, 42, 43].includes(a.rec)).map(a => [a.rec, a.pos[0], a.pos[2]]) : null;
-      rec.push({ active: P.intro.active, ended: P.intro.ended, hud: !!P.output.hud, vin: P.vin.body.visible,
+      rec.push({ active: P.intro.active, ended: P.intro.ended, hud: !P.intro.hudParked && !!P.output.hud, vin: P.vin.body.visible,
                  cam: [c.x, c.y, c.z], pos: [p.x, p.z], ticks: P.stats.ticks, sol });
       if (rec.length < 200000) requestAnimationFrame(step);
     };
@@ -98,7 +109,7 @@ try {
   await pg.waitForFunction(() => window.__play.stats.ticks > 30, null, { timeout: 120000 });
   const c = await pg.evaluate(() => {
     const P = window.__play, p = P.ctrl.pos;
-    return { pos: [p.x, p.y, p.z], restarts: P.restart.count, active: P.intro.active, hud: !!P.output.hud, vin: P.vin.body.visible,
+    return { pos: [p.x, p.y, p.z], restarts: P.restart.count, active: P.intro.active, hud: !P.intro.hudParked && !!P.output.hud, vin: P.vin.body.visible,
              paused: P.pause && P.pause.open };
   });
   ok(!c.active && c.restarts === 0, `the event ended; the hand-off is not counted as a Restart (${c.restarts})`);
@@ -160,7 +171,7 @@ try {
     await pg.waitForTimeout(500);
     await pg.keyboard.press('Space');                 // ✕ on Restart
     await until(() => window.__play.restart.count === 2 && window.__play.intro.active);
-    const g = await pg.evaluate(() => ({ hud: !!window.__play.output.hud, vin: window.__play.vin.body.visible, go: window.__play.gameOver.go.active }));
+    const g = await pg.evaluate(() => ({ hud: !window.__play.intro.hudParked && !!window.__play.output.hud, vin: window.__play.vin.body.visible, go: window.__play.gameOver.go.active }));
     ok(!g.hud && !g.vin, `game over -> Restart plays the event (HUD / Vincent hidden; game over active ${g.go})`);
     const n0 = await pg.evaluate(() => window.__rec.length);
     await until(() => window.__play.intro.ended === 3 && !window.__play.intro.active, null, 600000);
@@ -184,11 +195,20 @@ try {
     await until(() => window.__play.restart.count === 3 && window.__play.intro.active && window.__play.intro.rt.frameNo > 60, null, 120000);
     await pg.keyboard.press('Enter');
     await until(() => window.__play.intro.paused);
+    // worker 0239: the event pause's screen (layout 0x4779c0): the dim, image 0x10c and the ✕ icon (0x36), pulsing
+    await pg.waitForTimeout(200);
+    const ep = await pg.evaluate(() => { const W = window.__play.intro.windows, P = W && W.prompt;
+      const d = P ? P.draw(performance.now()) : [];
+      return P && { n: d.length, dim: d[0] && d[0].dim, a: d.slice(1).map(q => q.v[0].c[3]), icon: P.byId(0x23).image }; });
+    ok(ep && ep.n === 3 && ep.dim && ep.icon === 0x36 && ep.a.every(x => x >= 0x20 && x <= 0x80) && ep.a[0] === ep.a[1],
+      `event pause screen: ${ep && ep.n} draws, icon 0x${ep && ep.icon.toString(16)}, alpha ${ep && ep.a}`);
     const f0 = await pg.evaluate(() => window.__play.intro.rt.frameNo);
     await pg.waitForTimeout(1500);
     const f1 = await pg.evaluate(() => ({ n: window.__play.intro.rt.frameNo, pause: window.__play.pause.active }));
     ok(f1.n === f0 && !f1.pause, `Start in the event: the event is held (frame ${f0} -> ${f1.n}), not the gameplay pause menu`);
     await pg.keyboard.press('Space');
+    await pg.waitForTimeout(400);
+    ok(await pg.evaluate(() => { const W = window.__play.intro.windows; return !W || (W.drawAll(performance.now()), W.prompt === null); }), 'the event pause screen closes after ✕ (100 ms)');
     await until(() => window.__play.intro.ended === 4 && !window.__play.intro.active, null, 120000);
     await until(t => window.__play.stats.ticks > t + 10, (await pg.evaluate(() => window.__play.stats.ticks)), 60000);
     const k = await pg.evaluate(() => { const P = window.__play, r = P.intro.rt, p = P.ctrl.pos;

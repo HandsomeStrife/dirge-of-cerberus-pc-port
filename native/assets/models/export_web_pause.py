@@ -9,7 +9,10 @@ Notes: notes/menu-research.md ("Pause menu drawing", worker 0180).
 
 What is exported
   layouts      pause 0x477678 (FUN_003bfe28) and the Yes/No message box 0x472ad8 (FUN_003b7f38), as
-               byte scripts for menu_layout.js; opLen = DAT_0047a6c8.
+               byte scripts for menu_layout.js; opLen = DAT_0047a6c8. Worker 0239: the event window (box kind 4,
+               0x472c48, FUN_003b8598) and the event pause (0x4779c0, FUN_003bfe28 param 1) for event_window.js.
+  speakers     PTR_DAT_0047a8c8 (FUN_003d1c08, text code '$h'): [two letters, message id]; the ids' messages go
+               into `messages` (worker 0239).
   images       DAT_0047bfc0 (16 bytes per image id): +0 slice list (8 bytes per piece: u, v, w, h,
                signed), +4 texture page (FUN_003dd4a8(page + 6)), +5 slice kind, +6 lit-variant byte,
                +7 repeat flags (bit 0 u, bit 1 v; FUN_003c94e0), +8 gradient colours (4 x u32,
@@ -57,14 +60,22 @@ LANGUAGE = 2
 
 LAYOUTS = {'pause': 0x477678, 'yesno': 0x472ad8,
            # FUN_003c0220 -> FUN_003c0a68 -> FUN_003d4a20: one type-8 widget each (rect, message, id, box kind)
-           'box_restart': 0x477a10, 'box_quit': 0x477a30, 'box_tempsave': 0x477a50}
+           'box_restart': 0x477a10, 'box_quit': 0x477a30, 'box_tempsave': 0x477a50,
+           # the event window, box kind 4 (FUN_003b84a8 -> FUN_003b8598, param_7 0; worker 0239)
+           'window4': 0x472c48,
+           # the event pause (FUN_003bfe28 param 1: Start during an event; language 2's rect override 0x51fc60[2] is 0)
+           'eventpause': 0x4779c0}
 BOX_TEXTOFF_AT = 0x472f58                       # FUN_003b7f38: per language 2 shorts, OK / CANCEL text x (+0x60)
-LINEAR_IDS = {'pause': 0x477c18}                # FUN_003d58b8 (flag 0x1e): widget ids that get flag 8 (bilinear)
+LINEAR_IDS = {'pause': 0x477c18, 'eventpause': 0x477c30}   # FUN_003d58b8 (flag 0x1e): widget ids that get flag 8 (bilinear)
 IMAGES_AT, KINDS_AT, PIECES_AT, PAGES_AT = 0x47bfc0, 0x47d180, 0x47a6b0, 0x47d500
-IMAGE_IDS = [0x06, 0x07, 0x08, 0x0a, 0x34, 0x106, 0x107]
+IMAGE_IDS = [0x06, 0x07, 0x08, 0x0a, 0x34, 0x106, 0x107,
+             0x10c, 0x35, 0x36]                 # the event pause's widgets 0x22 / 0x23 (0x36 when FUN_003e2790(); worker 0239)
 CLUTS_AT = 0x47d3c0                             # FUN_003dcf58, flag 0x1e set (the PAL dump's branch)
 FONT_ROWS = (0, 448)                            # the whole page: FUN_003cd7e8 glyphs (rows 0..27), FUN_003cedf0 (224..287)
 MESSAGES = [0x5c00, 0x5c01, 0x5c02, 0x5c06, 0x5c07, 0x5c08, 0x3800, 0x3801]
+# FUN_003d1c08 (text code '$h' + two letters): PTR_DAT_0047a8c8, 8 bytes a row (+0 two-letter name pointer, +4 message id),
+# ends at id 0; the speaker names (its message ids) are exported with the table (worker 0239)
+SPEAKERS_AT = 0x47a8c8
 
 
 # FUN_003fd370 builds its two 8-byte XOR keys from four 16-bit constants that sit in its own
@@ -285,8 +296,13 @@ def main():
     widths20 = menudata[w_off: w_off + 0x30].hex()                  # ASCII 0x20..0x7f
     box_textoff = list(struct.unpack('<2h', elf.read(BOX_TEXTOFF_AT + 4 * LANGUAGE, 4)))
     cluts = [[list(elf.read(CLUTS_AT + 0x40 * n + 4 * i, 4)) for i in range(16)] for n in range(5)]
+    speakers, i = [], 0
+    while elf.u32(SPEAKERS_AT + 8 * i + 4):
+        nm = elf.read(elf.u32(SPEAKERS_AT + 8 * i), 2)
+        speakers.append([nm.decode('ascii'), elf.u32(SPEAKERS_AT + 8 * i + 4)])
+        i += 1
     msgs = {}
-    for mid in MESSAGES:
+    for mid in MESSAGES + [sp[1] for sp in speakers]:
         s = kelstr_message(kelstr, mid)
         msgs['%#x' % mid] = s.hex()
     doc = {
@@ -300,7 +316,7 @@ def main():
         'font': {'w': 512, 'v0': FONT_ROWS[0], 'h': FONT_ROWS[1] - FONT_ROWS[0], 'idx': font_rows(fontdata),
                  'cluts': cluts},
         'widths': widths, 'widths20': widths20, 'boxTextOff': box_textoff,
-        'messages': msgs,
+        'messages': msgs, 'speakers': speakers,
     }
     os.makedirs(os.path.dirname(a.o), exist_ok=True)
     with open(a.o, 'w') as f:

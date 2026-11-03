@@ -307,6 +307,13 @@ export async function setupHud({ output, player, url = 'data/hud/hud.json', camY
     // FUN_003fdb48(3) at the game over request -> FUN_003ad5b0 (HUD off): the panels slide out (hud_core hideAll);
     // applied in tick() with this frame's clock (as the hits). Called by play.js on gameover.js's 'begin'.
     hideAll() { hide = true; },
+    // worker 0237: the top-right gauge (enemy_ai opts.hudGauge: manager 0x6e -> FUN_003b58e0, 0x6f -> FUN_003b5378, 0x70 ->
+    // FUN_003b53c0; the boss brain's FUN_00aa11b8 is a 0x6e). Applied at once, inside the game frame's logic, as the game's calls.
+    gauge(cmd, g) {
+      if (cmd === 0x6e) st.gaugeRequest(g.id, g.v, g.max, g.f);
+      else if (cmd === 0x6f) st.gaugeShow();
+      else if (cmd === 0x70) st.gaugeHide();
+    },
     // the page's pause (play.js onPause): no game frames run, but FUN_0023c1f0 (the slides' clock) is real time and
     // runs on through the game's pause (state 0x17 stops only DAT_004f58ec, FUN_003e23f8), so the pause's length is
     // added to mnow when it closes. GUESS: the HUD's group step (FUN_003d5a80) during the pause is not traced; the page

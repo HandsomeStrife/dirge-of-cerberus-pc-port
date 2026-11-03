@@ -230,6 +230,8 @@ INPUTS = {
     '07670a02.bin': '315ee731f8bb997f21aecabe3ac7ec23d1713ddae2e2184e67be370b5d5cd34a',   # g040 texture
     '07670a41.bin': 'fd5d50d60642083e9e8be42b47d14feda5ba2988c4b7c6d8346f8a49c1f8e64e',   # g041 item model
     '07670a42.bin': '9a28ac19059a18147270f4fc6f20b999eaccb99f307c0c2bc6f072348929f096',   # g041 texture
+    '07670e81.bin': '8798457c37eef092d4b9fd953c38e1494bd203c5496d587a0f973fdf77ec870f',   # g058 item model (the boss e024's drop; worker 0237)
+    '07670e82.bin': '46dc13d00fb73125604be9cff0df05c8d3d2fb84791ecdc9eefa9556bc1a6b80',   # g058 texture
     '076710c1.bin': '5c87f180c54586a7b606988400997b9eef0b341690440267f71c616869cda0f8',   # g067 item model
     '076710c2.bin': 'a8c2402ce4aec90311207c1bb0c53cd48d98f6b986932e8901aceff5ff89bb5d',   # g067 texture
     '07671101.bin': '4c3c20b6a0560b26e733b03d71f6e6b2f42d96b2c31417066d0cc4d55131200a',   # g068 item model

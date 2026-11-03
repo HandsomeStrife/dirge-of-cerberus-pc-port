@@ -289,6 +289,96 @@ ok(warns.some(w => w.includes('KerberosActor.setpos_l')), 'untranslated natives 
   }
 }
 
+// ---- the event windows (event_window.js; worker 0239): open_l / close_l, box kind 4, the text's '$h', Skip ----
+{
+  const W = await imp('event_window.js');
+  const SI = await imp('stage_info.js');
+  const { loadPauseData } = await imp('pause.js');
+  const pj = path.join(here, 'data/pause.json'), sj = path.join(here, 'data/stage_info.json');
+  const PD = existsSync(pj) && existsSync(sj) ? SI.loadStageInfoData(JSON.parse(readFileSync(sj, 'utf8')), loadPauseData(JSON.parse(readFileSync(pj, 'utf8')))) : null;
+  // the pulse FUN_003d0ad0 (hand values)
+  ok(W.pulse(1000, 0x200, 0x20, 0x80, 1000) === 0x20 && W.pulse(1000, 0x200, 0x20, 0x80, 1512) === 0x80 && W.pulse(1000, 0x200, 0x20, 0x80, 1256) === 0x50 &&
+     W.pulse(1000, 0x200, 0x20, 0x80, 2024) === 0x20 && W.pulse(0, 0x200, 0x20, 0x80, 5) === 0x80 && W.pulse(1000, 0x200, 0x80, 0x20, 1256) === 0x50,
+     'FUN_003d0ad0: a 2 x 512 ms triangle from a to b; start 0 -> b');
+  // book-keeping without screens (no D)
+  {
+    const win = W.createEventWindows({ D: null, warn });
+    const r = new EventRuntime(D, { warn, windows: win }); r.start();
+    const N = win.natives(r), open = N['fake/KerberosWindow.open_l(IIIIIILjava/lang/String;I)V'], close = N['fake/KerberosWindow.close_l(I)V'];
+    for (let i = 1; i <= 6; i++) open(r.vm, [i, 4, 0, 380, 512, 448, 'MES_10110SK', 0]);
+    close(r.vm, [6]);                                                // FUN_003789b8: the pending command 6 freed
+    ok(r.slots.filter(c => c.type === 10).length === 5, 'close_l before the frame frees the pending command 10 (FUN_003789b8)');
+    win.frame(r);
+    ok(win.entries.map(e => e.id).join() === '1,2,3,4,5' && r.slots.every(c => c.type !== 10), 'case 10: five window entries (+0x9804), slots freed');
+    open(r.vm, [7, 4, 0, 380, 512, 448, 'MES_10110SK', 0]); win.frame(r);
+    ok(win.screens.length === 5 && !win.entries.some(e => e.id === 7) && win.log.some(x => x[1] === 'open 7 MES_10110SK'), 'no free entry: the box closes at once (FUN_003b6978; no screen without data: gone at once)');
+    close(r.vm, [3]);
+    ok(win.entries[2].id === -1, 'close_l: the entry id -> -1 (FUN_00378b00)');
+    win.frame(r);
+    ok(win.entries[2].id === 0 && !win.screens.some(x => x.id === 3), 'the window loop closes it (FUN_003788d8)');
+  }
+  if (!PD || !PD.layouts.window4 || !PD.speakers || !PD.layouts.eventpause) console.log('SKIP windows draw: data/pause.json without the window layouts / speakers (re-run export_web_pause.py) or no data/stage_info.json');
+  else if (!D.messages) console.log('SKIP windows draw: data/event/ev0100_scr001.json without messages (re-run export_web_event.py)');
+  else {
+    const runWin = (opts = {}) => {
+      const win = W.createEventWindows({ D: PD, warn });
+      const r = new EventRuntime(D, { warn, windows: win }); r.start();
+      const at = {};
+      while (!r.done && r.frameNo < 2000) {
+        r.frame(20);
+        if (opts.skipAt === r.frameNo) r.requestSkip();
+        if (opts.frames && opts.frames.includes(r.frameNo)) at[r.frameNo] = { prims: win.draw(), keys: win.screens.map(x => x.key) };
+      }
+      return { win, r, at };
+    };
+    const { win, at } = runWin({ frames: [180, 240, 980] });
+    ok(win.log.map(x => x.join(' ')).join('|') === '126 open 1 MES_10109VN1|191 close 1|226 open 2 MES_10109VN2|286 close 2|966 open 3 MES_10110SK|1036 close 3',
+      'scr001 opens three kind-4 windows and closes each (open_l / close_l)');
+    ok(at[180].keys.join() === 'MES_10109VN1' && at[180].prims.length === 0, 'MES_10109VN1 (a space) draws nothing');
+    ok(at[240].prims.length === 264 && at[980].prims.length === 108, `glyph sprites: VN2 ${at[240].prims.length} (22 x 12 with the name), SK ${at[980].prims.length}`);
+    // the speaker's name: on (DAT_004f3044 bit 10, MEASURED 0xc00) it is drawn and centred with the line
+    {
+      const b = new W.EventWindowScreen(PD, 0, -1);
+      b.moveTo(b.root, 0, 380); b.setSize(512, 448);
+      const s = Uint8Array.from(Buffer.from(D.messages.MES_10109VN2, 'hex'));
+      b.setText(s);
+      const nameLen = PD.msg[PD.speakers.find(x => x[0] === 'vn')[1]].length;
+      ok(s[0] === 0x24 && s[1] === 0x68 && b.text.count === s.length - 4 + nameLen, `measure: '$h' + 'vn' inserts the name (count ${b.text.count})`);
+      ok(b.text.flags5e === ((0x212 & 0xfffd) | 0x4000) && b.root.flags & 0x80 && b.text.w === 512 && b.text.h === 448,
+        `FUN_003b8598 / FUN_003b6c98: text flags 0x${b.text.flags5e.toString(16)}, root no clip, text widget ${b.text.w} x ${b.text.h}`);
+      const m2 = W.measureCodes(PD, b.text, Uint8Array.from([0x24, 0x68, 0x7a, 0x7a, 0x41, 0]));   // an unknown speaker: 'zz' is text
+      const t = new W.EventWindowScreen(PD, 1000, 300), t0 = new W.EventWindowScreen(PD, 1000, -1);
+      ok(t.cur === 0 && t.total === 300 && t.end === 1300 && t0.total === 100 && t0.end === 1100 && t.se === null,
+        'open_l t != 0: FUN_003d50b8 makes the open last t ms (else FUN_003d5110\'s 100); no open sound (FUN_003e1d80)');
+      ok(m2.count === 3, `'$h' with no table row: the two letters are text (count ${m2.count})`);
+    }
+    // under Skip: the open window is hidden (FUN_003b7118), later ones open hidden (FUN_00383408)
+    {
+      const s = runWin({ skipAt: 240, frames: [241] });
+      ok(s.at[241] && s.at[241].prims.length === 0 && s.win.screens.every(x => x.box.root.flags & 1), 'Skip hides the open window (FUN_003b7118 -> FUN_003cb360)');
+    }
+    // the game's draws (GS dumps w239: tools/trace/window_ref.py)
+    const refp = path.join(OUT, 'w239/window_ref.json');
+    if (!existsSync(refp)) console.log('SKIP windows vs the game: no tools/trace/out/w239/window_ref.json (tools/trace/window_ref.py)');
+    else {
+      const ref = JSON.parse(readFileSync(refp, 'utf8'));
+      const row = q => [q.v[0].x, q.v[0].y, q.v[1].x, q.v[1].y, q.v[0].u, q.v[0].v, q.v[1].u, q.v[1].v, q.v[0].c.join()].join();
+      const same = (P, R) => P.length === R.length && P.every((q, i) => row(q) === R[i].slice(0, 8).concat([R[i][8].join()]).join()
+        && (q.tex === 'font' ? q.clut === (R[i][9] === 0x3ffa ? 1 : 2) : true) && q.linear === ((R[i][10] & 0x60) !== 0));
+      ok(same(at[240].prims, ref.vn2), `MES_10109VN2: all ${ref.vn2.length} glyph sprites = GS dump f596 (xy, uv, rgba, CLUT, bilinear)`);
+      ok(same(at[980].prims, ref.sk), `MES_10110SK: all ${ref.sk.length} glyph sprites = GS dump f1400`);
+      // the event pause's screen at the dump's pulse phase (alpha 37 = (now - start) % 1024 = 27)
+      const P = new W.EventPauseScreen(PD, 1000);
+      P.update(1200); P.frame(1200);
+      const now = P.t60 + 27; P.update(now); P.frame(now);
+      const d = P.draw(now);
+      const dim = d[0], R = ref.pause;
+      ok(d.length === 3 && dim.dim && dim.v[0].x === R[0][0] && dim.v[3].x === R[0][2] && dim.v[3].y === R[0][3] && dim.v[0].c[3] === R[0][8][3] &&
+         same(d.slice(1), R.slice(1)), 'the event pause screen = GS dump f1453 (dim 0x60, image 0x10c, the ✕ icon 0x36; xy, uv, alpha)');
+    }
+  }
+}
+
 // ---- against the game (traces) ----
 // T w210_intro_a / b / c (TRACE_FIELDSET=event, from the state at the stage start, f1704 of the w210 restart drive).
 // Camera ids differ: KerberosCamera's id counter (a static, camera_id_idx % 6) runs on from earlier events in the game,

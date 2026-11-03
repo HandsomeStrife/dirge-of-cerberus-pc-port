@@ -4,7 +4,10 @@
 // The route: stage flag 0 = 36 and global flag 19 = 1 (0231's trace recipe: main's boss block, restart path). The page's
 // stage controller is not yet known to reach Zone.boss(true) from the save, so after a short wait the test does what that
 // path does in the game (stated as a harness step): the plug-in on (Zone.boss(true), FUN_0037fe18) and FUN_005459d8 (script
-// event 0x23 to every object: record 32's HP, gauge 13 and its activation). Then: the boss's brain runs (AI mode 0x100,
+// event 0x23 to every object: record 32's HP, gauge 13 and its activation). Worker 0237: that harness step is gone; the page
+// must reach both itself (the test fails otherwise). Worker 0240: the 0x23 comes from main's boss-block battle(): FUN_0037cf30
+// -> FUN_00324e70 -> FUN_005453b0 -> FUN_005459d8 (T w240_boss; stage_controller.js enterBattle -> play.js stagePass). Then:
+// the boss's brain runs (AI mode 0x100,
 // boss_z128.js through boss_io.js), it is drawn, it flies between its boxes (move mode 1), fires (gun bullets and missiles
 // from its markers), takes damage from a shot, and at HP < 10001 is beaten: script event 0x17 -> stage flag 0 = 40.
 import { existsSync } from 'node:fs';
@@ -47,18 +50,20 @@ try {
   // 1. the route: flags as 0231's trace recipe; see whether the stage controller takes the boss block
   await pg.evaluate(() => { const P = window.__play; P.enemyAI.eventFlags[0] = 36; P.stage.globalFlags[19] = 1; });
   const routed = await pg.waitForFunction(() => window.__play.enemyAI.bossPlugin, null, { timeout: 20000 }).then(() => true).catch(() => false);
-  console.log(`info: the page's stage controller ${routed ? 'reached' : 'did not reach'} Zone.boss(true) within 20 s`);
-  // harness: what main's restart path does in the game (Zone.boss(true); the 0x23 pass)
+  // worker 0237: no harness fallback any more: the page's own stage controller must take main's boss block (Zone.boss(true))
+  // and its stage-load pass must send event 0x23 (record 32 active); the test fails otherwise
+  ok(routed, `the page's stage controller reaches Zone.boss(true) within 20 s (${routed})`);
+  await pg.waitForFunction(() => window.__play.enemyAI.objects.get(32 + 22).flags28 & 1, null, { timeout: 20000 }).catch(() => null);
   const st0 = await pg.evaluate(() => {
-    const W = window.__play.enemyAI;
-    const harness = !W.bossPlugin || !(W.objects.get(32 + 22).flags28 & 1);
-    if (!W.bossPlugin) W.setBossPlugin(true);
-    if (!(W.objects.get(32 + 22).flags28 & 1)) W.event23();
-    const a = W.objects.get(32 + 22);
-    if (harness) console.log('harness: Zone.boss / the 0x23 pass run by the test');
+    const W = window.__play.enemyAI, a = W.objects.get(32 + 22);
     return { kind: a.kind, hp: a.hp, gauge: { ...W.hudGauge() }, mode: a.ai ? a.ai.mode : null };
   });
   ok(st0.kind === 'actor' && st0.hp === 17000, `event 0x23 at flag 0 = 36: record 32 active with HP 17000 (T w231_boss4: 17000 at difficulty 1): ${st0.kind} ${st0.hp}`);
+  if (st0.kind !== 'actor') {
+    // the 0x23 on this route is battle()'s stage-load pass (FUN_00324e70 -> FUN_005453b0 -> FUN_005459d8, T w240_boss)
+    ok(false, 'the boss is not active (no 0x23 from battle()\'s stage-load pass): the remaining checks are skipped');
+    throw Object.assign(new Error('stop'), { stop: true });
+  }
   ok(st0.gauge.id === 13 && st0.gauge.v === 7000 && st0.gauge.max === 7000 && st0.gauge.c59 === 1, `HUD gauge 13 = 7000 / 7000, shown (manager 0x6e / 0x6f): ${JSON.stringify(st0.gauge)}`);
   const brain = await pg.waitForFunction(() => { const a = window.__play.enemyAI.objects.get(54); return a.ai && a.ai.mode === 0x100 && a.ai.boss && a.ai.boss.st >= 2 ? { st: a.ai.boss.st, pos: a.pos.slice() } : false; },
     null, { timeout: 30000 }).then(h => h.jsonValue()).catch(() => null);
@@ -102,13 +107,10 @@ try {
   if (process.env.BOSS_SHOT) { await pg.screenshot({ path: process.env.BOSS_SHOT }); console.log('saved ' + process.env.BOSS_SHOT); }
   const flag = await pg.waitForFunction(() => window.__play.enemyAI.eventFlags[0] === 40, null, { timeout: 60000 }).then(() => true).catch(() => false);
   ok(flag, 'after 180 ticks: the death event 0x17 sets stage flag 0 = 40 (main\'s boss loop ends)');
-  // the boss's death drop (FUN_0055cac8 -> items.js drop) asks for item model g058, which data/items does not have yet
-  const gap = errs.filter(e => /g058|status of 404/.test(e));
-  if (gap.length) console.log('known data gap: ' + gap.join(' | ') + ' (the boss\'s drop model g058 is not exported)');
-  const other = errs.filter(e => !gap.includes(e));
-  ok(other.length === 0, `no page errors${other.length ? ': ' + other.slice(0, 5).join(' | ') : ''}`);
+  // the boss's death drop (FUN_0055cac8 -> items.js drop) loads item model g058 (exported since worker 0237): no 404 allowed
+  ok(errs.length === 0, `no page errors (the drop model g058 included)${errs.length ? ': ' + errs.slice(0, 5).join(' | ') : ''}`);
   if (warns.length) console.log('warnings:\n  ' + [...new Set(warns)].slice(0, 25).join('\n  '));
-} finally {
+} catch (e) { if (!e.stop) throw e; } finally {
   await browser.close();
   srv.kill();
 }

@@ -487,6 +487,14 @@ export function createEnemyAI(opts) {
     objects.set(o.id, o);
     return o;
   });
+  // worker 0237: the stage object. FUN_0053c140 builds it first (FUN_0053db98 type 0xc, FUN_00589760; manager +0x10aa = its
+  // id) and gives it script = stage section 4 +0x18 (FUN_00311038 -> FUN_0054e3d8; ai.json stage_script, z128: script 0).
+  // It is on the manager's type-0xc list, so FUN_005459d8 sends it event 0x23 (first). GUESS: object id 'stage' (its slot
+  // from FUN_0036e1f0(-1) is not read; no script names it by id). Without stage_script (an old ai.json) there is none.
+  const STAGE_OBJ = data.stage_script >= 0
+    ? { kind: 'stage', id: 'stage', script: data.stage_script, vars: new Int16Array(8), t3c: new Int16Array(2), flags28: 0 } : null;
+  if (STAGE_OBJ) objects.set(STAGE_OBJ.id, STAGE_OBJ);
+  else console.warn('enemy_ai: ai.json has no stage_script (re-export data/enemies): the stage object gets no event 0x23');
   const recById = id => data.records[id - ID_BASE];
   // FUN_00550ad8 (stage start, L: its caller is a vtable slot, not traced): each trigger object is
   // activated (+0x144(1)) unless its flags +0xa4 have bit 17 (0x20000); those wait for a script's
@@ -670,6 +678,14 @@ export function createEnemyAI(opts) {
           st[st.length - 1] = Math.trunc(Math.fround(Math.fround(v + 1) * rng()));
           break;
         }
+        // worker 0237: op 42 FUN_00370d68 (table DAT_004a2f60 entry 42; asm 0x370d68-0x370e44): hi = pop, lo = pop, each
+        // chopped to int if it is a float cell (cvt.w.s), then push the int lo + (int)((float)(hi - lo + 1) x FUN_0040b5c0()):
+        // one draw of the shared RNG, in [lo, hi]. Scripts 159-164 (records 81-86) event 0x23: cmd 0x106 timer 0 = 200..600.
+        case 42: {
+          const hi = Math.trunc(pop()) | 0, lo = Math.trunc(pop()) | 0;
+          st.push((lo + Math.trunc(Math.fround(Math.fround((hi - lo + 1) | 0) * rng()))) | 0);
+          break;
+        }
         // op 45 FUN_00370f58: pop v (a float is chopped); table at data + imm x 8: +0 count, +4 default,
         // +8 + 4v targets; 0 <= v < count -> pc = targets[v], else pc = default (instruction indices)
         case 45: {
@@ -747,12 +763,14 @@ export function createEnemyAI(opts) {
       if (cmd === 0x30) return (r[0] >>> 0) < 0x100 ? mshort[r[0]] : 0;                 // case 0x30
       // worker 0231 (notes/boss-research.md): case 0x6e: r0 < 0x12 -> FUN_003b58e0(HUD DAT_00471380, r0, r1, r2, r3) (a
       // HUD gauge: id, value, max, r3); 0x6f -> FUN_003b5378 (HUD +0xc59 = 1: shown); 0x70 -> FUN_003b53c0 (shown -> 2).
-      // The page keeps the request (world.hudGauge(), opts.hudGauge); drawing the gauge is not translated (warned).
+      // The page keeps the request (world.hudGauge()) and passes it on (opts.hudGauge -> play.js -> hud.js / hud_core.js, which
+      // draws it: worker 0237). Worker 0237: 0x6e with r0 >= 0x12 calls nothing, so nothing is passed on.
       if (cmd === 0x6e || cmd === 0x6f || cmd === 0x70) {
-        if (cmd === 0x6e && (r[0] >>> 0) < 0x12) Object.assign(hudGauge, { id: r[0] | 0, v: r[1] | 0, max: r[2] | 0, f: r[3] | 0 });
+        if (cmd === 0x6e && !((r[0] >>> 0) < 0x12)) return 0;
+        if (cmd === 0x6e) Object.assign(hudGauge, { id: r[0] | 0, v: r[1] | 0, max: r[2] | 0, f: r[3] | 0 });
         else if (cmd === 0x6f) hudGauge.c59 = 1;
         else if (cmd === 0x70 && hudGauge.c59 === 1) hudGauge.c59 = 2;
-        if (opts.hudGauge) opts.hudGauge(cmd, hudGauge); else warnOnce('enemy_ai: HUD gauge (FUN_003b58e0 / FUN_003b5378 / FUN_003b53c0) not drawn on the page');
+        if (opts.hudGauge) opts.hudGauge(cmd, hudGauge); else warnOnce('enemy_ai: HUD gauge (FUN_003b58e0 / FUN_003b5378 / FUN_003b53c0): no HUD on the page');
         return 0;
       }
       // worker 0209: section-15 gimmicks (props.js): 0x3e = object id of gimmick r0 (manager +0x5b2), 0x2a / 0x2b the explosion
@@ -939,7 +957,12 @@ export function createEnemyAI(opts) {
           events.push(`f38 ${t.id} 0x${t.f38.toString(16)}`);
         } else warnOnce(`enemy_ai: object cmd 0x16a on ${t.kind} ${t.id} (+0x38 not modelled) not translated (skipped)`);
         return 0;
-      case 0x193: if (t.kind === 'actor' && t.ai) setTarget(t.ai, P); return 0;   // FUN_005661e8 0x193 (FUN_0053bb08 = the player)
+      case 0x193:                                                                // FUN_005661e8 0x193 (FUN_0053bb08 = the player)
+        if (t.kind === 'actor' && t.ai) setTarget(t.ai, P);
+        // worker 0237: no AI (+0x184 0: an inactive record, e.g. 81-86 at event 0x23) -> FUN_00562f50(actor, player id):
+        // +0x11c = the id, +0x118 |= 3. Not kept: the page's activation (addActor) does not carry a record's +0x118.
+        else if (t.kind === 'record' && P) warnOnce(`enemy_ai: cmd 0x193 on inactive record ${t.rec} (FUN_00562f50: +0x11c / +0x118 bits 0-1) not kept`);
+        return 0;
       // worker 0230 (notes/other-types.md). FUN_0054cd70: object +0x38 bit commands, r0 == 1 sets else clears: 0x16b bit 3,
       // 0x16c bit 0 (+ +0x40 bit 4: not modelled), 0x16d bit 1, 0x16e bit 2, 0x16f bit 6, 0x167 bit 8 (+ +0x40 bit 6). Bit 0 gates
       // Vincent's bullets, bit 2 the lock-on, bit 9 the push-out (a.f38 readers). An actor without its own +0x38 (the soldiers'
@@ -3298,10 +3321,13 @@ export function createEnemyAI(opts) {
     const lim = f(b.home * f(0.016666668));
     if (lim < Math.abs(ang)) ang = ang < 0 ? -lim : lim;
     if (0.001 < Math.abs(ang)) {
+      // worker 0237: FUN_00259f60's order (asm 0x259fa0-0x25a048): the pair products first (x x, y y, z z, x y, z x, y z), then
+      // x (1 - cos), then +- the sin terms / + cos, each rounded to f32
       const sn = f(Math.sin(ang)), cs = f(Math.cos(ang)), t = f(1.0 - cs), [x, y, z] = ax;
-      const R = [[f(f(t * x) * x + cs), f(f(f(t * x) * y) + f(z * sn)), f(f(f(t * z) * x) - f(y * sn))],
-                 [f(f(f(t * x) * y) - f(z * sn)), f(f(f(t * y) * y) + cs), f(f(f(t * y) * z) + f(x * sn))],
-                 [f(f(f(t * z) * x) + f(y * sn)), f(f(f(t * y) * z) - f(x * sn)), f(f(f(t * z) * z) + cs)]];
+      const xx = f(t * f(x * x)), yy = f(t * f(y * y)), zz = f(t * f(z * z)), xy = f(t * f(x * y)), zx = f(t * f(z * x)), yz = f(t * f(y * z));
+      const R = [[f(xx + cs), f(xy + f(z * sn)), f(zx - f(y * sn))],
+                 [f(xy - f(z * sn)), f(yy + cs), f(yz + f(x * sn))],
+                 [f(zx + f(y * sn)), f(yz - f(x * sn)), f(zz + cs)]];
       b.dir = unit3([0, 1, 2].map(k => f(f(f(u[0] * R[0][k]) + f(u[1] * R[1][k])) + f(u[2] * R[2][k]))));
     }
     const k = f(b.speed * step);
@@ -4442,7 +4468,16 @@ export function createEnemyAI(opts) {
   // HP 10 / 28 / 24, timer 1 = 80 / 0 / 150, 42 brain mode 1; 41 mode 2 at record 90.
   // At record 24 the game moves all three to the opening event's hand-off (worker 0205: FUN_00344d68 -> FUN_003157b0 ->
   // FUN_00558cc0 at their battle clips' end): checkpoint.js schedules it (scheduleHandOff, applied in tick step 3b).
+  // Worker 0240: split in two. loadPass(recs) = FUN_005453b0's per-slot loop (above); stageLoad(recs) = the whole function
+  // (the loop, then FUN_005459d8: event 0x23 to every object), which only battle()'s FUN_00324e70 calls (stage_controller.js
+  // enterBattle -> play.js stagePass). T w240_act / w240_init: at the reload's record 10 the game runs NO FUN_005453b0 (no
+  // 0x23 there): 41-43 and 45-49 are activated by their area switching on (FUN_0054ef68 -> vt+0x14c FUN_0055a0d8 ->
+  // vt+0x144(1, 1)); play.js rebuildEnemies uses loadPass for 41-43 as the stand-in (GUESS row in notes/fidelity-audit.md).
   function stageLoad(recs) {
+    loadPass(recs);
+    event23();                                                                // worker 0235: FUN_005453b0's end
+  }
+  function loadPass(recs) {
     const order = [...new Set(recs)].sort((x, y) => x - y);                    // slot order (record + 22)
     // Only the loaded statuses get here: FUN_005453b0 calls vt+0x36c for an object with +0x28 bit 0x40 or status +0x60
     // bit 0. T: in the reload state the already-active 44 / 66 have neither (+0x28 0x208403, status +0x60 0), so the tail
@@ -4465,15 +4500,38 @@ export function createEnemyAI(opts) {
       if (a.C.mover !== 0) warnOnce(`enemy_ai: stage-load pass on record ${k} with a moving body (FUN_0034edf0(C, 0) -> FUN_00352a60) not translated`);
       a.f118 = (a.f118 & ~0x40000) >>> 0;
     }
-    event23();                                                                // worker 0235: FUN_005453b0's end
   }
   // worker 0235: FUN_005459d8 (the end of FUN_005453b0 and of FUN_0053ca50): script event 0x23 to every object of the
   // manager's type lists (mgr +0x1108, types 0xc, 1, 2, 3, 8, 0xa, 0xf, 0x10, 0xb, 0xe, ... from DAT_0058b5c8). The z128
-  // boss's script 242 sets its HP, the gauge and activates itself there. L: the page sends it to its triggers, then its
-  // records / actors in id order (the page's kinds are not mapped to the type numbers).
+  // boss's script 242 sets its HP, the gauge and activates itself there. Worker 0237: list order = type order: 0xc the stage
+  // object (STAGE_OBJ), 1 the actors (FUN_00558790: records / actors), 3 the triggers (FUN_00550228, vtable 0x58cdf8).
+  // L: inside a list, id order (FUN_00580ed8's insertion not read); props / items (other types) get no event 0x23 here.
   function event23() {
-    for (const o of triggers) runEvent(o, 0x23);
+    if (STAGE_OBJ) runEvent(STAGE_OBJ, 0x23);
     for (const o of [...objects.values()]) if (o.kind === 'record' || o.kind === 'actor') runEvent(o, 0x23);
+    for (const o of triggers) runEvent(o, 0x23);
+  }
+  // Worker 0240: the stage init's pass, FUN_0053ca50(mgr, 1), the end of FUN_0053c140 (stage init FUN_003245e8, after the
+  // stage object and the section objects are built). T w240_init (from start1704, a Restart's reload): FUN_003245e8 ->
+  // FUN_0053c140 -> FUN_0053ca50(mgr, 1) -> FUN_005459d8, at manager clock +0x20 = 0, +0x24 = 0; 44 / 66's activation draws
+  // (FUN_00360418) inside it. Order:
+  //  1. objects FUN_0053bdb8(mgr, k) get +0x4e = k for k < FUN_00310b90(0x12) (FUN_00310c40() = 48 > 12): read only by the
+  //     0x22 handlers' attach below, which never fires in z128: not kept.
+  //  2. vt+0x2ec(o, 1) on every object of the lists DAT_0058b040 = types 0xc, 1, 2, 3, 8, 0xa, 0xf, 0x10, 0x13, 0xb, 0xe (the
+  //     0x23 lists plus 0x13), list by list. vt+0x2ec = FUN_0054b110 (stage object 0x592600, type 8) or a wrapper that first
+  //     attaches the object to FUN_0053bdb8(mgr, byte) when that byte != -1 (actors FUN_0055f028: status +0xa0 +0x4f;
+  //     triggers / type 0xb / 0xe FUN_00551b18: +0xd4 +0xab; props FUN_00585a48: +0x10c +0x4e). Every such byte is 0xff in
+  //     the reload state (216 actors, 195 triggers, 95 props), so each is FUN_0054b110 = script event 0x22 (vt+0x2f4).
+  //     Script 0's 0x22 (flag 0 < 2): cmd 0x108 to 44 and 66 (worker 0237): their activation.
+  //  3. FUN_0053cc00: FUN_0053ccc8 for each of DAT_004eeb30[0..2] that is 0: all three are 1 before and after (start1704,
+  //     reload0), so nothing; mgr +0x2b0 bit 6 cleared (no reader on the page).
+  //  4. FUN_005459d8: event 0x23 to every object (event23).
+  // L: props / items (types 0xa / 0xf / 0x10 / 0x13) get neither event here (as event23); the player (type 2) has no script.
+  function stageInit() {
+    if (STAGE_OBJ) runEvent(STAGE_OBJ, 0x22);
+    for (const o of [...objects.values()]) if (o.kind === 'record' || o.kind === 'actor') runEvent(o, 0x22);
+    for (const o of triggers) runEvent(o, 0x22);
+    event23();
   }
 
   // the opening event's hand-off (checkpoint.js): [{ rec, frame (S.frame of the tick it happens in), pos, face }]
@@ -4597,6 +4655,8 @@ export function createEnemyAI(opts) {
   // fired, now; queueShot: the same at this frame's player slot inside the next tick (the page).
   const world = { S, actors, triggers, bullets, attackObjs, objects, addActor, tick, runEvent, recById, events, activated, setActive, stageLoad, scheduleHandOff, handOffs, delayed,
                   event23,                                // worker 0235: FUN_005459d8 (script event 0x23 to every object)
+                  stageInit, loadPass,                    // worker 0240: FUN_0053ca50(mgr, 1) (0x22 then 0x23); FUN_005453b0's loop alone
+                  stageObj: STAGE_OBJ,                    // worker 0237: the stage object (type 0xc, script 0 on z128)
                   timerList,                              // script-timer list (FUN_0053e6e8; tests)
                   playerShot, queueShot, lockTargets, pushOut, boneWorld: opts.boneWorld || null,
                   eventFlags: EVFLAGS,

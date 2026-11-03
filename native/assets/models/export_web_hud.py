@@ -1042,6 +1042,26 @@ START = {
 BUILD_CLOCK = 1000              # GUESS: the clock when the HUD is built (only != 0 and < START clock matters)
 
 
+def gauge_json(elf, locale):
+    """Worker 0237: the top-right gauge (panel 4 = slot 4; FUN_003b58e0 / FUN_003b5378 / FUN_003b5d58).
+    show: panel p's show list PTR_DAT_00471d80[p] (FUN_003afbf8: element ids, 0-terminated), panels 0..10;
+    widths: DAT_004729a0 (FUN_003b56f0: [id, width] pairs to the 0xff id; gauge 13 adds 0x3c);
+    labels: FUN_003b58e0 case 0xc's label strings, kelstr messages DAT_004729f8[f] (f = 0..7; FUN_003fd578), as bytes."""
+    show = []
+    for k in range(11):
+        q, ids = elf.u32(0x471d80 + 4 * k), []
+        while q and elf.read(q + len(ids), 1)[0]:
+            ids.append(elf.read(q + len(ids), 1)[0])
+        show.append(ids)
+    widths, q = [], 0x4729a0
+    while elf.read(q, 1)[0] != 0xff:
+        widths.append(list(struct.unpack('<HH', elf.read(q, 4))))
+        q += 4
+    kel = P.kelstr_decode(open(os.path.join(locale, 'kelstr.bin'), 'rb').read(), P.kelstr_keys(elf))
+    labels = [list(P.kelstr_message(kel, elf.u32(0x4729f8 + 4 * f))) for f in range(8)]
+    return {'show': show, 'widths': widths, 'labels': labels}
+
+
 def disc_tree(elf, locale, metrics, start=START):
     """The HUD tree and values from the ELF + locale files alone (no save state): FUN_003ad618, then the
     status sync (FUN_00339988 / FUN_00339590 -> the setters) with `start`, a hide (FUN_003ad5b0) and a show
@@ -1397,7 +1417,8 @@ def main():
     ids = {e['sprite'] for e in chain}
     kinds = [list(struct.unpack('<HH8i', elf.read(KINDS + 0x24 * k, 0x24))) for k in range(5)]
     bars = []
-    for r in range(6):
+    # worker 0237: 17 rows (0..0x10; 9 / 0xa / 0xb / 0xf / 0x10 are the top-right gauge's, FUN_003b5d58); row 17 is not a row
+    for r in range(17):
         b = elf.read(BARS + 0x14 * r, 0x14)
         pa, pb = struct.unpack_from('<II', b, 8)
         bars.append({'c0': list(b[0:4]), 'c1': list(b[4:8]), 'dir': b[0x10],
@@ -1421,7 +1442,7 @@ def main():
         'chain': chain, 'values': values,
         'layout': {str(k): v for k, v in layout.items()},
         'sprites': {str(k): v for k, v in sprite_table(elf, ids).items()}, 'kinds': kinds, 'bars': bars,
-        'textures': textures, 'ring': ring_json(elf), 'slides': slides_json(elf),
+        'textures': textures, 'ring': ring_json(elf), 'slides': slides_json(elf), 'gauge': gauge_json(elf, a.locale),
         'font': {'w': w, 'h': h, 'atlas': atlas.hex(), 'cluts': {str(k): v for k, v in cluts.items()},
                  'metrics': metrics.hex()},
     }

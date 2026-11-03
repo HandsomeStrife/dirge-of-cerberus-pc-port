@@ -65,6 +65,26 @@ function withOverride(b, opLen, ov) {
   return Array.from(out, x => x.toString(16).padStart(2, '0')).join('');
 }
 
+// ---------------------------------------------------------------- '$h': the speaker's name (worker 0239)
+// DAT_004f3044 bits 10 / 11 (FUN_003e1518 / FUN_003e1588, set from the config by FUN_003e1770; FUN_003dd810 / FUN_003e1668
+// set both by language). MEASURED: 0xc00 (both set) in every stage-start state read (w218_gs, w239). FUN_003e1550 = bit 10
+// (the names), FUN_003e15c0 = bit 11 (event_window.js: the window text's outline). The page has no options screen.
+export const MENU_CONFIG_BITS = 0xc00;
+export const speakerNamesOn = () => (MENU_CONFIG_BITS >> 10) & 1;   // FUN_003e1550 (FUN_002419d8(10) == 0: story mode)
+// FUN_003d1d98 code 8: the two letters after '$h' (both < 0x80) -> FUN_003d1c08: PTR_DAT_0047a8c8's (name, message id)
+// rows (pause.json speakers), the message by FUN_003fd578 (pause.json messages). Length 4 when found; else 3 when the
+// first letter is '$', else 2 (the letters are then text). Returns { n, name }.
+export function speakerCode(D, str, p) {
+  const a = str[p + 2], b = str[p + 3];
+  if (!(a < 0x80 && b < 0x80)) return { n: 2, name: null };
+  const row = (D.speakers || []).find(r => r[0].charCodeAt(0) === a && r[0].charCodeAt(1) === b);
+  if (!D.speakers) warnOnce('speakers', 'text: pause.json has no speaker table (re-run export_web_pause.py); $h names left out');
+  const name = row ? (D.msg[row[1]] || null) : null;
+  if (row && !name) warnOnce('spk' + row[1], 'text: speaker message 0x' + row[1].toString(16) + ' not exported');
+  if (row) return { n: 4, name };
+  return { n: a === 0x24 ? 3 : 2, name: null };
+}
+
 // ---------------------------------------------------------------- the box's screen (FUN_003c5d10 -> FUN_003d41e0)
 const s16 = v => (v << 16) >> 16;
 function rgbaOf(v) { return [v & 0xff, (v >>> 8) & 0xff, (v >>> 16) & 0xff, v >>> 24]; }
@@ -97,10 +117,10 @@ export class StageInfoScreen extends PauseScreen {
     if (w.textOff[0] !== 0x7f) { x0 = w.x + w.textOff[0]; right = (s16(w.x) + s16(w.w) - w.textOff[0]) * 16; }
     else x0 = (f & 0x10) ? w.ix + Math.trunc((w.iw - w.tw) / 2) : (f & 0x20) ? w.ix + (w.iw - w.tw) : w.ix;
     if (f & 0x1000) warnOnce('f1000', 'stage info: text flag 0x1000 (FUN_003cd7e8 scrolling line) not translated');
-    const lineX = (x0 << 20) >> 16;
+    const lineX0 = (x0 << 20) >> 16;
     let bottom = (w.iy + w.ih) * 16, y0;
     if (w.textOff[1] !== 0x7f) { y0 = w.y + w.textOff[1]; bottom = (s16(w.y) + s16(w.h) - w.textOff[1]) * 16; } else y0 = w.iy;
-    let y = (y0 << 20) >> 16, x = lineX;
+    let y = (y0 << 20) >> 16, x = lineX0;
     const an = this.anim(w), sc = v => an ? Math.trunc((v * this.cur) / this.total) : v;
     let c = w.col4c.slice();
     let main = [c[0], c[1], c[2], sc(c[3])];
@@ -109,7 +129,16 @@ export class StageInfoScreen extends PauseScreen {
     const lineH = (w.lineGap + 0x10) * 0x10, cond = (f & 0x8000) !== 0;
     const codes = D.si.codes;
     let count = 0, p = 0, nl = false, notCode = false;
-    while (str[p]) {
+    let ret = null;                                // '$h' (worker 0239): pbStack_d4 / iStack_d0 / uStack_cc, the main string to return to
+    let lineX = lineX0;
+    for (;;) {
+      if (!str[p]) {                               // LAB_003ced8c: the end of an inserted name returns to the main string
+        if (!ret) break;
+        count = ret.count; str = ret.str; p = ret.p;
+        if (ret.cc) lineX = (x << 16) >> 16;      // iStack_128 = (short)uStack_1c0: the next lines start after the name
+        ret = null;
+        continue;
+      }
       if (bottom <= y || maxCount <= count || maxLines < count) break;
       const ch = str[p];
       let off = 0, adv = 0, uw = 0, draw = false, g = 0, img = null, imgCol = null;
@@ -118,12 +147,13 @@ export class StageInfoScreen extends PauseScreen {
         const k = codes.findIndex(e => e[0] && e[0] === str[p + 1]);
         if (k < 0) { notCode = true; p++; continue; }               // returns 1, *param_4 = 1: the '$' is skipped
         const code = k + 1;
-        let n = 2, val = 0;
+        let n = 2, val = 0, name = null;
         if (code === 9) {                                             // 'i': FUN_003d1d08 (two letters, both < 0x80)
           const a = str[p + 2], b = str[p + 3];
           if (a < 0x80 && b < 0x80) { img = D.si.inline.find(r => r.name.charCodeAt(0) === a && r.name.charCodeAt(1) === b) || null; n = 4; }
-        } else if (code === 8) {
-          warnOnce('code8', 'stage info: text code $h (FUN_003d1c08) not translated');
+        } else if (code === 8) {                                      // 'h': FUN_003d1c08 (two letters, both < 0x80)
+          const r = speakerCode(D, str, p);
+          n = r.n; name = r.name;
         }
         for (let d = 0; d < codes[k][1]; d++) {                        // digits (base codes[k][2])
           const q = str[p + n];
@@ -140,7 +170,10 @@ export class StageInfoScreen extends PauseScreen {
           w.col4c = [rgb[0], rgb[1], rgb[2], main[3]];
           continue;                                                   // no advance
         }
-        if (code === 6) { nl = true; }                                // r: iStack_f8 = 1
+        if (code === 8) {                                             // case 8: the speaker's name, when FUN_003e1550()
+          if (name && speakerNamesOn()) { ret = { str, p, count, cc: 1 }; str = name; p = 0; count = 0; }
+        }                                                             // (no advance; the tail's wrap test still runs)
+        else if (code === 6) { nl = true; }                           // r: iStack_f8 = 1
         else if (code === 9) {
           if (!img) { warnOnce('img', 'stage info: unknown inline image in text'); continue; }
           imgCol = [img.col & 0xff, (img.col >>> 8) & 0xff, (img.col >>> 16) & 0xff, main[3]];   // rgb | text alpha

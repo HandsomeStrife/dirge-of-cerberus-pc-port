@@ -284,11 +284,15 @@ export function cam2dProj(p40) {
 // v[o..o+3] is the current value, v[o+4..] the base / rate / acceleration the type keeps.
 function rd4(F, a) { return [F.f32(a), F.f32(a + 4), F.f32(a + 8), F.f32(a + 12)]; }
 function put(v, o, a) { for (let i = 0; i < a.length; i++) v[o + i] = a[i]; }
-// The spawn parameter (mgr+0xb4) is always 0 here (FUN_002e8ea8 param_6 = 0 from the timeline).
+// The spawn parameter (mgr+0xb4, FUN_002e8ea8 param_6 -> FUN_002eb038) is 0 from the timeline; type 18's children
+// (worker 0241) get { flags 7, pos, vel, acc } (FUN_00272aa0). The inits test its word 0: 1 pos (+4), 2 velocity (+8),
+// 4 acceleration (+0xc), 8 / 0x10 rotation (+0x10 / +0x14), 0x40 / 0x80 scale (+0x1c / +0x20), 0x200 / 0x400 colour
+// (+0x28 / +0x2c) (asm 0x274438.., 0x275858.., 0x2760e0.., 0x272190..). Translated: bits 1 / 2 / 4 of types 1 / 2 / 3.
+const spawnArg = (X, bits) => { const S = X.sp; if (S && (S.flags & ~7)) X.warn(`effects: spawn parameter flags 0x${S.flags.toString(16)} (bits past 7) not translated`); return S && (S.flags & bits) ? S : null; };
 const T = {};
-// type 1 position: FUN_00274430 init, FUN_00274488 transition
+// type 1 position: FUN_00274430 init (spawn flag 1: +0x10 = the given position, 4 words), FUN_00274488 transition
 T[1] = {
-  init(X, a, o) { const v = X.p.v; put(v, o + 4, rd4(X.F, a)); put(v, o, v.slice(o + 4, o + 8)); },
+  init(X, a, o) { const v = X.p.v; put(v, o + 4, rd4(X.F, a)); const S = spawnArg(X, 1); if (S) put(v, o + 4, S.pos); put(v, o, v.slice(o + 4, o + 8)); },
   trans(X, t, a, o, old) {
     const F = X.F, v = X.p.v;
     for (let i = 0; i < 3; i++) v[o + 4 + i] = f(F.f32(a + 4 * i) + f(v[o + 4 + i] - F.f32(old + 4 * i)));
@@ -297,7 +301,11 @@ T[1] = {
 };
 // type 2 position + velocity: FUN_00274748 init, FUN_002747e0 transition, FUN_00274920 eval
 T[2] = {
-  init(X, a, o) { const v = X.p.v; put(v, o + 4, rd4(X.F, a)); put(v, o + 8, rd4(X.F, a + 16)); put(v, o, v.slice(o + 4, o + 8)); },
+  init(X, a, o) {                                    // FUN_00274748: spawn flags 1 / 2 replace +0x10 / +0x20 (4 words)
+    const v = X.p.v; put(v, o + 4, rd4(X.F, a)); put(v, o + 8, rd4(X.F, a + 16));
+    const S = spawnArg(X, 3); if (S && (S.flags & 1)) put(v, o + 4, S.pos); if (S && (S.flags & 2)) put(v, o + 8, S.vel);
+    put(v, o, v.slice(o + 4, o + 8));
+  },
   trans(X, t, a, o, old) {
     const F = X.F, v = X.p.v;
     for (let i = 0; i < 3; i++) {
@@ -547,7 +555,9 @@ function buildMatrix(X, a) {
   if (F.u8(a + 2) === 1) X.warn('effects: type 14 velocity alignment (FUN_002d93d0) not translated');
   const order = F.u8(a + 3);
   const m = eulerT(scaleM([v[scl], v[scl + 1], v[scl + 2]]), [v[rot], v[rot + 1], v[rot + 2]], [v[pos], v[pos + 1], v[pos + 2]], order);
-  if (X.p.parent) X.warn('effects: child particles (FUN_002e3dd8 parent cases) not translated');
+  // a child (type 18, worker 0241): FUN_002e3dd8's per-category cases (jump table 0x49f740) take the parent's matrix: not
+  // translated, so the child is simulated (its channels draw the RNGs) but not drawn
+  if (X.p.parent) X.p.noDraw ??= 'a parent (FUN_002e3dd8 parent cases)';
   if (!m) { X.p.noDraw = `rotation order ${order} (FUN_002d82d0 case ${order})`; return; }
   X.p.m50 = m;
 }
@@ -576,10 +586,15 @@ function drawSlot(X, a) {
   return SLOT_BASE[SLOT_GRP[cat]] + SLOT_OFF[cat] + (n ? Math.min(sub, n - 1) : 0);
 }
 // type 3 position, quadratic (worker 0198): FUN_00274558 init (asm: rows +0 / +0x10 / +0x20 -> value +0x10 /
-// +0x20 / +0x30, out = base; the spawn parameter mgr +0xb4 is 0 on these paths), FUN_002745f0 -> FUN_002ecf18
-// transition, FUN_00274680 eval (byte-identical to type 17's FUN_00272348)
+// +0x20 / +0x30, out = base; spawn flags 1 / 2 / 4 add the given position / velocity / acceleration to the three
+// rows, VADD .xyz: worker 0241), FUN_002745f0 -> FUN_002ecf18 transition, FUN_00274680 eval (= type 17's FUN_00272348)
 T[3] = {
-  init(X, a, o) { const v = X.p.v; put(v, o + 4, rd4(X.F, a)); put(v, o + 8, rd4(X.F, a + 16)); put(v, o + 12, rd4(X.F, a + 32)); put(v, o, v.slice(o + 4, o + 8)); },
+  init(X, a, o) {
+    const v = X.p.v; put(v, o + 4, rd4(X.F, a)); put(v, o + 8, rd4(X.F, a + 16)); put(v, o + 12, rd4(X.F, a + 32));
+    const S = spawnArg(X, 7);
+    if (S) [[1, S.pos, 4], [2, S.vel, 8], [4, S.acc, 12]].forEach(([b, w, k]) => { if (S.flags & b) for (let i = 0; i < 3; i++) v[o + k + i] = f(v[o + k + i] + w[i]); });
+    put(v, o, v.slice(o + 4, o + 8));
+  },
   trans(X, t, a, o, old) { quadTrans(X, t, a, o, old); },
   eval(X, t, a, o) { quadEval(X.p.v, o, t, 1); },
 };
@@ -884,9 +899,7 @@ function animBox(X, anim) {
 // page frame 1011 on: 9 LCG + 1 VU0 R per point, the six particles of each schedule step together (log 1013..1047).
 // GUESS: the eval's first test reads the channel context's word 0 bit 0 (a1 = DAT_004ec058-like context, not the
 // particle; not decoded): taken as clear (the log shows the draws every time a point is due).
-// The draw FUN_002aa120 (GS lines, head -> tail) is not translated: in the w198 dump g4 (f1050) its 24 lines come
-// after the HUD (after layer 6's depth clear, seq 57216), so the draw entry's layer (FUN_002e1e40 / FUN_002e2048)
-// would be needed too. Simulated, not drawn (warned).
+// The draw FUN_002aa120 (GS lines, head -> tail): drawStrands below (worker 0241).
 T[103] = {
   init(X, a, o) {
     const F = X.F, n = F.u16(a + 0x2c);
@@ -928,7 +941,89 @@ T[103] = {
       else { const k = f(1 / Math.sqrt(s2)); for (let j = 0; j < 3; j++) q.tail[j] = f(q.pos[j] + f(f(d[j] * k) * cap)); }
     }
   },
-  draw(X) { X.warn('effects: draw type 103 (strand lines FUN_002aa120, drawn after the HUD) not translated: not drawn'); },
+  draw: drawStrands,
+};
+// FUN_002aa120, type 103's draw (worker 0241; asm 0x2aa120..0x2aa510): M = FUN_002e3498(1.0, .., the type 14 bytes) (as
+// the type 137 sparks); GS ALPHA = FUN_00284d30(FUN_00284e20(data +0x3f, 0, 1, 2)) for the draw (FUN_00286770, restored
+// after); colours: c = particle colour (ref slot 0) x emitter colour +0xb0 (FUN_00444c58), x data +0x50 (head) / +0x60
+// (tail) x 1/128 (FUN_00444c70 0x3c000000), clamped 0..255 (FUN_00284f88 -> FUN_00445018). Per live point (record +0x4c;
+// records from pool +0xc to +8, 0x60 bytes) two packed vertices into one GIF packet (tag PRIM 0x4a: line strip, gouraud,
+// blended; regs RGBAQ, XYZ2): head (+0) then tail (+0x10): VMULAx..VMADDw by M, Q = 1 / w, x y z x Q, VFTOI4 x y; RGBA
+// = c with only .w x the point's fade +0x44 (VMULx.w), VMAX 0 / VMINI 255, VFTOI0. The head carries ADC (0x8000: no
+// kick); the tail kicks only when neither vertex set the sticky zero / sign flags (status 0xc0) of x y w and 4096 - x y:
+// one segment a point, drawn when both ends have 0 < x, y < 4096 and w > 0. The packet goes straight to VIF1
+// (FUN_002e14b8 -> FUN_0030b670), so it draws at the particle's slot in its layer (drawSlot). T: w220 open330 (the help
+// box): the dump's 36 untextured LINE segments (test_effects).
+const vuX = (M, p) => [0, 1, 2, 3].map(j => f(f(f(f(p[0] * M[j]) + f(p[1] * M[4 + j])) + f(p[2] * M[8 + j])) + M[12 + j]));   // VMULAx, VMADDAy, VMADDAz, VMADDw (vf0.w)
+function drawStrands(X, a, o, view, out, tex, proj) {
+  const F = X.F, p = X.p, em = X.em, d = X.d, pool = valObj(X, o);
+  if (!pool) return;
+  const m14 = p.data[D.ref(F, d, 1)];
+  const C = viewMatrix(X, p.m50, F.u8(m14 + 1), view, f(1), null);
+  if (!C) return;
+  const alpha = ALPHA_IDX[F.u8(a + 0x3f)] ?? 0x44, cs = D.refSlot(F, d, 0) / 4, K = f(1 / 128);
+  const clamp = x => Math.min(255, Math.max(0, x));
+  const col = off => [0, 1, 2, 3].map(i => clamp(f(f(p.v[cs + i] * em.col[i]) * f(F.f32(a + off + 4 * i) * K))));
+  const c0 = col(0x50), c1 = col(0x60);
+  const vert = (q, w, c) => {
+    const pv = vuX(C, w);                                          // game view space (the projection below, as drawSparks)
+    const z = pv[2], X0 = f(f(proj.fx * pv[0] / z) + proj.cx), Y0 = f(f(proj.fy * pv[1] / z) + proj.cy), Z0 = f(f(proj.zA / z) + proj.zB);
+    const bad = !(X0 > 0 && Y0 > 0 && z > 0 && X0 < 4096 && Y0 < 4096);   // status ZS | SS of VSUBx.xyw / VSUB.xy (4096 - x, y)
+    const rgba = [Math.trunc(c[0]), Math.trunc(c[1]), Math.trunc(c[2]), Math.trunc(clamp(f(c[3] * q.fade)))];
+    return { v: { pos: [pv[0], pv[1], pv[2]], gs: [X0, Y0, Z0], rgba }, bad };
+  };
+  pool.forEach((q, i) => {
+    if (!q.live) return;
+    const h = vert(q, q.pos, c0), t = vert(q, q.tail, c1);
+    if (h.bad || t.bad) return;
+    out.push({ line: true, verts: [h.v, t.v], alpha, emitter: em.ei, id: em.id, type: 103, tag: p.tag, slot: i });
+  });
+}
+
+// Type 18, a child-particle spawner (worker 0241; vtable 0x499a30 from the save RAM: init 0x272a60 / transition 0x272a70
+// (value word 0 = 0), eval 0x272a78 -> FUN_00272aa0(emitter dt +0x20, ..), loop 0x272a98 (returns 1), draw / destroy the
+// no-ops 0x2d5730 / 0x2d5738). Data: +0 rate (children a frame x dt), +4 offset range, +8 speed, +0xc acceleration,
+// s16 +0x10 child tag, u16 +0x12 carry back-off, s16 +0x14 (< 0: off), u8 +0x17 chance (%). Eval (asm 0x272aa0): off when
+// +0x10 or +0x14 is negative; carry += rate x dt; below 1 kept; else n = (int)carry, carry = carry - n - rate x u16 +0x12;
+// FUN_002e5478(tag): tag bit 0x1000 -> a tag group (E +0x28, FUN_002e54b0 / FUN_002e54e0: not translated, warned); then n
+// times: chance < 100 -> FUN_002d9880(100) (VU0 R) >= chance skips this one; offset = 3 LCG FUN_002d98c8(range), w 1;
+// M = identity with row 3 = the ref-0 channel's value (FUN_002d8490, the lq / pcpyud copy of x y z); FUN_002e4180(child
+// render category = P'+0xb, offset, M, .., pos, dir, 1): category 1: pos = offset . M (FUN_002d8578), dir = pos - M row 3
+// (VSUB .xyz, VMOVE .w vf0); 0 / 2-8: pos = dir = offset; 9 not translated; dir normalised (FUN_00444ad0); acceleration =
+// dir x +0xc, velocity = dir x +8 (FUN_002d88e0, .xyz); FUN_002e9268(0.0, tag, { 7, pos, vel, acc }) -> FUN_002e8ea8 with
+// this particle as the parent; a failed spawn ends the eval.
+T[18] = {
+  init(X, a, o) { X.p.v[o] = 0; },
+  trans(X, t, a, o) { X.p.v[o] = 0; },
+  loop() {},
+  eval(X, t, a, o) {
+    const F = X.F, v = X.p.v, r = X.rng, tag = F.s16(a + 0x10);
+    if (tag < 0 || F.s16(a + 0x14) < 0) return;
+    const rate = F.f32(a);
+    const acc = f(v[o] + f(rate * X.em.dt));
+    if (acc < 1) { v[o] = acc; return; }
+    let n = Math.trunc(acc);                                       // cvt.w.s
+    v[o] = f(f(acc - n) - f(rate * F.u16(a + 0x12)));
+    if (tag & 0x1000) { X.warn('effects: type 18 tag group (bit 0x1000: FUN_002e54b0 / FUN_002e54e0) not translated'); return; }
+    const d = X.d, ref = X.p.v.subarray(D.refSlot(F, d, 0) / 4, D.refSlot(F, d, 0) / 4 + 4);
+    const Pc = F.part(X.em.E, tag & 0xfff), cat = Pc ? F.u8(Pc + 0xb) : 0;
+    const range = F.f32(a + 4), chance = F.u8(a + 0x17);
+    for (; n > 0; n--) {
+      if (chance < 100 && !(r.vrInt(100) < chance)) continue;
+      const off = [r.signed(range), r.signed(range), r.signed(range), 1];
+      let pos, dir;
+      if (cat === 1) {
+        const M = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, ref[0], ref[1], ref[2], 1];
+        pos = xform(M, off);
+        dir = [f(pos[0] - M[12]), f(pos[1] - M[13]), f(pos[2] - M[14]), 1];
+      } else if (cat === 9) { X.warn('effects: type 18 child of render category 9 (FUN_002e4180 case 9) not translated'); return; }
+      else { pos = off.slice(); dir = off.slice(); }
+      dir = vnorm(dir);
+      const ac = [f(dir[0] * F.f32(a + 0xc)), f(dir[1] * F.f32(a + 0xc)), f(dir[2] * F.f32(a + 0xc))];
+      const vel = [f(dir[0] * F.f32(a + 8)), f(dir[1] * F.f32(a + 8)), f(dir[2] * F.f32(a + 8))];
+      if (!X.child(tag, { flags: 7, pos, vel, acc: ac })) return;
+    }
+  },
 };
 
 // Screen channels of r0000.fed (worker 0200; the hit on Vincent's 0x1000, FUN_00336508). Vtables from the save RAM
@@ -1517,7 +1612,10 @@ export function createEffects({ fed, fed0 = null, core, warn = console.warn, twi
   let counter = 0;                            // mgr +0x8c
   let phase = 0xc;                            // mgr +0xb0 (0xc after the draw, 5 in the logic, 9 after FUN_002efe98)
   // one context object, refilled per channel call (no handler keeps it or calls back into ctx)
-  const X0 = { F, em: null, p: null, d: 0, rng, warn: warnOnce, models0 };
+  const X0 = { F, em: null, p: null, d: 0, rng, warn: warnOnce, models0, sp: null, child: null };
+  // FUN_002e9268(0.0, ctx, tag, init) (type 18, worker 0241): FUN_002e8ea8 with the current particle as the parent, then
+  // the context's particle / descriptor (+0xa8 / +0xac) restored
+  X0.child = (tag, init) => { const em = X0.em, p = X0.p, d = X0.d; const q = spawnParticle(em, 0, tag, p, init); X0.F = F; X0.em = em; X0.p = p; X0.d = d; return q; };
   const ctx = (em, p, d) => { X0.F = F; X0.em = em; X0.p = p; X0.d = d; return X0; };
 
   // FUN_002e62b0 (via FUN_002e6290, param_3 = id): FED by id & 0xfffc0000, group (id >> 10) & 0x7f,
@@ -1564,7 +1662,7 @@ export function createEffects({ fed, fed0 = null, core, warn = console.warn, twi
   }
 
   // FUN_002e8ea8(age, mgr, em, parent 0, tag, 0)
-  function spawnParticle(em, age, tag) {
+  function spawnParticle(em, age, tag, parent = null, init = null) {
     if (tag < 0) return null;
     const P = F.part(em.E, tag & 0xfff);
     if (!P || !F.u8(P + 8)) return null;
@@ -1572,7 +1670,7 @@ export function createEffects({ fed, fed0 = null, core, warn = console.warn, twi
     const buf = new ArrayBuffer(Math.max(size, 16));
     const p = {
       P, tag: tag & 0xfff, pid: F.u16(P), flags: (tag & 0x2000) ? 0x40 : 0, list: (F.u8(P + 9) & 1) ^ 1, age: f(age),
-      life: F.u16(P + 6), ev: F.u8(P + 0x21) ? 0 : -1, cat: F.u8(P + 0xb), parent: null,
+      life: F.u16(P + 6), ev: F.u8(P + 0x21) ? 0 : -1, cat: F.u8(P + 0xb), parent, children: 0,
       v: new Float32Array(buf), i32: new Int32Array(buf), data: [], entry: [], m50: ident(), skip: null,
     };
     if (tag & 0x2000) warnOnce('effects: spawn tag bit 0x2000 (child particles) not translated');
@@ -1583,6 +1681,8 @@ export function createEffects({ fed, fed0 = null, core, warn = console.warn, twi
     // 6 / 8 draw as category 1. 2 / 7 / 9 are simulated (their channels draw the RNGs as the game) but not drawn.
     if (p.cat === 2 || p.cat === 7 || p.cat === 9) p.noDraw = `render category ${p.cat} (FUN_002e9db0 +0x54 matrix)`;
     else if (p.cat > 9) p.skip = `render category ${p.cat}`;
+    // worker 0241: with a parent (type 18) categories 6 / 8 copy the parent's own +0x54 matrix when it has one (not modelled)
+    if (parent && (p.cat === 6 || p.cat === 8)) p.noDraw = p.noDraw ?? `render category ${p.cat} child (FUN_002e9db0 parent matrix)`;
     // FUN_002eb038: the init list (+0x30: count +4, entries from +8 stride 8: u8 channel, u16 data offset)
     const blk = F.list(P, 0);
     for (let j = 0; j < F.u8(blk + 4); j++) {
@@ -1598,10 +1698,13 @@ export function createEffects({ fed, fed0 = null, core, warn = console.warn, twi
       // (FUN_002d9828). w172_sound3 f789: the hit's emitter 3 tag 4 draws 25 LCG values after its type 21 eval
       // (the 25 that emitter 6 is early by on the page). Not translated (the page runs no eval for type 100).
       if (!ev) { if (!DRAWN_ELSEWHERE[ty]) p.skip = p.skip ?? `channel type ${ty}`; else p.noDraw = p.noDraw ?? `draw type ${ty} (${DRAWN_ELSEWHERE[ty]})`; continue; }
-      ev.init(ctx(em, p, d), a, D.slot(F, d) / 4);
+      ctx(em, p, d).sp = init;                                 // FUN_002eb038: mgr +0xb4 = the spawn parameter
+      ev.init(X0, a, D.slot(F, d) / 4);
     }
+    X0.sp = null;
     if (p.skip) warnOnce(`effects: particle with ${p.skip} not translated (emitter ${em.ei}): not drawn`);
     em.lists[p.list].push(p);
+    if (parent) parent.children++;                             // FUN_002e8ea8: parent +0x20 + 1
     em.n58 = em.n58 < 0xff00 ? em.n58 + 1 : 0x8000;
     return p;
   }
@@ -1640,7 +1743,13 @@ export function createEffects({ fed, fed0 = null, core, warn = console.warn, twi
     }
   }
   // FUN_002e92c8 (death list +0x40: slot +0x2c is a no-op for the translated types)
-  function kill(em, p) { const L = em.lists[p.list]; L.splice(L.indexOf(p), 1); }
+  // worker 0241: FUN_002e92c8(.., 0): flag 8; a particle with live children (+0x20) stays; on removal the parent's count drops
+  function kill(em, p) {
+    p.flags |= 8;
+    if (p.children) return;
+    const L = em.lists[p.list]; L.splice(L.indexOf(p), 1);
+    if (p.parent) p.parent.children--;
+  }
 
   // FUN_002ea040(dt, mgr, em): ages, deaths, the spawn timeline, the emitter's own end
   function ageEmitter(em, step) {
@@ -1653,8 +1762,17 @@ export function createEffects({ fed, fed0 = null, core, warn = console.warn, twi
     if (loopE && em.fade < 0 && step > 10) step = 1;              // (FUN_002ea040: +0x0a & 0x380 == 0 path)
     let dt = f(step + em.carry); em.carry = 0;
     em.age = f(em.age + dt); em.dt = dt;
-    if (!(em.fade < 0)) em.noDraw = 'emitter fade (+0x28)';       // not translated (nothing on the page sets it)
-    if (loopE && Ec) warnOnce('effects: looping emitter with E +0xc (fade start) not translated');
+    // the emitter fade (worker 0241; FUN_002ea040 after the age): +0x28 = the age the fade started (-1: none; set by the
+    // soft end FUN_002e7198, or for a looping emitter at E +0xc); by E +0x1f: 0 = 30 frames, 1 = 15 frames (+0xd0 =
+    // 1 - (age - start) / length; gone once it reaches the length, or when age < start), 2 = gone at once, 3+ = none here
+    let fm = -1;
+    if (!(em.fade < 0)) fm = F.u8(E + 0x1f);
+    else if (loopE && Ec !== 0 && !(em.age < Ec)) { em.fade = f(Ec); fm = F.u8(E + 0x1f); }
+    if (fm === 0 || fm === 1) {
+      const len = fm ? 15 : 30, x = f(em.age - em.fade);
+      em.d0 = f(1 - f(x / len));
+      if (len <= x || x < 0) return false;                         // LAB_002ea524 / 0x2ea528: FUN_002e6920(.., 1)
+    } else if (fm === 2) return false;
     for (const L of em.lists) for (const p of L.slice()) {
       p.age = f(p.age + dt);
       // worker 0198: a looping particle (particle +4 = P id, bit 1) of a looping emitter is not killed at its
@@ -1664,7 +1782,10 @@ export function createEffects({ fed, fed0 = null, core, warn = console.warn, twi
         if (!(p.age < F.u16(p.P + 0x12))) p.flags |= 0x10;
         continue;
       }
-      if (Math.trunc(p.age) >= p.life) kill(em, p);
+      if (Math.trunc(p.age) >= p.life) {
+        if ((p.pid & 1) && p.children) continue;                // P id bit 0 with live children: kept (worker 0241)
+        kill(em, p);
+      }
     }
     if (em.age < 0) return true;
     const dur = F.s32(E + 4);
@@ -1813,6 +1934,7 @@ export function createEffects({ fed, fed0 = null, core, warn = console.warn, twi
       F = em.F;
       emitterMatrix(em);
       if (cull && view && cullEmitter(em, view)) continue;
+      if (!cull) em.col[3] = f(em.p150[3] * em.d0);             // FUN_002ea6a0: +0xbc = +0x15c x +0xd0 (x a cull fade of 1; worker 0241)
       list1(em);
     }
     phase = 9;
@@ -1938,7 +2060,18 @@ export function createEffects({ fed, fed0 = null, core, warn = console.warn, twi
     }
     return out;
   }
-  return { spawn, begin, end, update, sprites, emitters, rng, fed: F0, feds, tex, warn: warnOnce, reset, stageLoad, cellMask, cells: () => mask ? mask.bits() : [...new Set([...hiddenSet, ...scriptCells])].sort((a, b) => a - b) };
+  // FUN_002e7198(mgr, em), the soft end (worker 0241; the menu boxes' FUN_003c5a98, the loading card): an emitter not yet
+  // fading (+0x28 < 0) starts its fade now (+0x28 = the age +0x1c), or, not started yet (age < 0), goes (+2 |= 0x20); with
+  // E +0x1f == 3 its looping stops (+2 |= 0x10). FUN_002ea040 then runs the fade (ageEmitter). A link object ('l': the
+  // children at +0x30) recurses: the page has none.
+  function softEnd(em) {
+    if (!em || !(em.fade < 0)) return;
+    if (em.age < 0) em.flags |= 0x20; else em.fade = em.age;
+    if (em.F.u8(em.E + 0x1f) === 3) em.flags |= 0x10;
+  }
+  // FUN_002e6920(mgr, em, 0): the emitter and its particles go at once (the boxes' FUN_003c5c50 / FUN_003c5cc0)
+  function remove(em) { const i = emitters.indexOf(em); if (i >= 0) emitters.splice(i, 1); }
+  return { spawn, begin, end, update, sprites, emitters, rng, fed: F0, feds, tex, warn: warnOnce, reset, stageLoad, softEnd, remove, cellMask, cells: () => mask ? mask.bits() : [...new Set([...hiddenSet, ...scriptCells])].sort((a, b) => a - b) };
 }
 
 // ---------------------------------------------------------------------------------------------

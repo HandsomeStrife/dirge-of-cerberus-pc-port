@@ -33,7 +33,7 @@ import { setupItemsView } from './items_view.js';
 import { createEnemyAI, GameRandom } from './enemy_ai.js';
 import { createEffects, EffectLayer, wallImpactId, hitImpactId, cameraView } from './effects.js';
 import { boneRows } from './enemy_hit.js';
-import { restoreCheckpoint } from './checkpoint.js';
+import { restoreCheckpoint, initWorld } from './checkpoint.js';
 import { AreaStream, pickLight, loadedGrids, Light2 } from './area_stream.js';
 import { Areas } from './areas.js';
 import { createRoomVis, createVisMask } from './room_vis.js';
@@ -830,6 +830,8 @@ async function main() {
       items,                                                   // worker 0224: the item pickups and drops (items.js)
       // FUN_00567c08: a bullet's hit on Vincent -> the HUD's hit-direction ring (hud.js; gameHud is set up below)
       hudHit: (p, from) => { if (gameHud) gameHud.hit(p, from); },
+      // worker 0237: manager 0x6e / 0x6f / 0x70 and the boss brain's FUN_00aa11b8 -> the HUD's top-right gauge (hud.js gauge)
+      hudGauge: (cmd, g) => { if (gameHud) gameHud.gauge(cmd, g); },
       // the walk mesh for soldiers' physics bodies (mover 3, move mode 0xc; body flags 0x36: not a block80 body)
       walkMesh: col,
       // the save's dead records (41-43): FUN_00559748 refuses to activate them
@@ -1246,13 +1248,11 @@ async function main() {
     if (!aiOpts) return null;
     // the reload rebuilds every status (FUN_0030f3d8 / the stage load): nothing is dead (T w204_reload: 41-43 HP 10 / 28 / 24)
     if (items) items.restart();                     // the checkpoint's inventory, taken bits cleared (worker 0224; before attach)
-    enemyAI = createEnemyAI({ ...aiOpts, eventFlags: flags, deadRecs: [], now: clock.now, acc: clock.acc, mgr20: clock.mgr20, mgr24: clock.mgr24 });
-    enemyAI.S.frame = frame;                         // the new world's frame counter at the placement (checkpoint.js)
-    // T w204_reload: 44 / 66 are already active in the reload state; 41-43 (the stage-load pass, FUN_005453b0 in slot
-    // order) and 45-49 become active at record 10. GUESS (0201): 44-49 / 66 still take the save's states (wakeSave)
-    wakeSave(enemyAI, [44, 66]);
-    enemyAI.stageLoad(enemies ? enemies.loadRecs || [] : []);
-    wakeSave(enemyAI, AWAKE.filter(k => k !== 44 && k !== 66));
+    // worker 0240 (checkpoint.js initWorld): the stage init's pass FUN_0053ca50(mgr, 1) (event 0x22: script 0 activates
+    // 44 / 66; event 0x23) at clock 0, the placement's clocks and frame, then 41-43 (stand-in) and 45-49 (GUESS (0201):
+    // the save's states, wakeSave) as at record 10 (T w204_reload / w240_act)
+    enemyAI = initWorld(o => createEnemyAI({ ...aiOpts, ...o }), { flags, frame, clock, loadRecs: enemies ? enemies.loadRecs || [] : [],
+      wake: w => wakeSave(w, AWAKE.filter(k => k !== 44 && k !== 66)) });
     if (window.__play) window.__play.enemyAI = enemyAI;
     return enemyAI;
   };
@@ -1303,7 +1303,7 @@ async function main() {
   window.__play = { ctrl, anim, follow, aim: weapon, col, stats, amb, areas, camera, renderer, output, root, vin, light, spawnY: gy,
                     playerState, camView, report, keys, pressed, motions, packsReady, actionHelp, cape, enemies, enemyAI, php, pause, gameHud, pauseSound, gameOver,
                     restart: { get count() { return restarts; }, get pending() { return restartPending || !!restartHold || restartReady; } },
-                    intro: { get active() { return !!intro; }, get rt() { return introRt; }, get ended() { return introEnded; }, get paused() { return !!intro && intro.paused; } },
+                    intro: { get active() { return !!intro; }, get rt() { return introRt; }, get windows() { return introWin; }, get hudParked() { return !!intro && output.hud !== introHud; }, get ended() { return introEnded; }, get paused() { return !!intro && intro.paused; } },
                     get stage() { return stage; }, get stageInfo() { return stageSi; }, get gameState() { return stageGs; }, get results() { return stageRes; }, visMask, roomOccl };
   // ---- the opening event (intro.js): played before play on a fresh load; at its end the Restart path (checkpoint.js)
   // places Vincent and soldiers 41-43 as the event's end hands them to play. The page's gameplay bodies and HUD are
@@ -1312,18 +1312,19 @@ async function main() {
   // worker 0222: Start during the opening = the event pause: the pause object in its event state (+0x44 = 1, set by
   // FUN_003bf550) and FUN_00376ee0(ev, 1, 1) (intro.js pause). ✕ there = Skip (FUN_003c0520: button 3 with
   // FUN_003e0d00() == 0 -> +0x48 = 1, the pause closes -> FUN_003c0110 -> FUN_003dfdc8 -> FUN_00372f70 (intro.js skip),
-  // then FUN_00376ee0(ev, 0, 1)); Start again resumes (FUN_003dfd90). The pause's draw in this state (layout widgets
-  // 0x22 / 0x23 pulsing, FUN_003d0a90) is not decoded: nothing is drawn (warned).
+  // then FUN_00376ee0(ev, 0, 1)); Start again resumes (FUN_003dfd90). The pause's screen in this state (layout 0x4779c0,
+  // widgets 0x22 / 0x23 pulsing, FUN_003d0a90) is event_window.js EventPauseScreen (worker 0239).
   const { PAUSE_KEYS } = await import('./pause_layer.js');
   addEventListener('keydown', (e) => {
     if (!intro || intro.done || e.repeat || restartPending || /^(INPUT|TEXTAREA)$/.test(e.target.tagName)) return;
     if (PAUSE_KEYS.start.includes(e.code)) {
       e.preventDefault();
-      if (!intro.paused) console.warn('intro: the event pause\'s Skip prompt (pause widgets 0x22 / 0x23) is not drawn (not decoded); ✕ skips, Start resumes');
       intro.pause(!intro.paused);
+      if (introWin) introWin.pausePrompt(intro.paused, performance.now());   // the pause's screen (event_window.js, worker 0239)
     } else if (intro.paused && PAUSE_KEYS.cross.includes(e.code)) {
       e.preventDefault();
       intro.skip(); intro.pause(false);
+      if (introWin) introWin.pausePrompt(false, performance.now());
     }
   });
   actionHelp.push('During the opening: Enter = the event pause, then Space (✕) = Skip');
@@ -1331,6 +1332,7 @@ async function main() {
   let stageRes = null;                            // results.js (worker 0232): the section stats, the level end's Status screen
   // opening: main runs alongside it (first_event waits for the hand-off, then main reads the opening's +0x156c);
   // else from the save / a hand-off already past (skip: that +0x156c)
+  let stagePassWarned = false;
   function startStage(opening = false, skip = 0) {
     if (!createStage) return;
     // the hand-off's +0x156c: the opening's (intro.js / event_rt.js skip, worker 0222); 0 from the save
@@ -1341,6 +1343,15 @@ async function main() {
       openingDone: opening ? () => !intro : undefined, openingSkip: opening ? () => (introRt ? introRt.skip : 0) : undefined,
       flags: () => (enemyAI ? enemyAI.eventFlags : null),             // the current world's (a Restart replaces it)
       bossOverlay: on => { if (enemyAI && enemyAI.setBossPlugin) enemyAI.setBossPlugin(on); },   // worker 0231: Zone.boss (FUN_0037fe18)
+      // worker 0240: battle()'s FUN_00324e70 -> FUN_005453b0 (enemy_ai stageLoad): the loop activates statuses with +0x28
+      // bit 0x40 or status +0x60 bit 0 (and turns off +0x118 bit 0x400 ones); the page does not track those bits on its
+      // statuses, so the loop gets none (warned); then FUN_005459d8 = event 0x23 to every object. Its tail (FUN_00325818,
+      // FUN_0055f0e0 / FUN_0055f338, FUN_0053d510 / FUN_0053d590 / FUN_0053c4c8) is left out (warned)
+      stagePass: () => {
+        if (!enemyAI) return;
+        if (!stagePassWarned) { stagePassWarned = true; console.warn('stage: battle()\'s stage-load pass: the per-status loop (+0x28 bit 0x40 / status +0x60 bit 0 / +0x118 bit 0x400) and its tail (FUN_00325818, FUN_0055f338, FUN_0053d510, FUN_0053d590, FUN_0053c4c8) left out; event 0x23 sent'); }
+        enemyAI.stageLoad([]);
+      },
       stream: () => (light ? light.stream : null),                     // area_stream.js: FUN_002677a0
       music: () => pauseSound.music,                                   // music.js GameMusic (worker 0215)
       area: () => ({ play: (n, v) => { if (areaSoundHook) areaSoundHook(n, v); }, stop: () => console.warn('stage: stopBgAreaSound not wired') }),
@@ -1417,6 +1428,7 @@ async function main() {
     return fxCam;
   }
   let introData = null, createIntro = null, introActors = null, introVoices = null;
+  let introWin = null, introWinMod = null, introWinData = null;      // event_window.js (worker 0239): the subtitles, the event pause's screen
   // the opening's sound back ends (event_sound.js): music.js GameMusic, the area sound hook, audio.js GameAudio, the voices
   const introSound = {
     music: () => pauseSound.music,
@@ -1430,17 +1442,23 @@ async function main() {
     intro = createIntro({ data: introData, camera, output, canvas: renderer.domElement,
                           zoneLoad: (z, a, b) => { if (light) light.stream.reset([a, b]); },
                           actorLib: introActors, root, litPatch, light,       // the event's actors (event_actors.js, worker 0218)
-                          sound: introSound });                                // its music / SEs / voices (event_sound.js, worker 0222)
+                          sound: introSound,                                   // its music / SEs / voices (event_sound.js, worker 0222)
+                          windows: introWin = introWinMod ? introWinMod.createEventWindows({ D: introWinData }) : null });   // subtitles (worker 0239)
     introGate.event = true;
     introGate.on = true;
     introRt = intro.rt;
-    introHud = output.hud; output.hud = null;
+    // the menu draw while the opening plays (the gameplay HUD is parked): the event windows and the event pause's screen
+    // (event_window.js), with the pause's PauseLayer
+    introHud = output.hud;
+    output.hud = introWin ? function introMenuDraw(o) { const p = introWin.drawAll(performance.now()); if (p.length && pause && pause.layer) pause.layer.draw(o.renderer, o, p); } : null;
   }
   if (INTRO) {
     introData = await fetch('data/event/ev0100_scr001.json').then(r => (r.ok ? r.json() : null)).catch(() => null);
     if (!introData) console.warn('intro: data/event/ev0100_scr001.json missing (tools/byo/build_web.sh step event); starting from the save');
     else {
       ({ createIntro } = await import('./intro.js'));
+      introWinMod = await import('./event_window.js');
+      introWinData = await introWinMod.loadEventWindowData().catch(e => { console.warn('intro: subtitles not drawn:', e && e.message); return null; });
       if (SOUND) { const { VoicePlayer } = await import('./event_sound.js'); introVoices = new VoicePlayer({ get ctx() { return pauseSound.audio && pauseSound.audio.ctx; } }); }
       // the event's actors, resident before it starts (data/event/actors: build step event_actors)
       introActors = await (await import('./event_actors.js')).loadEventActors()

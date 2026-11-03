@@ -40,9 +40,11 @@ export const CHECKPOINT = Object.freeze({
   // the page's frame count at the placement (enemy_ai S.frame: the hand-off schedule below counts frames from it)
   frame: 24,
   // the world's clock (DAT_0046e938+0x20 = enemy_ai S.mgr20, ticks; worker 0230): FUN_0053b500 adds int(+0x24 += 1.2) a frame.
-  // T: the state saved at the reload holds +0x20 = 14, +0x24 = 0.3999990 (record 0); 10 frames of f32 steps -> 26 / 0.3999996
-  // at record 10, as the trace's AI clock (ai_now 14 -> 26). The opening cutscenes don't advance it.
-  mgr20: 26, mgr24: 0.39999961853027344,
+  // T: the state saved at the reload holds +0x20 = 14, +0x24 = 0.3999990 (record 0); 10 frames of f32 steps -> 26 / 0.3999983
+  // at record 10, as the trace's AI clock (ai_now 14 -> 26). The opening cutscenes don't advance it. Worker 0240: the step is
+  // DAT_004eeb24 = 0x3f999999 (1.1999999, player.js STEP; T reload0 RAM), not f32 1.2 (0230's 0.3999996): with it the
+  // stage init's 0x113 periods re-arm at the game's records (w205_rng 88 / 118; FUN_0053e9e0: due = +0x20 + period)
+  mgr20: 26, mgr24: 0.3999983072280884,
   // the new AI scheduler's clock (FUN_00365008: += int(step) accumulated; DAT_0046f4ec +0): T w201_reload ai_now 14 at
   // record 0, 26 at record 10, so the rebuilt scheduler runs in the frames before the placement. Its fraction: every
   // value in [0.2001, 0.4] gives all 270 traced records (L: 0.3 taken)
@@ -99,6 +101,36 @@ export const PLAYER_STAMPS = Object.freeze({ t27c: -40, t280: -15, part: -1, s14
 
 const warned = new Set();
 const warnOnce = m => { if (!warned.has(m)) { warned.add(m); console.warn(m); } };
+
+// initWorld(make, { flags, frame, clock, loadRecs, wake }) -> world: the stage reload's new enemy_ai world, in the game's
+// order (worker 0240; notes/checkpoint-research.md 'The stage-init pass'). make(opts) = createEnemyAI with the page's opts.
+//   1. the stage init FUN_003245e8 -> FUN_0053c140: the objects, then FUN_0053ca50(mgr, 1) = script event 0x22 to every
+//      object, then FUN_005459d8 = event 0x23 (enemy_ai stageInit). T w240_init (from start1704, the reload after a
+//      Restart): f2276-2278, manager clock +0x20 = 0 / +0x24 = 0 there; script 0's 0x22 activates 44 / 66 (their
+//      magazine draws inside the pass), 81-86's 0x23 arms their cmd 0x113 periods from clock 0 (draws at w205_rng
+//      records 39 / 45 / 50 / 54 ...). The AI scheduler clock is taken as 0 there too (L: ai_now = mgr +0x20 at every
+//      traced record from 0 to 270).
+//   2. the clocks at the placement (CHECKPOINT; L: the frames between the init and the placement, ~15 in the game, are
+//      not run: 44 / 66's activation event 3 runs on the page's first tick).
+//   3. 41-43 at the placement: GUESS stand-in, FUN_005453b0's loop (enemy_ai loadPass, worker 0204's translation). The
+//      game activates them through their area switching on (FUN_0054ef68 -> vt+0x14c FUN_0055a0d8 -> vt+0x144(1, 1);
+//      T w240_act: every record-10 activation returns to 0x55a124), with no FUN_005453b0 and no second 0x23.
+//   4. wake(world): 45-49 (play.js wakeSave, GUESS: the save's states; the game activates them the same way as 41-43).
+// main's battle() just after the opening finds no stage object yet (DAT_0046e290 == 0, T w240_init f2264): its
+// FUN_00324e70 sends nothing (stage_controller.js enterBattle's stage pass).
+export function initWorld(make, o) {
+  const W = make({ eventFlags: o.flags, deadRecs: [], now: 0, acc: 0, mgr20: 0, mgr24: 0 });
+  if (W.stageInit) W.stageInit();
+  else warnOnce('restart: enemy_ai has no stageInit (the stage init\'s 0x22 / 0x23 pass left out)');
+  const c = o.clock || {};
+  W.S.now = c.now ?? 0; W.S.acc = c.acc ?? 0; W.S.mgr20 = c.mgr20 ?? 0; W.S.mgr24 = Math.fround(c.mgr24 ?? 0);
+  W.S.frame = o.frame ?? 0;                        // the page's frame count at the placement (the hand-off schedule)
+  // GUESS: 41-43's record-10 activation through FUN_00558f68's part (the game: FUN_0054ef68 -> FUN_0055a0d8 -> vt+0x144(1, 1),
+  // not translated; see notes/fidelity-audit.md 'GUESS: 41-43's activation at the placement')
+  if (W.loadPass) W.loadPass(o.loadRecs || []);
+  if (o.wake) o.wake(W);
+  return W;
+}
 
 // restoreCheckpoint(sys): the stage reload as a reset of the page's systems, in place (no page reload). Each part
 // is optional (null = that system is off on the page). sys:
@@ -158,8 +190,8 @@ export function restoreCheckpoint(sys) {
   if (sys.sfx) sys.sfx.pending.length = 0;
   if (sys.rebuildEnemies) {
     out.enemies = sys.rebuildEnemies(C.eventFlags, C.frame, { now: C.aiNow, acc: C.aiAcc, mgr20: C.mgr20, mgr24: C.mgr24 });
-    // 41-43: the rebuilt world runs the stage-load pass (enemy_ai stageLoad = FUN_00319190 -> FUN_005453b0 ->
-    // FUN_00558f68, worker 0204) from play.js rebuildEnemies; at their battle clips' end (SOLDIER_RELEASE frames after
+    // 41-43: the rebuilt world activates them at the placement (initWorld above, from play.js rebuildEnemies; worker
+    // 0204's FUN_00558f68 translation as the stand-in); at their battle clips' end (SOLDIER_RELEASE frames after
     // Vincent's) FUN_00344d68 -> FUN_00558cc0 moves them to the hand-off (enemy_ai scheduleHandOff)
     const list = [];
     if (!(sys.handoff && sys.handoff.actors)) warnOnce('restart: no data/checkpoint.json: 41-43 stay at their placements (the opening event\'s hand-off at record 24 is left out)');

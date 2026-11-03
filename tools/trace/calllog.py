@@ -539,3 +539,23 @@ SETS["results"] = [
     dict(id=261, kind="site", where=(0x100000, 0x5f0000, 0x31D698), name="stat_set", copy=[cpr("ra")]),
     dict(id=262, kind="site", where=(0x100000, 0x5f0000, 0x31D6D8), name="total_set", copy=[cpr("ra")]),
 ]
+
+# worker 0240: the stage init and the stage-load pass (notes/checkpoint-research.md 'The stage-init pass'): who calls
+# FUN_0053c140 (stage objects) / FUN_0053ca50 (0x22 pass + FUN_005459d8) / FUN_005453b0 (the stage-load pass) /
+# FUN_00324e70 (battle()'s end) / FUN_00319190, and when (a0 +0x20 / +0x24 = the manager clock where a0 = the manager);
+# FUN_00360418 (the magazine draw at an activation) for the order against them.
+_ELF = (0x100000, 0x5f0000)
+SETS["w240"] = [
+    dict(id=270, kind="site", where=_ELF + (0x53C140,), name="stage_objs", copy=[cpr("ra"), cpr("a1"), cp("a0", 0x20, 2)]),
+    dict(id=271, kind="site", where=_ELF + (0x53CA50,), name="pass22", copy=[cpr("ra"), cpr("a1"), cp("a0", 0x20, 2)]),
+    dict(id=272, kind="site", where=_ELF + (0x5459D8,), name="pass23", copy=[cpr("ra"), cp("a0", 0x20, 2)]),
+    dict(id=273, kind="site", where=_ELF + (0x5453B0,), name="stage_pass", copy=[cpr("ra"), cp("a0", 0x20, 2)]),
+    dict(id=274, kind="site", where=_ELF + (0x324E70,), name="battle_end", copy=[cpr("ra"), cpr("a0")]),
+    dict(id=275, kind="site", where=_ELF + (0x319190,), name="statuses", copy=[cpr("ra")]),
+    dict(id=276, kind="site", where=_ELF + (0x3245E8,), name="stage_init", copy=[cpr("ra"), cpr("a0"), cpr("a1")]),
+    dict(id=278, kind="site", where=_ELF + (0x360418,), name="refill", copy=[cpr("ra"), cp("a0", 0x7C, 1)]),
+]
+# who activates 41-43 / 45-49 at the reload's record 10 (the actor class's vt+0x144 = activate, ra = its caller)
+SETS["w240b"] = SETS["w240"] + [
+    dict(id=279, kind="vt", where=(0x58E1F8, 0x144), name="activate", copy=[cpr("ra"), cpr("a1"), cpr("a2"), cp("a0", 0x20, 1)]),
+]

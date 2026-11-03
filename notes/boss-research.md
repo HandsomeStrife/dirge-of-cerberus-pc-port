@@ -295,3 +295,39 @@ request).
 Open: the gauge drawing; FUN_00340de0(C, 3) (state 0's body flag); FUN_003367e0 (effect end); the effects' attachment to the model
 (placed at the body position, L); the muzzle effects FUN_00335a68 / FUN_00335b60; a trace with Vincent moving in the arena; the
 drop model g058 (404 at the boss's death: items.json lists it, data/items has no g058.glb).
+
+## Review follow-ups and the boss HUD gauge (worker 0237, 2026-11-03)
+
+- **The 0x23 pass and the stage object.** FUN_005459d8's lists (DAT_0058b5c8) = types 0xc, 1, 2, 3, 8, 0xa, 0xf, 0x10, 0xb, 0xe.
+  FUN_0053db98: type 0xc = FUN_00589760 (the stage object: FUN_0053c140 builds it first, manager +0x10aa = its id, script =
+  stage section 4 +0x18 through FUN_0054e3d8; z128: script 0), 1 = FUN_00558790 (actors), 3 = FUN_00550228 (triggers, vtable
+  0x58cdf8). So script 0 gets event 0x23, first. enemy_ai.js `STAGE_OBJ` (ai.json `stage_script`, export_web_triggers.py) and
+  `event23` in the game's order (stage object, records / actors, triggers). Script 0's 0x23 sends nothing with the Restart's flags
+  (all 0; flag 0 == 2 -> flag 63 = 1 is its first branch), so it is **not** what wakes 44 / 66: that is script 0's **event 0x22**
+  (flag0 < 2: 0x108 to 44 at @170; 66 at @729 / @1465), sent by FUN_0053ca50(mgr, 1)'s vt+0x2ec pass (FUN_0054b110; list
+  DAT_0058b040 = the 0x23 list plus type 0x13) at the stage init FUN_0053c140, followed by FUN_005459d8. The page has no stage-init
+  pass, so play.js's wakeSave GUESS stays (lead for whoever builds it).
+- **Op 42** = FUN_00370d68 (DAT_004a2f60 entry 42, asm read by hand): hi = pop, lo = pop, float cells chopped, push lo +
+  (int)((float)(hi - lo + 1) x rand). Scripts 159-164 (81-86) now finish their 0x23: 0x193 (no AI: FUN_00562f50 writes +0x11c /
+  +0x118, not kept: warned), 0x143(2) (no AI: nothing, as the game), 0x113 (event 0x18 every 59 / 67 / 73 / 77 ticks for four of
+  them), 0x106 timer 0 = rand in 200..600 etc. **Timing open**: w205_rng's draws (records 39, 45, 50, 54, 88, 101, 111, 118) are
+  exactly those periods with due = 1 + k x period, i.e. the game ran this 0x23 at clock 1 (the stage init) and did not re-run it at
+  record 10; the page runs it at the end of stageLoad (clock 26). The game's record-10 frame has 7 draws (2 magazines + 5 not
+  identified), the page's 8. Two attempts; stopped.
+- **g058** exported (build_web.sh item models, disc.py 07670e81 / 07670e82 = 0x07670000 + 0x40 x 58 + 1 / 2).
+- **boss_z128.js mutants**: the turn choice checked against the overlay asm 0xaa1aac-0xaa1b88 for all 12 moves (me 0: l_trn unless
+  to = 3; me 1 / 2: l_trn when to >= me; me 3: l_trn unless to = 0); `me <= to` -> `me < to` is equivalent there (to != me), five
+  other turn mutants killed. Homing targets against w235_missile: 505 targets, slots 0 / 4 radius 10-20, slots 1 / 5 40-60, angle
+  i x pi / 4, Vincent's height. No trace has a flight, a missile within 80 u of Vincent, or a nearest-box tie: hand cases. Mutants
+  9 / 9 (radius 0 / 4, 80 u, tie, gauge floor, 5 turn).
+- **Homing matrix**: FUN_00259f60's asm order (pair products, x (1 - cos), sin / cos terms) for all nine entries; the trace error
+  is unchanged (1.2e-4 u), so an exact reference check in test_boss_wiring holds it.
+- **The boss HUD gauge** (hud_core.js; notes/hud-research.md 'The top-right gauge'): manager 0x6e -> FUN_003b58e0 case 0xc (label
+  kelstr DAT_004729f8[f] = 0x2814 for f 1 into +0xbd8 = element 0x45's text; FUN_003aec10 on +0x7c, then +0x7e = max), FUN_003b56f0
+  widths (0x44 / 0x45 0x9c, 0x46 0xa0; + 0x3c for gauge 13); 0x6f -> FUN_003b5378 (panel 4 slides in, show list 0x41-0x46);
+  0x70 -> FUN_003b53c0 (slides out); callback 0x46 = FUN_003b5d58 (rows 0xb backing +0x88 = 1 / 1 from FUN_003b52c8, then 9). The
+  text object DAT_00471384 gets mode 0 for gauge 13 (FUN_003b5488 default case): it draws nothing. The label element has +0x5c 0
+  -> FUN_003cd7e8 = FUN_003cc208 reading a byte string. T: r0b_boss2 GS dump, 61 / 61 primitives. Image: worker 0237's scratchpad
+  w0237_boss_gauge_game_vs_page.png.
+- test_boss_page no longer runs Zone.boss / event23 itself: it fails at "record 32 active" (the page's stage controller reaches
+  Zone.boss(true), but nothing sends the 0x23 pass on that route; in the game it is the stage init's).
