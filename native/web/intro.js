@@ -21,11 +21,14 @@ import { EventActors } from './event_actor_rt.js';
 export const FRAME_MS = 20;
 
 export function createIntro({ data, camera, output, canvas, zoneLoad = null, warn = (m) => console.warn(m),
-                              actorLib = null, root = null, litPatch = null, light = null, sound = null, windows = null }) {
+                              actorLib = null, root = null, litPatch = null, light = null, sound = null, windows = null, rand = null }) {
   // the event's actors (worker 0218): their natives and update (event_actor_rt.js), drawn by event_actors.js
   let view = null, clipFrames = null;
   if (actorLib && root) clipFrames = (m, n, c) => { const p = actorLib.models[m] && actorLib.models[m].packs[n]; return p && p.info.clipFrames[c] != null ? p.info.clipFrames[c] : null; };
-  const actors = clipFrames ? new EventActors({ clipFrames, warn }) : null;
+  // worker 0248: the models' texture animations (the faces) and resident motion packs (export_web_event_actors.py)
+  const actors = clipFrames ? new EventActors({ clipFrames, warn,
+    texAnims: (m) => (actorLib.models[m] && actorLib.models[m].info.texanim ? actorLib.models[m].info.texanim.anims : null),
+    residentFiles: (m) => (actorLib.models[m] && actorLib.models[m].info.resident) || [], rand }) : null;
   // sound (event_sound.js back ends: music / area / audio / voices) and windows (event_window.js), worker 0222
   const rt = new EventRuntime(data, { warn, zoneLoad, actors, sound, windows });
   rt.start();

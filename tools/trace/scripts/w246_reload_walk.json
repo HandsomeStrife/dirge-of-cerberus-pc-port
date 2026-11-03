@@ -1,0 +1,1 @@
+{"name": "w246_reload_walk", "frames": 220, "events": [{"from": 10, "to": 12, "buttons": ["r1"]}, {"from": 40, "to": 42, "buttons": ["r1"]}, {"from": 60, "to": 220, "ly": -0.5}, {"from": 90, "to": 92, "buttons": ["r2"]}]}

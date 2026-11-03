@@ -75,8 +75,18 @@ def main():
                 chans.append(dict(type=typ, keys=[list(struct.unpack_from('<2f', b, o + 12 + 16 * q)) for q in range(cnt)]))
             cams[n] = dict(file='%08x' % (0x0C000200 + (EVENT << 12) + n), hdr8=w2, channels=chans)
     eps = struct.unpack('<f', K.elf_bytes(a.elf, 0x46BE00, 4))[0]
+    # the event windows' texts (worker 0248, as export_web_event.py `messages`, worker 0239): the 'MES_' string constants
+    # of the classes whose events the page plays (stage_controller.js PLAYS: rv_matiawase, class ev0101 = scr001), looked
+    # up in ev0100's message file 0c0641ca (FUN_003a6698; misses -> null). Widen PLAYED_CLASSES with PLAYS (and run
+    # tools/hygiene_text.py: the other events' texts hold runs that match ordinary words in the repo)
+    import export_web_stageinfo as SI       # noqa: E402
+    PLAYED_CLASSES = ('ev0101',)
+    keys = sorted({x[1] for c in classes.values() if c['name'] in PLAYED_CLASSES for x in c['cp']
+                   if isinstance(x, list) and len(x) == 2 and isinstance(x[1], str) and x[1].startswith('MES_')})
+    msgs = SI.messages(os.path.join(a.nopath, '%08x.bin' % (0x0C0001CA + (EVENT << 12))), a.elf,
+                       SI.Elf(open(a.elf, 'rb').read()), keys)
     out = dict(source='ev%04d scr000..scr%03d + the ELF event library; export_web_stage.py' % (EVENT, SCRIPTS[-1]),
-               main=main_cls, splineEps=eps, cameraFiles=cams, classes=classes)
+               main=main_cls, splineEps=eps, cameraFiles=cams, classes=classes, messages=msgs)
     os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
     json.dump(out, open(a.out, 'w'), separators=(',', ':'))
     print('wrote %s: main class %s, %d classes, %d camera files (%d computed loads)' % (

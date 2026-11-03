@@ -86,4 +86,28 @@ function mouseRun(hz, px, { direct = null, feed = true, frames = 120 } = {}) {
   for (let k = 0; k < 40; k++) { cam.addMouse(0, -500); tick(cam, { x: 0, y: 0, z: 0 }); }
   ok(near(cam.pitch, 50 * 0.017453294, 1e-5), `mouselook=direct keeps the game's pitch limit (${(cam.pitch / 0.017453294).toFixed(2)} deg, want 50)`);
 }
+{ // worker 0246: FUN_0032ace0 l.437-441 / 612-637: game-state bit 11 (p.noUser): the look read (mouse latch, counts spent) is
+  // zeroed, no ramp CAM+0x1ec, no deadzone request, the idle counter runs; the counts are not banked for later frames
+  const tk = (cam, nu) => cam.tick({ pos: { x: 0, y: 0, z: 0 }, want: { x: 0, y: 0, z: 1 }, state: 0, stick: 0, pad: null, noUser: nu });
+  const cam = new FollowCamera(null); cam.reset({ x: 0, y: 0, z: 0 }); tk(cam, false);
+  for (let k = 0; k < 40; k++) tk(cam, false);
+  const y0 = cam.yaw, p0 = cam.pitch, r0 = cam.ramp, i0 = cam.idle;
+  cam.addMouse(40, 25); tk(cam, true);
+  const still = cam.yaw === y0 && cam.pitch === p0;
+  ok(still && cam.ramp === r0 && cam.flags14 === 0 && cam.mouseActive && cam.idle >= i0 && cam.look190[0] === 0 && cam.look190[1] === 0,
+     `user control off: mouse (40, 25) turns nothing (yaw ${(cam.yaw - y0).toExponential(2)}, pitch ${(cam.pitch - p0).toExponential(2)}), ramp ${cam.ramp} kept, no deadzone bit, latch ${cam.mouseActive}, idle ${i0} -> ${cam.idle}`);
+  tk(cam, false);
+  ok(cam.yaw === y0 && cam.pitch === p0, `the counts are spent, not banked: next free frame turns nothing (yaw ${(cam.yaw - y0).toExponential(2)})`);
+  cam.addMouse(40, 25); tk(cam, false);
+  ok(cam.yaw !== y0, `control back: the same mouse turns (yaw ${(cam.yaw - y0).toFixed(5)})`);
+  // the ramp CAM+0x1ec / its direction are left as they were (LAB_0032b950 skipped), not eased toward 0
+  const r = new FollowCamera(null); r.reset({ x: 0, y: 0, z: 0 }); tk(r, false);
+  r.tick({ pos: { x: 0, y: 0, z: 0 }, want: { x: 0, y: 0, z: 1 }, state: 0, stick: 0, pad: [0.5, 0] });
+  r.tick({ pos: { x: 0, y: 0, z: 0 }, want: { x: 0, y: 0, z: 1 }, state: 0, stick: 0, pad: [0.5, 0] });
+  const rr = r.ramp, rd = r.rampDir.slice();
+  tk(r, true);
+  ok(rr > 0 && r.ramp === rr && r.rampDir[0] === rd[0] && r.rampDir[1] === rd[1], `user control off keeps the look ramp (${rr.toFixed(4)} -> ${r.ramp.toFixed(4)})`);
+  const d = new FollowCamera(null); d.reset({ x: 0, y: 0, z: 0 }); tk(d, false); d.startDeath(); tk(d, true);
+  ok(d.look190[0] === 0 && d.look190[1] === 0, `user control off skips the death camera's look (0, -0.3): look ${d.look190}`);
+}
 process.exit(fail ? 1 : 0);

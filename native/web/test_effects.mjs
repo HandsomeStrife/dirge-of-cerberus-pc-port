@@ -100,8 +100,10 @@ const ok = (what, cond, info = '') => { checks++; if (!cond) { fails++; console.
     return { n: fx.sprites({ toView: p => p.slice(0, 3) }).length, w };
   };
   ok('baseline: emitter 12 draws', run(() => {}).n > 0);
+  // worker 0241: the emitter fade is translated (FUN_002ea040; tests at the box effects below): a fade started at age 0
+  // is past emitter 12's mode-0 length (30 frames)? no: 3 frames in, it still draws, at a lower +0xd0
   const fade = run(em => { em.fade = 0; });
-  ok('emitter fade (+0x28): not drawn, warned', fade.n === 0 && fade.w.some(m => m.includes('emitter fade')));
+  ok('emitter fade (+0x28): drawn while it fades (FUN_002ea040, mode by E +0x1f)', fade.n > 0 && !fade.w.some(m => m.includes('emitter fade')));
   const ord = run(em => { for (const p of em.lists[1]) p.noDraw = 'rotation order 1 (FUN_002d82d0 case 1)'; });
   ok('particle rotation order != 0: not drawn, warned', ord.n === 0 && ord.w.some(m => m.includes('rotation order')));
   // param +0x1d: a copy of the FED with emitter 12's param record byte +0x1d set
@@ -330,6 +332,138 @@ const ok = (what, cond, info = '') => { checks++; if (!cond) { fails++; console.
       ok(`w208_still dump ${k}: every game fire triangle drawn but E10-E12's FUN_002f93d8 models (${missing.length} left, all RGB (130, 50, 5))`,
         missing.length <= 4 && missing.every(t => t.v.every(u => u[6][0] === 130 && u[6][1] === 50 && u[6][2] === 5)), JSON.stringify(missing.map(t => t.v.map(u => u[6]))));
     }
+  }
+}
+
+// --- worker 0241: the menu-box effects (data/stage_info.fed = a0211, the help box): channel type 18, draw type 103, the
+// soft end FUN_002e7198 with FUN_002ea040's fade, against the w220 open330 GS dump (tools/trace/out/w220/fx330.json:
+// dumpfx.py open330.gs --lines --fed a0211.fed; the state's emitters are at age 124.8 in the dump's frame)
+{
+  const fp = join(here, 'data/stage_info.fed'), dp = join(here, '../../tools/trace/out/w220/fx330.json');
+  if (!existsSync(fp)) console.log('  (no data/stage_info.fed: the box effect checks are skipped; export_web_stageinfo.py)');
+  else {
+    const box = rd(fp), W = [];
+    const fx = createEffects({ fed: box, core, rng: new EffectRng(), reseed: false, warn: m => W.push(m) });
+    fx.begin(1.2); fx.end();                                       // the box spawns in the menu update: state 9
+    const E0 = fx.spawn(0x834c0000, [0, 0, 0]), E8 = fx.spawn(0x834c2000, [0, 0, 0]);
+    ok('box: panel E0 / picture E8 spawn on camera 1, aged at once (state 9)', E0 && E8 && E0.cat === 1 && E8.cat === 1 && E0.age === 0, `${E0?.age}`);
+    let items = [], kids = 0, maxKids = 0;
+    for (let n = 0; n < 104; n++) {
+      fx.begin(1.2); fx.end(); items = fx.sprites({});
+      kids = E0.lists[1].filter(p => p.parent).length; maxKids = Math.max(maxKids, kids);
+    }
+    ok(`box: age ${E0.age.toFixed(2)} = the dump's 124.8`, Math.abs(E0.age - 124.8) < 1e-3);
+    // type 18 (tag 1): children of tag 0 (type 119, its draw not decoded) every ~31 frames; the RAM state holds 3
+    const sp = E0.lists[1].find(p => p.tag === 1);
+    ok(`box: type 18 spawns tag-0 children with the spawner as their parent (${kids} live now, the state 3; max ${maxKids})`, sp && kids >= 2 && kids <= 4 && sp.children === kids, `${kids} ${sp?.children}`);
+    ok('box: the children are simulated, not drawn (FUN_002e3dd8 parent cases / type 119)', E0.lists[1].filter(p => p.parent).every(p => p.noDraw));
+    const lines = items.filter(s => s.line && s.type === 103), quads = items.filter(s => !s.line && s.verts);
+    if (existsSync(dp)) {
+      const D = JSON.parse(readFileSync(dp, 'utf8'));
+      const key = s => '0x' + s.tex.tex0[1].toString(16) + s.tex.tex0[0].toString(16).padStart(8, '0');
+      const used = new Set(); let bad = 0, worst = 0;
+      for (const t of D.tris) {
+        const cand = quads.filter(s => s.tex && key(s) === t.tex0);
+        const hit = cand.find(s => t.v.every(v => s.verts.some(q => Math.hypot(q.gs[0] - v[0], q.gs[1] - v[1]) < 0.3)));
+        if (!hit) continue;
+        used.add(t.i);
+        for (const v of t.v) {
+          const q = hit.verts.reduce((a, c) => Math.hypot(c.gs[0] - v[0], c.gs[1] - v[1]) < Math.hypot(a.gs[0] - v[0], a.gs[1] - v[1]) ? c : a);
+          worst = Math.max(worst, Math.hypot(q.gs[0] - v[0], q.gs[1] - v[1]));
+          if (q.rgba.join() !== v[6].join()) bad++;
+        }
+      }
+      const by = k => D.tris.filter(t => t.tex0 === k), mine = k => by(k).filter(t => used.has(t.i)).length;
+      // the panel's 7 quads (tags 2 / 3 in slot 0x11c, then the strands and type 119's frame-buffer stripes, then tags 6-8 in
+      // 0x11d: dump triangles 63484.. and 63556..); the dump's other core-texture triangles (63368..63439) are not the box's
+      const pic = '0x4007b805dd30aec0', mdl = ['0x4007bd85e1313200'];
+      ok(`open330: the item picture (E8 type 10) = the dump's 2 triangles, corners ${worst.toFixed(3)} px, RGBA exact`, mine(pic) === 2 && bad === 0, `${mine(pic)} ${bad}`);
+      ok(`open330: the panel's type 11 models = the dump's triangles of their textures (${mdl.map(k => mine(k) + '/' + by(k).length).join(', ')}; RGBA exact)`,
+        mdl.every(k => mine(k) === by(k).length) && bad === 0, `${bad} bad`);
+      const G = D.lines.filter(l => l.alpha[1] === 2);
+      const col = l => l.v[0][3].slice(0, 3).join() + '>' + l.v[1][3].slice(0, 3).join();
+      ok(`open330: type 103 strands: the dump's ${G.length} blended LINE segments and our ${lines.length} have the same head / tail RGB and ALPHA 0x48 (the points are random: the LCG / VU0 R of the frame)`,
+        lines.length > 0 && G.length > 0 && lines.every(s => s.alpha === 0x48 && G.some(l => col(l) === s.verts[0].rgba.slice(0, 3).join() + '>' + s.verts[1].rgba.slice(0, 3).join())),
+        `${lines.map(s => s.verts[0].rgba.join() + '>' + s.verts[1].rgba.join()).slice(0, 2)} vs ${G.slice(0, 2).map(l => l.v[0][3] + '>' + l.v[1][3])}`);
+      // the kick test is the GS range 0 < x, y < 4096 (not the 432 x 512 scissor): the right strand runs past the screen in both
+      const far = l => Math.max(l.v[0][0], l.v[1][0]);
+      ok(`open330: strands past the screen's right edge are drawn (GS x up to ${Math.max(...G.map(far)).toFixed(0)} in the dump, ${Math.max(...lines.map(s => Math.max(s.verts[0].gs[0], s.verts[1].gs[0]))).toFixed(0)} on the page)`,
+        G.some(l => far(l) > 2400) && lines.some(s => s.verts.some(v => v.gs[0] > 2400)));
+    } else console.log('  (no tools/trace/out/w220/fx330.json: the box vs GS dump checks are skipped)');
+    // the soft end (FUN_002e7198) on both, then FUN_002ea040: E +0x1f is 3 for both: no timed fade; looping stops (+2 0x10), the
+    // particles end at their lives, a parent with children stays (flag 8, no lists: FUN_002eb6b8) until they die
+    fx.softEnd(E0); fx.softEnd(E8);
+    ok('soft end: +0x28 = the age, +2 |= 0x10 (E +0x1f == 3)', E0.fade === E0.age && (E0.flags & 0x10) && (E8.flags & 0x10));
+    let gone8 = -1, gone0 = -1, kept = 0;
+    for (let n = 1; n <= 400 && gone0 < 0; n++) {
+      fx.begin(1.2); fx.end(); if (gone8 < 0 && !fx.emitters.includes(E8)) gone8 = n; if (!fx.emitters.includes(E0)) gone0 = n;
+      // FUN_002e92c8: the spawner (life 2) past its life with live children stays listed, flag 8, its children counted
+      const s1 = E0.lists[1].find(p => p.tag === 1), c = E0.lists[1].filter(p => p.parent).length;
+      if (c && s1 && (s1.flags & 8) && s1.children === c) kept++;
+    }
+    ok(`soft end: the spawner stays (flag 8, no lists) while its children live (${kept} frames)`, kept > 10);
+    ok(`soft end: the picture goes when its particle's life ends (${gone8} frames), the panel when its last child dies (${gone0})`, gone8 > 0 && gone8 < 60 && gone0 > gone8 && gone0 < 120, `${gone8} ${gone0}`);
+    // a timed fade (E +0x1f 0: 30 frames, 1: 15): r0001's emitter 12 (wall impact) with its fade mode byte patched
+    for (const [m, L] of [[0, 30], [1, 15], [2, 0]]) {
+      const b2 = fed.slice(0), F2 = parseFed(b2), E12 = F2.emitter(12);
+      new DataView(b2).setUint8(E12 + 0x1f, m);
+      const fz = createEffects({ fed: b2, core, rng: new EffectRng(1), reseed: false, warn: () => {} });
+      fz.begin(1.2); const em = fz.spawn(0x43400, [0, 0, 30]); fz.end();
+      fz.update(1.2); fz.softEnd(em);
+      const d0 = []; let k = 0;
+      while (fz.emitters.includes(em) && k < 60) { fz.update(1.2); d0.push(em.d0); k++; }
+      const want = Math.ceil(L / 1.2);
+      ok(`emitter fade mode ${m}: +0xd0 = 1 - (age - start) / ${L || '-'}, gone after ${k} frames (${L ? want : 1})`, m === 2 ? k === 1 : (k === want && Math.abs(d0[0] - (1 - 1.2 / L)) < 1e-6), `${k} ${d0[0]}`);
+    }
+  }
+}
+
+// --- worker 0241: the Status screen's effects (data/results.fed = a0093, manager DAT_004ee580): channel type 8 (the rank
+// letters' scale) against the w232 rows dump. tools/trace/out/w232/fx321.json = fx_fixture.py on the state at 321 (code
+// 0x81740000, manager 0x4ee580); fxrows.json = dumpfx.py rows.gs --lines --fed a0093.fed. Every emitter of the state but
+// the panel E0 (its type 18 / 26 children draw from the frame's LCG) is spawned at its slot position, aged to its RAM age
+// and drawn: each of its triangles must be a dump triangle (corners < 0.3 px, RGBA exact)
+{
+  const fp = join(here, 'data/results.fed'), sp = join(here, '../../tools/trace/out/w232/fx321.json'), dp = join(here, '../../tools/trace/out/w232/fxrows.json');
+  if (!existsSync(fp) || !existsSync(sp) || !existsSync(dp)) console.log('  (no data/results.fed or w232 fx321 / fxrows: the Status effect checks are skipped)');
+  else {
+    const rb = rd(fp), F = parseFed(rb), S = JSON.parse(readFileSync(sp, 'utf8')), D = JSON.parse(readFileSync(dp, 'utf8'));
+    const idOf = rec => { for (let g = 0; g < F.u16(0x40); g++) { const G = F.groupOf(g); if (!G) continue; for (let k = 0; k < F.u16(G + 6); k++) if (G + F.u32(G + 0x20 + 4 * k) === rec) return (F.code | (g << 10) | k) >>> 0; } return null; };
+    const W = [], fx = createEffects({ fed: rb, core, rng: new EffectRng(), reseed: false, warn: m => W.push(m) });
+    // MEASURED: the dump's frame is the state's + 3 (E12's rising colour matches only there; as w208_still's dump), not
+    // grab_log's 320 / 321: the page draws 3 frames after the RAM ages (W241_BACK: frames before the state, for probing)
+    const back = +(process.env.W241_BACK ?? -3);
+    const want = S.emitters.filter(e => e.ei !== 0).map(e => ({ e, id: idOf(e.rec), n: Math.round(e.age / 1.2) - back }));
+    const maxN = Math.max(...want.map(w => w.n));
+    for (let n = maxN; n >= 0; n--) {                              // spawn each so that it reaches its age at the end
+      fx.begin(1.2); fx.end();
+      for (const w of want) if (w.n === n) w.em = fx.spawn(w.id, [w.e.p120[0], w.e.p120[1], 0]);
+    }
+    const ages = want.every(w => w.em && Math.abs(w.em.age + 1.2 * back - w.e.age) < 2e-3);
+    ok(`w232 state 321: ${want.length} Status emitters (rank letters, evaluation) spawned and aged as RAM`, ages, want.filter(w => !w.em || Math.abs(w.em.age - w.e.age) >= 2e-3).map(w => `E${w.e.ei} ${w.em?.age} ${w.e.age}`).join(' '));
+    // OPEN (worker 0241): E15 (0x81741400, the evaluation's backdrop: type 11 model 0x21) draws other quads than the dump's
+    // (shape and vertex colours); left out of this check and listed in notes/fidelity-audit.md 'Menu-box effects'
+    const items = fx.sprites({}).filter(s => !s.line && s.verts && s.tex && s.emitter !== 15);
+    const key = s => '0x' + s.tex.tex0[1].toString(16) + s.tex.tex0[0].toString(16).padStart(8, '0');
+    const tri = s => s.verts.length === 3 ? [[0, 1, 2]] : [[0, 1, 2], [1, 2, 3]];
+    let n = 0, miss = 0, worst = 0, badc = 0, t8 = 0;
+    const used = new Set();
+    for (const s of items) {
+      if (s.type === 11 && fx.emitters.find(e => e.ei === s.emitter)?.lists[1].some(p => p.tag === s.tag && p.data.some((a, i) => a && F.u16(F.desc(p.P, i)) === 8))) t8++;
+      for (const ix of tri(s)) {
+        n++;
+        const vs = ix.map(j => s.verts[j]);
+        const t = D.tris.find(t => !used.has(t.i) && t.tex0 === key(s) && vs.every(q => t.v.some(v => Math.hypot(q.gs[0] - v[0], q.gs[1] - v[1]) < 0.3)));
+        if (!t) { miss++; if (process.env.DBG241) console.log('  miss', s.emitter, s.type, s.tag, key(s), vs.map(q => q.gs.slice(0, 2).map(x => x.toFixed(1)).join(',') + ' ' + q.rgba.join(',')).join(' | ')); continue; }
+        used.add(t.i);
+        for (const q of vs) {
+          const v = t.v.reduce((a, c) => Math.hypot(q.gs[0] - c[0], q.gs[1] - c[1]) < Math.hypot(q.gs[0] - a[0], q.gs[1] - a[1]) ? c : a);
+          worst = Math.max(worst, Math.hypot(q.gs[0] - v[0], q.gs[1] - v[1]));
+          if (q.rgba.join() !== v[6].join()) { badc++; if (process.env.DBG241) console.log('  rgba', s.emitter, s.type, s.tag, q.rgba.join(), 'vs', v[6].join()); }
+        }
+      }
+    }
+    ok(`w232 rows dump (state + 3 frames): the ${n} triangles of those emitters but E15 (${t8} type 11 models scaled by type 8) are dump triangles: ${n - miss} found, corners ${worst.toFixed(3)} px, RGBA ${badc ? badc + ' off' : 'exact'}`, n > 0 && t8 > 0 && miss === 0 && badc === 0, `${miss} missing`);
   }
 }
 

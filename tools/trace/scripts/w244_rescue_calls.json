@@ -1,0 +1,50 @@
+{
+ "name": "w244_rescue_calls",
+ "frames": 2132,
+ "log_from": 2118,
+ "doc": "worker 0244: w244_rescue_cam's run with TRACE_CALLLOG=w244 TRACE_CALLLOG_FRAMES=2118:2132: the camera updates / enters / reset in battle()'s frame.",
+ "events": [
+  {
+   "from": 1000,
+   "to": 1004,
+   "buttons": [
+    "right"
+   ]
+  },
+  {
+   "from": 1020,
+   "to": 1024,
+   "buttons": [
+    "cross"
+   ]
+  },
+  {
+   "from": 1080,
+   "to": 1084,
+   "buttons": [
+    "left"
+   ]
+  },
+  {
+   "from": 1100,
+   "to": 1104,
+   "buttons": [
+    "cross"
+   ]
+  },
+  {
+   "from": 1200,
+   "to": 1204,
+   "buttons": [
+    "cross"
+   ]
+  },
+  {
+   "from": 1300,
+   "to": 1304,
+   "buttons": [
+    "cross"
+   ]
+  }
+ ]
+}

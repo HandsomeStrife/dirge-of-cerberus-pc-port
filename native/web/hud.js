@@ -271,7 +271,8 @@ export class HudLayer {
 // play.js hook: draws after the reticle (the reticle's group is the root of the game's draw list) and
 // follows Vincent's HP (FUN_00339988 -> FUN_003adda8 when the status HP changes).
 // weapon: aim_core's WeaponSystem (its hudMask = DAT_0046e54c, ammo = the slot's rounds; worker 0214)
-export async function setupHud({ output, player, url = 'data/hud/hud.json', camYaw = null, weapon = null }) {
+// items: items.js's inventory (worker 0243: DAT_0046e54c bit 3 -> the selected item's name and count)
+export async function setupHud({ output, player, url = 'data/hud/hud.json', camYaw = null, weapon = null, items = null }) {
   let data;
   try {
     const r = await fetch(url);
@@ -289,6 +290,7 @@ export async function setupHud({ output, player, url = 'data/hud/hud.json', camY
   let lastHp = player ? player.hp : null;
   const hits = [];
   let hide = false, pausedAt = null;
+  const control = [];                              // worker 0248: set_usercontrol's FUN_003b01b0(HUD, b) calls, in order
   if (!camYaw) console.warn('hud: no camera yaw (CAM+0x178) given: the hit-direction ring turns with yaw 0');
   return {
     layer, get state() { return st; },
@@ -301,12 +303,15 @@ export async function setupHud({ output, player, url = 'data/hud/hud.json', camY
     // Then the stage loop's state 8 slides the new HUD in (hud_core restartedHud, worker 0203). The page's H aid does the same.
     reset() {
       layer.state = st = restartedHud(data, st.now, st.mnow);
-      hits.length = 0; hide = false; lastHp = player ? player.hp : null;
+      hits.length = 0; hide = false; control.length = 0; lastHp = player ? player.hp : null;
       if (player && player.hp !== st.hp[0]) st.setHP(player.hp, st.hp[1]);
     },
     // FUN_003fdb48(3) at the game over request -> FUN_003ad5b0 (HUD off): the panels slide out (hud_core hideAll);
     // applied in tick() with this frame's clock (as the hits). Called by play.js on gameover.js's 'begin'.
     hideAll() { hide = true; },
+    // worker 0248: set_usercontrol(b) (FUN_0037e5e8) -> FUN_003b01b0(HUD, b): 0 = the panels slide out (FUN_003aff20, as
+    // hideAll), 1 = in (FUN_003b0128, hud_core show). T: GS dump w248_gs f1100 (rv_matiawase) draws no HUD. Applied in tick()
+    control(b) { control.push(!!b); },
     // worker 0237: the top-right gauge (enemy_ai opts.hudGauge: manager 0x6e -> FUN_003b58e0, 0x6f -> FUN_003b5378, 0x70 ->
     // FUN_003b53c0; the boss brain's FUN_00aa11b8 is a 0x6e). Applied at once, inside the game frame's logic, as the game's calls.
     gauge(cmd, g) {
@@ -336,9 +341,13 @@ export async function setupHud({ output, player, url = 'data/hud/hud.json', camY
       // same frame as R+0x30)
       if (weapon && weapon.chainReset) { weapon.chainReset = false; st.chainShot(); }   // FUN_003b4f28 (the shot)
       if (weapon && (weapon.hudMask & 2)) st.setAmmo(...weapon.ammo.hud());
+      // bit 3 (worker 0243): FUN_0031f448(inventory) -> FUN_003ae308(HUD, id, count), or (-1, 0) with no selection / count 0
+      // (T w243_potion: the Potion's use -> (0x69300000, 1) in the same frame)
+      if (weapon && (weapon.hudMask & 8) && items) { const e = items.selected(); if (e && e[1] !== 0) st.setItem(e[0], e[1]); else st.setItem(-1, 0); }
       if (weapon) weapon.hudMask = 0;
       for (const [p, from] of hits.splice(0)) st.hit(p, from);
       if (hide) { hide = false; st.hideAll(); }
+      for (const b of control.splice(0)) { if (b) st.show(); else st.hideAll(); }
       // the screen update's group step (FUN_003d5a80 -> FUN_003d5d10); its order against the stage loop's hide is
       // not decoded but not visible either (both see this frame's clock; at the start t = 0 is the start position)
       st.slideFrame();

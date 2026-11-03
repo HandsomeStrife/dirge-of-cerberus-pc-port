@@ -187,7 +187,8 @@ if [ $have_extract -eq 0 ]; then
     ! -path ./data/zone/z128/sound/bgm_013.at3 ! -path ./data/zone/z128/sound/bgm_014.at3 ! -path ./data/zone/z128/sound/bgm_018.at3 ! -path ./data/zone/z128/sound/bgm_274.at3 -delete)
   # .at2: only the opening event's voices (tools/audio/voice.py; worker 0222)
   (cd "$KEL.tmp" && find . -name '*.at2' ! -path ./data/event/scene/ev0100/sound/10109vn.at2 \
-    ! -path ./data/event/scene/ev0100/sound/10109v2.at2 ! -path ./data/event/scene/ev0100/sound/10110sk.at2 -delete)
+    ! -path ./data/event/scene/ev0100/sound/10109v2.at2 ! -path ./data/event/scene/ev0100/sound/10110sk.at2 \
+    ! -path ./data/event/scene/ev0100/sound/10201vn.at2 -delete)
   $PY "$BYO/disc.py" verify "$KEL.tmp/noPath" || fail "the unpacked files do not match the supported disc"
   date -u +%Y-%m-%dT%H:%M:%SZ > "$KEL.tmp/.byo-extract"
   rm -rf "$KEL"
@@ -404,7 +405,7 @@ run stageinfo $PY export_web_stageinfo.py --elf "$ELF" --disc "$KEL" -o "$DATA/s
 tail -n 1 "$LOGS/stageinfo.log" | cut -c1-160
 echo "ok"
 
-step "level end / Status results screen: step table, layouts, tables (ELF), texts (kelstr.bin), KerberosIntermissionCalc.class -> data/results.json"
+step "level end / Status results screen: step table, layouts, tables (ELF), texts (kelstr.bin), KerberosIntermissionCalc.class, the screen's FED a0093 -> data/results.json + results.fed"
 run results $PY export_web_results.py --elf "$ELF" --disc "$KEL" -o "$DATA/results.json"
 [ -s "$DATA/results.json" ] || fail "data/results.json missing (log: $LOGS/results.log)"
 tail -n 1 "$LOGS/results.log" | cut -c1-160

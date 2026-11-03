@@ -15,7 +15,7 @@ const OUT = process.env.TRACE_OUT ?? path.join(root, 'tools/trace/out');
 const imp = f => import(pathToFileURL(path.join(here, f)).href);
 const PL = await imp('player.js');
 const { Collision } = await imp('collision.js');
-const { CHECKPOINT, PLAYER_STAMPS, SOLDIER_RELEASE, handOff, vincentStart, restoreCheckpoint, initWorld } = await (process.env.CHECKPOINT_JS ? import(pathToFileURL(process.env.CHECKPOINT_JS).href) : imp('checkpoint.js'));
+const { CHECKPOINT, PLAYER_STAMPS, SOLDIER_RELEASE, handOff, vincentStart, restoreCheckpoint, initWorld, sceneSave, loadedPair, RECORD_RELOAD } = await (process.env.CHECKPOINT_JS ? import(pathToFileURL(process.env.CHECKPOINT_JS).href) : imp('checkpoint.js'));
 const { GameOver, mergeData } = await imp('gameover.js');
 let fail = 0;
 const ok = (c, m) => { console.log((c ? 'ok   ' : 'FAIL ') + m); if (!c) fail++; };
@@ -83,6 +83,12 @@ const rebuild = (opts, flags, frame, clock, load = LOAD) => initWorld(o => AI.cr
   const ev = W.initEvents || [], i22 = ev.findIndex(e => / ev 34 /.test(e)), i23 = ev.findIndex(e => / ev 35 /.test(e));
   ok(ev[0] === 'event stage script 0 ev 34 r 0,0,0,0' && i23 > i22 && !ev.slice(i23).some(e => / ev 34 /.test(e)) && ev.filter(e => /^event stage .* ev 35 /.test(e)).length === 1,
      `init pass: the stage object's 0x22 first, every 0x22 before the first 0x23 (${ev.filter(e => / ev 34 /.test(e)).length} x 0x22, ${ev.filter(e => / ev 35 /.test(e)).length} x 0x23)`);
+  // worker 0242 (review): within FUN_005459d8's 0x23 the stage object, then the records / actors, then the triggers (t25 /
+  // t64 / t160 / t161 handle 0x23), list by list as DAT_0058b040's order
+  { const e23 = ev.filter(e => / ev 35 /.test(e)).map(e => e.split(' ')[1]);
+    const lastRec = e23.reduce((k, id, i) => (/^\d+$/.test(id) ? i : k), -1), trig = e23.filter(id => /^t\d+$/.test(id));
+    ok(e23[0] === 'stage' && lastRec > 0 && trig.join() === 't25,t64,t160,t161' && e23.slice(lastRec + 1).join() === trig.join(),
+       `init pass 0x23 order: stage, ${lastRec} records / actors, then the triggers ${trig}`); }
   const a44 = W.actors.find(a => a.rec === 44), a66 = W.actors.find(a => a.rec === 66);
   ok(a44 && a66 && drawsAtInit === 8, `script 0's 0x22 activates 44 / 66 (cmd 0x108); ${drawsAtInit} draws in the pass (44 / 66's magazines + 81-86's op 42: 8)`);
   ok(JSON.stringify((W.initDelayed || []).filter(([k]) => k >= 81 && k <= 86)) === '[[85,59],[81,67],[82,73],[83,77]]',
@@ -453,11 +459,79 @@ else {
   ok(shot && shot.start[0] === L[0].pos[0] && shot.start[2] === L[0].pos[2]
      && fp5(recs[gFire].e0_face_pos).every((v, i) => Math.abs(v - L[0].pos[i]) < 1e-4),
      `41's first shot leaves from the hand-off (${shot && shot.start.map(v => v.toFixed(2))}), where the game's 41 stands`);
-  // NOT reproduced (reported): the page's 41 fires one frame early (record 95 vs 96, worker 0204's gap); the twister
-  // differs by then (record 12: the page draws 3, the game 1; the game draws once at records 39, 45, 50, 54, 88, the page
-  // not), so the page's shot takes words 423-425, the game's 426-428; and this hooked run has no body poses (the shot
-  // starts at the eye, not the muzzle; Vincent's part test has no bones). With the game's words forced at the shot the
-  // hooked run still misses, so the hit can't be judged here.
+  // NOT reproduced (reported; notes/fidelity-audit.md 'The twister after 42's first shot'): since worker 0240's stage-init
+  // pass the page's 41 fires at record 106 (the game's 96) and 43 at 174 (worker 0204's runs: 95 / 169). The twister is
+  // 2 words ahead from record 12 (42's first shot: the page draws 3 words, the game 1), so each later draw takes other
+  // words; 81-86's draws (records 39, 45, 50, 54, 88) are now the game's. This hooked run has no body poses (the shot starts
+  // at the eye, not the muzzle), so the hit can't be judged here either. Pinned below so drift shows up.
+  let fire43 = null;                                     // 43's first bullet (as the review's cmp.mjs counts: a new bullet from it)
+  for (let n = 121; n <= 200 && fire43 === null; n++) {
+    const pOld = [P.ctrl.pos.x, P.ctrl.pos.y, P.ctrl.pos.z], nb = P.W.bullets.length;
+    P.ctrl.step(IDLE()); P.php.pos = [P.ctrl.pos.x, P.ctrl.pos.y, P.ctrl.pos.z]; P.W.tick(STEP, pOld, P.php.pos);
+    if (P.W.bullets.slice(nb).some(b => b.from === L[2])) fire43 = n;
+  }
+  ok(fire41 === 106 && idxAtShot === 432 && fire43 === 174,
+     `pinned (known gap, not the game's): 41's first shot at page record ${fire41} (106; game ${gFire}), twister index ${idxAtShot} (432; game ${recs[gFire - 1].rng_idx}), 43's at ${fire43} (174)`);
   console.log(`info: 41's first shot: page record ${fire41}, game ${gFire}; twister index at the page's shot ${idxAtShot} (game ${recs[gFire - 1].rng_idx} before its shot); first hit on Vincent: page ${hitAt === null ? 'none to record 110' : 'record ' + hitAt + ' (HP ' + hpAt + ')'}, game record ${gHit} (HP ${recs[gHit].p_hp})`);
+}
+// ------------------------------------------------ mid-level checkpoints (worker 0242; checkpoint.js sceneSave / restoreRecord)
+// T w242 (s826 + the rescue route's scene_save(1) at f704, pause Restart f2420; states in the worker's scratch, numbers here):
+// the record DAT_004b2680 = stage 0x80, chunks (3, 2), program index 13 (cmd 0xa), n 1, event 100, global {0: 1, 1: 5, 18: 1,
+// 55: 7}, stage {0: 2, 1: 5, 2: 7, 46: 1}; DAT_0046b0b8 0. After the reload: stage flags = the record's (12 / 63 gone), global
+// 18 cleared by main, Vincent (-889.2, -0.0636, -599) facing (-1, 0, 0), HP 780 (500 at the save), stage flag 9 = 1.
+{
+  const stagePath = path.join(here, 'data/event/ev0100_stage.json');
+  if (!sceneSave) { ok(false, 'checkpoint.js exports sceneSave'); }
+  else if (!existsSync(stagePath)) console.log('SKIP mid-level checkpoint part: no data/event/ev0100_stage.json');
+  else {
+    const { createStageController } = await imp('stage_controller.js');
+    const { AreaStream } = await imp('area_stream.js');
+    const SD = JSON.parse(readFileSync(stagePath, 'utf8'));
+    const mk = (F, extra = {}) => {
+      const stream = new AreaStream([], [1, 2]), ev = [];
+      const vin = { tag: 'p_Vin', pos: null, face: null, matrix: () => [0, 0, 1, 0, 0, -1, 0, 0, -1, 0, 0, 0, -1395, -98, -1111, 1], lend() {}, show() {},
+        release() {}, place(p, f) { vin.pos = p.slice(); vin.face = f.slice(); ev.push('place'); } };
+      const c = createStageController({ data: SD, warn: () => {}, flags: () => F.v, stream: () => stream, battleObject: n => (n === 'p_Vin' ? vin : null), ...extra });
+      return { c, stream, vin, ev, run(n) { for (let f = 0; f < n && !c.done; f++) { stream.progress(); c.tick(20); } } };
+    };
+    // 1. the beat: rv_matiawase's scene_save(1) -> the page's record (onSceneSave as play.js wires it)
+    const F = { v: {} }; let rec = null;
+    const A = mk(F, { onSceneSave: n => { rec = sceneSave(n, { gflags: A.c.globalFlags, sflags: F.v, pair: loadedPair(A.stream),
+      hp: 500, inventory: { slots: [[0x69300000, 2]], gil: 7, other: 36 }, taken: new Set([22]) }); } });
+    A.run(30); F.v = { 0: 2, 63: 6 }; A.run(200);
+    const nz = o => JSON.stringify(Object.fromEntries(Object.entries(o).filter(([, v]) => v)));
+    ok(rec && rec.n === 1 && rec.resume === 'main' && rec.stage === 0x80 && rec.event === 100, `scene_save(1) -> the record (n ${rec && rec.n}, resume at main = the program's cmd 0xa, T index 13)`);
+    const g = rec ? Object.fromEntries([...rec.gflags].map((v, i) => [i, v]).filter(([, v]) => v)) : {};
+    ok(rec && g[18] === 1 && g[0] === 1 && g[1] === 5, `the record's global flags ${JSON.stringify(g)} (T {0: 1, 1: 5, 18: 1, 55: 7}: flag 18 = 1 inside the save; 55 is the x -1186 help box, not on this route)`);
+    ok(rec && rec.gflags !== A.c.globalFlags && A.c.globalFlags[18] === 0, 'the record holds a copy (main clears flag 18 after the save)');
+    ok(rec && nz(rec.sflags) === nz(F.v) && Object.isFrozen(rec.sflags), `the record's stage flags ${rec && nz(rec.sflags)} = the world's at the save`);
+    ok(rec && rec.pair.join() === '3,2', `the record's chunks ${rec && rec.pair} (T 3, 2: Zone.load(128, 2, 3) before the save)`);
+    ok(rec && rec.inventory.slots[0][1] === 2 && rec.inventory.gil === 7 && rec.taken.join() === '22', 'the record copies the inventory and the taken bits');
+    // 2. the Restart: restoreCheckpoint with the record (fake systems)
+    const php = { hp: 300, f118: 0, s64: 5 };
+    let rb = null, music = 0, resets = 0;
+    const sysR = { record: rec, php, ctrl: { pos: { x: 1, y: 2, z: 3 }, C: { face: { x: 0, y: 0, z: 1 } }, reset() { resets++; } },
+      rebuildEnemies: (...a) => { rb = a; return null; }, music: () => music++, handoff: HO };
+    const outR = restoreCheckpoint(sysR);
+    ok(php.hp === 780 && php.f118 === CHECKPOINT.f118 && php.s64 === 0, `HP after a record's reload: ${php.hp} (780: FUN_00319798 drops the saved status; T 780, the record held 500)`);
+    ok(rb && nz(rb[0]) === nz(rec.sflags) && rb[1] === RECORD_RELOAD.frame && rb[2] === RECORD_RELOAD.clock && rb[3] === rec,
+       `rebuildEnemies(the record's stage flags ${rb && nz(rb[0])}, frame 0, clock 0, the record)`);
+    ok(music === 0 && resets === 1 && outR.record === 1 && !outR.soldierHandOff, 'no zone-music restart, no opening hand-off (main\'s flag-18 branch does both)');
+    // 3. main from its top with the record's flags (play.js startStage(false, 0, rec.gflags))
+    const F2 = { v: { ...rec.sflags } };
+    const B = mk(F2, { globalFlags: Uint8Array.from(rec.gflags), settle: false });
+    B.run(400);
+    const calls = B.c.rt.vm.calls;
+    ok(!calls.includes('ev0101.rv_matiawase') && !B.c.rt.log.some(([, m]) => /first_event/.test(m)),
+       'resume: neither the opening nor rv_matiawase plays again (main\'s first beats\' tests fail on the record\'s flags)');
+    ok(B.c.globalFlags[18] === 0 && (F2.v[9] | 0) === 1, `resume: main's flag-18 branch ran (global 18 -> ${B.c.globalFlags[18]}, stage flag 9 -> ${F2.v[9]}; T 0 / 1)`);
+    ok(B.vin.pos && Math.abs(B.vin.pos[0] + 889.2) < 1e-3 && Math.abs(B.vin.pos[2] + 599) < 1e-3 && B.vin.face && Math.abs(B.vin.face[0] + 1) < 1e-6,
+       `resume: Vincent handed back at ${B.vin.pos && B.vin.pos.map(v => v.toFixed(3))} facing ${B.vin.face && B.vin.face.map(v => v.toFixed(4))} (T (-889.2, -0.0636, -599) facing (-1, 0, 0))`);
+    ok(B.c.battle, 'resume: battle mode after main\'s battle()');
+    // the stage start's path is unchanged without a record
+    const php0 = { hp: 300 }; let rb0 = null;
+    restoreCheckpoint({ php: php0, rebuildEnemies: (...a) => { rb0 = a; return null; }, handoff: HO });
+    ok(rb0 && rb0[3] === undefined && rb0[1] === CHECKPOINT.frame && php0.hp === 780, 'no record: the stage start (CHECKPOINT frame 24, no record passed)');
+  }
 }
 done();

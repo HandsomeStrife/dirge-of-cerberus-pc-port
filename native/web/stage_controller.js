@@ -25,6 +25,12 @@
 import { EventRuntime } from './event_rt.js';
 import { EventVM, block } from './event_vm.js';
 import { EventActors } from './event_actor_rt.js';
+import { sendEventSe } from './event_sound.js';
+
+// worker 0248: the events the page plays out by default (their actors, cameras, sound and windows are drawn: play.js
+// stage view, event_actors.js); with opts.autoSkip 'unplayed' (play.js's default) the page's Skip stand-in is kept for
+// the others only. ?autoskip=1 (true) skips every event, ?autoskip=0 (false) none
+export const PLAYS = new Set(['ev0101.rv_matiawase']);
 
 const f32 = Math.fround;
 
@@ -79,7 +85,10 @@ export class StageRuntime extends EventRuntime {
     // the actor slots (event +0x1800, 64 x 0x200): worker 0218's EventActors for the slot state and its natives (load_l,
     // setpos_l, setVisible_l ...). Nothing draws the stage's event-loaded models on the page (left out, warned); the
     // battle actors below lend the gameplay objects' own models to slots (worker 0229)
-    super(data, { warn: o.warn, lang: o.lang, actors: new EventActors({ warn: o.warn || ((m) => console.warn(m)) }) });
+    // worker 0248: opts.actors (play.js: EventActors with the event actor library's clips and texture animations, drawn
+    // by event_actors.js), opts.sound / opts.windows (event_sound.js back ends, event_window.js), as intro.js gives the opening
+    super(data, { warn: o.warn, lang: o.lang, actors: o.actors || new EventActors({ warn: o.warn || ((m) => console.warn(m)) }),
+                  sound: o.sound || null, windows: o.windows || null });
     this.o = o;
     // +0x156c. opts.skip: its value at the hand-off (the opening's runtime, intro.js: 2 when the player skipped it), so
     // main's isSkip() after first_event takes the game's branch (kalm_ld(100)) until battle() clears it (worker 0222)
@@ -96,7 +105,8 @@ export class StageRuntime extends EventRuntime {
     // not yet. T w240_init (a Restart's reload): main's battle() after first_event (f2264) comes before the stage init
     // (f2276-2278), so that battle's FUN_00324e70 finds none (worker 0240)
     this.stageObj = false;
-    this.autoSkip = o.autoSkip !== false;
+    // true: every event (the tests' default), 'unplayed': not the PLAYS events (play.js), false: none
+    this.autoSkip = o.autoSkip === 'unplayed' ? 'unplayed' : o.autoSkip !== false;
     // DAT_0050db20 (stored XOR DAT_0046f608; kept plain here). A new controller = a stage (re)load: all 0. The clearing is
     // traced only (w210 start1704: 0 mid stage load); its writer is not decoded
     this.gflags = o.globalFlags || new Uint8Array(64);
@@ -144,9 +154,17 @@ export class StageRuntime extends EventRuntime {
     return true;
   }
 
+  // an event of PLAYS is running (its method is on the VM's stack)
+  playing() { return this.vm.frames.some(F => PLAYS.has(F.cls + '.' + F.m.name)); }
+  // 'unplayed': a wait inside an event method that is not one of PLAYS (an event = a method of the event classes
+  // scr001..scr007; main's own class ev0100 and the library are not events): main's code after a played event is not skipped
+  unplayedEvent() { return !this.playing() && this.vm.frames.some(F => F.cls !== 'ev0100' && !F.cls.startsWith('fake/')); }
+
   frame(dtMs = 20) {
     this.frameNo++;
     if (this.log.length > 4000) this.log.splice(0, 2000);              // page memory: the log is for tests
+    // FUN_003e9ed0: last frame's event SEs go out (event_sound.js; as event_rt.js frame, worker 0248)
+    if (this.sePending && this.sePending.length) this.seSent = sendEventSe(this, this.sound && this.sound.audio ? this.sound.audio() : null);
     this.lentUpdate();                                                  // the statuses' update (main thread, before the VM window)
     if (!this.vm.done) this.vm.run();                                   // the VM thread's time this frame
     this.cardStep();
@@ -161,14 +179,19 @@ export class StageRuntime extends EventRuntime {
         if (c === this.zoneCmd) this.zoneCmd = null;
       }
     }
+    if (this.windows) this.windows.frame(this);                          // the event windows' state (event_window.js; worker 0248)
     if (this.skip === 1) this.skip = 2;                                  // FUN_00377c68's tail
     if (!this.battle) this.camOutput(); else this.view = null;           // FUN_00379148 only out of battle mode
+    if (this.fade) {                                                     // the fade's level, as event_rt.js frame (its GUESS rows)
+      const f = this.fade; f.level = Math.fround(f.level + Math.fround(f.rate * 1.2));
+      if (f.level <= 0) f.level = 0; else if (f.level >= 256) f.level = 256;
+    }
     // GUESS: the page chooses Skip for every event, once the menu would offer it and the event has reached a wait (its
     // code up to there runs as unskipped). The player's own timing is not the game's code (w219_skip: ✕ 63 frames into
     // rv_matiawase). It forces main's skip branches (heri_taijou -> no sk_mituketa2, heri_lasted -> no kita_ev0145) and
     // a skipped event's timing; ?autoskip=0 (opts.autoSkip false) turns it off (notes/fidelity-audit.md 'GUESS: auto-skip').
     // The pause menu runs after the event update, so +0x156c goes 1 -> 2 on the next frame (T w219_skip: f961 / f962)
-    if (this.autoSkip && this.skip === 0 && this.skippable() && !this.vm.done && this.vm.pending) this.requestSkip();
+    if (this.autoSkip && this.skip === 0 && this.skippable() && !this.vm.done && this.vm.pending && (this.autoSkip === true || this.unplayedEvent())) this.requestSkip();
   }
 
   // FUN_003779d0: with +0x156c == 2 the key time is the move's end
@@ -314,7 +337,9 @@ export class StageRuntime extends EventRuntime {
         R.state.usercontrol = v; log('usercontrol ' + v);
         // FUN_00325b60(b == 0): bit 11; FUN_0037def0(ev, b == 0) -> FUN_00325b10: bit 6 (the AI paused while off)
         const g = gs(); if (g) { if (v) { g.clear(11); g.clear(6); } else { g.set(11); g.set(6); } }
-        R.warnOnce('stage: set_usercontrol\'s FUN_003b01b0 / FUN_00380a28 / FUN_003edaa8 left out');
+        // FUN_003b01b0(DAT_00471380, b): the HUD's panels out / in (worker 0248: hud.js control; T w248_gs: no HUD in the event)
+        if (o().hudControl) o().hudControl(!!v);
+        R.warnOnce('stage: set_usercontrol\'s FUN_00380a28 / FUN_003edaa8 left out');
         const s = o().stream && o().stream();
         return s && s.busy ? block(() => !s.busy) : undefined;
       },

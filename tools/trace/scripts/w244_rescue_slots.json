@@ -1,0 +1,50 @@
+{
+ "name": "w244_rescue_slots",
+ "frames": 2140,
+ "log_from": 2110,
+ "doc": "worker 0244: w244_rescue_cam with TRACE_FIELDSET=cam TRACE_SLOTS=1: the chunk slot table around the rescue's battle() (f2126).",
+ "events": [
+  {
+   "from": 1000,
+   "to": 1004,
+   "buttons": [
+    "right"
+   ]
+  },
+  {
+   "from": 1020,
+   "to": 1024,
+   "buttons": [
+    "cross"
+   ]
+  },
+  {
+   "from": 1080,
+   "to": 1084,
+   "buttons": [
+    "left"
+   ]
+  },
+  {
+   "from": 1100,
+   "to": 1104,
+   "buttons": [
+    "cross"
+   ]
+  },
+  {
+   "from": 1200,
+   "to": 1204,
+   "buttons": [
+    "cross"
+   ]
+  },
+  {
+   "from": 1300,
+   "to": 1304,
+   "buttons": [
+    "cross"
+   ]
+  }
+ ]
+}

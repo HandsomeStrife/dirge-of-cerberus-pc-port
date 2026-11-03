@@ -1323,9 +1323,12 @@ export class SpeedAnimator {
     const key = (this.table || GAME.loco)[idx].key;
     let frame = 0;
     if (!first) frame = Math.min(Math.max(this.head.frame * 2, 0), this.frames[key] * 2 - 1) * 0.5;  // FUN_005a8fd0
-    const len = (idx === 0 && !first ? GAME.blendToIdle : GAME.blendFrames) + 1;
+    // a table's blend0: the C+0x591 its installer left (FUN_00346860 sets none on a first pick of row 0: the reload class
+    // FUN_005980f8's FUN_00340bb8(C, 1, 5)); noLoop: flags 0x86 instead of 0x87 (C+0x564 bit 0x40000; worker 0246)
+    const T = this.table || GAME.loco;
+    const len = (idx === 0 && !first ? GAME.blendToIdle : (idx === 0 && T.blend0 != null ? T.blend0 : GAME.blendFrames)) + 1;
     this.out = { key: prevKey, frame: this.head.frame, prevFrame: this.head.frame, loop: this.head.loop !== false };
-    this.head = { key, frame, prevFrame: frame, loop: true };
+    this.head = { key, frame, prevFrame: frame, loop: !T.noLoop };
     this.blend = { len, rem: len, w: 0 };
     this.cur = idx;
     this.current = key;
@@ -1593,10 +1596,13 @@ const NEAR_A220 = 25.0;                           // DAT_0046e4d0: FUN_0032a1d8'
 // Camera collision set: the packets the camera's ray tests. FUN_0054c848 casts through the
 // map object (FUN_0053bb58) with probe index 6 = flags 0x18b, i.e. packets with class bit
 // 0x04 (notes: native/assets/collision/FORMAT.md, "Packet-mask test").
-// GUESS: which DCOL input files that map object holds (not decoded; FUN_0053bb58). The
-// traces match with files 1-2 of the z128 DCOL; file 3's deck blocker (z -1120.1) must
-// not be in it (the game's eye passes it at +-50 deg pitch).
-export const CAM_COL_FILES = [1, 2];
+// Which chunks (worker 0244, DECODED): FUN_0053bb58's map object is the stage object (vt 0x58c9e0, vt+0xb4 = return
+// this); its vt+0x17c = FUN_0054fc38 -> FUN_0026a320 casts through each LOADED chunk slot of DAT_004e4c60 (slot +0x5c
+// set, +0x44 the slot's collision, +0x54 the chunk; area_stream.js). The DCOL's input file k is chunk 0680{k}11, so the
+// rays test the files of the loaded slots' chunks: rays.chunks() (play.js: the area stream's slots). Without it,
+// CAM_COL_FILES = the save's slots (chunks 0 / 1 / 2; chunk 00 has no collision). T: w244_rescue_slots (slots 0 / 3 / 2
+// at the rescue: chunk 3 pulls the eye in to 21.65, as the game).
+export const CAM_COL_FILES = [0, 1, 2];
 export function cameraRays(buf) {
   const dv = new DataView(buf);
   const nv = dv.getUint32(8, true), nt = dv.getUint32(12, true);
@@ -1605,12 +1611,15 @@ export function cameraRays(buf) {
   const I = new Uint32Array(buf.slice(o, o + nt * 12)); o += nt * 12;
   o += nt * 4;                                    // surface words
   const info = new Uint32Array(buf.slice(o, o + nt * 4));
-  const T = [];
+  const byFile = new Map();                       // input file (= chunk) -> its triangles
+  let count = 0;
   for (let t = 0; t < nt; t++) {
     const inf = info[t];
     if ((inf & 3) !== 1) continue;                // sub-tree 1 packets
     if (((inf >>> 16) & ~(0x18b | 0x100) & 0xffff) === 0) continue;
-    if (!CAM_COL_FILES.includes((inf >>> 8) & 0xff)) continue;
+    const file = (inf >>> 8) & 0xff;
+    if (!byFile.has(file)) byFile.set(file, []);
+    const T = byFile.get(file);
     const a = 3 * I[3 * t], b = 3 * I[3 * t + 1], c = 3 * I[3 * t + 2];
     const tri = [V[a], V[a + 1], V[a + 2], V[b], V[b + 1], V[b + 2], V[c], V[c + 1], V[c + 2]];
     const ux = tri[3] - tri[0], uy = tri[4] - tri[1], uz = tri[5] - tri[2];
@@ -1622,16 +1631,18 @@ export function cameraRays(buf) {
              Math.min(tri[0], tri[3], tri[6]), Math.max(tri[0], tri[3], tri[6]),
              Math.min(tri[1], tri[4], tri[7]), Math.max(tri[1], tri[4], tri[7]),
              Math.min(tri[2], tri[5], tri[8]), Math.max(tri[2], tri[5], tri[8]));
-    T.push(tri);
+    T.push(tri); count++;
   }
-  // segment a->b: nearest hit {point, normal} (double-sided, as col.segment)
+  const rays = { count, chunks: () => CAM_COL_FILES, segment };
+  // segment a->b: nearest hit {point, normal} (double-sided, as col.segment) over the loaded slots' chunks
+  // (FUN_0026a320: every loaded slot, the nearest hit kept)
   function segment(a, b) {
     const dx = b[0] - a[0], dy = b[1] - a[1], dz = b[2] - a[2];
     const x0 = Math.min(a[0], b[0]), x1 = Math.max(a[0], b[0]);
     const y0 = Math.min(a[1], b[1]), y1 = Math.max(a[1], b[1]);
     const z0 = Math.min(a[2], b[2]), z1 = Math.max(a[2], b[2]);
     let bt = null, bn = null;
-    for (const p of T) {
+    for (const c of rays.chunks()) for (const p of byFile.get(c) || []) {
       if (p[13] < x0 || p[12] > x1 || p[15] < y0 || p[14] > y1 || p[17] < z0 || p[16] > z1) continue;
       const e1x = p[3] - p[0], e1y = p[4] - p[1], e1z = p[5] - p[2];
       const e2x = p[6] - p[0], e2y = p[7] - p[1], e2z = p[8] - p[2];
@@ -1649,7 +1660,7 @@ export function cameraRays(buf) {
     }
     return bt === null ? null : { point: [a[0] + bt * dx, a[1] + bt * dy, a[2] + bt * dz], normal: [bn[9], bn[10], bn[11]] };
   }
-  return { count: T.length, segment };
+  return rays;
 }
 
 // FUN_0055a410: player states whose camera turn-behind follows the facing (10-14 = the ladder)
@@ -1713,10 +1724,7 @@ export class FollowCamera {
   // places it (snapped base, collision; dist 1000 > any measured, so dist = the measured one)
   reset(pos, s = CAM_SPAWN) {
     this.base = [pos.x, pos.y, pos.z];            // CAM+0x130
-    this.yaw = s.yaw; this.pitch = s.pitch;       // CAM+0x178 / +0x174 (GUESS: CAM_SPAWN)
-    this.dist = 1000.0;                           // CAM+0x1c0 = 0x447a0000
-    this.ramp = 0; this.rampDir = [0, 0];         // CAM+0x1ec (+0x1f0 left as is in the game)
-    this.snap = true;                             // CAM+0x1e8 bit 0x2000
+    this.resetAngles(s);                          // (GUESS: CAM_SPAWN for the spawn / H)
     this.look = [0, 0];
     this.mouseActive = false;                     // page aid: H / warp drop the mouse latch (DAT_004e17d0)
     this.flags14 = 0;                             // DAT_0046e290+0x14 (this frame's camera request bits)
@@ -1724,6 +1732,42 @@ export class FollowCamera {
     const g = this.place(this.base, this.base, { recede: 0, state: 0, L: 0, reset: true });
     this.eye = g.eye; this.at = g.at; this.M = g.M;
     this.prev = { eye: this.eye.slice(), at: this.at.slice(), f: this.M[2].slice() };
+  }
+
+  // FUN_003285d0 alone: the angles (render view 1's forward), snap flag 0x2000, CAM+0x1c0 = 1000, CAM+0x1ec = 0
+  // (CAM+0x180 / +0x188 / +0x18c: 0 on the page). The eye, matrix and base stay: the next update blends from them
+  resetAngles(s) {
+    this.yaw = s.yaw; this.pitch = s.pitch;       // CAM+0x178 / +0x174
+    this.dist = 1000.0;                           // CAM+0x1c0 = 0x447a0000
+    this.ramp = 0; this.rampDir = [0, 0];         // CAM+0x1ec (+0x1f0 left as is in the game)
+    this.snap = true;                             // CAM+0x1e8 bit 0x2000
+  }
+  // battle()'s camera (worker 0244; T w244_rescue_calls, the rescue's battle(): the calls in this order in one frame).
+  // FUN_00324e70: FUN_00329f68 (CAM+0x1e8 bit 2 cleared: bit 0x200000, the event cameras', is never set on the page;
+  // FUN_003285d0; CAM+0x1c0 = 1000), then FUN_00337148 = the type's update (vt+0x14 FUN_00330478) in place. Its eye
+  // blends from the old eye by the weapon system's ramp CAM+0x17c (FUN_0032ace0 l.2088), and the distance is measured
+  // from that eye (the in branch: CAM+0x1c0 = 1000). p: as tick()
+  battleReset(p, s) {
+    this.low = false;
+    this.resetAngles(s);
+    this.tick(p);
+  }
+  // FUN_00326da8 (FUN_004012c0 case 9, event +0x1528 set by battle()'s FUN_0037cf30): FUN_0053d420 posts camera message
+  // 0x7d5 (CAM+0x1f8 from the model: the pivot the page's type table already holds), FUN_0032a420(CAM, view, 1, 1)
+  // re-enters the type with the ramp at 1, FUN_00337148 (an update), FUN_00329dc8 (the render view: update()).
+  // The message runs after the frame's own update: messages()
+  battleHandBack(p) {
+    this.msg7d5 = true;
+    if (this.weapon) this.weapon.setView(this.weapon.cam.view, 1, 1);
+    this.tick(p);
+  }
+  // the camera messages posted this frame, after its update (T w244_rescue_calls): 0x7d5 -> FUN_0032a820 ->
+  // FUN_00337338(CAM, CAM+0x28, -1, 0): the same type entered again, phase 0, ramp 0, so the next frames blend from
+  // this eye to the follow eye (the rescue: the eye starts 21.3 from the look point and eases out)
+  messages() {
+    if (!this.msg7d5) return;
+    this.msg7d5 = false;
+    if (this.weapon) this.weapon.enterType(undefined, -1);
   }
 
   // mouse movement (pixels; GUESS 1 px = 1 USB count), summed until the next frame
@@ -1812,6 +1856,12 @@ export class FollowCamera {
     this.look = [0, 0];
     sx = mx; sy = -my;
     if (this.mouseActive) { sx /= S; sy /= S; }
+    // worker 0246: FUN_0032ace0 l.437-441 / l.612-637: with game-state bit 11 set (FUN_00326068(0xb): set_usercontrol(0) /
+    // free_usercontrol(1), e.g. the stage-info box) or FUN_00324258(10) (bits 7 / 5; play.js passes them in p.noUser), the
+    // look values read above (FUN_003256d8 ran: the mouse latch and its counts are spent) are zeroed and the update jumps
+    // to LAB_0032bcac: no ramp CAM+0x1ec / +0x1f0, no deadzone request, no death look (that branch is skipped too)
+    const noUser = !!p.noUser;
+    if (noUser) { sx = 0; sy = 0; dmx = 0; dmy = 0; }
     // the death camera (CAM+0x1e8 0x400000, startDeath): FUN_0032ace0 l.573 zeroes the left stick (fStack_1d0 /
     // 1cc: fVar31 = 0 for the nudge and the distance ease below; FUN_00330478's gain reads its own) and the
     // look stick is replaced after FUN_003256d8 read it (so the mouse latch above still updates): not
@@ -1825,10 +1875,10 @@ export class FollowCamera {
     let Lc = L;                                   // fVar31 (l.1150): |left stick| as FUN_0032ace0 uses it
     if (dead) {
       Lc = 0; dmx = 0; dmy = 0;
-      if (p.state !== 0x16) { sx = 0.0; sy = -0.3; }
+      if (p.state !== 0x16 && !noUser) { sx = 0.0; sy = -0.3; }
     }
     // ramp CAM+0x1ec toward |(sx, sy)| (FUN_0032ace0, LAB_0032b950)
-    if (!dead) {
+    if (!dead && !noUser) {
     const m = Math.hypot(sx, sy);
     let c = this.ramp;
     if (c < m) {
@@ -1849,7 +1899,7 @@ export class FollowCamera {
     // GUESS: its FUN_00326068(7) gate is taken as open (not decoded); nothing in the port
     // reads the bit yet (FUN_00324530 / FUN_00324598 do in the game)
     this.flags14 = 0;
-    if (!dead && !(Math.abs(sx) <= LOOK_DEADZONE && Math.abs(sy) <= LOOK_DEADZONE)) this.flags14 |= 1 << 10;
+    if (!dead && !noUser && !(Math.abs(sx) <= LOOK_DEADZONE && Math.abs(sy) <= LOOK_DEADZONE)) this.flags14 |= 1 << 10;
     // stick-idle counter CAM+0x1e2: -20 while turning, then +1 per frame to 30
     if (sx === 0 && dmx === 0 && dmy === 0) this.idle = this.idle > 29 ? 30 : Math.min(30, this.idle + Math.trunc(S));
     else this.idle = -20;

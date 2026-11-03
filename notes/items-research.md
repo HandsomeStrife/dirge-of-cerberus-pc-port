@@ -76,10 +76,73 @@ native/web/test_items_page.mjs`. Items are named by id only (game text comes fro
 - z128: record 45 (page actor #67) drops 0x62300000 x 36 (bit 23, no timer); record 44 none (bit 18). Save RAM
   r02_barrier: the drop at (-951.52, -160.39, -1084.89), +200 0x4, +0xca 45.
 
+## Item use, the heal, the item buttons (worker 0243, 2026-11-03)
+FUN_00335c40 is not the use path: nothing stores or calls its address (no pointer, no `jal`, no lui / addiu pair in the
+ELF); it maps an item id to an effect id (0x69300000 -> 0x82400) for a caller not found. The use is **script-driven**:
+- **Input** FUN_003320c0 (the player's control update, every state on foot): pad id 0x1d pressed -> FUN_00573db0; else
+  0x1e -> FUN_00574058(P, 0) (next); else 0x29 -> FUN_00574058(P, 1) (previous). Pad table 0x46bae0 (6-byte rows:
+  u16 mask in byte-swapped libpad order, ..., u8 id): **0x1d = D-pad right, 0x1e = D-pad left, 0x29 = mask 0** (no
+  button). Gates: FUN_003242e8's mask (DAT_0046e290 +0x10 | +0x18; ~0 in game states 7 / 5) bit 0x2000 (use) /
+  0x4000 (cycle), FUN_00574d30's result, the input object's +0x54 bit 8 (use). Page: E / Q (play.js help line).
+- **FUN_00573db0**: HP != 0, the inventory's selection +0 != -1 -> manager request 0x1c (FUN_0053fbe8), +0xc = the slot.
+- **FUN_0053fde8 case 0x1d -> FUN_00573eb0(P, slot)**: HP != 0; entry (FUN_0031e658) id != -1 and count != 0; bgd record
+  flags bit 2 (usable); **FUN_0054e138(P, id, 0x68)** != 0 (the item's script, event 0x68); P+0x28 bit 5 (a linked
+  object +0xbc: FUN_00bec9c0, overlay) not on Vincent; **FUN_00568ea0(P, id)**: Vincent's event 0x39 (r0 = id; vt+0x2f4;
+  script 246 / 297 have none -> 0): 1 -> not used, 0 -> FUN_0054e138(P, id, 100), 2 -> used; P+0x28 bit 2 ->
+  FUN_0031d668(4, 1) (section stat 4). Used -> FUN_0031eb60(inv, slot, 1). Then DAT_0046e54c |= 0x6e, FUN_00324440(0xd).
+- **FUN_0054e138(P, id, ev)**: the bgd record +6 = the item's script: FUN_0031e208 -> FUN_00310718(n) = bgd section 9's
+  base + section 8's u32[n] (DAT_0046dd68 +0x24 / +0x28; n out of range -> 0). FUN_0036fd58(VM DAT_0046f4dc, P+0x20,
+  script): the host is Vincent, so target -2 is Vincent. Result an int (a float cell truncated, asm 0x54e1d8).
+- **The Potion (0x69300000, script 0)**: event 0x68: cmd 0x172 (HP == max) -> sound msj_001, 0; else 1. Event 100:
+  cmd 0x125 msj_010, **cmd 0x14b 0x82400** (the effect), **cmd 0x12d 200** (the heal), 1. Other usable items have their
+  own scripts (bgd scripts 0-27; 32 usable items, kind 2 with flags bit 2).
+- **Vincent's commands** (vt+0xc FUN_00571b60 -> FUN_005661e8): 0x12d: request 5 with +0xc = r0; 0x12e: +0xc = +4 -
+  +0x20; 0x172: HP == max -> 1; 0x173: r0 < HP -> 1; 0x14b: FUN_00336658(r0, P+0x100, vt+0x26c model) -> FUN_00336748:
+  the effect from **the model's FED** (MP +0x3e4; FUN_002dbc80) attached to the model (FUN_002e8d50 / FUN_002e77f8).
+- **The heal**: request 5 -> FUN_0053fde8 case 6 -> vt+0x1f4 = **FUN_0055c910(P, n)**: FUN_003168e8 (0 < HP < max: HP
+  += n, capped at max; else nothing), vt+0x32c FUN_00576b10 -> FUN_0055ca20 (FUN_00567d00: the number popup returns for
+  Vincent) and vt+0x344 FUN_00576c28 (DAT_0046e54c |= 4: the HUD HP). No motion or state change.
+- **FUN_0031eb60(inv, k, n)**: count -= n (all when fewer); an emptied entry whose record has flags bit 1 clear is cleared
+  (FUN_0031eaf0 -> FUN_0031e858(k, -1): the selection -> -1 if it was k; the slot back to the pool FUN_0036e2c8, whose
+  free list is LIFO: FUN_0036e6b0 pushes at the head, FUN_0036e2a8 takes it). FUN_0031e940 (add) ends by selecting a
+  usable kind-2 item when nothing is selected.
+- **Selection** FUN_0031f3c8(inv, k): +0 = k, +0x10 = the id, +0xc = the last id (k out of range: +0 / +0x10 = -1).
+  **Cycle** FUN_0031f520(inv, dir): every slot with an id, a count and a usable kind-2 record -> {id, record +0xa, slot};
+  more than one and no selection: +0xc's id joins as slot -1; one entry (or no selection and no +0xc entry): the first,
+  unchanged -> 0; else sorted (FUN_003203c0, comparator 0x31f4e0: +0xa then the id) and +1 / -1 with wrap.
+  FUN_00574058: moved -> FUN_0054b158(P, 0x58ee70 = msj_012, 1); FUN_003320c0 then DAT_0046e54c |= 0x6e, FUN_00324440(0xe).
+- **HUD**: FUN_00339590 bit 3 -> FUN_0031f448 (the selection's entry, or -1) -> FUN_003ae308(HUD, id, count): slot 6
+  0x1b = FUN_003fd690(id) (kelstr's item table; -1: the empty text 0x4a5220), 0x1c = digits (count < 1: code 0x10).
+- **T: w243_potion** (TRACE_FIELDSET=items TRACE_CALLLOG=w243 TRACE_POKE=960660=258: HP 600 / 780). Record 21 (the
+  logic after the frame-20 press): use_req, event 0x68 = 1, msj_010, effect 0x82400, event 100 = 1, FUN_00568ea0 = 1,
+  remove(slot 0, 1), heal(200): HP 780, HUD HP 780 / 780, HUD item (0x69300000, 1), count text 0x15 -> 0x14. Frames 91 /
+  201 (full HP): msj_001, event 0x68 = 0, nothing else. Frame 151 (left): FUN_00574058 -> 0, no sound. Inventory header:
+  +0 = 0, +0xc = +0x10 = 0x69300000, +0x26 = 60.
+- Page: items.js `input` / `useSlot` / `playerCmd` / `heal`, Inventory `setSel` / `selected` / `remove` / `cycle`;
+  enemy_ai.js (the request queue's types 0x1c / 5, runEvent with an object's own script table, Vincent's command hook,
+  world.postManager); hud_core `setItem`, hud.js bit 3; export_web_items.py (all bgd items + `script` / `key`, `scripts`,
+  sounds.cycle) and export_web_hud.py (`item_names`): **re-run both**. Tests: test_item_use (hooked, the trace; mutants
+  18 / 19, the survivor equivalent: Vincent's parameter-set script has only event 0x25), test_item_use_page.
+
+## The HUD notices and the text logs (decoded, not on the page)
+- FUN_003b3538(HUD, kind, id, n): kind 0 (pickup, from FUN_00560098): text = sprintf(kelstr message DAT_00472820, the
+  item's name (FUN_003d24c8 / FUN_003fd690), n) (FUN_00248e98); it goes to **log 1** (and opens it:
+  FUN_003b47d0(HUD, min(lines + 1, 4) << 4 | 8), FUN_003b4670(HUD, 0x14b4) = 5.3 s) when the item is kind 10, kind 2
+  NOT usable (flags bit 2 clear), or kind 3 without an ammo part; else **log 0**. So the Potion's and the ammo's pickups
+  go to log 0. Kind 1: message DAT_00472824 (n); kind 2 ("can't carry", from FUN_00560110): DAT_00472828, log 0; kind 3:
+  FUN_003b4b68 / FUN_003b4c20 (log 2); FUN_003b2dd8 = HUD+0x538's vt+0x7c (another panel).
+- FUN_003b3cd0 -> FUN_003b3a20(HUD, text, style, log, lines, cap): four ring-buffered logs: +0x578 (8 lines, log 0),
+  +0x85c (4, log 1), +0x9d0 (4, log 2), +0xb44 (1, log 3); 0x5c bytes a line (text +8, width / height +0x54 / +0x56 via
+  HUD+0xba4's vt+0xdc, colour from table 0x472864 by style, position from 0x4728f0 by log, its life byte 0x472868, start
+  clock FUN_003e2450). FUN_003b3d68 (per frame, from FUN_003b41d8 in the HUD update FUN_003add28): life end -> drop the
+  oldest; phases from the style's table PTR_DAT_00472860 (fade in / slide / blink kinds 1-5); the scroll when a line is
+  added. FUN_003b41d8 resizes the item list (FUN_003b47d0) when log 1's count changes. The draw (FUN_003b48b0) and the
+  message texts are not read yet. **Not on the page** (items.js warns as before).
+
 ## Open
-- Item use (the item list and its input; the use effect FUN_00335c40 -> FUN_00336748, reached through a pointer, not
-  found in two searches) and the heal: not decoded.
-- The HUD pickup / full notices (FUN_003b3538 / FUN_003b2dd8) and the item list (slot 8, FUN_003b47d0, FUN_003b4670).
+- The use effect 0x82400 (Vincent's model FED, MP +0x3e4: which file, and attaching an effect to a model in effects.js).
+- The HUD text logs above (draw, phase tables, the formats), and the item list (slot 8) that log 1 opens.
+- FUN_00324440(0xd / 0xe) (DAT_0046e290 +0x14 request bits; their reader not decoded).
 - Drop life timers and the fade, the object rays, area activation, key items (bits 9 / 10), weapon items (bit 1).
 - The items' draw path (VU1 program, lighting): GUESS unlit, texture x c / 128.
 - Restart: the inventory and taken bits are kept across a Restart (L: the save data block is not reloaded on the page).

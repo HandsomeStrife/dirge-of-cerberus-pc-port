@@ -42,7 +42,7 @@ eq(D.si.scripts['43'].length, 9, 'kind 0x2b table: two sections (one mode-1 comm
 // ---- the flow, frame by frame (frame f = the f-th call of frame(); display in frame 216 as in the trace)
 function run({ crossAt = 400, until = 460, onFrame = null } = {}) {
   const si = new StageInfo(D, { flags: { event: n => (n === 55 ? 7 : 0) }, warn: () => {} });
-  const log = { open: -1, focus: -1, step7: -1, closed: -1, clear: -1, se: [] };
+  const log = { open: -1, focus: -1, step7: -1, closed: -1, clear: -1, se: [], fx: [] };
   for (let f = 0; f <= until; f++) {
     si.frame(f === crossAt);
     if (f === 216) si.display(6, 'MES_ITEM_07');                   // the event VM runs after FUN_003fdf00 in the frame
@@ -53,6 +53,7 @@ function run({ crossAt = 400, until = 460, onFrame = null } = {}) {
     if (b && b.closed && log.closed < 0) log.closed = f;
     if (f > 216 && !si.isDisplay(6) && log.clear < 0) log.clear = f;
     for (const e of si.events) if (e.se !== undefined) log.se.push([f, e.se]);
+    for (const e of si.events) if (e.fxOp) log.fx.push([f, e.fxOp]);          // worker 0241: the slot operations (menu_fx.js)
     si.events.length = 0;
     if (onFrame) onFrame(f, si);
   }
@@ -65,6 +66,11 @@ eq(L.step7, 400, '✕ in frame 400 -> step 7 (FUN_003c72f8 past the end mark, th
 eq(L.closed, 450, 'op -2 (FUN_003b7830) 1000 ms after the ✕: frame 450');
 eq(L.clear, 451, 'isDisplay(6) false from frame 451 (FUN_003fdf00 case 5 sees result 2)');
 eq(JSON.stringify(L.se), JSON.stringify([[226, 0x1d], [400, 0x1e]]), 'menu sounds 0x1d at the open, 0x1e at the ✕ (FUN_003e1d10)');
+// worker 0241: FUN_003c58b8 / FUN_003c5a98 / FUN_003c5cc0 as menu_fx.js operations: the panel (slot 0, 0x834c0000) and the
+// picture (slot 1: PTR_0051d090[flag 55 = 7] = 0x834c2000) at the open, both soft-ended at the ✕'s life end (-2 -> 0:
+// the same frame), the box's clear when it goes
+eq(JSON.stringify(L.fx), JSON.stringify([[226, { spawn: 0, id: 0x834c0000, x: 0, y: 0 }], [226, { spawn: 1, id: 0x834c2000, x: 0, y: 0 }],
+  [400, { end: 0 }], [400, { end: 1 }], [451, { clear: true }]]), 'box effects: spawn slots 0 / 1 at the open, soft ends at the ✕, clear at the close');
 const L2 = run({ crossAt: 240, until: 700 });
 eq(L2.step7, -1, 'a ✕ before the screen has the focus (frame 240) does nothing (FUN_003d5480)');
 eq(L2.closed, -1, '... and the box stays open (no time-out)');

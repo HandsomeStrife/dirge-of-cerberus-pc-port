@@ -83,7 +83,8 @@ if (!existsSync(dp) || !existsSync(ip)) { console.log('SKIP scr001 parts: no dat
 const data = JSON.parse(readFileSync(dp, 'utf8')), idx = JSON.parse(readFileSync(ip, 'utf8'));
 const clipFrames = (m, n, c) => { const p = idx.models[m] && idx.models[m].packs[n]; return p && p.clipFrames[c] != null ? p.clipFrames[c] : null; };
 const warns = [];
-const A = new EventActors({ clipFrames, warn: m => warns.push(m) });
+// the models' resident motion packs first (worker 0248: the opening's p000 plays h_st, Vincent's own stand)
+const A = new EventActors({ clipFrames, residentFiles: m => (idx.models[m] && idx.models[m].resident) || [], warn: m => warns.push(m) });
 const rt = new EventRuntime(data, { warn: m => warns.push(m), actors: A });
 const loads = [], motions = [], plays = [];
 const N0 = { ...rt.vm.natives };

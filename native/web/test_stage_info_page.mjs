@@ -65,6 +65,16 @@ try {
   ok(Math.hypot(d.pos[0] - c.pos[0], d.pos[1] - c.pos[1]) < 0.01, `no movement under bit 11 (${(d.pos[0] - c.pos[0]).toFixed(3)}, ${(d.pos[1] - c.pos[1]).toFixed(3)})`);
   const prims = await pg.evaluate(() => (window.__play.stageInfo.draw() || []).length);
   ok(prims === 1007, `the box draws 1007 primitives (the GS dump's count): ${prims}`);
+  // worker 0241: the box's effects on the menu managers (menu_fx.js): slot 0 the panel 0x834c0000, slot 1 the picture
+  const fxs = await pg.evaluate(() => {
+    const si = window.__play.stageInfo, L = si.fxLayer;
+    if (!si.fx || !L) return null;
+    const last = L.last || [], by = {};
+    for (const s of last) { const k = s.type + (s.line ? 'L' : ''); by[k] = (by[k] || 0) + 1; }
+    return { ids: si.fx.title.fx.emitters.map(e => e.id >>> 0), by, slots: [...si.fx.slots.keys()] };
+  });
+  ok(fxs && fxs.ids.includes(0x834c0000) && fxs.ids.includes(0x834c2000) && fxs.by['10'] === 1 && fxs.by['11'] === 7 && fxs.by['103L'] > 0,
+    `the box effects run and draw: panel + picture emitters, 7 models, 1 sprite, strand lines (${JSON.stringify(fxs)})`);
   if (process.env.STAGE_INFO_SHOT) { await pg.screenshot({ path: process.env.STAGE_INFO_SHOT }); console.log('saved', process.env.STAGE_INFO_SHOT); }
   // ✕: the box closes 1000 ms (50 game frames) later; the frames counted in the page (frame() calls), not across the
   // browser round trip
@@ -76,6 +86,9 @@ try {
   await until(() => window.__play.stageInfo.kind === -1);
   const L = await pg.evaluate(() => window.__si);
   ok(L.cross > 0 && L.clear - L.cross === 51, `✕ -> the kind clears ${L.clear - L.cross} frames later (game: ✕ frame 400, clear 451)`);
+  // worker 0241: after the close the slots are empty and the soft-ended emitters fade out (FUN_002e7198 / FUN_002ea040)
+  await until(() => window.__play.stageInfo.fx.title.fx.emitters.length === 0);
+  ok(await pg.evaluate(() => window.__play.stageInfo.fx.slots.size === 0), 'box closed: its effects are gone (slots empty, emitters faded out)');
   await until(() => window.__play.gameState.test(6) === 0);
   const g = await st();
   await until(t0 => window.__play.stats.ticks >= t0 + 60, g.ticks);

@@ -213,3 +213,62 @@ tools/trace/window_ref.py; script tools/trace/scripts/w239_sub.json; dumps / sta
   DAT_004a8250[0] = 0x1e, step table 0x47a028: [0, 0, -26, 16], effect slot 0 = FED 0x818c0000 (3000 ms), slot 2 =
   0x818c0400 (3000 ms), [500, 3000, -3, 0x27], [4000, 0, -2] end. Not on the page (FED effects, as 0220's boxes).
 - Not started: the scope view (SCOPE01 sequences) and the actors' effect sequences.
+
+## Texture animations (the faces' eyes / mouths), worker 0248 (2026-11-03)
+Dan's report "the mouths are out of sync in the cutscene": the page drew no face animation at all (the faces held the
+uploaded texture while the voices played). The game's mouths are not voice-synced data: they are texture flipbooks that
+the script turns on and off around a line. Code: event_actor_rt.js (`texAnimSetup` / `texAnimMatch` / `texAnimKey` /
+`texAnimAdvance`, native setanim_l, the draw snapshot `a.drawn.tex`), event_actors.js (`texAnimView`: a DataTexture per
+target), export_web_event_actors.py `texanims` (MODEL_tad_S_D.png). Test: test_texanim.mjs.
+- **Natives**: KerberosActor.startanim(name) / stopanim(name) (bytecode wrappers) -> setanim_l(id, name, 1 / 0) 0x39cfe0
+  -> FUN_00376510 (slot by id) -> FUN_00381168: slot +0x10 = the name (8 bytes, FUN_00258590), +0xa8 bit 53 (start) or
+  bit 54 (stop). The actor update FUN_003772c8 (after the visibility, before the attachments): bit 53 -> FUN_005aab10,
+  else FUN_005aabf8 (the MP, the name), then both bits cleared. Those set / clear entry +1 of every animation whose name
+  BEGINS with the given one (FUN_00414210 compares up to the query's length, at most 8).
+- **Data**: the model container's `texanm` entry, type 'tad' (0x646174). Payload +8 count, +0xc offset table (from the
+  payload): per animation +0 u8 source texture entry, +1 u8 target entry (indices of the texture container,
+  FUN_00253370(.., MP+0x3d8) +0x14), +4 s16 x 2 target corner, +8 s16 x 2 size, +0xc u16 frames, +0xe s16 key count,
+  +0x10 name, +0x18 / +0x1a s16 the random wait range, +0x20 keys (8 bytes: s16 source x, y, the frame the key runs to).
+- **MP state** (FUN_005a8850 at set-up): MP+0x400 entries of 0x10 (+1 on, +2 frames, +4 frame f32, +8 wait f32, +0xc /
+  +0xe the range), MP+0x404 count; on at set-up when the name starts '@'.
+- **Per draw** (FUN_005abec0 -> FUN_005a9938, skipped for a hidden MP: +0x440 & 0xf00 == 0x200): the textures upload
+  (FUN_00259058), then FUN_005aa9e8: each animation on with wait 0 -> FUN_00414290: key k (key[k-1].t <= (int)frame <
+  key[k].t; key 0 again from the last key's end), skipped if the target entry's +0x22 mask has the MP's variant bit
+  (+0x44b), -> FUN_00414568: a GS local -> local copy (BITBLTBUF source = the source entry's TBP / TBW, SPSM = DPSM =
+  the source's PSM; TRXPOS (sx, sy) -> (dx, dy); TRXREG w x h; TRXDIR 2). Then FUN_005aa838: a wait runs down by
+  DAT_004fc7e8 (1.2) first; else frame += 1.2 and at (int)frame >= frames: wait = min + (max - min) x FUN_0040b5c0()
+  when max >= 1, frame = 0.
+- The copy moves T8 indices, so the target's CLUT colours them: the exporter writes each source image decoded with the
+  target's CLUT. z128's event models: g000 (00_ue / 00_sita / 00_naka: upper / lower / middle mouth, 20 frames, 4 keys,
+  no wait; 01_eye 665 frames), e063 (@_eye, 275 frames), p000 (@_eye blink 19 frames, wait 128..512; eye_clo; ang).
+  The opening: startanim("00") on g000 (slot 12) at its line, 10110sk's playVoice 19 frames later, the mouths run until
+  stopanim("00") / the slot's finalize (page frames 947..1425). The eyes ("eye" on slot 5, "01_eye" on g000) too.
+- **Not checked against a GS dump yet** (the copies' result in VRAM at a talking frame); the gameplay Vincent's own
+  '@_eye' blink (his MP has the same tad) is not on the page either.
+
+## The stage's events played: rv_matiawase, worker 0248 (2026-11-03)
+Dan's report "the cutscene trigger on the stairs: Vincent stuck a moment, then at the bottom of the stairs": that was
+the page's auto-skip (the GUESS stand-in) skipping rv_matiawase (main's beat after the start deck, stage flag 0 = 2) at
+its first wait; the skipped event's setpos (-889.2, 0, -599) is the bottom of the stairs. Now it plays.
+- rv_matiawase (class ev0101 = the opening's scr001 class): Zone.load(128, 2, 3); loads p005 (Vincent's event model,
+  146 bones) and p000 (93 bones), motion files 13 / 123 (0x0c06440d: bv002..4vn, bv000vn0..2, km0201vn; 0x0c06447b:
+  km0202vn), loadVincentWeapon twice (FUN_0039e060 -> FUN_00379af8: a slot with the weapon model FUN_004099b0(frame,
+  barrel)), Camera.set + active, Zone.event, fadein 100, getbattleactor p_Vin (hidden), the lights, shot 1 p000
+  km0201vn, loadVoice2 10201vn, shot 2 (camera setdata 4 keys, move 0 -> 190.98 at 0.032) p005 km0202vn, setTimer 6000,
+  playVoice 10201vn + window MES_10201VN 2000 ms, fadeout 1000, getweaponframe -> bv000vn0..2 on p_Vin, displayStageInfo
+  / exit branches, Camera.set + setfov 73.5, setmotionofbattle bv002..4vn, unloads, setbattlename p_Vin.
+- getweaponframe (0x3a3330 -> FUN_00376618 -> FUN_00312478: DAT_0046dd68 +0x80, 0 -> 1) = 1 and getmorphstate (0x39d090 ->
+  FUN_00321460: DAT_0046e248 +0xc) = 0 in the route state r02_climb.
+- Page: stage_controller.js takes opts.actors / sound / windows (as intro.js gives the opening) and runs the event SE
+  send, the windows and the fade level in its frame (as event_rt.js); stage_view.js draws the stage's event camera,
+  fade veil and actors (event_actors.js); play.js wires it (startStage, the frame loop, the render camera, the window
+  draw in the HUD chain). The stage data has the messages now (export_web_stage.py). Auto-skip: opts.autoSkip
+  'unplayed' (play.js default) skips only waits inside events not in PLAYS (= rv_matiawase only); ?autoskip=1 every
+  event, ?autoskip=0 none.
+- T: w248_rv_a / b (TRACE_FIELDSET=event): game camera 1 at f896 (Zone.event f897), camera 2 at f959, fade particle at
+  f1219, the last camera (fov 73.5) at f1269, asj_033 f1468, scene_save f1476. Page: the same order and values (shot 2
+  within 0.003 u); its blocks are shorter by the load waits (voice load, e030 / SE loads at once on the page). GS dump
+  w248_gs f1100: no HUD -> set_usercontrol's FUN_003b01b0(HUD, b) is now on the page (hud.js control).
+- Left out (warned): p_Vin's own clips bv000vn0 / bv002vn at the end (the gameplay body's MP; the page's Vincent is
+  not an MP), the weapon on p_Vin's marker 15, focus blur, shadows, loadSoundEffectEx, setdirofbattle,
+  unload_residentmotion, p000 / p005's cloth (an event actor of the enemies' pipeline has no cape cloth).

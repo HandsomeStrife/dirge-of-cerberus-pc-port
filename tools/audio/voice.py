@@ -67,7 +67,7 @@ def main():
     ap.add_argument('--event', type=int, default=100)
     ap.add_argument('--out', default='native/web/data/audio/voice')
     # the opening event's (ev0101.first_event: loadVoice2 / playVoice)
-    ap.add_argument('--names', nargs='*', default=['10109vn', '10109v2', '10110sk'])
+    ap.add_argument('--names', nargs='*', default=['10109vn', '10109v2', '10110sk', '10201vn'])
     a = ap.parse_args()
     rows = sdb_rows(open(os.path.join(a.kel, 'noPath', '%08x.bin' % (0x06000000 | a.zone << 16 | 8)), 'rb').read())
     os.makedirs(a.out, exist_ok=True)

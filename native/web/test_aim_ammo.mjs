@@ -89,7 +89,7 @@ for (const file of files) {
                           rate: 0.5, current: 'idle', actions: {}, names: {}, table: GAME.loco, request: null });
     anim.has = n => !!MOTIONS[n];
     anim.ensure = function (k) { if (this.frames[k]) return true; if (!MOTIONS[k]) return false; this.frames[k] = MOTIONS[k].frames; return true; };
-    const actrl = { C: { groundSpeed: 0, face: { x: 0, y: 0, z: 1 }, moveDir: { x: 0, y: 0, z: 1 } } };
+    const actrl = { onGround: true, C: { groundSpeed: 0, face: { x: 0, y: 0, z: 1 }, moveDir: { x: 0, y: 0, z: 1 } } };   // the w214 traces stand on the ground (C+0x1c0 bit 0x200)
     ctl = makeClipControl({ core: sim, anim, ctrl: actrl, motions: MOTIONS, step: STEP });
     ctl.actrl = actrl; ctl.STEP = STEP;
   }

@@ -5,7 +5,7 @@
 // Visual only: no gun motion (the reload clip turns gun bone 3; not exported). ?gun=0 hides it.
 import * as THREE from 'three';
 
-async function loadGun() {
+export async function loadGun() {          // exported for the event actors' weapon (event_actors.js, worker 0248)
   const base = 'data/vincent/';
   const meta = await (await fetch(base + 'cerberus_web.json')).json();
   if (!Array.isArray(meta.runs) || meta.alpha_ref == null)

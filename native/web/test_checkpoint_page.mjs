@@ -26,7 +26,7 @@ try {
 } catch { console.log('SKIP: playwright not installed (npm i -g playwright)'); done(); }
 
 const port = await new Promise(r => { const s = net.createServer().listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => r(p)); }); });
-const srv = spawn('python3', ['-I', '-m', 'http.server', String(port), '--bind', '127.0.0.1', '--directory', here], { stdio: 'ignore' });
+const srv = spawn('python3', ['-I', '-m', 'http.server', String(port), '--bind', '127.0.0.1', '--directory', process.env.WEB_ROOT || here], { stdio: 'ignore' });   // WEB_ROOT: a scratch copy with a mutant (worker 0242)
 const browser = await chromium.launch({ args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
 async function open() {
   const pg = await browser.newPage({ viewport: { width: 960, height: 540 } });
@@ -195,6 +195,38 @@ try {
     const h = await pg.evaluate(() => window.__afterH);
     ok(h.hp === 780 && h.state === 2 && Math.hypot(h.pos[0] - h.spawn[0], h.pos[1] - h.spawn[1]) < 0.5 && Math.abs(h.spawn[0] - (-1395.63)) < 1e-6,
        `H after a Restart: the page spawn ${h.spawn.map(v => v.toFixed(2))} (not the checkpoint), HP ${h.hp}`);
+  }
+  { // 4. worker 0242: a mid-level checkpoint. Stage flags 0 = 2 / 63 = 6 (script 88's start deck cleared): main's beat runs
+    // rv_matiawase and scene_save(1) -> the record; then pause -> Restart -> OK reloads from it (checkpoint.js restoreRecord):
+    // main from its top with the record's global flags takes its flag-18 branch (T w242: Vincent (-889.2, -0.0636, -599)
+    // facing -x, HP 780, stage flags = the record's + 9 = 1, global 18 cleared), no opening, no stage-start soldiers 41-43
+    await pg.evaluate(() => { const W = window.__play.enemyAI; W.eventFlags[0] = 2; W.eventFlags[63] = 6; });
+    await until(pg, () => { const P = window.__play; return P.stage && P.stage.rt.log.some(([, m]) => m === 'scene_save 1') && !!P.restart.record; }, null, 90000);
+    const R0 = await pg.evaluate(() => { const r = window.__play.restart.record; return { n: r.n, g18: r.gflags[18], sf: JSON.stringify(r.sflags), pair: r.pair }; });
+    ok(R0.n === 1 && R0.g18 === 1 && /"0":2/.test(R0.sf), `scene_save(1) on the page: the record (n ${R0.n}, global 18 = ${R0.g18}, stage flags ${R0.sf}, chunks ${R0.pair})`);
+    await until(pg, () => window.__play.stage.battle && !window.__play.pause.active, null, 60000);
+    await pg.evaluate(() => { const P = window.__play; P.php.hp = 300; P.ctrl.pos.x += 20; window.__oldStage = P.stage; });
+    const n0 = await pg.evaluate(() => window.__play.restart.count);
+    const boxOpen = () => until(pg, () => { const f = window.__play.pause.flow; return !!f.box && f.box.cur === f.box.total; });
+    await pg.keyboard.press('Enter');
+    await until(pg, () => { const s = window.__play.pause.flow.screen; return s && s.cur === s.total && s.hasFocus && s.focus.id === 3; });
+    await pg.keyboard.press('Space'); await boxOpen();
+    await pg.keyboard.press('ArrowLeft');
+    await until(pg, () => window.__play.pause.flow.box.focus.id === 6);
+    await pg.keyboard.press('Space');                 // OK
+    await until(pg, n => window.__play.restart.count === n + 1 && !window.__play.pause.active, n0);
+    const r1 = await pg.evaluate(() => { const P = window.__play, W = P.enemyAI;
+      return { hp: P.php.hp, intro: P.intro.active, newStage: P.stage !== window.__oldStage, recs: W.actors.map(a => a.rec).sort((p, q) => p - q).join(),
+               g18: P.stage.globalFlags[18] }; });
+    ok(r1.hp === 780 && !r1.intro && r1.newStage, `record Restart: HP ${r1.hp} (780), no opening (${r1.intro}), a new stage controller (${r1.newStage})`);
+    ok(!/\b4[123]\b/.test(r1.recs), `record Restart: no stage-start stand-ins (41-43 loadPass / wakeSave): actors ${r1.recs}`);
+    await until(pg, () => { const P = window.__play; return Math.abs(P.ctrl.pos.x + 889.2) < 0.01 && Math.abs(P.ctrl.pos.z + 599) < 0.01 && P.stage.battle; }, null, 60000).catch(() => {});
+    const r2 = await pg.evaluate(() => { const P = window.__play, W = P.enemyAI;
+      return { pos: [P.ctrl.pos.x, P.ctrl.pos.y, P.ctrl.pos.z], face: [P.ctrl.C.face.x, P.ctrl.C.face.z], g18: P.stage.globalFlags[18], f9: W.eventFlags[9] | 0, f0: W.eventFlags[0] | 0,
+               mat: P.stage.rt.vm.calls.includes('ev0101.rv_matiawase'), battle: P.stage.battle }; });
+    ok(Math.abs(r2.pos[0] + 889.2) < 0.01 && Math.abs(r2.pos[2] + 599) < 0.01 && Math.abs(r2.pos[1] + 0.0636) < 0.05 && r2.face[0] < -0.999,
+       `record Restart: main's flag-18 branch places Vincent at ${r2.pos.map(v => v.toFixed(3))} facing ${r2.face.map(v => v.toFixed(3))} (T (-889.2, -0.0636, -599) facing -x)`);
+    ok(r2.g18 === 0 && r2.f9 === 1 && r2.f0 === 2 && !r2.mat && r2.battle, `record Restart: global 18 -> ${r2.g18}, stage flag 9 -> ${r2.f9}, flag 0 ${r2.f0}, rv_matiawase not replayed (${!r2.mat}), battle ${r2.battle}`);
   }
   ok(errs.length === 0, 'no page errors' + (errs.length ? ': ' + errs.slice(0, 2).join(' | ') : ''));
   await pg.close();

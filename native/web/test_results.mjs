@@ -97,6 +97,27 @@ if (boxAt > 0) {
     if (!okk) { bad++; if (!first) first = `f${k}: game step ${g.step} mode ${g.mode} hold ${g.hold}, page ${pbox.step} / ${pbox.mode} / ${pbox.hold}`; }
   }
   ok(bad <= 6, `timeline vs the game frame by frame (step within 1 at the transitions): ${bad} off${first ? ' (first ' + first + ')' : ''}`);
+  // worker 0241: the slot spawns (FUN_003c58b8 with FUN_003c6d70's positions, script flag 0x1e) vs the RAM emitters of the
+  // state at 321 (fx_fixture.py: tools/trace/out/w232/fx321.json): every live emitter's id and position +0x120 is the
+  // page's last spawn of some slot up to that frame (the rank letters at 0x51d0e0's, e.g. (184, -84), not the steps')
+  const fp = path.join(root, 'tools/trace/out/w232/fx321.json'), rf = path.join(here, 'data/results.fed');
+  if (existsSync(fp) && existsSync(rf)) {
+    const { parseFed } = await import('./effects.js');
+    const b = readFileSync(rf), F = parseFed(b.buffer.slice(b.byteOffset, b.byteOffset + b.length));
+    const idOf = rec => { for (let g = 0; g < F.u16(0x40); g++) { const G = F.groupOf(g); if (!G) continue; for (let k = 0; k < F.u16(G + 6); k++) if (G + F.u32(G + 0x20 + 4 * k) === rec) return (F.code | (g << 10) | k) >>> 0; } return null; };
+    const box2 = new R.ResultsBox(D, levelEnd(54), 0, { gil: () => 0 });
+    const last = new Map();
+    let t = 0;
+    for (let k = boxAt; k < 321 && k < recs.length; k++) {
+      if (k > boxAt) { t += 20; box2.frame(t, crossAt.has(k - 1)); }
+      for (const e of box2.events) if (e.fxOp && e.fxOp.spawn !== undefined) last.set(e.fxOp.spawn, e.fxOp);
+      box2.events.length = 0;
+    }
+    const S = JSON.parse(readFileSync(fp, 'utf8')).emitters;
+    const spawned = [...last.values()];
+    const miss = S.filter(e => !spawned.some(o => o.id === idOf(e.rec) && o.x === e.p120[0] && o.y === e.p120[1]));
+    ok(miss.length === 0 && S.length > 10, `the Status slots' spawns = the ${S.length} RAM emitters' ids and positions at 321 (${miss.map(e => 'E' + e.ei + ' (' + e.p120.slice(0, 2) + ')').join(' ') || 'all'})`);
+  } else console.log('SKIP the Status slot positions (no w232/fx321.json or data/results.fed)');
 }
 
 // ---- the text against the GS dumps

@@ -34,6 +34,15 @@ export const SPIN = f(0.024543693);          // FUN_0057ff80: 2 pi / 256 per fra
 export const SIZE_HIDE = 3.0, SIZE_SPIN = 5.0;   // FUN_0054c308's screen size: < 3 hidden, >= 5 spins
 export const DROP_LIFE = 0xe10;              // FUN_0055cac8: 3600 frames (status bit 14: none)
 export const INV_SLOTS = 60;                 // the save's inventory +0x26
+// worker 0243 (notes/items-research.md 'Item use'): the item buttons, use and heal. T: w243_potion (TRACE_FIELDSET=items,
+// TRACE_CALLLOG=w243, HP poked to 600 of 780).
+// The inventory's selection (FUN_0031f3c8): +0 the slot (-1 none), +0xc the last selected id, +0x10 the selected id. T: the
+// save's (w243_potion inv_hdr): slot 0, 0x69300000, 0x69300000.
+export const START_SEL = 0, START_LAST = 0x69300000;
+export const USE_REQ = 0x1c;                 // FUN_00573db0: manager request 0x1c, +0xc = the slot -> FUN_0053fde8 case 0x1d
+export const HEAL_REQ = 5;                   // FUN_005661e8 cases 0x12d / 0x12e: request 5, +0xc = n -> case 6: vt+0x1f4
+export const EV_CAN_USE = 0x68, EV_USE = 100, EV_PLAYER_USE = 0x39;   // FUN_00573eb0 / FUN_00568ea0
+export const PLAYER_HP_MAX = 780;            // Vincent's status +4 (T w243_potion ps_04 = 780; the save's)
 export const GIL_MAX = 99999999;             // FUN_003213d8
 // FUN_00310c40 = the save data's version (FUN_00312248 of "bzdNNN": 48 in the save); FUN_00316d70 reads the status
 // flags only from version 0x1d on
@@ -62,6 +71,80 @@ export class Inventory {
   // less AMMO_OTHER_LOADED)
   constructor(table, start = START_INVENTORY, gil = START_GIL) {
     this.table = table; this.slots = start.map(e => e.slice()); this.gil = gil; this.ammo = null; this.other = AMMO_OTHER_LOADED;
+    // worker 0243: the selection (+0 / +0xc / +0x10, FUN_0031f3c8) and the slot pool's free list (FUN_0036e6b0 pushes a
+    // freed slot at its head, FUN_0036e2a8 takes the head: the last freed slot is reused first). An empty slot is [-1, 0].
+    this.sel = START_SEL; this.last = START_LAST; this.selId = START_LAST; this.freed = [];
+  }
+  // FUN_0031f3c8(inv, k): k out of [0, +0x26) -> +0 = -1, +0x10 = -1 (returns k == -1); else +0 = k, +0x10 = the id at k
+  // (FUN_0031e6b8), +0xc = it unless -1
+  setSel(k) {
+    if (k < 0 || k >= INV_SLOTS) { this.sel = -1; this.selId = -1; return k === -1; }
+    this.sel = k;
+    const id = k < this.slots.length ? this.slots[k][0] : -1;
+    this.selId = id;
+    if (id !== -1) this.last = id;
+    return true;
+  }
+  // FUN_0031f448: the selected entry [id, count], or null (+0 == -1)
+  selected() {
+    if (this.sel === -1) return null;
+    const e = this.slots[this.sel] || [-1, 0];
+    return [e[0], this.countAt(this.sel)];
+  }
+  countAt(k) { const e = this.slots[k]; return !e || e[0] === -1 ? 0 : (e[0] === AMMO_ID ? this.count(AMMO_ID) : e[1]); }
+  // FUN_0031eb60(inv, k, n): count -= n (all of it when fewer; a -1 count only goes for n -1), then an emptied entry
+  // whose item has flags bit 1 clear is cleared (FUN_0031eaf0 -> FUN_0031e858(k, -1): the selection goes to -1 when it
+  // was this slot, the slot back to the pool, FUN_0036e2c8). Returns the amount taken.
+  remove(k, n) {
+    const e = this.slots[k];
+    if (!e || e[0] === -1) return 0;
+    let c = this.countAt(k), took = n;
+    if (c === -1) { took = 0; if (n === -1) { this.setCount(k, 0); took = -1; } }
+    else if (c < n) { this.setCount(k, 0); took = c; }
+    else this.setCount(k, c - n);
+    const r = this.rec(e[0]);
+    if (this.countAt(k) === 0 && r && !((r.flags >> 1) & 1)) {
+      if (this.sel === k) this.setSel(-1);
+      this.slots[k] = [-1, 0]; this.freed.push(k);
+    }
+    return took;
+  }
+  // FUN_0031f520(inv, dir): the item list's next (dir 0) / previous (dir 1) entry. Entries: every slot with an id, a count
+  // and a record of kind 2 with flags bit 2 (usable), as {id, key = record +0xa, slot}; with more than one and no selection
+  // (+0 == -1), +0xc's id joins as slot -1 (0xffff). One entry, or no selection and no +0xc entry: the first (unsorted);
+  // unchanged -> 0. Else sorted by FUN_003203c0 with 0x31f4e0 (key, then the id unsigned), the selection's place +1 / -1
+  // with wrap (none found: the first). None: the selection -> -1, 0. Returns 1 when the selection moved.
+  cycle(dir) {
+    const L = [];
+    for (let k = 0; k < INV_SLOTS && k < this.slots.length; k++) {
+      const e = this.slots[k];
+      if (e[0] === -1 || this.countAt(k) === 0) continue;
+      const r = this.rec(e[0]);
+      if (r && r.kind === 2 && ((r.flags >> 2) & 1)) L.push({ id: e[0], key: r.key ?? 0, slot: k });
+    }
+    let extra = false;
+    if (L.length > 1 && this.sel === -1 && this.last !== -1) {
+      const r = this.rec(this.last);
+      if (r) { extra = true; L.push({ id: this.last, key: r.key ?? 0, slot: -1 }); }
+    }
+    const n = L.length;
+    if (n < 1) { this.setSel(-1); return 0; }
+    let to;
+    if (n === 1 || (this.sel === -1 && !extra)) {
+      to = L[0].slot;
+      if (to === this.sel) return 0;
+    } else {
+      L.sort((a, b) => a.key !== b.key ? a.key - b.key : (a.id >>> 0) - (b.id >>> 0));
+      to = L[0].slot;
+      const i = L.findIndex(e => e.slot === this.sel);
+      if (i >= 0) {
+        let j = dir ? i - 1 : i + 1;
+        if (j < 0) j = n - 1; else if (j >= n) j = 0;
+        to = L[j].slot;
+      }
+    }
+    this.setSel(to);
+    return 1;
   }
   // aim_core's Ammo, read live: a reset (Restart / H) makes a new one (aim_core reset). `ammo` = the object or a getter
   get A() { return typeof this.ammo === 'function' ? this.ammo() : this.ammo;
@@ -84,7 +167,7 @@ export class Inventory {
     if (r.kind === 4) return true;
     const k = this.find(id);
     if (k >= 0 && (r.flags & 1)) return this.count(id) < r.max;
-    return this.slots.length < INV_SLOTS;
+    return this.slots.length < INV_SLOTS || this.slots.some(e => e[0] === -1);
   }
   // FUN_005740c0 -> FUN_0031e940 (FUN_003213d8 for kind 4): returns the slot (>= 0), 1 for gil, -1 when it fails
   add(id, n) {
@@ -100,11 +183,17 @@ export class Inventory {
       const c = this.count(id);
       if (c >= r.max) return -1;
       this.setCount(k, Math.min(c + n, r.max));
+      if (this.sel === -1 && r.kind === 2 && ((r.flags >> 2) & 1)) this.setSel(k);   // FUN_0031e940's end (worker 0243)
       return k;
     }
-    if (this.slots.length >= INV_SLOTS) return -1;
-    this.slots.push([id, n]); k = this.slots.length - 1;
+    // worker 0243: a new entry takes the pool's head (FUN_0036e2a8): the last freed slot. L: without one, the first empty
+    // slot or a new one at the end (the save's free list past slot 5 is not read; it runs 6, 7, .. in the save's entries)
+    const hole = this.freed.length ? this.freed.pop() : this.slots.findIndex(e => e[0] === -1);
+    if (hole < 0 && this.slots.length >= INV_SLOTS) return -1;
+    if (hole >= 0) { this.slots[hole] = [id, n]; k = hole; } else { this.slots.push([id, n]); k = this.slots.length - 1; }
     if (id === AMMO_ID && this.A) this.A.inv = n - this.other;
+    // FUN_0031e940's end: n >= 1, no selection, a usable kind-2 item -> it is selected (FUN_0031f3c8)
+    if (n >= 1 && this.sel === -1 && r.kind === 2 && ((r.flags >> 2) & 1)) this.setSel(k);
     return k;
   }
 }
@@ -137,15 +226,29 @@ export function modelIndex(o, rec) {
   }
 }
 
-export function createItems({ data, effect = null, warn = console.warn, ground = null, camera = null, hud = null, areas = null } = {}) {
+export function createItems({ data, effect = null, warn = console.warn, ground = null, camera = null, hud = null, areas = null, stats = null } = {}) {
   const warned = new Set();
   const warnOnce = m => { if (!warned.has(m)) { warned.add(m); warn(m); } };
   const inventory = new Inventory(data.items || {});
   const taken = new Set();                   // FUN_0031e0e0: the placed items' taken bits (+0xce)
   // the Restart (before the new world's attach): the checkpoint's inventory, the taken bits cleared (traced values above).
   // aim_core's reset makes its Ammo at START_AMMO (18 / 180: inv 198) = 234 - 36, consistent with RESTART_INVENTORY.
-  function restart() {
+  // rec (worker 0242, checkpoint.js sceneSave): a mid-level checkpoint's record. Its status block (+0x100) carries the
+  // inventory and DAT_0046e228's entries (+0x1c0, 4 x 0x34: the taken words at +0x24, FUN_0031e0e0; FUN_0031d4d8 writes
+  // them), so FUN_00400778's FUN_0030f688(stage, 2, rec + 0x100) brings back both as they were at the scene_save
+  function restart(rec = null) {
+    if (rec && rec.inventory) {
+      inventory.slots = rec.inventory.slots.map(e => e.slice()); inventory.gil = rec.inventory.gil; inventory.other = rec.inventory.other;
+      // worker 0243: the selection and the slot pool (L: an older record without them keeps the save's)
+      inventory.sel = rec.inventory.sel ?? START_SEL; inventory.last = rec.inventory.last ?? START_LAST;
+      inventory.selId = rec.inventory.selId ?? START_LAST; inventory.freed = (rec.inventory.freed || []).slice();
+      taken.clear(); for (const k of rec.taken || []) taken.add(k);
+      return;
+    }
     inventory.slots = RESTART_INVENTORY.map(e => e.slice()); inventory.gil = RESTART_GIL; inventory.other = RESTART_OTHER_LOADED;
+    // GUESS: the Restart's selection = the save's (slot 0, 0x69300000; the reload state's inventory header was not read;
+    // notes/fidelity-audit.md 'Item selection after a Restart')
+    inventory.sel = START_SEL; inventory.last = START_LAST; inventory.selId = START_LAST; inventory.freed = [];
     taken.clear();
   }
   const list = [];
@@ -427,8 +530,111 @@ export function createItems({ data, effect = null, warn = console.warn, ground =
   // object commands (FUN_00580d38 = vt+0xc): 0x1a4 -> +0xca; the rest FUN_0054cd70 (enemy_ai's generic cases)
   function cmd(o, c) { return c === 0x1a4 ? o.ca : undefined; }
 
+  // ---------------------------------------------------------------- item use (worker 0243; notes/items-research.md 'Item use')
+  // Vincent's +0x28 in the save (0x20901f; enemy_ai's notes): bit 2 set (the section stat FUN_0031d668(4, 1)), bit 5 clear
+  // (no linked object +0xbc: FUN_00573eb0's FUN_00bec9c0 branch and FUN_00571b60's overlay cases are not reached)
+  const P28 = 0x20901f;
+  const hpMax = P => P.hpMax ?? PLAYER_HP_MAX;
+  // FUN_003320c0 (the player's input, once a frame in his control update): pad id 0x1d pressed -> FUN_00573db0; else id 0x1e
+  // -> FUN_00574058(P, 0); else id 0x29 -> FUN_00574058(P, 1). Pad table 0x46bae0: 0x1d = D-pad right, 0x1e = D-pad left,
+  // 0x29 = no button. Gates: FUN_003242e8's mask (DAT_0046e290 +0x10 | +0x18) bit 0x2000 (use) / 0x4000 (cycle), FUN_00574d30's
+  // result and the input object's +0x54 bit 8 (use): 0 on the page's path, as aim_core's `g` (fidelity-audit 'Item buttons').
+  function input({ use = false, next = false, prev = false } = {}) {
+    if (!W || !W.player) return;
+    if (use) requestUse();
+    else if (next) cycle(0);
+    else if (prev) cycle(1);
+  }
+  // FUN_00573db0: HP not 0 (FUN_00316cf8), a selection (+0 != -1) -> FUN_0053fbe8(mgr, 0x1c, P+0x20), +0xc = the slot
+  function requestUse() {
+    if (W.player.hp === 0 || inventory.sel === -1 || !W.playerObj) return 0;
+    if (!W.postManager) { warnOnce('items: the AI world has no manager queue (postManager): no item use'); return 0; }
+    W.postManager(USE_REQ, W.playerObj.id, inventory.sel);
+    push(`use request slot ${inventory.sel}`);
+    return 1;
+  }
+  // FUN_00574058(P, dir): FUN_0031f520 moved the selection -> FUN_0054b158(P, 0x58ee70, 1); then FUN_003320c0: DAT_0046e54c
+  // |= 0x6e (DAT_0046e290 +0x30 set in the save) and FUN_00324440(0xe) (a request bit of DAT_0046e290 +0x14: not on the page)
+  function cycle(dir) {
+    if (!inventory.cycle(dir)) return 0;
+    sound(data.sounds && data.sounds.cycle, W.player.pos);
+    if (hud) hud(0x6e);
+    push(`item select ${inventory.sel}`);
+    return 1;
+  }
+  // FUN_0054e138(P, id, ev): the item's script (bgd +6, FUN_0031e208 -> FUN_00310718; items.json scripts) runs event ev in
+  // the VM DAT_0046f4dc with Vincent's id as host (FUN_0036fd58(vm, P+0x20, script)), so its target -2 is Vincent. The result
+  // is an int (a float cell is truncated, asm 0x54e1d8); no record / script -> 0. L: FUN_0053d960(mgr, P's position) (the
+  // manager's +0x230 locator) is not set: the item scripts send no command that reads it (0x125 / 0x14b / 0x12d / 0x172).
+  function itemEvent(id, ev) {
+    const r = inventory.rec(id);
+    if (!r) return 0;
+    const sc = data.scripts && data.scripts[String(r.script)];
+    if (!sc) { warnOnce(`items: item script ${r.script} not exported (re-run export_web_items.py)`); return 0; }
+    const o = Object.create(W.playerObj, { script: { value: r.script }, scripts: { value: data.scripts }, fallback: { value: -1 } });
+    return Math.trunc(W.runEvent(o, ev, [0, 0]) ?? 0);
+  }
+  // FUN_00568ea0(P, id): Vincent's event 0x39 (r0 = id, r1 = 0; vt+0x2f4): 1 -> not used (0); 0 -> the item's event 100;
+  // 2 -> used (1); else 0. Then P+0x28 bit 2 -> FUN_0031d668(4, 1) (the section stat).
+  function playerUse(id) {
+    const v = Math.trunc(W.runEvent(W.playerObj, EV_PLAYER_USE, [id, 0]) ?? 0);
+    let res = 0;
+    if (v === 0) res = itemEvent(id, EV_USE);
+    else if (v === 2) res = 1;
+    if ((P28 & 4) && stats) stats(4, 1);
+    return res;
+  }
+  // FUN_00573eb0(P, k) (manager request 0x1c, FUN_0053fde8 case 0x1d): HP not 0; the slot's entry (FUN_0031e658) with an id
+  // and a count; its record usable (flags bit 2); the item's event 0x68 != 0; then FUN_00568ea0 -> used: FUN_0031eb60(inv, k,
+  // 1). Then DAT_0046e54c |= 0x6e and FUN_00324440(0xd) (not on the page); returns 1.
+  function useSlot(o, k) {
+    const P = W.player;
+    if (!P || P.hp === 0) return 0;
+    const e = inventory.slots[k];
+    if (!e || e[0] === -1 || inventory.countAt(k) === 0) return 0;
+    const id = e[0], r = inventory.rec(id);
+    if (!r || !((r.flags >> 2) & 1)) return 0;
+    if (!itemEvent(id, EV_CAN_USE)) { push(`use ${id.toString(16)} refused`); return 0; }
+    const used = playerUse(id);
+    if (used) inventory.remove(k, 1);
+    if (hud) hud(0x6e);
+    push(`use ${id.toString(16)} slot ${k} ${used ? 'used' : 'not used'}`);
+    return 1;
+  }
+  // Vincent's command handler (FUN_00571b60 -> FUN_005661e8) for what the item scripts send; undefined = enemy_ai's cases
+  //   0x12d: status -> FUN_0053fbe8(mgr, 5, P+0x20), +0xc = r0      0x12e: the same with +0xc = max - HP (+4 - +0x20)
+  //   0x14b: FUN_00336658(r0, P+0x100, model) -> FUN_00336748: effect r0 from the model's own FED (MP +0x3e4) attached to it
+  //          (FUN_002dbc80 / FUN_002e8d50 / FUN_002e77f8). MISSING on the page (warned): no model FED is loaded.
+  //   0x172: HP == max -> 1, else 0                                0x173: r0 < HP -> 1, else 0
+  function playerCmd(t, c, r) {
+    const P = W && W.player;
+    if (!P) return undefined;
+    switch (c) {
+      case 0x12d: W.postManager(HEAL_REQ, t.id, r[0] | 0); return 0;
+      case 0x12e: W.postManager(HEAL_REQ, t.id, hpMax(P) - P.hp); return 0;
+      case 0x14b:
+        warnOnce(`items: cmd 0x14b effect 0x${(r[0] >>> 0).toString(16)} on Vincent's model (FUN_00336748, the model's FED MP+0x3e4) not on the page`);
+        push(`effect ${(r[0] >>> 0).toString(16)} (not drawn)`);
+        return 0;
+      case 0x172: return P.hp === hpMax(P) ? 1 : 0;
+      case 0x173: return (r[0] | 0) < P.hp ? 1 : 0;
+      default: return undefined;
+    }
+  }
+  // request 5's vt+0x1f4 = FUN_0055c910(P, n): FUN_003168e8 (0 < HP < max: HP += n, capped at max), then vt+0x32c =
+  // FUN_00576b10 -> FUN_0055ca20 (FUN_00567d00: the number popup returns for Vincent; n > 0: vt+0x344) and vt+0x344 =
+  // FUN_00576c28: DAT_0046e54c |= 4 (the HUD's HP; hud.js follows the HP itself)
+  function heal(n) {
+    const P = W.player, max = hpMax(P);
+    const before = P.hp;
+    if (P.hp > 0 && P.hp < max) P.hp = Math.min(P.hp + n, max);
+    if (hud) hud(4);
+    push(`heal ${n}: ${before} -> ${P.hp}`);
+  }
+
   return {
     attach, restart, areaSwitch, sweep, update, drop, cmd, deleted, inventory, taken, list,
+    input, useSlot, playerCmd, heal,                          // worker 0243: item use
     id: k => (byRec.has(k) && !byRec.get(k).gone ? byRec.get(k).id : -1),
     t: { inRange, take, touch, activate, modelIndex },
   };

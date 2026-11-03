@@ -62,7 +62,7 @@ def resolve_bases(mem):
         bases["GSB"] = u32(mem, u32(mem, u32(mem, G_GSTATE)) + 4)
         bases["AIQ"] = u32(mem, G_AISCHED)
         bases["EVF"] = u32(mem, 0x47DBB0)
-    elif FIELDSET == "ammo":
+    elif FIELDSET in ("ammo", "reloadrun"):            # reloadrun: worker 0246
         # worker 0214: the weapon slot record R (FUN_0031a990(*(PS+0x84))) and the inventory entry of its ammo item
         # (FUN_00319ef0: FUN_0031e658(*(PS+0x80), FUN_00319ec0(R, 5)))
         PS = u32(mem, P + 0x17C)
@@ -74,7 +74,7 @@ def resolve_bases(mem):
     elif FIELDSET == "items":
         # worker 0224: the inventory entries (*(PS+0x80) +0x34, 12 bytes each; FUN_0031e658), the status, the event flags
         PS = u32(mem, P + 0x17C)
-        bases.update(PS=PS, INVE=u32(mem, u32(mem, PS + 0x80) + 0x34), EVF=u32(mem, 0x47DBB0),
+        bases.update(PS=PS, INVE=u32(mem, u32(mem, PS + 0x80) + 0x34), EVF=u32(mem, 0x47DBB0), INV0=u32(mem, PS + 0x80),
                      GSB=u32(mem, u32(mem, u32(mem, G_GSTATE)) + 4))
     elif FIELDSET == "hud":
         # the HUD's top-level groups (worker 0203): root HUD+0x18, slot i HUD+0x38+4i (FUN_003ad618)
@@ -540,6 +540,18 @@ AMMO_FIELDS = [f for f in AIM_FIELDS if f[0] in ("step", "pad_held", "p_state", 
     ("hud_mask", None, 0x46E54C, "u32", "D", "DAT_0046e54c: HUD refresh mask (bit 2 = weapon / ammo)"),
 ]
 
+# Opt-in set for the reload while moving (TRACE_FIELDSET=reloadrun, worker 0246; notes/aim-research.md 'Reload motion
+# class 0x1c'): the ammo set + position, speed, the head clip and layers, C+0x1c0 (bit 0x20 frozen, 0x200 ground),
+# C+0x564 (0x4000 / 0x20000 from FUN_00598000), C+0x590 (bit 24 gun out), the speed table C+0x5f4..0x65c (FUN_00345b58)
+# and the motion class object C+2000 (+4 phase, +8 done, +0xc timer, +0x70 class id).
+RELOADRUN_FIELDS = AMMO_FIELDS + [f for f in FIELDS if f[0] in ("matrix", "ground_speed", "mp_head", "mp_rate", "mp_layers")] + [
+    ("c_1c0", "C", 0x1C0, "u32", "D", "C+0x1c0 (0x20: FUN_0034ea18 returns at once; 0x200 on the ground)"),
+    ("c_564", "C", 0x564, "bytes:8", "D", "C+0x564 / +0x568 flags"),
+    ("c_590", "C", 0x590, "bytes:8", "D", "C+0x590 (bit 24 gun out), +0x591 blend"),
+    ("c_tab", "C", 0x5F4, "bytes:112", "D", "FUN_00345b58 table: 3 x 0x18 rows from +0x5f4 (+0 motion row), +0x658 count, +0x659 index"),
+    ("c_cls", "C", 2000, "u32", "D", "C+2000 = the motion class object (FUN_00341780)"),
+]
+
 # Opt-in set for footsteps and placed sounds (TRACE_FIELDSET=ambfoot, worker 0215; notes/audio-research.md "Footsteps").
 AMBFOOT_FIELDS = [f for f in FIELDS if f[0] in ("step", "pad_held", "matrix", "ground_speed", "walk_poly", "mp_head")] + [
     ("c_6c0", "C", 0x6C0, "u32", "D", "byte 1 = C+0x6c1 floor material (FUN_00340e08)"),
@@ -610,6 +622,8 @@ STAGE_FIELDS = [f for f in FIELDS if f[0] in ("step",)] + [
 ITEMS_FIELDS = [f for f in FIELDS if f[0] in ("step", "pad_held", "matrix")] + [
     ("inv", "INVE", 0, "bytes:96", "D", "inventory entries 0-7: u32 id, u32 count, u32 (FUN_0031e658)"),
     ("ps_20", "PS", 0x20, "u32", "D", "status +0x20 HP (FUN_00316cf8)"),
+    ("ps_04", "PS", 0x4, "u32", "D", "status +4 max HP (FUN_003168e8; worker 0243)"),
+    ("inv_hdr", "INV0", 0, "bytes:48", "D", "inventory +0 selected slot, +0xc last id, +0x10 selected id, +0x26 slots (worker 0243)"),
     ("gstate", "GSB", 0, "bytes:8", "D", "game-state bits 0..63"),
     ("evt_flags", "EVF", 0x38, "bytes:64", "D", "event flags 0..63, XOR evt_key"),
     ("evt_key", None, 0x47DBF0, "bytes:64", "D", "DAT_0047dbf0"),
@@ -655,6 +669,8 @@ if FIELDSET == "evactor":
     FIELDS = EVACTOR_FIELDS
 if FIELDSET == "ammo":
     FIELDS = AMMO_FIELDS
+if FIELDSET == "reloadrun":
+    FIELDS = RELOADRUN_FIELDS
 if FIELDSET == "event":
     FIELDS = EVENT_FIELDS
 if FIELDSET == "hud":
@@ -683,6 +699,18 @@ elif __import__("os").environ.get("TRACE_FIELDSET") == "pose":
 if __import__("os").environ.get("TRACE_RNG"):
     FIELDS = FIELDS + [("rng_state", None, 0x4FBE00, "bytes:2496", "D", "DAT_004fbe00: MT state (624 u32)"),
                        ("rng_idx", None, 0x4FC7C0, "u32", "D", "DAT_004fc7c0: MT index")]
+
+# TRACE_SLOTS=1 (worker 0244): the chunk slot table DAT_004e4c60 (3 slots, stride 0x70: +0x54 chunk, +0x5c loaded;
+# area_stream.js) and the stream request DAT_0046bfb0..bc (current a / b, pending a / b)
+if __import__("os").environ.get("TRACE_SLOTS"):
+    FIELDS = FIELDS + [("chunk_slots", None, 0x4E4C60, "bytes:336", "D", "DAT_004e4c60: chunk slots (+0x54 chunk, +0x5c loaded)"),
+                       ("stream_req", None, 0x46BFB0, "bytes:16", "D", "DAT_0046bfb0 / b4 current pair, b8 / bc pending")]
+
+# TRACE_STREAMJOB=1 (worker 0247): the chunk load job: DAT_004e4c50 busy / +4 slot / +8 zone / +0xc chunk (FUN_002677a0,
+# FUN_00267970) and FUN_00266ae0's case DAT_0046bf94 / file handle DAT_0046bf9c
+if __import__("os").environ.get("TRACE_STREAMJOB"):
+    FIELDS = FIELDS + [("stream_job", None, 0x4E4C50, "bytes:16", "D", "DAT_004e4c50 busy, +4 slot, +8 zone, +0xc chunk"),
+                       ("load_case", None, 0x46BF94, "bytes:12", "D", "DAT_0046bf94 case, +4 DAT_0046bf98, +8 DAT_0046bf9c handle")]
 
 # TRACE_FXTITLE=d15820 (worker 0202): the GAME OVER title's emitter (DAT_004ee4a0 +0x84 list head; the same heap
 # address in the w198 states 1-5 of w192_gameover): its age +0x1c and step +0x20 (FUN_002ea040), read before the spawn too

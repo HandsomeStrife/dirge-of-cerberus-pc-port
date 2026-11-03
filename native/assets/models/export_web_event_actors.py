@@ -35,13 +35,65 @@ from skd_skeleton import load_skeleton      # noqa: E402
 
 EVENT = 100                                  # ev0100 (the class file 0x0c064001; export_web_event.py)
 MOT_BASE = 0x0C000400 + EVENT * 0x1000       # FUN_00250898(n, event)
-# p000 is the page's own Vincent (play.js): his event actor is left out on the page (warned there)
-SKIP = {'p000'}
-# scr001's loadmotion_l files (n), but p000's 0xfe: the class also names clips of other branches' files. T: the page
-# VM's run of scr001 (test_event_vm 'loadmotion files' checks every loadmotion_l argument is here or p000's)
-FILES = (0x01, 0x02, 0x04, 0x05, 0x1d, 0x22, 0xc6)
+# worker 0248: p000 (Vincent's own event actor) is exported too: rv_matiawase (the same class ev0101, run by the stage
+# controller) loads it into a slot with motion files 0x0d / 0x7b
+SKIP = set()
+# scr001's loadmotion_l files (n); the class also names clips of other branches' files. T: the page VM's run of scr001
+# (test_event_vm 'loadmotion files' checks every loadmotion_l argument is here). Worker 0248: 0x0d / 0x7b
+# (rv_matiawase's loadmotion(13) / (123)) and 0xfe (the opening's p000, now exported)
+FILES = (0x01, 0x02, 0x04, 0x05, 0x0d, 0x1d, 0x22, 0x7b, 0xc6, 0xfe)
 # scr001's load_l models (the class names other branches' models too; same test checks the VM run's load_l names)
-MODELS = ('e027', 'e048', 'e063', 'g000', 'g013', 'n013', 'p005', 'p014', 'w003')
+MODELS = ('e027', 'e048', 'e063', 'g000', 'g013', 'n013', 'p000', 'p005', 'p014', 'w003')
+
+
+def texanims(model, out):
+    """The model's texture animations (worker 0248): the container's `texanm` tad entry (0x646174), read by the MP
+    set-up FUN_005a8850 and played per draw by FUN_005a9938 (FUN_005aa9e8 then FUN_005aa838; FUN_00414290 /
+    FUN_00414568 build the GS copy). Payload: +8 count, +0xc table of offsets (from the payload) to the animations:
+      +0 u8 source texture entry, +1 u8 target entry (indices into the texture container, FUN_00414290 via
+      FUN_00253370(.., MP+0x3d8) +0x14), +4 s16 x 2 the target rect's corner (TRXPOS DSAX / DSAY), +8 s16 x 2 its size
+      (TRXREG), +0xc u16 frames, +0xe s16 key count, +0x10 name (8 bytes; '@' first = on at set-up), +0x18 / +0x1a s16
+      the random wait range after a cycle, +0x20 keys of 8 bytes: s16 source x, y (TRXPOS SSAX / SSAY), s16 the frame
+      the key runs to.
+    The copy is local -> local in the source's PSM (BITBLTBUF SPSM = DPSM): palette indices move, the target's CLUT
+    colours them. So each (source, target) pair is exported as the source image decoded with the TARGET's CLUT
+    (smd_material.texture_rgba with that entry's CLUT swapped in): MODEL_tad_S_D.png. The target texture is named by
+    its entry (the glb image name = the material's entry name). A target whose entry +0x22 mask has the MP's variant
+    bit (MP+0x44b) is skipped by FUN_00414290: `mask` is exported, the page draws variant 0."""
+    import struct
+    from PIL import Image
+    import smd_material as SM
+    b = open(E.paths(model)['cont'], 'rb').read()
+    u16 = lambda o: struct.unpack_from('<H', b, o)[0]
+    s16 = lambda o: struct.unpack_from('<h', b, o)[0]
+    u32 = lambda o: struct.unpack_from('<I', b, o)[0]
+    offs = [u32(0x14 + 4 * i) for i in range(u16(0x10))]
+    tad = next((o for o in offs if b[o + 8:o + 11] == b'tad'), None)
+    if tad is None:
+        return None
+    P = tad + 0x10
+    anims = []
+    for i in range(u32(P + 8)):
+        A_ = P + u32(P + u32(P + 0xc) + 4 * i)
+        nk = s16(A_ + 0xe)
+        anims.append(dict(name=b[A_ + 0x10:A_ + 0x18].split(b'\0')[0].decode('latin-1'), src=b[A_], dst=b[A_ + 1],
+                          d=[s16(A_ + 4), s16(A_ + 6)], wh=[s16(A_ + 8), s16(A_ + 0xa)], frames=u16(A_ + 0xc),
+                          wait=[s16(A_ + 0x18), s16(A_ + 0x1a)],
+                          keys=[[s16(A_ + 0x20 + 8 * k), s16(A_ + 0x22 + 8 * k), s16(A_ + 0x24 + 8 * k)] for k in range(nk)]))
+    if not anims:
+        return dict(anims=[], images={}, targets={})
+    tex = E.paths(model)['tex']
+    ents = SM.texture_entries(tex)
+    images, targets = {}, {}
+    for an in anims:
+        k = '%d_%d' % (an['src'], an['dst'])
+        if k not in images:
+            rgba = SM.texture_rgba(tex, dict(name=ents[an['src']]['name'], image_entry=an['src'], clut_entry=an['dst']))
+            f = '%s_tad_%s.png' % (model, k)
+            Image.fromarray(rgba, 'RGBA').save(os.path.join(out, f))
+            images[k] = f
+        targets['%d' % an['dst']] = dict(name=ents[an['dst']]['name'], mask=ents[an['dst']].get('mask', 0))
+    return dict(anims=anims, images=images, targets=targets)
 
 
 def mod_entries(buf):
@@ -120,6 +172,28 @@ def main():
             lp['clipFrames'] = {c: d['nf'] for c, d in clips.items()}
             lp['container'] = os.path.basename(f)
             packs['%d' % n] = lp
+        # worker 0248: the character's own (resident) motion files (export_web_enemy CLIP_KS: FUN_00249cb8 k) that hold a
+        # clip the script names (the opening's p000 plays h_st, Vincent's stand): pack 'rK' (K = k in hex), listed in
+        # `resident`; the page puts them before the event files in the actor's search (FUN_005a7390 takes the first file
+        # holding the name; the names are unique across them)
+        resident = []
+        for k in E.CLIP_KS:
+            f = E.NOPATH + '%08x.bin' % E.file_id(m, k)
+            if os.path.basename(f) not in listed or not os.path.exists(f):
+                continue
+            buf = open(f, 'rb').read()
+            ents = [x for x in mod_entries(buf) if x[0] in strs]
+            if not ents or not all(fits(buf, P, end, bc) for _nm, P, end in ents):
+                continue
+            key = 'r%x' % k
+            if any(key == r for r in resident) or any(nm in p_.get('clipFrames', {}) for p_ in packs.values() for nm, _P, _e in ents):
+                continue
+            clips = {nm: dict(cont=f, nf=AR.clip_frames(buf, P), zero_y=False) for nm, P, _e in ents}
+            lp = V.local_pose(sk, list(sk['parent']), clips, out, '%s_%s_local.bin' % (m, key), in_place=False)
+            lp['clipFrames'] = {c: d['nf'] for c, d in clips.items()}
+            lp['container'] = os.path.basename(f)
+            packs[key] = lp
+            resident.append(key)
         # marker.mkd (FUN_0030bef8 -> the socket of an attached actor, FUN_005ab8f0 / FUN_005ad508): [bone, x, y, z]
         import export_cerberus as EC
         try:
@@ -127,8 +201,12 @@ def main():
         except (ValueError, AssertionError):  # no marker.mkd / not the mk2 layout: no sockets (the page warns)
             mk = []
         index['models'][m] = dict(glb=m + '.glb', side=m + '.json', bones=bc, parent=[int(x) for x in sk['parent']],
-                                  markers=mk, packs=packs)
-        print('%s: %d bones, packs %s' % (m, bc, ' '.join('%02x(%s)' % (int(n), ','.join(p['clipFrames']))
+                                  markers=mk, packs=packs, resident=resident)
+        ta = texanims(m, out)                                         # worker 0248: texanm.tad (the faces' animations)
+        if ta and ta['anims']:
+            index['models'][m]['texanim'] = ta
+            print('%s: texanm %s' % (m, ' '.join(x['name'] for x in ta['anims'])))
+        print('%s: %d bones, packs %s' % (m, bc, ' '.join('%s(%s)' % (n if n.startswith('r') else '%02x' % int(n), ','.join(p['clipFrames']))
                                                             for n, p in packs.items())))
     json.dump(index, open(os.path.join(out, 'actors.json'), 'w'), indent=1)
     print('wrote %s/actors.json: %d models' % (a.out, len(index['models'])))

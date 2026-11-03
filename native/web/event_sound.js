@@ -165,7 +165,7 @@ export function sendEventSe(R, audio) {
   const list = R.sePending; R.sePending = [];
   const sent = [];
   for (const e of list) {
-    const row = audio && audio.se && audio.se.names[e.name];
+    const row = audio && (audio.row ? audio.row(e.name) : audio.se && audio.se.names[e.name]);   // FUN_003eb868
     if (!row || (row.flags & 2)) continue;               // a stream row (FUN_003eb088) is not played by the page
     sent.push({ name: e.name, id: row.id, vol: e.vol, pan: 0x40 });
     if (audio.ctx) audio.playId(row.id, e.vol, 0x40);

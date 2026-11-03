@@ -202,6 +202,10 @@ export class Ammo {
 }
 function seTable(table, i) { return Array.isArray(table) && i >= 0 && i < table.length ? table[i] || null : null; }
 let ammoSeWarned = false;
+// FUN_00577038 (player state 10 under game-state bit 11: C+0x565 bit 0 -> FUN_00346fc0 / FUN_003470d8 -> states 0xd / 0xe,
+// else FUN_00346fb0(C, 0) + FUN_00328640(CAM, 1)) is not translated (worker 0246)
+let nc10Warned = false;
+const warnNoControl10 = () => { if (!nc10Warned) { nc10Warned = true; console.warn('aim_core: FUN_00577038 (player state 10 with user control off) not translated'); } };
 const warnAmmoSe = () => { if (!ammoSeWarned) { ammoSeWarned = true; console.warn('aim_core: weapon.json has no se_dry / se_reload: rebuild data/aim (export_web_aim.py); no dry-fire / reload sound'); } };
 
 export class WeaponSystem {
@@ -330,11 +334,12 @@ export class WeaponSystem {
   // view pitch the render uses: + 0.8 x CAM+0x198 x (FOV / 73.5) (l.1762, DAT_0046e4cc)
   viewPitch() { const c = this.cam; return c.pitch + 0.8 * c.k198 * (c.fov / 73.5); }
 
-  // FUN_0032a420(CAM, mode): new camera type; transition starts (phase 0, ramp 0)
-  setView(mode) {
+  // FUN_0032a420(CAM, mode, p3, p4): new camera type; transition starts (phase 0, ramp 0; p3 = 1: ramp 1, FUN_0032aaf8)
+  setView(mode, p3 = 0, p4 = 0) {
     const c = this.cam;
     const prev = c.view;
-    if (mode === prev) return;                                // same mode, no restart (LAB_0032a4d0)
+    if (mode === prev && p3 === 0 && p4 === 0) return;        // same mode, no restart (LAB_0032a4d0); p3 / p4 force it
+                                                              // (FUN_00326da8's (view, 1, 1), worker 0244)
     // CAM+0x100: the old type's pivot (y x cos(pitch x 0.017453294): the game converts the
     // radian pitch again, so the cos is ~1) + offset, when the old view is 2-4; else 0 and
     // 0x800 cleared
@@ -349,7 +354,8 @@ export class WeaponSystem {
     // and CAM+0x1a4 = PTR_DAT_0046e350 (-0.75)
     if (c.type === 0xe) { c.a1a0 = 5; c.a1a4 = -0.75; }
     c.view = mode; c.type = VIEW_TO_TYPE[mode];
-    this.enterType(old);
+    c.v100 = old;                                             // CAM+0x100 (FUN_0032aaf8 reads it with 0x800)
+    this.enterType(old, p3);
   }
   // type object +0x10 pivot (y scaled as above) + +0x20 offset (FUN_0032a420 / FUN_0032aaf8)
   typeVec(type) {
@@ -360,9 +366,12 @@ export class WeaponSystem {
   // 0x800 the angle that keeps the aim on CAM+0xa0 across the pivot change:
   // v = new - CAM+0x100, D = max(25, |CAM+0xa0 - CAM+0x90| - v.z); +0x1dc = -sign(v.x) atan(|v.x| / D),
   // +0x1d8 = -sign(v.y) atan(|v.y| / D) (v >= 0 takes the negative branch)
-  enterType(old) {
+  // p3 (FUN_00337338's third argument, passed to the enter): FUN_0032aaf8 sets ramp CAM+0x17c = 1 when it is 1, else 0;
+  // FUN_00337338 then writes the phase CAM+0x2c = 0 either way (worker 0244; T w244_rescue_calls: ramp 1 after
+  // FUN_00326da8's enter, 0 after the message 0x7d5's)
+  enterType(old = this.cam.v100, p3 = 0) {
     const c = this.cam;
-    c.phase = 0; c.ramp = 0;
+    c.phase = 0; c.ramp = p3 === 1 ? 1 : 0;
     if (c.type === 0xc) c.e1e2 = 0;                           // FUN_00330240 0x330420: sb zero, CAM+0x1e2 (stick-idle counter)
     if (!(c.flags & 0x800)) return;
     const n = this.typeVec(c.type), v = [n[0] - old[0], n[1] - old[1], n[2] - old[2]];
@@ -550,6 +559,18 @@ export class WeaponSystem {
     if ((W.flags & 1) && !inp.r1Held) {                       // FUN_00574b98 on release
       if (P.st === 3) P.st = 0; else if (P.st === 4) P.st = 2;
     }
+  }
+
+  // FUN_00331f08 with game-state bit 11 set (worker 0246): the control update vt+0x4c FUN_003320c0 (these buttons, the
+  // auto reload), vt+0x54 FUN_00333150 (the stick, ✕) and vt+0x5c FUN_003343a8 are skipped (controller vtable 0x4a0910);
+  // instead FUN_00574920(P, 0) (P+0x298 = 0: play.js passes a neutral stick), FUN_00577038 for player state 10, and when
+  // FUN_0055a378 (status +0x17c's weapon record, FUN_00317c70) has W+4 bit 0 (auto fire) FUN_00574b98: the R1 release.
+  // L: FUN_00574b98's P+0x2a8 bit 0x20 path (FUN_00574808(P, 6, 1)) and FUN_00565ff0(P, 0) are not on the page (as in input)
+  noControl(player = null) {
+    const P = this.P;
+    this.events.length = 0;
+    if (player && player.P && player.P.state === 10) warnNoControl10();
+    if (this.W.flags & 1) { if (P.st === 3) P.st = 0; else if (P.st === 4) P.st = 2; }   // FUN_00574b98
   }
 
   // FUN_005766c0(P, 1, 1) / (P, 0, 1) -> FUN_00576548(P, on) (same a0 / a1): weapon state 0xc / 0xe

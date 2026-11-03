@@ -329,3 +329,33 @@ which no z128 record uses: not reachable on the page.
   the dumps' only fire triangles the page does not draw are E10-E12's 4 FUN_002f93d8 ones.
 - Open: FUN_002f93d8, the flares, the occluders, gameplay model fog (FUN_002f2d90, FOG register: not read from the dumps),
   script-spawned stage effects and hidden-cell changes, the start ages (page starts the fire at age 0).
+
+## Menu-box effects: channel types 8 / 18, type 103's draw, the soft end (worker 0241, 2026-11-03)
+See notes/message-research.md "Box effects" for the wiring (menu_fx.js). In effects.js:
+- **Type 18** (vtable 0x499a30, save RAM): a child-particle spawner. init 0x272a60 / transition 0x272a70 zero the carry,
+  eval 0x272a78 -> FUN_00272aa0(emitter dt +0x20), loop 0x272a98 returns 1, draw / destroy no-ops. Data: +0 rate, +4 offset
+  range, +8 speed, +0xc acceleration, s16 +0x10 child tag (bit 0x1000: a tag group E +0x28, FUN_002e54b0 / 54e0, warned),
+  u16 +0x12 carry back-off, s16 +0x14 (< 0 off), u8 +0x17 chance %. Per child: FUN_002d9880(100) chance (VU0 R) when < 100,
+  3 LCG offsets, FUN_002e4180 (child category 1: pos = offset . (identity + row 3 = the ref-0 value), dir = pos - row 3;
+  0 / 2-8: pos = dir = offset; normalised), vel / acc = dir x +8 / +0xc, FUN_002e9268 -> FUN_002e8ea8 with the spawner as
+  parent and the spawn parameter { 7, pos, vel, acc } at mgr +0xb4.
+- **The spawn parameter** (FUN_002eb038 sets mgr +0xb4 for each init): word 0 bits 1 pos (+4), 2 vel (+8), 4 acc (+0xc),
+  8 / 0x10 rotation, 0x40 / 0x80 scale, 0x200 / 0x400 colour (asm of the inits 0x272190.., 0x274438.., 0x275858..,
+  0x2760e0..). Translated: types 1 / 2 (replace, 4 words), 3 (VADD .xyz); other bits warned.
+- **Parents** (FUN_002e8ea8 / FUN_002e92c8): parent +0x20 counts live children; a particle past its life with children
+  gets flag 8 and stays; FUN_002eb6b8 runs no list (eval, draw, loop, once) for a flag-8 particle; P id bit 0 + children
+  skips the death. A child's matrix (FUN_002e3dd8's per-category cases, jump table 0x49f740) is not translated: children
+  are simulated, not drawn. During FUN_002ea6a0 the manager state is 6, so a child spawned in an eval gets no keyframe tail.
+- **Type 8** (vtable 0x49a510): scale + rate x 0.01, the scale analogue of type 2 (init 0x276438, transition 0x2764f8,
+  eval 0x2765f0 VU0 .xyzw, loop 0x276628).
+- **Type 103's draw** FUN_002aa120 (asm 0x2aa120..0x2aa510; drawStrands): see the code comment. T: the GAME OVER title's 24
+  lines = the w198 dumps (0.074 px, RGBA / ALPHA exact); the help box's strands have the dump's colours / ALPHA 0x48.
+- **Soft end** FUN_002e7198 (`softEnd`): +0x28 < 0 -> +0x28 = age (+0x1c), or age < 0 -> +2 |= 0x20; E +0x1f == 3 ->
+  +2 |= 0x10. **FUN_002ea040's fade** (ageEmitter): +0x28 >= 0 (or a looping emitter past E +0xc) -> by E +0x1f: 0 =
+  30 frames, 1 = 15 (+0xd0 = 1 - (age - start) / length; removed at the length or when age < start), 2 = removed, 3+ = none.
+  +0xbc = +0x15c x +0xd0 also without the cull (FUN_002ea6a0). `remove(em)` = FUN_002e6920(.., 0).
+- T (test_effects): w220 open330 (help box, emitters age 124.8 = the dump's frame): picture 2 / 2 and panel models 14 / 14
+  triangles exact; w232 rows dump = the state 321 + 3 frames: 162 / 162 triangles of the rank letters / evaluation (type 8)
+  exact. Fixtures (gitignored): tools/trace/out/w220/fx330.json, w232/fx321.json, w232/fxrows.json, w198/lines3-5.json.
+- Open: type 26 (FUN_002735f0, the Status panel's second spawner), type 119's draw, children's matrices, E15's model 0x21,
+  type 113 (FUN_002d4250: frame-buffer passes, the title card's 0x818c0400).

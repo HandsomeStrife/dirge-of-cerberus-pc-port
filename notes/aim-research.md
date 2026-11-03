@@ -507,3 +507,37 @@ f80), w214_empty (`TRACE_POKE=a096d0=2d`: the inventory count = the class sum, r
 Each shot -3 rounds (records 41, 71, ... 191); auto reload on record 205 (state 9, T 80, 18/18 162, bsj_012 at
 P+0x10c & 3 = 1); state 0 again at 273 (h_st_rd 205-272, h_st_a 273); R1 presses during state 9 are ignored.
 test_aim_ammo: every record of w214_dry / w214_r2 equal (state, timer, rounds, reserve, HUD texts 0x1a / 0x19, sounds).
+
+## 12. Reload motion class 0x1c (worker 0246, 2026-11-03) — D + T
+
+Dan: "When reloading, Vincent isn't running; he seems to glide." The page played h_st_rd as a one-shot over the moving body
+(GUESS). The game keeps the legs going:
+- FUN_005612e8 -> FUN_00341780(C, 0x1c, 0) -> factory FUN_00592918 (a compare tree, not a Ghidra function: walked from the ELF)
+  case 0x1c -> FUN_00597fc8, vtable 0x5a5d70: enter **FUN_00598000** (FUN_00345530(C, 1); C+0x564 |= 0x4000 | 0x20000;
+  C+0x664 == 2 -> FUN_00340de0), update **FUN_005980f8**, leave **FUN_00598070** (clears those, C+0x1c0 &= ~0x20).
+  Class 9 = FUN_00595440 (aimed move, vtable 0x5a6708), 8 = FUN_00594f98 (unarmed move, 0x5a6790).
+- FUN_005980f8 phase 0: FUN_00340bb8(C, 1, 5) (C+0x591 = 5). Gun out (C+0x590 bit 24): row 0x4a in the MP's files
+  (FUN_003455e8 -> FUN_005a7390: a name search of the loaded motion files) -> **FUN_00345b58(C, 0x48, 0x50, 0x4a)**, the
+  speed table, + FUN_00345e38(0, 24.0) (walk threshold), FUN_00345e58(C, 0, 1, 0), C+0x564 |= 8 | 0x40000, &= ~0x10; else
+  C+0x1c0 |= 0x20 (frozen: FUN_0034ea18 returns at once) + FUN_003456c0(1.0, C, 0x48, -1) (one clip). Gun away: rows
+  0x48 / 0x4b / 0x49. Phase -> 2 (gun) / 1. Stance C+0x664 = 0 (06800009.bin 'bmd' rows): 0x48 h_st_rd, 0x49 h_rn_rd,
+  0x4a h_frn_rd, 0x4b h_wk_rd, 0x50 h_fwk_rd (stance 7 has h_wk_rd at 0x50).
+- Phases 1 / 2: rem = FUN_00342f50 = 2 x count - (int)(2 x frame) of the head clip; rem < 25 (DAT_0046efc8) with timer >= 4,
+  or timer >= 180 -> phase 3. Else: off the ground -> done bit; phase 2 with the gun put away -> the gun-away table, phase 1;
+  rem < DAT_0046efcc (60 / 0) clears C+0x564 bit 0x4000 (the reload / fire gate). Timer += step every update.
+- Phase 3: FUN_003460d8 (a non-looping head clip at its last frame) or timer >= 180 -> done, FUN_00340bb8(C, 1, 0x14),
+  return C+0x1d8 <= 0 ? FUN_00341b20() (6 / 3) : 9 / 8; on the ground and moving -> the same at once.
+- **FUN_00346860** (the table switch) plays a one-clip row with flags 0x87, or **0x86 (no loop) with C+0x564 bit 0x40000**.
+  C+0x564 bit 0x10 clear -> FUN_00343160 skips FUN_00346c10: the rows play at rate 0.5 whatever the speed.
+- FUN_00343160: an update that sets its done bit sends the class id to the player state (FUN_00341af0, jump_core
+  stateEvent: states 2 / 3 on the ground, event 0x1c -> 2 / 3); when the state takes it, the class's own return is dropped.
+- T: **w246_reload_run / w246_reload_walk** (TRACE_FIELDSET=reloadrun: R1 draw, one shot, stick ahead full / half, R2 at 90):
+  60 / 15 u/s all through; h_frn_rd / h_fwk_rd from record 91 at 0.6 a frame, layer flags 0x86, table rows 0x48 / 0x50 / 0x4a,
+  C+0x1c0 bit 0x20 never set, C+0x564 0x60009 during, done bit (0x20) + C+0x591 20 at record 139, the leave at 140, h_rn_a /
+  h_wk_a at 141 (flags 0x87).
+- Page: aim.js `reloadUpdate` / `reloadTable` (rows, no loop, rate 0.5, blend0 5), player.js switchTo `noLoop` / `blend0`.
+  Test `node --import ./test_hooks.mjs native/web/test_reload_motion.mjs`: head clip every record, reload frames exact
+  (< 1e-4); mutants 7 / 8 (the survivor, the hand-back's inMove, is equivalent: clips() sets it from the speed the same call).
+- **KNOWN / not decoded (two attempts):** the class hands back 2 frames before the game (the done event at record 139, the
+  new class's clip at 141; w214's standing reloads show the same 2 frames). The state's FUN_0055b8e0 path through
+  FUN_00343160's loop (C+0x564 bit 0x80 repeat) is where the delay lives; not translated.

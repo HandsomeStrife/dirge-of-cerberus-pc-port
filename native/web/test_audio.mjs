@@ -164,4 +164,20 @@ t('cmd 0x2f (SeRenderer.stopFade): sequence volume to 0 over 16 ticks, then the 
   assert.ok(t0 > 10 + 40 - 2 && t0 < 400, 'ends after the 16-tick fade: ' + t0);
 });
 
+// worker 0246: FUN_003e8e18 -> FUN_003eb868 looks a name up in sdb slot 0 (resident) before slot 1 (the zone). The barrel's
+// bsj_065 and the pickups' asj_019 / 020 / 021 are resident names: SoundEmitters.play must find them.
+t('SE names: resident row before the zone row (FUN_003eb868); stream rows (+0xc bit 1) not played', () => {
+  const au = Object.create(A.GameAudio.prototype);
+  au.res = { names: { bsj_065: { id: 1063, flags: 0 }, both: { id: 5, flags: 0 }, st: { id: 9, flags: 2 } }, programs: {} };
+  au.se = { names: { bsj_012: { id: 1010, flags: 0 }, both: { id: 1999, flags: 0 } }, programs: {} };
+  const em = new A.SoundEmitters(au);
+  assert.strictEqual(em.play('bsj_065', [1, 2, 3]).id, 1063);
+  assert.strictEqual(em.play('bsj_012', [1, 2, 3]).id, 1010);
+  assert.strictEqual(em.play('both', null).id, 5);
+  assert.strictEqual(em.play('st', null), -1);
+  assert.strictEqual(em.play('none', null), -1);
+  assert.strictEqual(au.seIdOf('bsj_065'), 1063);
+  assert.strictEqual(au.seIdOf('none'), 0);
+});
+
 console.log(`${pass} passed`);

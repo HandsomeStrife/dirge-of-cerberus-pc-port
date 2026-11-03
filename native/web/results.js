@@ -36,7 +36,7 @@
 //     exchange screen'). T: w232_status: the game waits there (mode 2 from f732 to the trace's end).
 import { EventVM } from './event_vm.js';
 import { measureText } from './pause.js';
-import { StageInfoScreen } from './stage_info.js';
+import { StageInfoScreen, SCRIPT_FLAG_1E } from './stage_info.js';
 import { hexBytes } from './menu_layout.js';
 
 export const STAT = { KILLS: 0, SHOTS: 1, HITS: 2, CRITS: 3, DAMAGE: 8, KO: 9, ACC: 10, SECTION: 14, TIME: 15, CHAIN: 52 };
@@ -274,17 +274,20 @@ export class ResultsBox {
     else warnOnce('gil', 'results: no gil source: the Gil row keeps FUN_003c54f8\'s start values');
     warnOnce('req15', 'results: the gil requests 0x15 (the reward paid in) / 0x16 (FUN_00312b38) are not translated');
     this.v = v;                                    // +0xff0
-    // FUN_003c6d70 (the default case): rank effect ids by the rank stats (< 5), the evaluation slot 27
+    // FUN_003c6d70 (the default case): rank effect ids by the rank stats (< 5), the evaluation slot 25
     const S = this.T.rankSlots;
     for (let i = 0; S[3 * i] >= 0; i++) {
       const r = v[S[3 * i]];
       if (r < 5) {
-        if (S[3 * i + 1] !== -1) this.fx[S[3 * i + 1]].id = i32(this.T.rankFxA[r]);
-        if (S[3 * i + 2] !== -1) this.fx[S[3 * i + 2]].id = i32(this.T.rankFxB[r]);
-        // FUN_002413c0(0x1e) and FUN_003e2730: positions from 0x51d0e0 (not drawn: the effects are book-keeping)
+        // with FUN_002413c0(0x1e) and FUN_003e2730 (both set on the page): the slot positions from 0x51d0e0 (4 shorts a row)
+        const P = this.T.rankPosPal, pal = SCRIPT_FLAG_1E;
+        if (S[3 * i + 1] !== -1) { const F = this.fx[S[3 * i + 1]]; F.id = i32(this.T.rankFxA[r]); if (pal) { F.x = P[4 * i]; F.y = P[4 * i + 1]; } }
+        if (S[3 * i + 2] !== -1) { const F = this.fx[S[3 * i + 2]]; F.id = i32(this.T.rankFxB[r]); if (pal) { F.x = P[4 * i + 2]; F.y = P[4 * i + 3]; } }
       }
     }
-    this.fx[27].id = this.f1028 === 0x10 ? i32(0x81744c00) : i32(0x81744800);
+    // +0x310 / +0x31c / +0x31e = slot 25 (0x54 + 25 x 0x1c; worker 0241: was read as slot 27): its id and position
+    this.fx[25].id = this.f1028 === 0x10 ? i32(0x81744c00) : i32(0x81744800);
+    if (SCRIPT_FLAG_1E) { this.fx[25].x = 0; this.fx[25].y = 0x91; }
   }
   byId(id) { return this.screen ? this.screen.byId(id) : null; }
   // FUN_003c5d10: a new layout (FUN_003d4330 drops the old screen, FUN_003c5d78 clears the widget slots)
@@ -335,7 +338,7 @@ export class ResultsBox {
       case 2: if (!(this.opts.tutorial ?? 0)) return 'skip1'; this.fx[0].life = 0; return 'next';   // FUN_002419d8(10)
       case 3: this.events.push({ se: s[3] & 0xff }); return 'next';                                  // FUN_003e1d10
       case 5: {                                    // an effect slot's move (+0x5c = -2, start, length, x, y)
-        const F = this.fx[s[3]]; F.life = -2; F.mvStart = now; F.mvLen = s[1]; F.x = s[4]; F.y = s[5]; return 'next';
+        const F = this.fx[s[3]]; F.life = -2; F.mvStart = now; F.mvLen = s[1]; F.tx = s[4]; F.ty = s[5]; return 'next';   // +0x64 / +0x66 (worker 0241)
       }
       case 6: return this.v[P[(s[3] + 0x12) * 2]] !== 0 ? 'next' : 'skipmode';
       case 7: this.hold = 0; this.f48f = 1; this.mode = 1; return 'stop';
@@ -392,15 +395,15 @@ export class ResultsBox {
       if (x && x !== this.screen.root) x.flags |= 1;
     }
   }
-  // FUN_003c58b8: an effect in slot s[2] (book-keeping; not drawn)
+  // FUN_003c58b8: an effect in slot s[2] (as stage_info.js StageBox.slot; the spawn is menu_fx.js's, worker 0241)
   slot(s, now) {
-    const S = this.fx[s[2]];
-    S.h = -1;                                      // FUN_003c5c50
-    let id = s[3];
-    if (id === -1) { id = S.id; if (id === -1) return; }
-    warnOnce('fx', 'results: the Status screen\'s effects (FED a0093, ids 0x8174....) are not drawn');
-    S.h = 1; S.id = id; S.since = now;
-    this.events.push({ fx: u32(id) });
+    const k = s[2], S = this.fx[k];
+    if (S.h !== -1) { S.h = -1; this.events.push({ fxOp: { remove: k } }); }   // FUN_003c5c50
+    let id = s[3], x = s[4] | 0, y = s[5] | 0;
+    if (id === -1) { id = S.id; if (id === -1) return; if (SCRIPT_FLAG_1E) { x = S.x; y = S.y; } }
+    S.h = 1; S.id = id; S.since = now; S.mvLen = 0;            // +0x6c = 0
+    if (!(s[3] === -1 && SCRIPT_FLAG_1E)) { S.x = s[4] | 0; S.y = s[5] | 0; }
+    this.events.push({ fx: u32(id), fxOp: { spawn: k, id: u32(id), x, y } });
   }
   // FUN_003c5db0: widget slot s[3]: fade in over 100 ms (op != -0xd); ops -13..-8: the value text from stats pa / pb
   c5db0(s, w, now, pa, pb) {
@@ -436,10 +439,21 @@ export class ResultsBox {
   }
   // the end of FUN_003c6050: effect lives / moves (FUN_003c5a98 / FUN_003c5b00) and the widget fades and counts
   tail(el, now) {
-    for (const S of this.fx) {
-      if (S.h === -1) continue;
-      if (!(el < u32(S.life))) { S.h = -1; this.events.push({ fxEnd: u32(S.id) }); }
-    }
+    this.fx.forEach((S, k) => {
+      if (S.h === -1) return;
+      if (!(el < u32(S.life))) { S.h = -1; this.events.push({ fxEnd: u32(S.id), fxOp: { end: k } }); return; }
+      // FUN_003c5b00 (worker 0241): while +0x6c (the move's length) is set, the position from +0x60 / +0x62 towards
+      // +0x64 / +0x66 over it (s16 maths), at the end the target and +0x6c = 0; FUN_002e7660(flag 1, the position)
+      if (S.mvLen) {
+        const d = (now - S.mvStart) | 0;
+        let x, y;
+        if (u32(now) < u32(S.mvStart + S.mvLen)) {
+          x = ((((((S.tx - S.x) * d) / S.mvLen) | 0) << 16 >> 16) + (S.x & 0xffff)) << 16 >> 16;
+          y = ((((((S.ty - S.y) * d) / S.mvLen) | 0) << 16 >> 16) + (S.y & 0xffff)) << 16 >> 16;
+        } else { x = S.tx; y = S.ty; S.mvLen = 0; }
+        this.events.push({ fxOp: { move: k, x, y } });
+      }
+    });
     for (const W of this.ws) {
       if (!W.w) continue;
       let a = null;

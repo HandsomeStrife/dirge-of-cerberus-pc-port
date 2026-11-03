@@ -67,7 +67,7 @@ the skipped beat in ~10 frames (its loads are at once); the game's 7 frames befo
 - Game-state bits: bit 11 (play.js neutral input) and bit 6 (enemy_ai AI pause) are read on the page; bit 2 (the stick in
   the event camera's frame, FUN_00333150) and bit 10 (FUN_005728d8's hit gate) are not;
   the skipped events' actor / camera / window / voice natives are left out (warned); Vincent is not moved by an event.
-- scene_save -> checkpoint.js (P?), endSection / Zone.exit -> P12, displayStageInfo -> 0220's stage_info.js.
+- scene_save -> checkpoint.js `sceneSave` (worker 0242, P8: notes/checkpoint-research.md 'Mid-level checkpoints'), endSection / Zone.exit -> P12, displayStageInfo -> 0220's stage_info.js.
 - Only the first beat is traced; later beats (chunks 6 / 7, 10 / 11, the bosses) need route states (worker 0217).
 
 ## Review fixes (2026-11-03, manager review)
@@ -112,7 +112,30 @@ getweaponframe 0x3a3330, setdirofbattle_l 0x3a3448, getposx/y/z_l 0x39d488 / 0x3
   `enterBattle`), play.js `battleObject` / `vinBattle` / `stageCameraReset`, ai.json records' `tag`. Tests:
   test_stage_controller section 5 (+ trace checks; MUTATE=setpos|camset|setdir|bname), test_npc_page (the two beats on the page).
 - **Open**: where the townspeople are after the rescue (not main; roji02_01 / scripts on flag 12?) and whether they are
-  drawn; the camera's distance after the reset (T 21.05 u, page 36.1 u: FollowCamera at pitch -0.70); bone 1's offset
+  drawn; the camera's distance after the reset (DONE by worker 0244, notes/battle-camera.md: the rays test the loaded slots, and battle()'s frame runs an in-place update + two type re-enters); bone 1's offset
   (GUESS 0); the slot's own drawing while lent (setpos / setmotion not shown during the auto-skipped beat); who clears
   Vincent's +0x88 for the p000 hand-back; getmorphstate / getweaponframe / setdirofbattle / loadVincentWeapon,
   getpos / get_battle_camera, the other events' natives.
+
+## Beats and the warp aid (worker 0249, 2026-11-03)
+main's beat chain, disassembled from data/event/ev0100_stage.json (a JVM disassembler in the worker 0249 scratchpad). The
+prologue stores pairs of constants (locals 2-86) and each beat runs when **stage flag 0 == X and global flag 1 < Y**, then
+sets global 1 = Y; checkpoint saves are `setflag(18, 1); scene_save(n); setflag(18, 0)`. Global flag 19 == 1 (or
+isdebugmode) at main's top = a reload: if stage flag 1 > 0, stage 0 / global 1 = (2, 5) when stage 1 < 28, else (24, 25)
+(pc 559-626); each sub-beat tests flag 19 again before its event.
+| stage 0 | global 1 | beat (pc) | where (trigger that sets stage 0: script, position) |
+|---|---|---|---|
+| 0 | < 3 | first_event (745) | start deck |
+| 2 | < 5 | rv_matiawase (1216) -> scene_save(1) | trig 15 (script 88; -848, -10, -574): top of the alley stairs |
+| 2..13 | 5..13 | kalm_ld(0) section, sub-beats on stage flag 1 = 4, 5, 7, 9, 6, 8, 10, 12: roji01_01 / roji02_01 / beast_ev01-02 / heri_tobi / help_people01 / help_orei01-02 | chunks 03-05 (trig 23 / 160 / 19 / 162 set stage 0 = 3 / 4 / 11 / 12) |
+| 13 | < 13 | kalm_ld(5), scene_save(2), heri_toujou (5162) | trig 14 (script 87; -1330, 0, 1155): the market, chunk 06 |
+| 14 / 16 | < 14 / < 18 | heri_dgsol (5438), heri_taijou (5756) | script 29 (the helicopter's events 0x16 / 0x1) |
+| 18 | < 20 | scene_save(3), sk_mituketa2 (6366), Zone.load(128, 6, 7) (6412) | main sets stage 0 = 18, 9 = 9 at pc 5939 |
+| 20 | < 22 | first_encounter (6887) | trig 18 (script 102; -1949, -44, 1594): chunk 07 |
+| 24 | < 25 | rv_toujou (7152), scene_save(4), kalm_ld(1) (market townspeople n017 ...) | script 111 (an object's event 1) |
+| 24 | < 29 | sub-beats on stage flag 1 = 28, 29, 30, 32: help_orei04, help_people03, help_orei03, wro_kaisetu (-> global 1 = 26) | trig 33 / 64 / 65 / 26 (market, chunks 06 / 08) |
+| 36 | < 29 | kalm_ld(3), scene_save(5), heri_lastst (10609), the boss | trig 29 (script 35; 415, -95, 1458): chunk 0b |
+| 40 | < 33 | heri_lasted, load(128, 10, 11), kita_ev0145, endSection | the boss's death (stage 0 = 40) |
+Chunk extents (DCOL walk polygons by file): 07 = x -1949..-1740, z 1525..1644; 09 = x -215..271, z 470..1512; 0b (file 11)
+= x 209..1265, z 1053..1868. The warp aid (native/web/warp.js, PAGE AID) sets these flags for its places; see
+fidelity-audit 'PAGE AID: ?warp='.

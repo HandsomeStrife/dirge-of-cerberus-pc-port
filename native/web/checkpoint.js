@@ -51,6 +51,12 @@ export const CHECKPOINT = Object.freeze({
   aiNow: 26, aiAcc: 0.3,
 });
 
+// worker 0242: the world after a record's reload. The stage init (FUN_003245e8) zeroes the manager clock (worker 0240);
+// then main's flag-18 branch runs in event mode (AI paused, game-state bit 6) until its battle(): T w242 (Restart f2420,
+// stage loop f3151): manager +0x20 = 64, AI clock 23 at f3966, i.e. the clocks barely move before play. L: the page's
+// world starts at clock 0 and frame 0; main's own frames (the page's event mode) do the rest.
+export const RECORD_RELOAD = Object.freeze({ frame: 0, clock: Object.freeze({ now: 0, acc: 0, mgr20: 0, mgr24: 0 }) });
+
 // GUESS: the frames from Vincent's battle clip end (his placement, record 10) to the soldiers' (record 24): traced; the
 // battle clips' clock across the load is not decoded (their remaining frames at the stage loop's first frame).
 export const SOLDIER_RELEASE = 14;
@@ -102,6 +108,46 @@ export const PLAYER_STAMPS = Object.freeze({ t27c: -40, t280: -15, part: -1, s14
 const warned = new Set();
 const warnOnce = m => { if (!warned.has(m)) { warned.add(m); console.warn(m); } };
 
+// ---- Mid-level checkpoints (worker 0242; notes/checkpoint-research.md 'Mid-level checkpoints (P8)')
+// main's beats save with `setflag(18, 1); scene_save(n); setflag(18, 0)` (ev0100 main pc 1271-1286 for n = 1 after
+// rv_matiawase; pc 5130-5142 later). scene_save = Zone native FUN_0039c728: unless mode bits DAT_004b8ac8 0xc / 0x10 /
+// 0x14 (not story mode: 0 on the page) wait_save, then FUN_0023d690(0, n, 0): DAT_0046b0b8 = 0 and the record
+// DAT_004b2680 (0x948 bytes) from FUN_0023d2d8 -
+//   +0 the stage byte (*DAT_0047dbb0 = 0x80), +1 / +2 the loaded chunks (FUN_0023cf88: slots with +0x5c and +0x54 != 0,
+//   at most 2), +4 the program index to resume at = (FUN_004036f8(stage, 10) - program) >> 4 (FUN_003ff528: the stage
+//   program's first command 0xa = run event 100 = ev0100 main; written over FUN_0023d2d8's stage +0xc), +0x10 n
+//   (FUN_0023c6c8: DAT_0046b0dc), +0x14 stage +0x1a (the running event, 100), +0x70 the 8 loaded-script slots (stage
+//   +0x28), +0x80 the 64 global flags (FUN_0037cea0: flag 18 = 1 in it), +0xc0 the 64 stage flags (FUN_003ff738), and
+//   +0x100 the status block (FUN_0030fe58(2, +0x100) -> FUN_00311fa0: the status header 0x98, DAT_0046e248 (gil),
+//   DAT_0046e240 / DAT_0046e218 (+4 lists), Vincent's status FUN_00319798 -> FUN_003188f8 (status +0x20..+0x80 without
+//   the matrix +0x30..+0x5c; HP = +0x20), DAT_0046e228 (the section stats)).
+// sceneSave(n, s) -> the page's record. s: gflags (stage controller), sflags (enemy_ai eventFlags), pair (area_stream
+// slots), hp, inventory (items.js Inventory). The page keeps the parts it has; the rest of the status block is left out.
+export function sceneSave(n, s = {}) {
+  const sf = {};
+  for (const [k, v] of Object.entries(s.sflags || {})) if (+k >= 0 && +k < 64 && v) sf[k] = v & 0xff;   // FUN_003ff738: bytes 0..63
+  const inv = s.inventory;
+  return Object.freeze({
+    stage: 0x80, n: n | 0, resume: 'main', event: 100,
+    gflags: Uint8Array.from({ length: 64 }, (_, i) => (s.gflags ? s.gflags[i] | 0 : 0) & 0xff),
+    sflags: Object.freeze(sf),
+    pair: Array.isArray(s.pair) ? s.pair.slice(0, 2) : null,
+    hp: s.hp,
+    // worker 0243: the inventory's selection (+0 / +0xc / +0x10) and slot pool are part of the same block
+    inventory: inv ? { slots: inv.slots.map(e => e.slice()), gil: inv.gil, other: inv.other, sel: inv.sel, last: inv.last, selId: inv.selId, freed: (inv.freed || []).slice() } : null,
+    taken: s.taken ? [...s.taken] : [],            // DAT_0046e228 +0x1c0 entries' taken words (FUN_0031e0e0)
+  });
+}
+
+// FUN_0023cf88 on area_stream.js's slots: the loaded nonzero chunks, at most two (slot order)
+export function loadedPair(stream) {
+  if (!stream || !stream.slots) return null;
+  const p = [];
+  for (const s of stream.slots) if (s.loaded && s.chunk && p.length < 2) p.push(s.chunk);
+  while (p.length < 2) p.push(0);
+  return p;
+}
+
 // initWorld(make, { flags, frame, clock, loadRecs, wake }) -> world: the stage reload's new enemy_ai world, in the game's
 // order (worker 0240; notes/checkpoint-research.md 'The stage-init pass'). make(opts) = createEnemyAI with the page's opts.
 //   1. the stage init FUN_003245e8 -> FUN_0053c140: the objects, then FUN_0053ca50(mgr, 1) = script event 0x22 to every
@@ -142,8 +188,9 @@ export function initWorld(make, o) {
 //   music()                                 the zone music / ambience restart (the stage's ev0100 / ev0101)
 // Returns a summary for the tests.
 export function restoreCheckpoint(sys) {
+  const C = CHECKPOINT, out = {}, rec = sys.record || null;
+  if (rec) return restoreRecord(sys, rec);
   warnOnce('restart: the stage-result Status screen, the load title and the opening cutscenes are not on the page (left out)');
-  const C = CHECKPOINT, out = {};
   if (sys.gameOver) sys.gameOver.reset();
   if (sys.php) { sys.php.hp = C.hp; sys.php.f118 = C.f118; sys.php.s64 = 0; Object.assign(sys.php, PLAYER_STAMPS); }
   // Vincent at his battle clip's end (handOff; T record 10). Without the data: the page spawn (warned)
@@ -204,5 +251,51 @@ export function restoreCheckpoint(sys) {
     out.soldierHandOff = list;
   }
   if (sys.music) sys.music();
+  return out;
+}
+
+// restoreRecord(sys, rec): a Restart after a scene_save (worker 0242). The game (decoded): FUN_00247508 0x15 case 6 with
+// DAT_0046b0b8 == 0 (the scene_save's) sets mode bit 3 -> 0x13: FUN_003ff0c0 -> FUN_003ff028(stage, DAT_004b2680): the
+// stage byte, the program index (+4: the stage program's cmd 0xa), stage +0x18 bit 0 (+0x3b), +0x19 (+0x42), the stage
+// flags FUN_00403a48(+0xc0), FUN_0023c6c8(+0x10); stage +0x18 bit 4 (resuming). The stage program FUN_00401b90 then runs
+// FUN_00400778 before any command: the record's chunks loaded (FUN_002673d8(stage, +1, +2)), the status block
+// FUN_0030f688(stage, 2, +0x100) (HP, inventory, taken bits; the status matrix is not in it), the ambience (cmd 0x17's
+// FUN_00403720), the 8 scripts of +0x70 loaded again (FUN_004002f8), the global flags back (case 0xb: FUN_0037ce60(i,
+// +0x80[i]), so flag 18 = 1), then event +0x14 = 100 run from its start (FUN_004002f8(100, -1), FUN_003fffe0) and the
+// program goes on at its cmd 0xa. So main runs from the top with the record's flags: its first beat's test fails (stage
+// flag 0 != 0), and its flag-18 branch for the beat after the save (pc 1425 for scene_save(1): flag 18 = 0, fadeout,
+// playMusic3, Zone.load(128, 2, 3), p000 setpos (-889.2, 0, -599) / setdir / setbattlename p_Vin, Camera.set, stage
+// flag 9 = 1, fadein, battle()) puts Vincent and the camera back; the opening (first_event) does not play.
+// The page: sys.record = sceneSave's record. The stage controller is restarted by play.js with rec.gflags; this resets the
+// rest as the stage load does and leaves Vincent's place to main (vinBattle.place on battle()'s hand-back).
+function restoreRecord(sys, rec) {
+  const out = { record: rec.n };
+  warnOnce('restart (checkpoint record): the save box / load screens between the Restart and the reload are not on the page (left out)');
+  if (sys.gameOver) sys.gameOver.reset();
+  // HP: full (780), not the record's. FUN_00319798's read branch (the status block's player part) finds no player status
+  // yet (FUN_00311038 < 0, FUN_00318bf8(0) == 0: the objects are built later), so it reads the saved status into a scratch
+  // status (FUN_00314ad8 / FUN_003188f8 / FUN_00314b38) and drops it; the reload's new status starts full. T w242 (HP 500
+  // at the save, 300 at the Restart): the record holds 500 (block +0x402), the new status 780 from r150, 780 in play.
+  // P+0x118 / the stamps: the reload's new Vincent (as the stage start's)
+  if (sys.php) { sys.php.hp = CHECKPOINT.hp; sys.php.f118 = CHECKPOINT.f118; sys.php.s64 = 0; Object.assign(sys.php, PLAYER_STAMPS); }
+  if (sys.ctrl) {
+    // GUESS: until main's battle() hands him back, Vincent stands at the page spawn (the game: the reloaded status's own
+    // matrix, which the status block does not carry; see notes 'Mid-level checkpoints (P8)')
+    sys.ctrl.reset();
+    out.pos = { ...sys.ctrl.pos };
+    if (sys.php) { sys.php.pos = [sys.ctrl.pos.x, sys.ctrl.pos.y, sys.ctrl.pos.z]; sys.php.face = [sys.ctrl.C.face.x, sys.ctrl.C.face.y, sys.ctrl.C.face.z]; }
+  }
+  if (sys.weapon) sys.weapon.reset();
+  if (sys.cape) sys.cape.cloth.started = false;
+  if (sys.follow) {
+    if (sys.follow.clearDeath) sys.follow.clearDeath();
+    sys.follow.reset(sys.ctrl ? sys.ctrl.pos : undefined);
+    sys.follow.back = 0; sys.follow.backTarget = 0; sys.follow.gain = 0; sys.follow.idle = -20;   // FUN_00328368 (as above)
+  }
+  if (sys.fx) { if (sys.fx.reset) sys.fx.reset(); else sys.fx.emitters.length = 0; }
+  if (sys.hud) sys.hud.reset();
+  if (sys.sfx) sys.sfx.pending.length = 0;
+  if (sys.rebuildEnemies) out.enemies = sys.rebuildEnemies({ ...rec.sflags }, RECORD_RELOAD.frame, RECORD_RELOAD.clock, rec);
+  // no music() here: main's flag-18 branch plays it (playMusic3 / playBgAreaSound)
   return out;
 }

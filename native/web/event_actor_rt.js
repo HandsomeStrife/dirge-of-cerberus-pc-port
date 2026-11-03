@@ -53,10 +53,71 @@ export function mul(A, B) {
   return o;
 }
 
+// ---- texture animations (worker 0248): the model's texanm.tad (export_web_event_actors.py texanims), the faces'
+// eyes / mouths. MP+0x400 = one 0x10 entry per animation, MP+0x404 the count:
+//   +1 on (bit 0)   +2 frames   +4 frame (f32)   +8 wait (f32)   +0xc / +0xe the wait range (s16)
+// FUN_005a8850 (the MP set-up): frame / wait 0, the range and frames from the animation, on when its name starts '@'.
+export function texAnimSetup(anims) {
+  return (anims || []).map(an => ({ on: an.name[0] === '@' ? 1 : 0, frames: an.frames, frame: 0, wait: 0, wmin: an.wait[0], wmax: an.wait[1] }));
+}
+// FUN_00414210(list, i, name): the animation's name begins with `name` (up to 8 characters; '' matches every one)
+export const texAnimMatch = (an, name) => an.name.slice(0, Math.min(8, name.length)) === name.slice(0, 8);
+// FUN_00414290: the key that frame f (the (int) of +4, a short) shows: k with key[k - 1].t <= f < key[k].t, key 0
+// before the first key's end and again from the last key's end on (the loop's exit with k reset)
+export function texAnimKey(keys, f) {
+  const n = keys.length;
+  let k = 0;
+  if (0 < n) {
+    if (-1 < f && f < keys[0][2]) k = 0;
+    else {
+      let j = 0;
+      for (;;) {
+        const prev = keys[j][2];
+        j++; k = 0;
+        if (n <= j) break;
+        if (f < prev) continue;
+        k = j;
+        if (!(keys[j][2] <= f)) break;
+      }
+    }
+  }
+  if (n <= k) k = n - 1;
+  return k;
+}
+// FUN_005aa838 (after FUN_005aa9e8's copies, in the MP's draw FUN_005a9938): per animation that is on, a wait runs
+// down first (to 0, that frame no advance); else frame += DAT_004fc7e8 (1.2; 0 while DAT_004fc7e4 == 1, the pause:
+// the page does not draw a paused event) and at (int)frame >= frames: wait = min + (max - min) x FUN_0040b5c0() when
+// max >= 1 (not below 0), frame = 0
+export function texAnimAdvance(tex, rand) {
+  for (const e of tex) {
+    if (!(e.on & 1)) continue;
+    const dt = STEP;
+    if (0 < e.wait) {
+      e.wait = f32(e.wait - dt);
+      if (e.wait < 0) e.wait = 0;
+      continue;
+    }
+    e.frame = f32(e.frame + dt);
+    if (Math.trunc(e.frame) < e.frames) continue;
+    if (0 < e.wmax) {
+      const lo = f32(e.wmin);
+      e.wait = f32(lo + f32(f32(f32(e.wmax) - lo) * f32(rand())));
+      if (e.wait < 0) e.wait = 0;
+    }
+    e.frame = 0;
+  }
+}
+
 export class EventActors {
   // clipFrames(model, n, clip) -> frame count of `clip` in event motion file n for that model, or null (no pack)
-  constructor({ clipFrames, warn = (m) => console.warn(m) } = {}) {
+  // texAnims(model) -> the model's texanm animations (export_web_event_actors.py texanims), or null (worker 0248)
+  // rand: FUN_0040b5c0 (the game's shared Mersenne twister, enemy_ai.js GameRandom)
+  // residentFiles(model) -> the character's own motion packs (export 'rK' keys), searched before its loadmotion files
+  constructor({ clipFrames, texAnims = null, rand = null, residentFiles = null, warn = (m) => console.warn(m) } = {}) {
     this.clipFrames = clipFrames || (() => null);
+    this.residentFiles = residentFiles || (() => []);
+    this.texAnims = texAnims || (() => null);
+    this.rand = rand || (() => { this.warnOnce('rand', 'event actors: no FUN_0040b5c0 source given: the texture animations\' waits use 0.5'); return 0.5; });
     this.warn = warn;
     this.warned = new Set();
     this.slots = [];                   // live actors in slot order (FUN_00376308 takes the first free of 64)
@@ -80,10 +141,14 @@ export class EventActors {
       loop: false, visible: true, clip: true,            // +0xa8 bits 48 / 49 / 52 (FUN_00376308: 49, 52)
       code: null, flags: 0x82, start: -1, blend: 0, speed: 0, lod: 5,
       kids: [null, null, null, null], markers: [0, 0, 0, 0], kidsDirty: false,
-      files: [],                                          // loadmotion_l, in load order
+      // loadmotion_l, in load order, after the character's resident motion files (worker 0248: the model's own sets,
+      // loaded with the character; FUN_005a7390 searches them all, the names are unique)
+      files: (this.residentFiles(model) || []).slice(),
       mp: { clip: null, frame: 0, rate: 0.5, loop: false, count: 0, kids: [null, null, null, null], marker: [0, 0, 0, 0] },
       shown: true, frameDrawn: 0, clipDrawn: null,
+      anim: null, animOn: false,                          // +0x10 the setanim name, +0xa8 bits 53 (start) / 54 (stop)
     };
+    a.mp.tex = texAnimSetup(this.texAnims(model));        // FUN_005a8850: MP+0x400 / +0x404 (worker 0248)
     this.slots.push(a);
     return a;
   }
@@ -127,6 +192,16 @@ export class EventActors {
       // MPs FUN_005a7698), posed at the head frame. A slot whose MP was never updated has no matrix from the actor yet:
       // not placed (its fresh MP matrix is not read)
       a.drawn = mp.M ? { M: mp.M, shown: a.shown, kids: mp.kids.slice(), marker: mp.marker.slice(), clip: mp.clip, frame: mp.frame } : null;
+      // FUN_005abec0 (a shown MP's draw; FUN_005a85f8(MP, 2) = +0x440 & 0xf00 0x200 skips it) -> FUN_005a9938: the
+      // texture animations' copies (FUN_005aa9e8: on, wait 0 -> FUN_00414290 at frame (int)+4), then the advance
+      // FUN_005aa838 (worker 0248)
+      if (a.drawn) {
+        a.drawn.tex = [];
+        if (a.drawn.shown && mp.tex.length) {
+          mp.tex.forEach((e, i) => { if ((e.on & 1) && e.wait === 0) a.drawn.tex.push([i, Math.trunc(e.frame) << 16 >> 16]); });
+          texAnimAdvance(mp.tex, this.rand);
+        }
+      }
       if (pose) pose(a);
       a.frameDrawn = mp.frame; a.clipDrawn = mp.clip;
       if (!mp.clip) continue;
@@ -140,6 +215,13 @@ export class EventActors {
   update() {
     for (const a of this.slots) {
       a.shown = a.visible;                                             // +0xa8 bit 49 -> FUN_005a85f8(MP, 0 / 2)
+      // +0xa8 bits 53 / 54 (setanim_l, worker 0248): start -> FUN_005aab10 (on = 1), stop -> FUN_005aabf8 (on = 0) for
+      // each of the model's animations whose name begins with +0x10 (FUN_00414210); then both bits cleared
+      if (a.anim !== null) {
+        const list = this.texAnims(a.model) || [];
+        list.forEach((an, i) => { if (texAnimMatch(an, a.anim) && a.mp.tex[i]) a.mp.tex[i].on = a.animOn ? 1 : 0; });
+        a.anim = null;
+      }
       if (a.kidsDirty) {                                               // FUN_003771e0: bind the attached MPs
         for (let i = 0; i < 4; i++) { a.mp.kids[i] = a.kids[i]; a.mp.marker[i] = a.markers[i]; }
         a.kidsDirty = false;
@@ -211,6 +293,24 @@ export class EventActors {
       },
       // detach_l(parent, marker, i) (FUN_003a12c0 -> FUN_003767a0 -> FUN_003814a0(parent, i))
       'fake/KerberosActor.detach_l(III)V': (vm, [p, , i]) => { const a = A(p); if (a) { a.kids[(i >>> 0) > 3 ? 0 : i] = null; a.kidsDirty = true; } },
+      // setanim_l(id, name, on) (FUN_0039cfe0 -> FUN_00376510 -> FUN_00381168): +0x10 = the name (8 bytes,
+      // FUN_00258590), +0xa8 bit 53 (on: startanim) or bit 54 (off: stopanim), the other cleared (worker 0248)
+      'fake/KerberosActor.setanim_l(ILjava/lang/String;Z)V': (vm, [id, name, on]) => {
+        const a = A(id); if (!a) return;
+        a.anim = (str(name) || '').slice(0, 8); a.animOn = !!on;
+        T.log.push([R.frameNo, 'setanim ' + id + ' ' + a.anim + ' ' + (a.animOn ? 1 : 0)]);
+      },
+      // ---- Vincent's (worker 0248; rv_matiawase)
+      // getmorphstate (FUN_0039d090 -> FUN_003766a8 -> FUN_00321460): DAT_0046e248 +0xc. T: 0 in the route state
+      // r02_climb (no morph; the page has none)
+      'fake/KerberosActor.getmorphstate()I': () => 0,
+      // getweaponframe (FUN_003a3330 -> FUN_00376618 -> FUN_00312478): DAT_0046dd68 +0x80, 0 read as 1. T: 1 in
+      // r02_climb (the handgun frame Cerberus, the page's only weapon)
+      'fake/KerberosActor.getweaponframe()I': () => (T.weaponFrame ? T.weaponFrame() : 1) || 1,
+      // loadVincentWeapon_l(id) (FUN_0039e060 -> FUN_00379af8): FUN_004099b0(FUN_00312478(), FUN_00312498(), 0, 0)
+      // builds the weapon's model, FUN_00376308 a slot with it, the slot matrix = the model's (+0x10..+0x4c). The page's
+      // weapon model is the gun mesh (gun.js), model name 'weapon'; its matrix: identity (a new model's, GUESS)
+      'fake/KerberosActor.loadVincentWeapon_l(I)V': (vm, [id]) => { T.create('weapon', id); T.log.push([R.frameNo, 'loadVincentWeapon ' + id]); },
       // setVisible_l (FUN_003a3478 -> FUN_0037ede8): +0xa8 bit 49; setClip_l (FUN_003a3518 -> FUN_0037ef08): bit 52
       'fake/KerberosActor.setVisible_l(IZ)V': (vm, [id, v]) => { const a = A(id); if (a) a.visible = !!v; },
       'fake/KerberosActor.setClip_l(IZ)V': (vm, [id, v]) => { const a = A(id); if (a) a.clip = !!v; },

@@ -32,7 +32,8 @@ from export_web_aim import Elf  # noqa: E402
 MODEL_TABLE, MODEL_COUNT = 0x5909c0, 18
 PULSE_TABLE = 0x590a48
 SOUND_NAMES = {'full': 0x58d938, 'id_6932000b': 0x58d940, 'id_6932000c': 0x58d948, 'nonammo': 0x58d950,
-               'dropped': 0x58d958, 'placed': 0x58d960}
+               'dropped': 0x58d958, 'placed': 0x58d960,
+               'cycle': 0x58ee70}               # worker 0243: FUN_00574058's FUN_0054b158(P, 0x58ee70, 1) (the item cycle)
 
 
 def gitignored(path):
@@ -64,9 +65,33 @@ def bgd_items(b):
             return None
         part = struct.unpack_from('<h', r, 4)[0]
         p10 = struct.unpack_from('<I', b, o5 + part * s5 + 0x10)[0] if 0 <= part < n5 else None
+        # worker 0243: +6 the item's script (FUN_0031e208 -> FUN_00310718), +0xa the item list's order key (FUN_0031f520's
+        # comparator 0x31f4e0: +0xa, then the id)
         return dict(flags=struct.unpack_from('<H', r, 8)[0], kind=r[0xc], max=struct.unpack_from('<H', r, 0xe)[0],
-                    value=struct.unpack_from('<i', r, 0x10)[0], part10=p10)
+                    value=struct.unpack_from('<i', r, 0x10)[0], part10=p10,
+                    script=struct.unpack_from('<h', r, 6)[0], key=struct.unpack_from('<H', r, 0xa)[0])
+    item.ids = [c + k for c, _st, n in cats for k in range(n)]
     return item
+
+
+def bgd_scripts(b, wanted):
+    """Worker 0243: the item scripts. FUN_00310718(n): bgd section 8 (u32 offsets, count = section 8's) + section 9's
+    base (DAT_0046dd68 +0x24 / +0x28 = the section 8 / 9 pointers); n out of range -> script 0. The format is the stage
+    scripts' (FUN_0036fd58 / FUN_0036fdc8), exported as export_web_triggers.script does: {event: {locals, code, data}}."""
+    sec = lambda k: struct.unpack_from('<3I', b, 0x24 + 16 * k)
+    o8, n8, _ = sec(8)
+    o9 = sec(9)[0]
+    out = {}
+    for n in sorted(wanted):
+        m = n if 0 <= n < n8 else 0
+        base = o9 + struct.unpack_from('<I', b, o8 + 4 * m)[0]
+        ev = {}
+        for e, f, code, end in SE.functions(b, base):
+            ins = SE.disasm(b, code, end)
+            data = b[f + SE.u32(b, f + 4): f + SE.u32(b, f + 4) + SE.u32(b, f + 0xc)]
+            ev[str(e)] = dict(locals=SE.u32(b, f + 8), code=[[op, imm] for _i, op, imm in ins], data=data.hex())
+        out[str(n)] = ev
+    return out
 
 
 def main():
@@ -80,7 +105,8 @@ def main():
         sys.exit('REFUSING: %s is not gitignored (game-derived output)' % a.o)
     elf = Elf(open(a.elf, 'rb').read())
     d = open(a.stage, 'rb').read()
-    item = bgd_items(open(a.bgd, 'rb').read())
+    bgd = open(a.bgd, 'rb').read()
+    item = bgd_items(bgd)
     S = SE.sections(d)
     o0, n0, s0 = S[0]
     o1, n1, s1 = S[1]
@@ -120,6 +146,7 @@ def main():
             ids.add(dr['id'])
             ids.update(e[0] for e in tab)
     ids.update((0x62300000, 0x69300000))
+    ids.update(item.ids)                     # worker 0243: every item (the inventory's, the item list's cycle and use)
     table = {}
     for i in sorted(ids):
         it = item(i)
@@ -129,7 +156,9 @@ def main():
                models=[cstr(elf, MODEL_TABLE + 5 * i, 5) for i in range(MODEL_COUNT)],
                pulse=list(elf.read(PULSE_TABLE, 32)),
                sounds={n: cstr(elf, v) for n, v in SOUND_NAMES.items()},
-               items=table, placed=placed, drops=drops)
+               items=table, placed=placed, drops=drops,
+               # worker 0243: the usable items' scripts (kind 2, flags bit 2: FUN_00573eb0 / FUN_0031f520)
+               scripts=bgd_scripts(bgd, {t['script'] for t in table.values() if t['kind'] == 2 and (t['flags'] >> 2) & 1}))
     os.makedirs(os.path.dirname(a.o), exist_ok=True)
     with open(a.o, 'w') as f:
         json.dump(out, f, separators=(',', ':'))

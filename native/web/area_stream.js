@@ -66,7 +66,8 @@ export class AreaStream {
   progress() {
     if (this.busy !== 1) return;
     // GUESS: the load completes on its first FUN_00266ae0 call (the disc read time and the 10-case
-    // state machine's frame count are not modelled; see notes/fidelity-audit.md "Character lighting")
+    // state machine's frame count are not modelled; see notes/fidelity-audit.md "Character lighting").
+    // T w247_rescue_load: 69 frames in the game, mostly disc reads (cases 2-9); the unload is immediate on both.
     const { slot, chunk } = this.job;
     this.slots[slot] = { chunk, loaded: 1 };        // case 10: +0x54 = chunk, +0x5c = 1
     this.busy = 0; this.job = null;

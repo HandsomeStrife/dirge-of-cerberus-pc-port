@@ -280,6 +280,7 @@ INPUTS = {
     # outside noPath (data/etc): the HUD 'menu2' texture (reticle) for export_web_aim.py
     '../data/etc/menudata.bin': 'b851a405451880e46a9f95c4be406b958ac81c44a9ac8de7bd7b8e7dccd74eb6',
     '../data/etc/KerberosIntermissionCalc.class': '03ddeb380b451fac6f9e4d8901a3bfcb858382a6a39d8060ce31a315557c86b1',   # export_web_results.py (worker 0232)
+    '../data/effect/anything/a0050/a0093/fer/a0093.fed': '43ecbc7c2f06ba73e35e50b21ba44334d4b43a82fd041da1f14ecc9ae0c6d6f8',   # export_web_results.py: the Status screen's FED (worker 0241)
     # z128 sound: SE programs sep.bin (06zz0005) and names sdb.bin (06zz0008) for tools/audio/extract.py / bgm.py
     '06800005.bin': '519b914c16e6ab40592cb59c7a5f1270b772c65dc62778cd5cb08c0e3cc8ce28',
     '06800008.bin': 'e5854eb93c8e80479cda8935879d40dbdbab5fc5dbb5e81793c8227028bfeb3d',
@@ -305,6 +306,7 @@ INPUTS = {
     '../data/event/scene/ev0100/sound/10109vn.at2': '6d8162da5980962a3e7ba90fa1705c397424690e2b6ae6092b9cb740146c46e8',
     '../data/event/scene/ev0100/sound/10109v2.at2': '89fa0ae88bc91bffbbe21feefebd56fdc19283e20efdfadac8fa7d8404d02162',
     '../data/event/scene/ev0100/sound/10110sk.at2': '88009ba5db19b0c8c82519aba386b0382047eef078f7b5fe6169daa84dbe67bb',
+    '../data/event/scene/ev0100/sound/10201vn.at2': '1677cd04bff30f5ce66d8de86793ccdb5e91ad7b3b50465505cb64ac0fd325ae',   # rv_matiawase (worker 0248)
     # outside noPath: resident effect file + effect texture pack (export_web_effects.py)
     '../data/effect/resident/r0000/r0001/fer/r0001.fed': '5faf7fdfd9f3a8c8f07de02cd4551711c544e531c8f9c602acf05e005fc0726b',
     '../data/effect/resident/r0000/r0000/fer/r0000.fed': 'b10188567af8d5f5d23be74b1e411672f1a259a9e5ee6672ee95ebff0fc60675',
@@ -392,6 +394,10 @@ INPUTS = {
     '0c06441d.bin': '41372ed0a2baffe6b72db1b30e33a4afea80622d1f39d30d25e6cfce82494f80',
     '0c064422.bin': 'c57f07fc4e5bf053f58f3e5d4e28d26916054ec7d0c4b58306e3b283c9ccc5a5',
     '0c0644c6.bin': 'c932e42809a879e378dad26ba50e57408af25c843b7a9a33d5b86d66d04cf7eb',
+    # rv_matiawase's p000 motion files loadmotion(13) / (123) (export_web_event_actors.py, worker 0248)
+    '0c06440d.bin': '8b6515d69ef1e339ff9b21d9145ef3492659c6e65e12389c98b9118a162926a5',
+    '0c06447b.bin': 'd9e3240f9d37cf5e60cd49ba45e66c71f51ad94bca4d6f25547deb8551d69851',
+    '0c0644fe.bin': '4bff4c03a6ff6891732856814e068dd8cab37eaebbaa0ca130243b9daae8eb6c',   # the opening's p000 loadmotion(254) (worker 0248)
     '07700141.bin': '8e39417027c58f7d3adbd49c439cc48e72d9edd0733f034be948c5f714f3103c',
     '07700142.bin': '48642817f47dda6249601cfd68727bc9883bef3eccc58ad414d8a4bcfe440844',
     '07670341.bin': '95afdc7eee628ac4fafdb533aade5e662fc6b893fde57ae5013f642cb6a5e883',

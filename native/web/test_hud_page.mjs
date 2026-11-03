@@ -423,7 +423,8 @@ try {
       P.gameHud.tick = () => {
         t0();
         const st = P.gameHud.state, g = s => st.chain[st.groupOf[s]];
-        log.push({ now: st.now, y5: g(5).rect[1], st5: g(5).slide[0], t5: g(5).slide[6], x8: g(8).rect[0], begin: P.gameOver.go.events.includes('begin'), restarts: P.restart.count, hp: P.php.hp });
+        log.push({ now: st.now, y5: g(5).rect[1], st5: g(5).slide[0], t5: g(5).slide[6], x8: g(8).rect[0], begin: P.gameOver.go.events.includes('begin'), restarts: P.restart.count, hp: P.php.hp,
+                   hits: P.enemyAI && P.enemyAI.events ? P.enemyAI.events.filter(e => /^(hit|blast) player/.test(e)).length : 0 });
       };
       window.__ref = { H, data };
       return null;
@@ -464,12 +465,16 @@ try {
       await pg4.waitForTimeout(1500);
       const Hh = await pg4.evaluate(() => {
         const P = window.__play, { H, data } = window.__ref, ref = new H.HudState(data), st = P.gameHud.state;
-        return { hp: P.php.hp, hp1: window.__hlog.length ? window.__hlog[0].hp : null,
+        // worker 0242 (review): a frame can run between the log's clearing and the key (HP 0 still logged): the first entry
+        // with HP > 0 is H's; after it HP may drop only on a frame whose world events hold a hit on Vincent
+        const L = window.__hlog, i = L.findIndex(r => r.hp > 0);
+        const badDrop = i < 0 ? null : L.slice(i + 1).findIndex((r, k) => r.hp < L[i + k].hp && !r.hits);
+        return { hp: P.php.hp, hp1: i >= 0 ? L[i].hp : null, badDrop, before: i,
                  same: st.chain.every((e, k) => e.rect.join() === ref.chain[k].rect.join() && e.box.join() === ref.chain[k].box.join() && e.flags === ref.chain[k].flags) };
       });
       // worker 0240: HP 780 on the first frame after H; 41-43 / 44 / 66 are active after the Restart and may hit him in the
       // 1.5 s after (the stage init's draws moved the soldiers' random sequence)
-      ok(Hh.hp1 === 780 && Hh.same, `H during the slide-out: the HUD comes back to the start layout (HP ${Hh.hp1} after H, ${Hh.hp} 1.5 s later)`);
+      ok(Hh.hp1 === 780 && Hh.badDrop === -1 && Hh.same, `H during the slide-out: the HUD comes back to the start layout (HP ${Hh.hp1} after H, ${Hh.hp} 1.5 s later; ${Hh.before} HP-0 frames before it; drops without a soldier's hit: ${Hh.badDrop === -1 ? 'none' : 'at ' + Hh.badDrop})`);
       // the pause during the slide-in: FUN_0023c1f0 (the slides' clock) runs on through the game's pause, so after a
       // 1.5 s pause the first game frame has the slide done (the page's game frames stop while paused)
       await pg4.evaluate(() => { window.__hlog.length = 0; });

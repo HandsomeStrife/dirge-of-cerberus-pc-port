@@ -73,3 +73,41 @@ FUN_0055c7f8; of 11: FUN_00331f08 (player control update), FUN_0032ace0.
 The box effects (effects.js: channel type 18, draw type 103, FUN_002e7198); item pickups (the real trigger, P5); kind 1
 drawing (stat 0x32); kinds 0 / 2 / 4 / 5; FUN_0055c7f8's gate on Vincent's damage; the camera's bit-11 branch;
 FUN_00241760 (bit 1 / the counter DAT_0046b1e0) consumers.
+
+## User control off during the box (worker 0246, 2026-11-03; decoded)
+
+Dan: with the pickup box up he could still shoot, turn the camera (and, per the review board, move). The page blocked only the
+stick. What game-state bit 11 (free_usercontrol(1) / set_usercontrol(0), FUN_00325b60) does:
+- **FUN_00331f08** (the control object's update, vtable 0x4a0910 +0x14) tests FUN_00326068(0xb). Clear: vt+0x5c
+  **FUN_003343a8** (the aimed face point, unless P+0x2a4 is 1 / 3), and with HP != 0 vt+0x4c **FUN_003320c0** (R1 / R2 / R3 /
+  circle, the auto reload) and vt+0x54 **FUN_00333150** (the stick, ✕), then the select message 0x7d3. Set: none of them;
+  FUN_00574920(P, 0) (P+0x298 stick = 0), FUN_0055a410 states -> FUN_00577038 (player state 10 only; not translated, warned),
+  FUN_0055a378 + W+4 bit 0 (auto fire) -> FUN_00574b98 (the R1 release: 3 -> 0, 4 -> 2).
+- **FUN_0032ace0** (camera) l.437-441: bVar1 = FUN_00324258(10) (game-state bits 7 / 5, FUN_00324a78(G, 2), DAT_0046e290
+  +0x10 / +0x18 bit 10) or bit 11. FUN_003256d8 still reads the look stick and the mouse (the latch updates, the counts are
+  spent); with bVar1 the look is zeroed and the update jumps to LAB_0032bcac (no ramp CAM+0x1ec / +0x1f0, no deadzone request
+  FUN_00324440(10), no death look). FUN_00325678 (the left stick the camera reads) gives 0 under bit 11.
+- Page: play.js passes `noControl` in the neutral input and `noUser` (bit 11 or bits 7 / 5) to FollowCamera.tick; aim.js
+  hook.pre drops the button edges and runs aim_core `noControl` instead of `input`. Tests: test_camera (5 checks), test_no_control
+  (7), test_items_page (W / R1 / R2 / drag with the box up). Movement was already neutral under bit 11 on the page.
+
+## Box effects (worker 0241, 2026-11-03)
+- native/web/menu_fx.js: the box slots' effects on the menu managers. FUN_002f0878 for ids >> 28 == 8: (id >> 18) & 0x3ff
+  in {0x5d, 0xe0, 0xfd, 0x109, 0x115} -> DAT_004ee580 (a0093, the Status / objective FED 0x8174....), else DAT_004ee4a0
+  (a0211 0x834c...., the title card's a0099 0x818c...., the GAME OVER title). FUN_003e27d0 -> FUN_0051bdc0 remaps ids for
+  languages 3..6 only (table 0x51df20); the page's language 2: identity.
+- FUN_003c58b8: FUN_003c5c50 (remove the slot's old emitter), id -1 = the slot's id, position = the step's (+0x10 / +0x12)
+  or, id -1 with script flag 0x1e (FUN_002413c0: DAT_004b8980 bit 30, MEASURED set), the slot's (+0x60 / +0x62), stored
+  back unless that case; FUN_002e62b0(0, mgr, id, { flag 1, &(x, y) }). FUN_003c6050's tail per slot: life over ->
+  FUN_003c5a98 (FUN_002e7198 soft end), else +0x6c set -> FUN_003c5b00 (move: +0x60 -> +0x64 over +0x6c ms from +0x68).
+  FUN_003c5cc0 at the box's end. The box code runs in the menu update FUN_003dce38 (after FUN_002efe98): managers in state 9.
+- Frame order (FUN_00248110): FUN_002f00c0 (layers 3, 4), FUN_003dcf58(0) (menus: HUD, box text), FUN_002f0250 (layer 5),
+  FUN_003dcf58(1), FUN_002f0428 (layer 6). The help box: panel in layer 4 (slots 0x11c / 0x11d), the picture in layer 5
+  (0x12d: open330 draws it last, after the text). Page: both before the HUD (GUESS row).
+- The help box on the page now draws the panel's bars / stripes (type 11), the strands (103) and the case (type 10);
+  missing: the dark backdrop and scanlines (type 119 children of type 18). Image: worker 0241's scratchpad
+  w0241_helpbox_game_vs_page.png.
+- **Title card (box 0x1e) not wired**: its effects are a0099's E6 (0x818c0000: a type 21 burst on camera 0, whose spawn z
+  is stack data) and E5 (0x818c0400: type 113, FUN_002d4250's frame-buffer passes); its step [500, 3000, -3, 0x27] is
+  command 0x1a with arg 0x27 for kind 0x1e (a layout, likely the stage name: not decoded). event_rt.js still drops
+  displayStageInfo(0). No hold to add: scr001 checks isDisplayStageInfo(0) once (no wait loop).

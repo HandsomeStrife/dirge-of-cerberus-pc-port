@@ -85,15 +85,17 @@ try {
     const beat = async (k, v, want) => pg.evaluate(async ([k, v, want]) => {
       const P = window.__play, rt = P.stage && P.stage.rt;
       if (!rt) return { err: 'no stage controller' };
-      const cams = [], f = P.follow, reset = f.reset;
-      f.reset = function (...a) { const r = reset.apply(this, a); cams.push({ eye: this.eye.slice(), fwd: this.M[2].slice() }); return r; };
+      // battle()'s camera (worker 0244: follow.battleReset, then battleHandBack and the message 0x7d5)
+      const cams = [], f = P.follow, reset = f.battleReset;
+      f.battleReset = function (...a) { const r = reset.apply(this, a); cams.push({ eye: this.eye.slice(), fwd: this.M[2].slice(), dist: this.dist }); return r; };
       P.enemyAI.eventFlags[k] = v;
       const t0 = Date.now();
       while (!rt.log.some(([, m]) => m.startsWith('handback p_Vin ' + want)) && Date.now() - t0 < 30000) await new Promise(r => setTimeout(r, 50));
       const t1 = P.stats.ticks; while (P.stats.ticks < t1 + 3) await new Promise(r => setTimeout(r, 50));
-      f.reset = reset;
+      f.battleReset = reset;
+      const slots = P.light ? P.light.stream.slots.filter(x => x.loaded).map(x => x.chunk) : null;
       const E = P.enemies.actors, vis = k => { const a = E.find(x => x.rec === k); return a ? a.body.visible : null; };
-      return { pos: [P.ctrl.pos.x, P.ctrl.pos.y, P.ctrl.pos.z], face: [P.ctrl.C.face.x, P.ctrl.C.face.z], cams, vis: [vis(113), vis(114)], vin: P.vin.body.visible,
+      return { pos: [P.ctrl.pos.x, P.ctrl.pos.y, P.ctrl.pos.z], face: [P.ctrl.C.face.x, P.ctrl.C.face.z], cams, slots, dist: f.dist, fwd: f.M[2].slice(), vis: [vis(113), vis(114)], vin: P.vin.body.visible,
                log: rt.log.filter(([, m]) => /getbattleactor|battlename|handback|freed|^battle /.test(m)).map(x => x.join(' ')).slice(-8) };
     }, [k, v, want]);
     const near = (a, b, e) => a.every((x, i) => Math.abs(x - b[i]) <= e);
@@ -101,14 +103,19 @@ try {
     ok(b1 && !b1.err && near(b1.pos, [-889.2, -0.064, -599], 0.02) && near(b1.face, [-1, 0], 1e-5),
        `rv_matiawase: main's p000 slot named p_Vin hands Vincent its place (T f1850 (-889.2, -0.064, -599) facing -x): ${b1 && b1.pos ? b1.pos.map(v => v.toFixed(3)) + ' face ' + b1.face.map(v => v.toFixed(4)) : JSON.stringify(b1)}`);
     const b2 = await beat(1, 5, '-1120.20');
-    const c = b2 && b2.cams && b2.cams.at(-1);
     ok(b2 && !b2.err && near(b2.pos, [-1120.2, -0.0623, -1277.3], 0.02) && near(b2.face, [0.98894, -0.14831], 1e-4),
        `the rescue (getbattleactor p_Vin, setpos, setdir, setbattlename): Vincent at T record 2126 (-1120.2, -0.0623, -1277.3) facing (0.98894, -0.14831): ${b2 && b2.pos ? b2.pos.map(v => v.toFixed(4)) + ' face ' + b2.face.map(v => v.toFixed(5)) : JSON.stringify(b2)}`);
-    ok(!!c && near(c.fwd, [0.75641, 0.64547, -0.10588], 2e-4),
-       `battle()'s camera reset (FUN_00329f68 -> FUN_003285d0): forward from main's event camera ${c ? c.fwd.map(v => v.toFixed(5)) : '-'} (T 0.75641 0.64547 -0.10588)`);
-    // KNOWN GAP (not this work's): the eye's distance along that forward. T: 21.05 u from the aim point (feet - 17.4 in y),
-    // the page's FollowCamera places it 36.1 u out at this pitch (-0.70 rad); the reset's angles above are the translated part
-    if (c) console.log(`GAP  camera eye after the reset ${c.eye.map(v => v.toFixed(3))} (T -1136.096 -31.009 -1275.074): FollowCamera distance at pitch -0.70`);
+    // the forward after battle()'s frame (its in-place update blends from the old view by the page's ramp: see below)
+    ok(!!b2 && !!b2.fwd && near(b2.fwd, [0.75641, 0.64547, -0.10588], 2e-4),
+       `battle()'s camera reset (FUN_00329f68 -> FUN_003285d0): forward from main's event camera ${b2 && b2.fwd ? b2.fwd.map(v => v.toFixed(5)) : '-'} (T 0.75641 0.64547 -0.10588)`);
+    // worker 0244: the eye's distance after battle(). T w244_rescue_cam: CAM+0x1c0 21.29 after battle()'s frame, easing out
+    // toward ~21.66 (the collision distance: the rays test the loaded slots, the game's 0 / 3 / 2 there; chunk 3 holds what
+    // pulls the eye in). Was 36.1 (rays on chunks 1 / 2). The game's 21.29 comes from blending from the old eye with
+    // the ramp at 0.9495 (re-entered ~110 frames before, inside the unskipped roji02_01); the page auto-skips that event,
+    // so its ramp at battle() differs and its distance is the collision one (21.65). test_battle_camera checks the frame
+    // from the game's own state.
+    ok(b2 && b2.slots && b2.slots.includes(3) && b2.dist > 21.2 && b2.dist < 21.7,
+       `battle()'s camera distance 3 frames on: ${b2 && b2.dist ? b2.dist.toFixed(4) : '-'} (T 21.29 -> 21.66, was 36.1); slots ${b2 && b2.slots} (T 0 / 3 / 2)`);
     ok(b2 && b2.vin === true && b2.vis && b2.vis.every(v => v !== false) && b2.log.some(m => /battle actor \d+ freed/.test(m)),
        `after battle(): Vincent drawn, 113 / 114 lent models freed and drawn again (${b2 && b2.vis}); log: ${b2 && b2.log && b2.log.join(' | ')}`);
   }
@@ -139,7 +146,7 @@ try {
     return { hp, state: a().astate, clip: a().C.clip, drawn: d ? d.head.clip : null, f38: a().f38, ev: log.slice(0, 6).concat([`bullets ${W.bullets.length}`, `c ${W.boneWorld(a())(3)[3].map(v => v.toFixed(1))} pos ${a().pos.map(v => v.toFixed(1))}`]), paused: !!(window.__play.gameState && window.__play.gameState.aiPaused && window.__play.gameState.aiPaused()) };
   });
   ok(kill && !kill.err && kill.hp[0] < 58 && kill.hp.at(-1) === 0 && kill.state === 7 && /^dead/.test(kill.drawn) && kill.f38 === 0x181,
-     `shots at 114 on the page: HP ${kill && kill.hp && kill.hp.join(' -> ')}, actor state ${kill && kill.state}, drawn ${kill && kill.drawn}${kill && kill.err ? ' ' + kill.err : ''}${kill && kill.hp.at(-1) ? ' ' + JSON.stringify(kill.ev) : ''}`);
+     `shots at 114 on the page: HP ${kill && kill.hp && kill.hp.join(' -> ')}, actor state ${kill && kill.state}, drawn ${kill && kill.drawn}${kill && kill.err ? ' ' + kill.err : ''}${kill && kill.hp && kill.hp.at(-1) ? ' ' + JSON.stringify(kill.ev) : ''}`);
   }
   ok(!warns.some(w => /not drawn|not exported/.test(w)), 'no "not drawn" / "not exported" warnings' + (warns.length ? ': ' + warns.slice(0, 2).join(' | ') : ''));
 

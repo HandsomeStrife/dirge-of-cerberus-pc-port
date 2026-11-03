@@ -37,6 +37,11 @@ try {
     catch (e) { if (i > 20) throw e; await new Promise(r => setTimeout(r, 250)); }
   }
   await pg.waitForFunction(() => window.__play && window.__play.stats.ticks > 30 && window.__propsView, null, { timeout: 120000 });
+  // worker 0246: the explosion's sound bsj_065 (a resident sdb name: FUN_003e8e18 -> FUN_003eb868 slot 0). A gesture makes
+  // the AudioContext; the emitter sends are logged (audio.js SoundEmitters.update)
+  await pg.keyboard.press('KeyQ');
+  const sfxOn = await pg.waitForFunction(() => { const P = window.__play; return !!(P.amb && P.amb.sfx && P.pauseSound.audio && P.pauseSound.audio.ctx); }, null, { timeout: 60000 }).then(() => true).catch(() => false);
+  await pg.evaluate(() => { const P = window.__play; if (P.amb.sfx) P.amb.sfx.log = []; });
   const r = await pg.evaluate(async () => {
     const P = window.__play, props = window.__props, view = window.__propsView, ai = P.enemyAI;
     const wait = n => new Promise(res => setTimeout(res, n));
@@ -76,6 +81,9 @@ try {
   ok(r.evs.some(e => /explosion x0 r 65 dmg 120/.test(e)), 'script 196 runs the explosion (radius 65, damage 120)');
   ok(r.evs.some(e => /explosion x0 targets P/.test(e)) && r.hp0 - r.hp === 118, `Vincent 35 u away: HP ${r.hp0} -> ${r.hp} (118, as in the trace)`);
   ok(r.gone && !r.meshAfter, 'the barrel and its model are gone');
+  const boom = await pg.evaluate(() => { const P = window.__play, A = P.pauseSound.audio;
+    return { sent: (P.amb.sfx && P.amb.sfx.log || []).filter(e => e.name === 'bsj_065'), id: A ? A.seIdOf('bsj_065') : 0, prog: !!(A && A.program(A.seIdOf('bsj_065'))) }; });
+  ok(sfxOn && boom.id > 0 && boom.prog && boom.sent.length === 1 && boom.sent[0].vol > 0, `the explosion's bsj_065 is sent once (id ${boom.id}, program ${boom.prog}): ${JSON.stringify(boom.sent)}`);
   const s8 = r.spawned.find(x => x.id === 0x800);
   ok(!r.fxOn || (s8 && s8.sc && Math.abs(s8.sc[0] - 6.5) < 1e-6), `effect 0x800 spawned in the page's engine with scale ${s8 && s8.sc} (effects ${r.fxOn ? 'on' : 'off'}; its channel type 46 is not translated yet)`);
   const bad = errs.filter(e => !/favicon/.test(e));

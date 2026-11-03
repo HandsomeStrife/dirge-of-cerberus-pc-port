@@ -1042,6 +1042,24 @@ START = {
 BUILD_CLOCK = 1000              # GUESS: the clock when the HUD is built (only != 0 and < START clock matters)
 
 
+def item_names_json(elf, locale):
+    """Worker 0243: FUN_003fd690 -> FUN_003fd5e8(id, 0) for every id of kelstr's item table (+0x24: u32 category count,
+    then 8-byte rows u16 count, u16 category (id >> 16), u16 offset-table offset (& 0xfffe); the item name = T + the
+    table's u16 at index 4 k). For FUN_003ae308 (the HUD's item name, DAT_0046e54c bit 3) after an item use / cycle.
+    Keys: the id in hex (8 digits); values: the name's bytes. Ids outside the table get message 6 at run time (not here)."""
+    kel = P.kelstr_decode(open(os.path.join(locale, 'kelstr.bin'), 'rb').read(), P.kelstr_keys(elf))
+    T = struct.unpack_from('<I', kel, 0x24)[0] + 0x24
+    u = lambda o: struct.unpack_from('<H', kel, T + o)[0]
+    out, k = {}, 2
+    for _ in range(u(0) + u(2) * 0x10000):
+        cnt, cat, tab = u(2 * k), u(2 * k + 2), u(2 * k + 4) & 0xfffe
+        for i in range(cnt):
+            s = T + struct.unpack_from('<H', kel, T + i * 4 + tab)[0]
+            out['%08x' % ((cat << 16) | i)] = list(kel[s:kel.index(b'\0', s)])
+        k += 4
+    return out
+
+
 def gauge_json(elf, locale):
     """Worker 0237: the top-right gauge (panel 4 = slot 4; FUN_003b58e0 / FUN_003b5378 / FUN_003b5d58).
     show: panel p's show list PTR_DAT_00471d80[p] (FUN_003afbf8: element ids, 0-terminated), panels 0..10;
@@ -1443,6 +1461,7 @@ def main():
         'layout': {str(k): v for k, v in layout.items()},
         'sprites': {str(k): v for k, v in sprite_table(elf, ids).items()}, 'kinds': kinds, 'bars': bars,
         'textures': textures, 'ring': ring_json(elf), 'slides': slides_json(elf), 'gauge': gauge_json(elf, a.locale),
+        'item_names': item_names_json(elf, a.locale),               # worker 0243: FUN_003fd690 per item id
         'font': {'w': w, 'h': h, 'atlas': atlas.hex(), 'cluts': {str(k): v for k, v in cluts.items()},
                  'metrics': metrics.hex()},
     }

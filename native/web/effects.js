@@ -326,6 +326,32 @@ T[4] = {
   },
 };
 // type 7 scale (percent): FUN_002760d8 init, FUN_00276158 transition
+// type 8 scale + rate x 0.01 (worker 0241; vtable 0x49a510 from the save RAM, asm): init 0x276438 (+0x10 = data +0,
+// +0x20 = data +0x10; spawn flags 0x40 / 0x80 would replace them; out .xyz = +0x10 x 0.01 (0x3c23d70a)), transition
+// 0x2764f8 (per lane x y z: base = new base + ((rate t + base) - (old rate t + old base)), out = base x 0.01, rate = new
+// rate + (rate - old rate)), eval 0x2765f0 (VU0, .xyzw: out = (base + rate t) x 0.01), loop 0x276628 (rate re-based as
+// the transition, base = (old rate t2 + base) - new rate t1, then the eval at t1)
+T[8] = {
+  init(X, a, o) { const v = X.p.v; put(v, o + 4, rd4(X.F, a)); put(v, o + 8, rd4(X.F, a + 16)); spawnArg(X, 0); for (let i = 0; i < 3; i++) v[o + i] = f(v[o + 4 + i] * PCT); },
+  trans(X, t, a, o, old) {
+    const F = X.F, v = X.p.v;
+    for (let i = 0; i < 3; i++) {
+      const d = f(f(f(v[o + 8 + i] * t) + v[o + 4 + i]) - f(f(F.f32(old + 16 + 4 * i) * t) + F.f32(old + 4 * i)));
+      v[o + 4 + i] = f(F.f32(a + 4 * i) + d); v[o + i] = f(v[o + 4 + i] * PCT);
+      v[o + 8 + i] = f(F.f32(a + 16 + 4 * i) + f(v[o + 8 + i] - F.f32(old + 16 + 4 * i)));
+    }
+  },
+  eval(X, t, a, o) { const v = X.p.v; for (let i = 0; i < 4; i++) v[o + i] = f(f(v[o + 4 + i] + f(v[o + 8 + i] * t)) * PCT); },
+  loop(X, t1, t2, a, o, old) {
+    const F = X.F, v = X.p.v;
+    for (let i = 0; i < 3; i++) {
+      const r = v[o + 8 + i], r2 = f(F.f32(a + 16 + 4 * i) + f(r - F.f32(old + 16 + 4 * i)));
+      v[o + 8 + i] = r2;
+      v[o + 4 + i] = f(f(f(r * t2) + v[o + 4 + i]) - f(r2 * t1));
+    }
+    T[8].eval(X, t1, a, o);
+  },
+};
 T[7] = {
   init(X, a, o) { const v = X.p.v; put(v, o + 4, rd4(X.F, a)); for (let i = 0; i < 3; i++) v[o + i] = f(v[o + 4 + i] * PCT); },
   trans(X, t, a, o, old) {
@@ -1735,7 +1761,7 @@ export function createEffects({ fed, fed0 = null, core, warn = console.warn, twi
   const segT = (p, idx) => { const e = p.entry[idx]; return e ? f(p.age - F.s16(e + 4)) : p.age; };
   // FUN_002eb6b8 kind 2 (eval list +0x38, slot +0x1c) and kind 7 (once list +0x4c, slot +0x3c)
   function runList(em, p, k, cnt, slot) {
-    if (p.skip) return;
+    if (p.skip || (p.flags & 8)) return;                       // FUN_002eb6b8: a dying particle (+2 & 8, worker 0241) runs no list
     const P = p.P, L = F.list(P, k);
     for (let j = 0; j < F.u8(P + 0x20 + k); j++) {
       const idx = F.u16(L + 2 * j), d = F.desc(P, idx), h = T[D.type(F, d)];
@@ -1889,7 +1915,7 @@ export function createEffects({ fed, fed0 = null, core, warn = console.warn, twi
   // FUN_002eb6b8 kind 5 (the loop list +0x44, count +0x25) at time tEnd = P +0x12: each channel takes the data
   // it has at the loop start P +0x10 and its loop method (vtable +0x34) re-bases it; the event index +0x36 restarts
   function loopList(em, p, tEnd) {
-    if (p.skip) return;
+    if (p.skip || (p.flags & 8)) return;                       // FUN_002eb6b8: a dying particle (+2 & 8) runs no list
     const P = p.P, L = F.list(P, 5), p10 = F.u16(P + 0x10);
     p.ev = 0;
     for (let j = 0; j < F.u8(P + 0x25); j++) {
@@ -2016,7 +2042,7 @@ export function createEffects({ fed, fed0 = null, core, warn = console.warn, twi
     {
       for (const [em, p] of order) {
         F = em.F;
-        if (p.skip) continue;
+        if (p.skip || (p.flags & 8)) continue;                   // FUN_002eb6b8 kind 3: not for a dying particle
         if (p.noDraw) { warnOnce(`effects: particle with ${p.noDraw} not translated (emitter ${em.ei}): not drawn`); continue; }
         const P = p.P, Ld = F.list(P, 3);
         // FUN_002e3300: emitter byte +1 picks the camera; camera 1 (2D) with the emitter's +0x40 / +0x44 added to

@@ -71,8 +71,8 @@ export class AreaSound {
     if (!au.se || !au.ctx) return false;
     if (name === this.name) return true;           // same name: only FUN_003e8b70 again (the volume is fixed anyway)
     this.stop();                                     // FUN_003e65b0
-    const row = au.se.names[name];
-    const hex = row && au.se.programs[String(row.id)];
+    const row = au.row ? au.row(name) : au.se.names[name];          // FUN_003e8e18 -> FUN_003eb868
+    const hex = row && (au.program ? au.program(row.id) : au.se.programs[String(row.id)]);
     if (!hex) return false;
     const prog = hexBytes(hex);
     const bank = au.banks[prog[1] | (prog[2] << 8)];

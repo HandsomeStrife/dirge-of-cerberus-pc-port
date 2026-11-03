@@ -37,9 +37,24 @@ i32 n (28), i32, n u32 offsets from the entry data; box 0x70: 4x4 f32, +0x40 typ
 - Page aids (not the game): H -> `reset()`; the ?ladder= warp -> `everyChunk()` (every chunk until a box's pair loads).
 - Light 2 for every MP (Vincent, soldiers, props) through `Light2`, every game frame.
 
+## Load timing, traced (worker 0247, 2026-11-03)
+- Trace w247_rescue_load (tools/trace/scripts; state s826.p2s + TRACE_POKE=a06338=91379f02, worker 0244's rescue
+  inputs, f0-600; fields.py `TRACE_SLOTS=1 TRACE_STREAMJOB=1`: DAT_004e4c50 job, DAT_0046bf94 case): the rescue's
+  load(128, 2, 3) requests at f15; slot 1 (chunk 01) is unloaded THE SAME FRAME (FUN_002677a0 -> FUN_002688f0); the
+  cases run f15 0, f16 1, f17 2, f23 3, f24 4, f31 5, f32 6, f43 7, f49 8, f55 9 (FUN_00266780: the 0680ff texture
+  files) .. f83 10; slot 1 = chunk 03 loaded at f84: **69 frames**. Case 2/4/6/7/8/9 wait on a file's status +0x23a
+  == 3 (disc), so the count is disc time. The game never keeps the old pair drawn during a load.
+- The page keeps its next-frame stand-in (GUESS row): it shows the new chunk earlier than the game, never later.
+
+## Dan's "texture deloading" report (worker 0247, 2026-11-03; reports/20261103T092417Z-7bd8)
+- Feet (-1507.3, -0.06, -573.5), chunk 03 square, box pair (2, 3): only floor, banners, a barrel and actors drawn.
+- Not the stream: the slots were right (0 / 2 / 3). Cause: the follow camera's rays tested chunks 0 / 1 / 2 only
+  (player.js CAM_COL_FILES), so the eye went through chunk 03's camera wall at z -542.75 to z -538.83, behind chunk
+  03's occluder quad 2 (x -1662..-553, y -125..159, plane z -540): FUN_0026ccc8 dropped most of chunks 02 / 03.
+  Fixed by worker 0244's decode (FUN_0054c848 -> FUN_0054fc38 -> FUN_0026a320: the rays test the LOADED slots;
+  play.js `camRays.chunks`): the eye stops at z -543.6 and the square draws. Test: test_market_cam_page.mjs.
+
 ## Open
-- Load time: FUN_00266ae0 is about one case a frame plus disc reads; the page completes a load at the next
-  FUN_00267970 (GUESS row). Needs a trace through a box (slot +0x54 / +0x5c per frame).
 - No GS dump outside chunks 01 / 02 (no save state past the start deck); the chunk-06 pick is checked against
   the decoded rule only. Needs a state on the route (shared with P2's chunk 07 / 09 dumps).
 - Events' load(128, a, b) is not wired (no stage controller, P3).

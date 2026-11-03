@@ -46,6 +46,12 @@ try {
   await until(() => { const o = window.__items.list.find(x => x.rec === 22); const m = o && window.__itemsView.meshes.get(o); return !!m; });
   // 1. the take
   const walk = async ms => { await pg.keyboard.down('KeyW'); await new Promise(r => setTimeout(r, ms)); await pg.keyboard.up('KeyW'); };
+  // worker 0246: the pickup's sound goes out (FUN_0054b158 -> FUN_0033cc90 -> FUN_003e8e18: its name is a resident sdb row,
+  // found by FUN_003eb868's slot 0); log the emitter sends (audio.js SoundEmitters.update)
+  await pg.keyboard.press('KeyQ');                 // a gesture: the AudioContext (play.js au.resume)
+  const sfxOn = await pg.waitForFunction(() => { const P = window.__play; return !!(P.amb && P.amb.sfx && P.pauseSound.audio && P.pauseSound.audio.ctx); }, null, { timeout: 60000 }).then(() => true).catch(() => false);
+  ok(sfxOn, 'sound loaded (data/audio)');
+  await pg.evaluate(() => { const P = window.__play; if (P.amb.sfx) { P.amb.sfx.log = []; window.__se0 = (P.pauseSound.audio.playing || []).length; } });
   await pg.evaluate(() => { const c = window.__play.ctrl.pos, o = window.__items.list.find(x => x.rec === 22); o.pos = [c.x, c.y, c.z]; });
   await walk(1500);
   await until(() => window.__items.inventory.count(0x69300000) === 3, null, 30000).catch(() => {});
@@ -54,11 +60,42 @@ try {
   ok(s1.n === 3 && s1.flag2 === 7 && s1.gone, `walked over record 22: count ${s1.n} (3), flag 2 = ${s1.flag2} (7), the item gone`);
   const box = await pg.waitForFunction(() => window.__play.stageInfo && window.__play.stageInfo.kind === 6, null, { timeout: 60000 }).then(() => true).catch(() => false);
   ok(box, 'the stage-info box opens (kind 6: ev0100 deb_jump on flag 2 = 7)');
+  const se = await pg.evaluate(async () => { const P = window.__play, S = (await (await fetch('data/items/items.json')).json()).sounds || {};
+    const names = new Set([S.placed, S.dropped, S.nonammo, S.id_6932000b, S.id_6932000c].filter(Boolean));
+    return { sent: (P.amb.sfx && P.amb.sfx.log || []).filter(e => names.has(e.name)), names: [...names] }; });
+  ok(se.sent.length === 1 && se.sent[0].vol > 0 && se.sent[0].id > 0, `the pickup sound is sent once: ${JSON.stringify(se.sent)} (one of ${se.names})`);
+  // worker 0246: with the box up (game-state bit 11: FUN_00331f08 skips FUN_003320c0 / FUN_00333150 / FUN_003343a8, the
+  // camera FUN_0032ace0 zeroes its look input) W, R1, R2 and a mouse drag do nothing
+  if (box) {
+    const snap = () => pg.evaluate(() => { const P = window.__play, c = P.ctrl.pos, w = P.aim && P.aim.core;
+      return { b11: P.gameState.test(11), kind: P.stageInfo.kind, pos: [c.x, c.y, c.z], yaw: P.follow.yaw, pitch: P.follow.pitch,
+        st: w ? w.P.st : null, drawn: w ? w.P.drawn : null, rounds: w ? w.ammo.rounds() : null, spd: P.ctrl.C.groundSpeed }; });
+    const b0 = await snap();
+    await pg.keyboard.down('KeyW');
+    await pg.evaluate(() => { window.__play.aim.press('r1'); });
+    await new Promise(r => setTimeout(r, 300));
+    await pg.evaluate(() => { window.__play.aim.press('r1'); window.__play.aim.press('r2'); });
+    const bb = await pg.evaluate(() => { const r = window.__play.renderer.domElement.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; });
+    await pg.mouse.move(bb[0], bb[1]); await pg.mouse.down();
+    await pg.mouse.move(bb[0] + 200, bb[1] + 60, { steps: 12 }); await pg.mouse.up();
+    await new Promise(r => setTimeout(r, 700));
+    const b1 = await snap();
+    await pg.keyboard.up('KeyW');
+    const moved = Math.hypot(b1.pos[0] - b0.pos[0], b1.pos[2] - b0.pos[2]);
+    ok(b0.b11 === 1 && b1.b11 === 1 && b1.kind === 6, `the box is still up with bit 11 set (${b0.b11} / ${b1.b11}, kind ${b1.kind})`);
+    ok(moved < 0.01 && b1.spd === 0, `W does not move him (${moved.toFixed(4)} units, speed ${b1.spd})`);
+    ok(b1.yaw === b0.yaw && b1.pitch === b0.pitch, `the mouse does not turn the camera (yaw ${(b1.yaw - b0.yaw).toExponential(2)}, pitch ${(b1.pitch - b0.pitch).toExponential(2)})`);
+    ok(b1.st === b0.st && b1.drawn === b0.drawn && b1.rounds === b0.rounds, `R1 / R2 do nothing (weapon state ${b0.st} -> ${b1.st}, drawn ${b0.drawn} -> ${b1.drawn}, rounds ${b0.rounds} -> ${b1.rounds})`);
+  }
   // close it (one cross), so the page runs on
   if (box) { await new Promise(r => setTimeout(r, 1500)); await pg.keyboard.press('Space').catch(() => {});
     await until(() => window.__play.stageInfo.kind === -1, null, 60000).catch(() => {}); }
   const closed = await pg.evaluate(() => window.__play.stageInfo.kind === -1 && window.__play.gameState.test(11) === 0);
   ok(closed, 'the box closed and control is back (bit 11 clear)');
+  { const p0 = await pg.evaluate(() => { const c = window.__play.ctrl.pos; return [c.x, c.z]; });
+    await walk(800);
+    const p1 = await pg.evaluate(() => { const c = window.__play.ctrl.pos; return [c.x, c.z]; });
+    ok(Math.hypot(p1[0] - p0[0], p1[1] - p0[1]) > 1, `after the box W moves him again (${Math.hypot(p1[0] - p0[0], p1[1] - p0[1]).toFixed(2)} units)`); }
   // 2. kill record 45, take his drop. H first (the page's respawn: aim_core's reset makes a new Ammo; review blocker)
   await pg.keyboard.press('KeyH');
   await new Promise(r => setTimeout(r, 1000));

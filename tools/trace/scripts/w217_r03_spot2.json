@@ -1,0 +1,7 @@
+{
+"name": "r03_spot2",
+"frames": 202,
+"log_from": 200,
+"doc": "worker 0217 route replay from r02_climb.p2s (pokes: 960660=270f,95f158=40401576; HP set to 780 before the save). Recorded pad bytes of a PINE-steered run; see notes/route-states.md.",
+"events": []
+}

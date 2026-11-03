@@ -9,13 +9,14 @@
 // actions=0 (no action modules), packs=a,b (clip packs to load; default ladder, jump, shoot,
 // packs= loads none), zprio=0 / zunder=0 (room.js depth-tie offsets off), cloth=0 (cape
 // cloth off: the keyed glb cape), gun=0 (no gun mesh), ladder=N (test aid: start at
-// ladder N's bottom), outblur=1/0 (PS2 output merge on/off, output.js; default: on only with res=native), res=native (the game's
+// ladder N's bottom), warp=<name> / warp=list (PAGE AID, warp.js: a later place in the level), outblur=1/0 (PS2 output merge on/off, output.js; default: on only with res=native), res=native (the game's
 // 432x512 framebuffer shown 4:3; default = canvas-resolution render filling the canvas, Dan's choice), aim=0 (no
 // weapon: aim.js / aim_core.js, the camera's weapon views and the reticle). Packs load in
 // the background after start (vincent_<pack>.glb).
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { TICK, STEP, PlayerController, SpeedAnimator, FollowCamera, cameraRays, KEY_WALK, KEY_RUN, MouseFeed, MOUSE_SENS_DEFAULT, CROSS_KEY, dirAngles } from './player.js';
+import { warpRequest, applyWarp, warpHelp } from './warp.js';   // PAGE AID ?warp= (worker 0249)
 import { attachGun } from './gun.js';
 import { loadActions } from './actions/index.js';
 import { initReport } from './report.js';
@@ -33,7 +34,7 @@ import { setupItemsView } from './items_view.js';
 import { createEnemyAI, GameRandom } from './enemy_ai.js';
 import { createEffects, EffectLayer, wallImpactId, hitImpactId, cameraView } from './effects.js';
 import { boneRows } from './enemy_hit.js';
-import { restoreCheckpoint, initWorld } from './checkpoint.js';
+import { restoreCheckpoint, initWorld, sceneSave, loadedPair } from './checkpoint.js';
 import { AreaStream, pickLight, loadedGrids, Light2 } from './area_stream.js';
 import { Areas } from './areas.js';
 import { createRoomVis, createVisMask } from './room_vis.js';
@@ -65,7 +66,11 @@ const GAMEHUD = params.get('gamehud') !== '0';      // hud.js (hud_core.js): the
 const SOUND = params.get('sound') !== '0';
 // the opening event (intro.js, worker 0210): z128 starts with ev0100 scr001, then the Restart path's hand-off; ?intro=0
 // skips it (test aid) and starts from the save state as before
-const INTRO = params.get('intro') !== '0';
+// PAGE AID (worker 0249, warp.js; not the game): ?warp=<name> puts Vincent at a later place once main has settled; a warp
+// starts from the save (no opening, as ?intro=0). ?warp=list prints the names
+const WARP = warpRequest(params);
+let warpPending = WARP && WARP !== 'list' ? WARP : null;
+const INTRO = params.get('intro') !== '0' && !warpPending;
 const PACKS = params.has('packs') ? params.get('packs').split(',').filter(Boolean) : (AIM ? ['ladder', 'jump', 'shoot'] : ['ladder', 'jump']);
 // Placement: the game draws the model with the motion player's matrix MP+0x10 (FUN_005ab8f0
 // -> view x MP+0x10), a copy of the character matrix (FUN_00343de8 -> FUN_005a6f40 ->
@@ -666,7 +671,7 @@ async function main() {
   const enemies = ENEMIES ? await setupEnemies({ root, litPatch, light, extra: aiData ? AWAKE.map(k => aiData.records[k]) : [] })
     .catch(e => { console.warn('enemies off:', e.message); return null; }) : null;
   // Vincent's status for the enemy AI: HP 780 = P status +0x20 in the save state (k_enemy_engage8 p_hp)
-  const php = { pos: [ctrl.pos.x, ctrl.pos.y, ctrl.pos.z], face: [ctrl.C.face.x, ctrl.C.face.y, ctrl.C.face.z], hp: 780, id: 0x16, f118: 0x20209, s64: 0 };   // f118 = P+0x118 from the save's RAM (0x20209; player.js hitBranch)
+  const php = { pos: [ctrl.pos.x, ctrl.pos.y, ctrl.pos.z], face: [ctrl.C.face.x, ctrl.C.face.y, ctrl.C.face.z], hp: 780, hpMax: 780, id: 0x16, f118: 0x20209, s64: 0 };   // hpMax: status +4 (worker 0243, T w243_potion)   // f118 = P+0x118 from the save's RAM (0x20209; player.js hitBranch)
   ctrl.hpZero = () => php.hp === 0;               // FUN_005786e8's FUN_00316cf8: no intent / weapon at HP 0 (worker 0181)
   let gameOver = null;                            // gameover_layer.js, set up after the pause (worker 0192)
   // Vincent's joints j00..j92 (flat under the glb root: model-space TRS) and his start-of-frame placement (tick)
@@ -809,6 +814,7 @@ async function main() {
     // FUN_0054c308's camera: the eye (camera +0x30) and +0xd0 = tan of half the horizontal fov (save RAM 0.7467 = 1 / the
     // projection's x scale 1.3391, effects.js CULL). L: the page camera's vertical fov times the game's 448 / 512 ratio
     camera: () => { const c = fxCamera(); return { pos: cameraView(c).eye, tanHalf: Math.tan(c.fov * Math.PI / 360) * (1.1718 / 1.3391) }; },
+    stats: (k, n) => { if (stageRes) stageRes.stats.add(k, n); },              // FUN_0031d668 (worker 0243: the item use's stat 4)
     hud: m => { if (itemsWeapon) itemsWeapon.hudMask |= m; } }) : null;         // FUN_005740c0: DAT_0046e54c |= 0x6e
   // FUN_0054ef68 -> vt+0x14c on the area's children (worker 0223): barrels, items, placed sounds
   if (areas) areas.onSwitch = (k, on) => { if (props) props.areaSwitch(k, on); if (items) items.areaSwitch(k, on); if (amb.placed) amb.placed.areaSwitch(k, on); };
@@ -902,6 +908,9 @@ async function main() {
   // class (null with the stub: no pull-in). Starts at the save state's camera values (GUESS
   // for the page's spawn, player.js CAM_SPAWN).
   const follow = new FollowCamera(camera, camRays || null);
+  // the camera's rays test the chunks in the loaded slots (FUN_0054fc38 -> FUN_0026a320 over DAT_004e4c60; worker 0244):
+  // the area stream's slot table, not its everyChunk() page aid (that one is for drawing and light 2 only)
+  if (camRays && light) camRays.chunks = () => light.stream.slots.filter(sl => sl.loaded).map(sl => sl.chunk);
   if (MOUSE_DIRECT) follow.mouseDirect = { sens: MOUSE_SENS * Math.PI / 180 };   // OPTION mouselook
   follow.reset(ctrl.pos);
   // the room's mask before the first game frame (worker 0225): the probe from the start camera
@@ -929,6 +938,7 @@ async function main() {
                                      isFrozen: () => { try { return frozen || paused; } catch (_) { return false; } } }) : null;
   actionHelp.push('Space jump (✕; the ladder takes it first)');
   if (weapon) actionHelp.push(weapon.help);
+  if (items) actionHelp.push('E use item (D-pad →)   Q next item (D-pad ←)');   // worker 0243: pad table 0x46bae0 ids 0x1d / 0x1e
   // Vincent's bullets vs the soldiers (aim.js onShot -> enemy_ai playerShot, FUN_00577480), fired in
   // enemyAI.tick after the AI scheduler (the game's frame order, FUN_00323128)
   if (weapon && enemyAI) weapon.onShot = (...shot) => enemyAI.queueShot(...shot);
@@ -940,7 +950,7 @@ async function main() {
   if (weapon && enemyAI) weapon.targets = () => props ? enemyAI.lockTargets().concat(props.lockTargets()) : enemyAI.lockTargets();   // + the barrels (worker 0209)
   // the game's HUD in the frame (hud.js, after the reticle in output.hud); follows php.hp each game frame
   // fetched only when scene.json declares it (export_web_hud.py writes "hud"): no 404 without the data
-  gameHud = GAMEHUD && scene.hud ? await setupHud({ output, player: php, url: 'data/' + scene.hud, camYaw: () => follow.yaw, weapon: weapon ? weapon.core : null }) : null;
+  gameHud = GAMEHUD && scene.hud ? await setupHud({ output, player: php, url: 'data/' + scene.hud, camYaw: () => follow.yaw, weapon: weapon ? weapon.core : null, items: items ? items.inventory : null }) : null;
   if (GAMEHUD && !scene.hud) console.warn('hud: not exported (run native/assets/models/export_web_hud.py)');
 
   // detached debug camera (?cam=), same format as main.js
@@ -1001,6 +1011,7 @@ async function main() {
     renderer.setSize(innerWidth, innerHeight);
     output.fitCamera(camera);
     if (intro) intro.refit();                      // the event camera's fov again at the next render (intro.js)
+    if (stageView) stageView.refit();              // the same for main's events (stage_view.js, worker 0248)
   });
 
   // keys -> camera-relative world direction through the camera matrix (rows 2 / 0)
@@ -1086,7 +1097,7 @@ async function main() {
       // box runs until it closes; then the page stops (report mode: the next stage is not on the page). The game's states
       // between the program's end and the next stage (FUN_00401b90 / FUN_00247508) are not decoded (notes/fidelity-audit.md)
       if (stageRes && stageRes.exit) {
-        if (stageSi && stageSi.kind >= 0) { stageSi.frame(pressed.has(CROSS_KEY)); stageSi.sounds(); stageSi.events.length = 0; }
+        if (stageSi && stageSi.kind >= 0) { stageSi.fxBegin(STEP); stageSi.frame(pressed.has(CROSS_KEY)); stageSi.sounds(); stageSi.events.length = 0; stageSi.fxEnd(fxCamera()); }
         else { frozen = true; keys.clear(); console.info('results: the Status box closed after Zone.exit: the page stops here'); }
         pressed.clear(); mouse.dx = mouse.dy = 0;
         acc -= TICK; n++; stats.ticks++; continue;
@@ -1120,6 +1131,13 @@ async function main() {
         amb.sndL = sfx.listener;                   // FUN_003e9ed0 also sends the placed sounds' slots (ambient.js SlotStreams)
         if (amb.slots) amb.slots.update(amb.sndL);
       }
+      // PAGE AID ?warp= (warp.js, worker 0249; not the game): once, when main is in battle() (settled) and the world is up
+      if (warpPending && stage && stage.battle && enemyAI && packsDone) {
+        const name = warpPending; warpPending = null;
+        applyWarp(name, { ctrl, follow, stream: light ? light.stream : null, flags: enemyAI.eventFlags, gflags: stage.globalFlags, cape });
+        detached = null; pressed.clear(); mouse.dx = mouse.dy = 0;
+        window.__play.warp = { name, tick: stats.ticks };
+      }
       // the camera runs first in the game frame: it follows the player as the last frame
       // left him, and this frame's stick-to-world uses its new matrix (player.js camera notes)
       // FUN_00248110: FUN_00267970 + FUN_0026a0c0 before the game logic, at MP+0x10's translation: the matrix
@@ -1133,11 +1151,15 @@ async function main() {
       // (GUESS: order, notes/fidelity-audit.md 'Stage-info boxes'); its ✕ is the frame's edge (FUN_003de918(0, 1))
       if (stageSi) { stageSi.frame(pressed.has(CROSS_KEY)); stageSi.sounds(); stageSi.events.length = 0; }
       if (stage) stage.tick(20);
+      if (stageView) stageView.step();             // the events' actors: FUN_005a8e28's draw, then FUN_003772c8 (worker 0248)
       if (stageRes) stageRes.frame(stageSi ? stageSi.now : 0);   // FUN_00242a50 (FUN_00247428): the play clock (results.js)
       // FUN_00331f08: the player's control update (vt+0x5c) is skipped while game-state bit 11 is set (set_usercontrol(0)
       // / free_usercontrol(1), game_state.js): no stick or button reaches him (the box's ✕ above does not jump)
       const noControl = !!(stageGs && stageGs.test(11));
-      const inp = noControl ? aim({ fwd: 0, side: 0, run: false, keys: new Set(), pressed: new Set() }, follow.basis()) : readInput();
+      const inp = noControl ? aim({ fwd: 0, side: 0, run: false, keys: new Set(), pressed: new Set(), noControl: true }, follow.basis()) : readInput();
+      // FUN_0032ace0's no-look test (worker 0246): bit 11 or FUN_00324258(10) = game-state bit 7 / 5 (L: its FUN_00324a78(G, 2)
+      // and DAT_0046e290 +0x10 / +0x18 masks are not on the page: 0)
+      const noUser = noControl || !!(stageGs && (stageGs.test(7) || stageGs.test(5)));
       const moving = Math.hypot(inp.x, inp.z) > 1e-6;
       // gameover.js: FUN_003fdf00 / FUN_00334590 / FUN_004012c0 on last frame's HP (worker 0192). Before the camera:
       // FUN_00334590 case 2 starts the death camera and FUN_0032ace0 looks down in the same frame (T: w199_deathcam
@@ -1146,6 +1168,7 @@ async function main() {
       // impacts' DAT_004ee2e0, the stage's DAT_004ee3c0, then the title's DAT_004ee4a0 (gameOver.frame's title.begin)
       if (fx) fx.begin(STEP);
       if (fxStage) fxStage.begin(STEP);
+      if (stageSi) stageSi.fxBegin(STEP);          // worker 0241: the menu managers DAT_004ee4a0 / 4ee580 (the boxes' effects)
       if (gameOver) {
         gameOver.frame(php.hp === 0, STEP);
         if (gameOver.go.events.includes('deathCamera')) follow.startDeath();   // FUN_0032a420(CAM, 1, 0, 0) + FUN_00328720(CAM)
@@ -1155,7 +1178,8 @@ async function main() {
       }
       // on the ladder the camera reads the ladder's P+0x104 (ladder.js camState) and the facing C+0x20
       follow.tick({ pos: ctrl.pos, want: ctrl.C.dir, state: ctrl.active?.camState ?? ctrl.P.state, facing: ctrl.C.face,
-                    stick: moving ? (inp.run ? KEY_RUN : KEY_WALK) : 0, pad: null });
+                    stick: moving ? (inp.run ? KEY_RUN : KEY_WALK) : 0, pad: null, noUser });
+      follow.messages();                           // the camera messages posted this frame (0x7d5: battle()'s hand-back)
       const b = follow.basis();                    // re-aim the keys with this frame's matrix
       const pOld = [ctrl.pos.x, ctrl.pos.y, ctrl.pos.z];
       vinStart.pos = pOld; vinStart.h = ctrl.heading;
@@ -1163,6 +1187,9 @@ async function main() {
       // frame f comes from the positions it starts with and moves Vincent in the same frame)
       ctrl.push = enemyAI ? enemyAI.pushOut(pOld) : null;
       ctrl.step(aim(inp, b));
+      // worker 0243: FUN_003320c0's item buttons (id 0x1d = D-pad right -> the use request, 0x1e = D-pad left -> the next item;
+      // page keys E / Q). The control update is skipped while game-state bit 11 is set (noControl), as for the other buttons.
+      if (items && !noControl) items.input({ use: pressed.has('KeyE'), next: pressed.has('KeyQ') });
       pressed.clear();                             // an edge is seen by one tick only
       // feet vs ground check (for the HUD / tests)
       const g = col.groundY(ctrl.pos.x, ctrl.pos.z, ctrl.pos.y);
@@ -1182,6 +1209,7 @@ async function main() {
       // FUN_002efe98 runs every manager (worker 0208: the level manager's cull FUN_002ea6a0 with this frame's camera), then the draw passes
       if (fx) { fx.end(); if (fxStage) fxStage.end(cameraView(fxCamera())); fxLayer.update(fxCamera()); if (fxStage) fxStageLayer.update(fxCamera()); }
       if (gameOver) gameOver.endFrame(fxCamera());   // the GAME OVER title's manager DAT_004ee4a0 (gameover_title.js)
+      if (stageSi) stageSi.fxEnd(fxCamera());      // worker 0241: the boxes' effects (menu_fx.js), then their slot operations
       if (gameHud) gameHud.tick();
       if (enemies) enemies.tick(enemyAI);
       acc -= TICK; n++; stats.ticks++;
@@ -1195,12 +1223,15 @@ async function main() {
 
     if (intro) {                                   // the event camera (a ?cam= view applies after the hand-off)
       hideForIntro(); intro.render();
+    } else if (stageView && stageView.active) {    // main's event camera (FUN_00379148 out of battle mode; worker 0248)
+      stageView.render();
     } else if (detached) {
       camera.position.copy(detached.pos); camera.up.set(0, -1, 0);
       camera.lookAt(detached.pos.clone().add(detached.dir));
     } else {
       follow.update(acc / TICK);                   // between the last two game frames, as the body
     }
+    if (stageView && !intro && !stageView.active) stageView.render();   // the fade's veil, the projection back
     if (weapon && !intro) weapon.render();         // Vincent's first-person fade (not while the opening event hides him); the reticle draws in output.render
     if (fxLayer) fxLayer.flush(); if (fxStageLayer) fxStageLayer.flush();   // the effect meshes once per drawn frame (worker 0208)
     output.render(root, camera);
@@ -1215,7 +1246,7 @@ async function main() {
       `   speed ${(ctrl.speed * 60).toFixed(1)} u/s\n` +
       `onGround ${ctrl.onGround}${ctrl.hitWall ? '  WALL' : ''}` + (enemyAI ? `   HP ${php.hp}${ENEMY_DMG ? '' : ' (bullet damage off: ?enemydmg=0)'}` : '') +
       (weapon ? `   weapon ${weapon.core.P.drawn ? 'out' : 'away'} st ${weapon.core.P.st} T ${weapon.core.P.T}  cam 0x${weapon.core.cam.type.toString(16)}` : '') + '\n' +
-      `click: mouse look (drag works too)   WASD move (walk)   Shift run   ${actionHelp.join('   ')}   H respawn   R report`;
+      `click: mouse look (drag works too)   WASD move (walk)   Shift run   ${actionHelp.join('   ')}   H respawn   R report   ${warpHelp()}`;
   }
   // ---- Restart -> the checkpoint (checkpoint.js, worker 0201): both Restarts (game over, pause OK) make the stage loop
   // return 6 and the game reloads the stage from its start (FUN_00247508 0x15 -> 0x13 FUN_003ff0c0 -> 0x14 -> 0x15). The
@@ -1243,16 +1274,17 @@ async function main() {
     return Promise.all(adds);
   };
   // the new enemy_ai world, built as at the start with the checkpoint's flags and frame counter (bodies: swapBodies)
-  const rebuildEnemies = (flags, frame, clock) => {
+  const rebuildEnemies = (flags, frame, clock, rec = null) => {
     if (areas) areas.reset();                       // the stage reload: the areas again, all off (worker 0223)
     if (!aiOpts) return null;
     // the reload rebuilds every status (FUN_0030f3d8 / the stage load): nothing is dead (T w204_reload: 41-43 HP 10 / 28 / 24)
-    if (items) items.restart();                     // the checkpoint's inventory, taken bits cleared (worker 0224; before attach)
+    if (items) items.restart(rec);                  // the checkpoint's inventory, taken bits cleared (worker 0224; before attach); a record's own (worker 0242)
     // worker 0240 (checkpoint.js initWorld): the stage init's pass FUN_0053ca50(mgr, 1) (event 0x22: script 0 activates
     // 44 / 66; event 0x23) at clock 0, the placement's clocks and frame, then 41-43 (stand-in) and 45-49 (GUESS (0201):
     // the save's states, wakeSave) as at record 10 (T w204_reload / w240_act)
-    enemyAI = initWorld(o => createEnemyAI({ ...aiOpts, ...o }), { flags, frame, clock, loadRecs: enemies ? enemies.loadRecs || [] : [],
-      wake: w => wakeSave(w, AWAKE.filter(k => k !== 44 && k !== 66)) });
+    // worker 0242: after a scene_save the stage-start stand-ins (41-43's loadPass, wakeSave) are not run (RECORD_WAKE below)
+    enemyAI = initWorld(o => createEnemyAI({ ...aiOpts, ...o }), { flags, frame, clock, loadRecs: rec ? [] : enemies ? enemies.loadRecs || [] : [],
+      wake: rec ? null : w => wakeSave(w, AWAKE.filter(k => k !== 44 && k !== 66)) });
     if (window.__play) window.__play.enemyAI = enemyAI;
     return enemyAI;
   };
@@ -1263,25 +1295,29 @@ async function main() {
     const handing = introHandoff;
     if (handing) finishIntro();                    // the event's hiding / view end in the hand-off's own frame
     else if (introData) introGate.on = true;       // a replay follows: restoreCheckpoint's music restart stays silent
-    if (light) light.stream.reset(light.startPair);      // the stage reload: FUN_003ff7a8(0x80, 1, 2) again
+    if (stageRes) stageRes.exit = null;                  // worker 0242: a reload is a new stage program (no Zone.exit pending)
+    const rec = checkpointRec;                           // worker 0242: the last scene_save's record (checkpoint.js sceneSave)
+    // the stage reload: FUN_003ff7a8(0x80, 1, 2) again; after a scene_save FUN_00400778 loads the record's chunks (+1 / +2)
+    if (light) light.stream.reset(rec && rec.pair ? rec.pair : light.startPair);
     // the script half DAT_004e8700 starts empty again (GUESS, notes/fidelity-audit.md 'the hidden-cell mask's script half
     // at start'; worker 0225), with or without the stage fire; the camera half is the next frame's probe
     visMask.clearScript(); for (const b of (fxIds && fxIds.hidden_script) || []) visMask.setScript(b, true);
     if (introHandoff) introHandoff = false; else restarts++;
     // worker 0208: the stage reload reloads the area FEDs (FUN_002f15d0 spawns their records again; GUESS as fx.reset's)
     const fxAll = fx ? { reset: () => { fx.reset(); if (fxStage) { fxStage.reset(); fxStage.stageLoad(); } } } : null;
-    restoreCheckpoint({ ctrl, groundY: (x, z, y) => col.groundY(x, z, y), follow, php, gameOver, weapon, cape, fx: fxAll,
+    restoreCheckpoint({ record: rec, ctrl, groundY: (x, z, y) => col.groundY(x, z, y), follow, php, gameOver, weapon, cape, fx: fxAll,
                         hud: gameHud, sfx, rebuildEnemies, handoff, music: () => { introGate.handing = handing; if (musicRestart) musicRestart(); introGate.handing = false; } });
     detached = null; pressed.clear(); mouse.dx = mouse.dy = 0;
     // the stage reload runs the stage program from its start, so the opening event plays again (T: w210 restart drive,
     // the reload after the game over's Restart plays ev0100 scr001); its end hands off again (uncounted, above)
-    if (!handing && introData) startIntro();
+    if (!handing && introData && !rec) startIntro();     // a record's reload resumes at main (no opening; checkpoint.js restoreRecord)
     // the stage reload runs ev0100 main from its start (stage_controller.js), with the replayed opening as first_event; the
     // hand-off releases the main already waiting there. The global flags DAT_0050db20 start empty (T: w210 start1704)
     // worker 0220: a stage reload starts with no stage-info box and the game-state bits clear (game_state.js reset)
     if (stageSi) stageSi.reset();
     if (stageGs) stageGs.reset();
-    if (!handing) startStage(!!introData); else if (!stage) startStage(false, introRt ? introRt.skip : 0);
+    if (rec) startStage(false, 0, rec.gflags);           // main from its top with the record's global flags (FUN_00400778 case 0xb)
+    else if (!handing) startStage(!!introData); else if (!stage) startStage(false, introRt ? introRt.skip : 0);
   };
 
   // ---- pause menu (pause_layer.js / pause.js; Start = Esc or Enter). While it is open the world is frozen
@@ -1289,7 +1325,8 @@ async function main() {
   let paused = false;
   const pause = await (await import('./pause_layer.js')).setupPause({
     // the kill's own frame: FUN_00576b48 -> FUN_00241760(1, 3, 0); then gameover.js's FUN_00241760 count / the pad given to the menus (FUN_00253fd8(2))
-    output, blocked: () => frozen || !!intro || php.hp === 0 || !!(gameOver && gameOver.go.pauseBlocked), sound: pauseSound,
+    // worker 0242: after Zone.exit the stage program has ended (FUN_004012c0 returned 1), so its pause (case 0xf) is gone
+    output, blocked: () => frozen || !!intro || php.hp === 0 || !!(gameOver && gameOver.go.pauseBlocked) || !!(stageRes && stageRes.exit), sound: pauseSound,
     onPause(on) { paused = on; if (gameHud) gameHud.pause(on); pressed.clear(); mouse.dx = mouse.dy = 0; drag = null; if (!on) { clock.getDelta(); acc = 0; } },
     // Sent when the confirm box (pause.js openBox, layout 0x472ad8) is answered OK. Restart: FUN_003c0a20 +
     // FUN_003dee40(0xf) -> FUN_004012c0 case 0xf returns 6 -> the checkpoint (restart above). Tempsave / Quit:
@@ -1302,9 +1339,9 @@ async function main() {
     onRequest(r) { if (r === 'restart') restartPending = true; } });
   window.__play = { ctrl, anim, follow, aim: weapon, col, stats, amb, areas, camera, renderer, output, root, vin, light, spawnY: gy,
                     playerState, camView, report, keys, pressed, motions, packsReady, actionHelp, cape, enemies, enemyAI, php, pause, gameHud, pauseSound, gameOver,
-                    restart: { get count() { return restarts; }, get pending() { return restartPending || !!restartHold || restartReady; } },
+                    restart: { get count() { return restarts; }, get pending() { return restartPending || !!restartHold || restartReady; }, get record() { return checkpointRec; } },
                     intro: { get active() { return !!intro; }, get rt() { return introRt; }, get windows() { return introWin; }, get hudParked() { return !!intro && output.hud !== introHud; }, get ended() { return introEnded; }, get paused() { return !!intro && intro.paused; } },
-                    get stage() { return stage; }, get stageInfo() { return stageSi; }, get gameState() { return stageGs; }, get results() { return stageRes; }, visMask, roomOccl };
+                    get stage() { return stage; }, get stageView() { return stageView; }, get stageWin() { return stageWin; }, get stageInfo() { return stageSi; }, get gameState() { return stageGs; }, get results() { return stageRes; }, visMask, roomOccl };
   // ---- the opening event (intro.js): played before play on a fresh load; at its end the Restart path (checkpoint.js)
   // places Vincent and soldiers 41-43 as the event's end hands them to play. The page's gameplay bodies and HUD are
   // hidden while it runs (the event's own actors are left out, see intro.js)
@@ -1333,13 +1370,24 @@ async function main() {
   // opening: main runs alongside it (first_event waits for the hand-off, then main reads the opening's +0x156c);
   // else from the save / a hand-off already past (skip: that +0x156c)
   let stagePassWarned = false;
-  function startStage(opening = false, skip = 0) {
+  let checkpointRec = null;                       // worker 0242: DAT_004b2680 (checkpoint.js sceneSave); null = the stage start
+  function startStage(opening = false, skip = 0, gflags = null) {
     if (!createStage) return;
+    // worker 0248: main's events drawn (stage_view.js): the event actors (the actor library's clips and texture
+    // animations, FUN_0040b5c0 = the shared twister), the opening's sound back ends and new event windows
+    if (stageView) { stageView.dispose(); stageView = null; }
+    stageWin = stageWinMod && stageWinData ? stageWinMod.createEventWindows({ D: stageWinData }) : null;
+    const stageActors = stageViewMod ? stageViewMod.createStageActors({ lib: stageLib, rand: () => aiRng.rand(), warn: (m) => console.warn(m) }) : undefined;
     // the hand-off's +0x156c: the opening's (intro.js / event_rt.js skip, worker 0222); 0 from the save
-    stage = createStage({ data: stageData, warn: (m) => console.warn(m), skip,
-      // ?autoskip=0: the page does not choose Skip in the events (the auto-skip is a GUESS stand-in for the player; leave
-      // it on while the events' actors / windows are not on the page)
-      autoSkip: params.get('autoskip') !== '0',
+    stage = createStage({ data: stageData, warn: (m) => console.warn(m), skip, actors: stageActors, sound: introSound, windows: stageWin,
+      // worker 0242: a record's reload: its global flags, and main runs in game frames (no settling before the first)
+      ...(gflags ? { globalFlags: Uint8Array.from(gflags), settle: false } : {}),
+      // scene_save(n) (FUN_0039c728 -> FUN_0023d690(0, n, 0)): the checkpoint record
+      onSceneSave: n => { checkpointRec = sceneSave(n, { gflags: stage ? stage.globalFlags : null, sflags: enemyAI ? enemyAI.eventFlags : null,
+        pair: loadedPair(light && light.stream), hp: php.hp, inventory: items ? items.inventory : null, taken: items ? items.taken : null }); },
+      // the auto-skip (a GUESS stand-in for the player): by default only for the events the page does not play yet
+      // (stage_controller.js PLAYS, worker 0248); ?autoskip=1 every event (an aid), ?autoskip=0 none
+      autoSkip: params.get('autoskip') === '1' ? true : params.get('autoskip') === '0' ? false : 'unplayed',
       openingDone: opening ? () => !intro : undefined, openingSkip: opening ? () => (introRt ? introRt.skip : 0) : undefined,
       flags: () => (enemyAI ? enemyAI.eventFlags : null),             // the current world's (a Restart replaces it)
       bossOverlay: on => { if (enemyAI && enemyAI.setBossPlugin) enemyAI.setBossPlugin(on); },   // worker 0231: Zone.boss (FUN_0037fe18)
@@ -1361,7 +1409,10 @@ async function main() {
       stats: () => (stageRes ? stageRes.stats : null), calc: vm => { if (stageRes) stageRes.calc(vm); },
       onEndSection: () => { if (stageRes) stageRes.endSection(); },
       onExit: (z, a, b) => { if (stageRes) stageRes.onExit(z, a, b); },   // the frame loop below stops the world
+      hudControl: (b) => { if (gameHud && gameHud.control) gameHud.control(b); },   // set_usercontrol -> FUN_003b01b0 (worker 0248)
       battleObject, cameraReset: (view) => { if (stage) stageCameraReset(view); } });   // main's battle actors (worker 0229)
+    if (stageViewMod) stageView = stageViewMod.createStageView({ rt: stage.rt, camera, output, canvas: renderer.domElement, lib: stageLib,
+      root, litPatch, light, weapon: stageGun ? () => stageGun.clone() : null, warn: (m) => console.warn(m) });
   }
   // ev0100 main's battle actors (stage_controller.js, worker 0229): the gameplay object whose status has that 8-char name
   // (FUN_003193c0 / FUN_00316d40: section-1 record +0x44, ai.json records[k].tag; record 0 = p_Vin = Vincent)
@@ -1399,10 +1450,16 @@ async function main() {
   };
   // battle()'s camera reset (FUN_00324e70 -> FUN_00329f68 -> FUN_003285d0): the angles of render view 1's forward
   // (FUN_00260f54) = the event camera's while one was active (view), else the follow camera's own
+  // battle()'s camera (worker 0244; T w244_rescue_calls): FUN_00324e70's reset + in-place update (follow.battleReset),
+  // then FUN_004012c0 case 9's FUN_00326da8 for battle()'s event +0x1528 (follow.battleHandBack); its message 0x7d5 runs
+  // after this frame's follow.tick (follow.messages()). L: the page's keys are read after the stage tick, so these two
+  // updates get no stick (the beats that end in battle() run under set_usercontrol(0))
   function stageCameraReset(view) {
     let s = { yaw: follow.yaw, pitch: follow.pitch };
     if (view) { const [pitch, yaw] = dirAngles(view.aim[0] - view.eye[0], view.aim[1] - view.eye[1], view.aim[2] - view.eye[2]); s = { yaw, pitch }; }
-    follow.reset(ctrl.pos, s);
+    const p = { pos: ctrl.pos, want: ctrl.C.dir, state: ctrl.active?.camState ?? ctrl.P.state, facing: ctrl.C.face, stick: 0, pad: null };
+    follow.battleReset(p, s);
+    follow.battleHandBack(p);
   }
   function hideForIntro() {
     for (const o of [vin.body, ...(enemies ? enemies.actors.map(a => a.body) : [])]) if (o && o.visible) { o.visible = false; introHidden.push(o); }
@@ -1427,6 +1484,9 @@ async function main() {
     fxCam.position.set(v.eye[0], v.eye[1], v.eye[2]); fxCam.up.set(-v.upDir[0], -v.upDir[1], -v.upDir[2]); fxCam.lookAt(v.aim[0], v.aim[1], v.aim[2]);
     return fxCam;
   }
+  // worker 0248: main's events on the page (stage_view.js): the view, its actor library / gun, the event windows
+  let stageView = null, stageViewMod = null, stageLib = null, stageGun = null, stageWin = null, stageWinMod = null, stageWinData = null;
+  { const prev = output.hud; output.hud = (o) => { if (prev) prev(o); if (stageWin && pause && pause.layer) { const p = stageWin.drawAll(performance.now()); if (p.length) pause.layer.draw(o.renderer, o, p); } }; }
   let introData = null, createIntro = null, introActors = null, introVoices = null;
   let introWin = null, introWinMod = null, introWinData = null;      // event_window.js (worker 0239): the subtitles, the event pause's screen
   // the opening's sound back ends (event_sound.js): music.js GameMusic, the area sound hook, audio.js GameAudio, the voices
@@ -1442,6 +1502,7 @@ async function main() {
     intro = createIntro({ data: introData, camera, output, canvas: renderer.domElement,
                           zoneLoad: (z, a, b) => { if (light) light.stream.reset([a, b]); },
                           actorLib: introActors, root, litPatch, light,       // the event's actors (event_actors.js, worker 0218)
+                          rand: () => aiRng.rand(),                            // FUN_0040b5c0: the face animations' waits (worker 0248)
                           sound: introSound,                                   // its music / SEs / voices (event_sound.js, worker 0222)
                           windows: introWin = introWinMod ? introWinMod.createEventWindows({ D: introWinData }) : null });   // subtitles (worker 0239)
     introGate.event = true;
@@ -1472,13 +1533,22 @@ async function main() {
     // with the opening: loaded alongside its first frames (an await here changed the start-up order of the HUD and the
     // opening); from the save (?intro=0): awaited, so main is settled before the first game frame
     const stageReady = Promise.all([fetch('data/event/ev0100_stage.json').then(r => (r.ok ? r.json() : null)).catch(() => null), import('./stage_controller.js'),
-                 import('./game_state.js'), import('./stage_info.js'), import('./results.js').catch(e => { console.warn('results: module off:', e && e.message); return null; })])
-      .then(([d, m, GS, SI, RS]) => {
+                 import('./game_state.js'), import('./stage_info.js'), import('./results.js').catch(e => { console.warn('results: module off:', e && e.message); return null; }),
+                 // worker 0248: the events' view (stage_view.js), actors (data/event/actors), gun mesh (gun.js), windows, voices
+                 import('./stage_view.js').catch(e => { console.warn('stage view: module off:', e && e.message); return null; }),
+                 introActors ? introActors : import('./event_actors.js').then(A => A.loadEventActors()).catch(e => { console.warn('stage: the events\' actors not drawn (data/event/actors):', e && e.message); return null; }),
+                 import('./gun.js').then(G => G.loadGun()).catch(e => { console.warn('stage: the events\' weapon not drawn:', e && e.message); return null; }),
+                 import('./event_window.js').then(async W => ({ W, D: introWinData || await W.loadEventWindowData() })).catch(e => { console.warn('stage: the events\' windows not drawn:', e && e.message); return null; }),
+                 SOUND && !introVoices ? import('./event_sound.js').then(E => { introVoices = new E.VoicePlayer({ get ctx() { return pauseSound.audio && pauseSound.audio.ctx; } }); }).catch(() => null) : null])
+      .then(([d, m, GS, SI, RS, SV, LIB, GUN, WIN]) => {
+        stageViewMod = SV; stageLib = LIB; stageGun = GUN;
+        if (WIN) { stageWinMod = WIN.W; stageWinData = WIN.D; }
         if (!d) { console.warn('stage: data/event/ev0100_stage.json missing (tools/byo/build_web.sh step stage): no story beats'); return; }
         stageData = d; createStage = m.createStageController;
         // worker 0220: the game-state bits (game_state.js) and the stage-info boxes (stage_info.js: FUN_0039e8e8 / FUN_003fdb48)
         stageGs = GS;
-        stageSi = SI.createStageInfo({ output, pause, flags: { event: n => (stage && stage.globalFlags ? stage.globalFlags[n] : 0) } });
+        stageSi = SI.createStageInfo({ output, pause, flags: { event: n => (stage && stage.globalFlags ? stage.globalFlags[n] : 0) },
+                                       THREE, root, fxRng: fx ? fx.rng : null });   // worker 0241: the box effects (menu_fx.js)
         // worker 0232: the section stats from the save (results.js) and the Status box (stage-info kind 2 -> box 0x1d)
         if (RS) stageRes = RS.createResults({ stageInfo: stageSi, gil: () => (items ? items.inventory.gil : 0) });
         if (!stage) startStage(!!intro, intro ? 0 : (introRt ? introRt.skip : 0));   // with the opening, or from the save / a hand-off

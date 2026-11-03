@@ -233,3 +233,50 @@ stagePass (test_boss_page).
 **Open**: actors on the area switch (FUN_0055a0d8; needs the records' area index) for 41-43 / 45-49 (and 45-49's 5 record-10
 magazine draws); the frames between the stage init and the placement; FUN_005453b0's per-status loop on the page; 41's first
 shot (page record 106 now vs the game's 96: the twister is 2 words ahead from record 12, 42's first shot draws 3 vs 1).
+
+## Mid-level checkpoints (P8) (worker 0242, 2026-11-03)
+**The save.** main saves each beat with `setflag(18, 1); scene_save(n); setflag(18, 0)` (ev0100 main pc 1271-1286 for n 1
+after rv_matiawase, then pc 5136 (n 2), 6305, 7230, 10582). scene_save = FUN_0039c728: unless mode bits DAT_004b8ac8 0xc /
+0x10 / 0x14, wait_save then FUN_0023d690(0, n, 0) (slot 2 pending in DAT_004b2590[2], -1 when one is in flight) and
+FUN_003bf250 (the memory-card box: worker 0229's 600-frame hold). FUN_0023d690(0): DAT_0046b0b8 = 0, FUN_0023d2d8(DAT_004b2680, n):
++0 stage byte, +1 / +2 loaded chunks (FUN_0023cf88), +4 stage +0xc then overwritten by (FUN_004036f8(stage, 10) - program) >> 4
+= the index of the program's first cmd 0xa (FUN_003ff528, 16-byte units, cmd 0xd = 2), +8 FUN_0042d970, +0xc 0x2b3e
+(FUN_0023cea8), +0x10 n (FUN_0023c6c8 -> DAT_0046b0dc), +0x14 stage +0x1a (the event run by FUN_004002f8: 100), +0x18 / +0x28
+/ +0x38-+0x48 misc (FUN_004021c8, DAT_004b7ac0, FUN_00321460, mode bit 4, DAT_0047d710, stage +0x18 bit 0, FUN_00242c60,
+difficulty, stage +0x19, FUN_00242950), +0x48 FUN_0023c5a0, +0x70 stage +0x28 (8 loaded-script slots), +0x80 global flags
+(FUN_0037cea0, plain), +0xc0 stage flags (FUN_003ff738, plain), +0x100 FUN_0030fe58(2) -> FUN_00311fa0(stream, 0): the 0x98
+header (FUN_003126e8 / FUN_00312758), DAT_0046e248 0x30 (gil, cap 99999999), DAT_0046e240 / DAT_0046e218 (+4 lists),
+FUN_00319798 (Vincent's status, FUN_003188f8: +0x20..+0x80 without the matrix), DAT_0046e228 (0xe8 + 0xd8 + 4 x 0x34 at
++0x1c0: the section stats and the item taken words, FUN_0031e0e0). Record size 0x948. Card saves (FUN_0023d690(1 / 3 / 4))
+copy it to the save block +0x41840 (FUN_0023dc48 copies it back).
+**The Restart.** FUN_00247508 0x15 case 6: DAT_0046b0b8 == 1 (card) -> save +0x41881 set: FUN_0023dc48 + mode bit 3, else the
+stage start (bit 5); == 0 (a scene_save) -> mode bit 3. 0x13: FUN_003ff0c0 with bit 3 -> FUN_003ff028(stage, DAT_004b2680):
+stage byte, program index +0xc = +4, +0x18 bit 0, +0x19, stage flags (FUN_00403a48), DAT_0046b0dc; stage +0x18 bit 4. The
+program FUN_00401b90 runs FUN_00400778 first: (case 0, bits 0xd / 0xe skip +0x3c / +0x44), case 4 FUN_003e8708(+0x3a), case 6
+FUN_002673d8(stage, +1, +2), FUN_0030f688(stage, 2, +0x100) (the block: FUN_0030fff0 -> FUN_00311fa0(.., 0)), cmd 0x17's
+ambience, case 10 the +0x70 scripts (FUN_004002f8), case 0xb the global flags (FUN_0037ce60), case 0xc / 0xd event +0x14
+(100) from its top (FUN_004002f8(100, -1), FUN_003fffe0), then the program goes on at index 13 (cmd 0xa).
+**main's resume.** With the record's flags main's first tests fail (opening: stage flag 0 == 0 && global 1 < 3; first beat:
+global 1 < 5) and the flag-18 test (pc 1425: global 1 < 13, stage 0 < 13, global 18 == 1) runs: 18 = 0, usercontrol off,
+fadeout, playMusic3, asj_033, Zone.load(128, 2, 3), loadchr, kalm_ld(0), p000 (or p001 by getmorphstate) setpos (-889.2, 0,
+-599) / setdir (-929.2, 0, -599) / vin_mset / setdirofbattle 270 / setbattlename p_Vin, Camera.set, stage flag 9 = 1, fadein,
+controls on, battle(). Each later beat has its own flag-18 branch (pc 5053, 6020, 8325, 10517). Global flag 19 is a debug
+start (isdebugmode() || flag 19): nothing in the scripts sets it to 1.
+**HP.** FUN_00319798's read branch with no player status yet (the objects come later) reads the saved status into a scratch
+status (FUN_00314ad8 / FUN_003188f8 / FUN_00314b38) and drops it: HP full after the reload.
+**T w242** (tools/trace/ckpt_drive.py; s826 + `0xa06338 = 0x91379f02` + HP poked 500; w229's box answers; pause Restart at
+f2200-2420 with HP poked 300; states rec / prerestart / reload0 / r150 / r400 / r800 / r1500 in the worker's scratch, not
+kept): the record at f704 = stage 0x80, chunks 3 / 2, index 13, n 1, +0x14 100, scripts 1-7, global {0: 1, 1: 5, 18: 1, 55: 7},
+stage {0: 2, 1: 5, 2: 7, 46: 1}, HP 500 at block +0x402; DAT_0046b0b8 1 -> 0. Restart: state 0x14 f2430, 0x15 f2466 (no Status
+screen), mode bits 0x6008 (3, 13, 14) during the resume, program index 13 to f3132, loop f3151; stage flags = the record's
+(the rescue's 12 / 63 gone), global 18 cleared; Vincent (-889.2, -0.0636, -599) facing (-1, 0, 0), h_st, HP 780 (new status
+780 from r150), camera forward (-0.9968, 0.0805, 0) = main's Camera.set; stage flag 9 = 1; f3966: manager +0x20 64, AI clock 23.
+**Page.** checkpoint.js `sceneSave` / `loadedPair` / `restoreRecord` / `RECORD_RELOAD`; play.js `onSceneSave` -> `checkpointRec`
+(`__play.restart.record`), `restart()` with a record: stream reset to its chunks, `restoreCheckpoint({ record })`, no intro,
+`startStage(false, 0, rec.gflags)` (settle off: main runs in game frames), `rebuildEnemies(.., rec)` (no loadPass / wakeSave
+stand-ins), items.js `restart(rec)`. Tests: test_checkpoint (record content, restoreRecord, main's resume on the controller;
+mutants 7 / 7), test_checkpoint_page section 4 (the beat on the page, pause Restart, Vincent placed by main; play.js mutants
+gflags / wake 2 / 2 via WEB_ROOT).
+**Open.** Which soldiers the game has active after the reload (not compared; the page: none until main's beats); the inventory /
+taken bits from the record (decoded, no pickup on the route); +0x3a / +0x3c / +0x44 and the gil / section-stat parts; later
+beats' records (n 2-5) not traced; the reload's frames before battle() (load / fade) run at the page's speed.

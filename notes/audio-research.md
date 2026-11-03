@@ -517,3 +517,17 @@ foot markers' y range on the walk -3.68..-1.59 (trace -3.68..-1.64).
 - Page: music.js `changeMusicVol`, `crossfade`, `MusicRamp`, `crossfadeCurve` / `evalCurve`, `mixWeights` / `mixGain`, `sfGain`,
   `pump` (per-frame gains scheduled 250 ms ahead). bgm_012 / 013 / 014 / 018 are extracted by build_web.sh now. The story
   switching (ev0100: playMusic3(.., 3, 2500), peace + changeMusicVol(3 / 0, 2500), boss bgm_014, kita_ev0145 bgm_018) is P3.
+
+## Resident names in gameplay sounds (worker 0246, 2026-11-03; decoded, page-checked)
+
+Dan's play test: the barrel explosion and the gold / ammo pickups were silent. Cause: `SoundEmitters.play` (audio.js) looked
+a name up in the zone's sdb only. The game's gameplay path FUN_0033cc90 -> **FUN_003e8e18** (also the area sound FUN_003e6c88
+and the placed sounds FUN_003e6d70) resolves it with **FUN_003eb868**: sdb slot 0 (the resident ressddb.bin, DAT_004f7dc0) and
+then slot 1 (the zone's sdb.bin); the row's +0xc bit 1 picks +8 (a stream) over +0x10 (the SE id). z128's resident-only names
+the page asks for: **bsj_065** (the barrel, id 1063), **asj_019 / asj_020 / asj_021** (placed / dropped item, "full"),
+**dsj_105** (non-ammo item), msj_012 (items.json). Fix: `GameAudio.row(name)` (FUN_003eb868) used by SoundEmitters.play,
+seIdOf, playName, music.js AreaSound.play and event_sound.js sendEventSe. A static sweep of every name in native/web/*.js and
+data/**/*.json found no other silent request: the remaining unresolved names are footstep cue rows for floor materials z128
+does not use and other weapons' shot names (bsj_054, bsj_061), which the game cannot resolve in z128 either (FUN_003eb868 -> 0,
+id -1, nothing sent). dsj_769 / dsj_770 (items 0x6932000b / c) are in neither sdb: silent in the game too.
+Page: test_props_page sends bsj_065 once (vol 106, pan 60 at 35 u); test_items_page sends asj_019 once (vol 114).

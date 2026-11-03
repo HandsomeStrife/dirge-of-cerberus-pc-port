@@ -230,14 +230,16 @@ try {
         c.add(new THREE_V(w[0] * x + w[4] * y + w[8] * z + w[12], w[1] * x + w[5] * y + w[9] * z + w[13], w[2] * x + w[6] * y + w[10] * z + w[14]));
       }
       c.multiplyScalar(1 / Math.max(1, 4 * letters.length)).project(cam);
-      return { titleAt: window.__titleAt, beginAt: window.__beginAt, n: L.last.filter(s => !s.glow && s.model === undefined).length, models: L.last.filter(s => s.model !== undefined).length, vis: vis.length, inRoot: L.group.parent === window.__play.root,
+      return { titleAt: window.__titleAt, beginAt: window.__beginAt, n: L.last.filter(s => !s.glow && !s.line && s.model === undefined).length, lines: L.last.filter(s => s.line && s.type === 103).length, models: L.last.filter(s => s.model !== undefined).length, vis: vis.length, inRoot: L.group.parent === window.__play.root,
         letters: letters.length, ndc: [c.x, c.y] };
     });
     ok(T !== null, 'the title is loaded (data/gameover_title.fed, gameover.json "title")');
     if (T) {
       ok(T.titleAt - T.beginAt === 14 * 20, `title spawned 14 game frames after the request (clock +${T.titleAt - T.beginAt} ms; 280 expected)`);
       // + worker 0206: the models of tags 61 (44 triangles) and 40 (2 quads), as the w198 dumps g4 / g5
+      // worker 0241: + type 103's strand lines (24 in the w198 dumps g4 / g5; random points, so only their presence here)
       ok(T.n === 30 && T.models === 46 && T.vis === 76 && T.inRoot, `settled: 30 type-10 sprites and 46 model primitives drawn (${T.n} sprites, ${T.models} model items, ${T.vis} meshes, in the scene)`);
+      ok(T.lines > 0, `the title's type 103 strand lines are drawn (${T.lines})`);
       ok(T.letters === 8 && Math.abs(T.ndc[0]) < 0.1 && T.ndc[1] > 0 && T.ndc[1] < 0.2, `the 8 letters centred, a little above the middle (NDC ${T.ndc.map(x => x.toFixed(3))})`);
     }
     ok(await pg.evaluate(() => window.__play.gameOver.go.menu.focus.id === 3), 'Restart focused (layout 0x477c38)');

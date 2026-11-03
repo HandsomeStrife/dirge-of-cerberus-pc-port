@@ -646,7 +646,7 @@ export function soundListener(hist, eye, fwd, pos) {
 export class SoundEmitters {
   constructor(audio) { this.audio = audio; this.pending = []; this.listener = null; this.log = null; }
   play(name, pos, range = 400.0) {
-    const row = this.audio.se && this.audio.se.names[name];
+    const row = this.audio.row ? this.audio.row(name) : (this.audio.se && this.audio.se.names[name]);   // FUN_003eb868
     if (!row || (row.flags & 2)) return -1;
     // pos null: FUN_0033cbd8, the sound camera's position (DAT_0047d8c0 block +0x30), which is the listener's
     // +0x3810 when the slot is sent (T: w172 bsj_063, pan 0x81 = a zero vector)
@@ -709,8 +709,15 @@ export class GameAudio {
   // FUN_003eb970 -> FUN_003eb868: sdb slot 0 (the resident names ressddb.bin, FUN_00244db0) first, then slot 1 (the
   // zone's sdb.bin, FUN_00402220); row +0x10 = the SE id, 0 when the name is in neither.
   seIdOf(name) {
-    const r = (this.res && this.res.names[name]) || (this.se && this.se.names[name]);
+    const r = this.row(name);
     return r ? r.id : 0;
+  }
+
+  // FUN_003eb868(name): the sdb row, slot 0 (resident ressddb.bin) before slot 1 (the zone's sdb.bin); null in neither.
+  // FUN_003e8e18 (every gameplay SE: FUN_0033cc90, the area sound FUN_003e6c88, the placed sounds FUN_003e6d70) looks
+  // names up the same way, so resident names (bsj_065, the pickups' asj_019 / 020 / 021, dsj_105) play in z128 too.
+  row(name) {
+    return (this.res && this.res.names[name]) || (this.se && this.se.names[name]) || null;
   }
 
   // FUN_00241f40's sound side (pause on / off): FUN_003e86e0(DAT_0047d718, on) sets the manager word that
@@ -811,7 +818,7 @@ export class GameAudio {
   }
 
   playName(name, vol, pan) {
-    const row = this.se && this.se.names[name];
+    const row = this.row(name);                     // FUN_003eb868
     return row ? this.playId(row.id, vol, pan) : null;
   }
 

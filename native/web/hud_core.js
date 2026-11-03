@@ -756,6 +756,25 @@ export class HudState {
     if (e1a) e1a.text = hpText(a, b);
     if (e19) e19.text = numberCodes(c);
   }
+  // FUN_003ae308(HUD, id, count) (worker 0243; FUN_00339590, DAT_0046e54c bit 3, with FUN_0031f448: the selection, or -1 / 0):
+  // slot 6 0x1b = the item's name FUN_003fd690(id) (id -1: the empty text 0x4a5220) through FUN_003d7218 flag 0 (FUN_003d03a0:
+  // text starting '$&' -> tflags |= 0x480, else &= 0xfb7f), 0x1c = FUN_003cba90(count) (count < 1: the one code 0x10) with
+  // flag 0x80. Names: hud.json item_names (export_web_hud.py, kelstr's item table); an id outside it would get message 6.
+  setItem(id, count) {
+    const e1b = this.find(6, 0x1b), e1c = this.find(6, 0x1c);
+    if (e1b) {
+      let name = [];
+      if (id !== -1) {
+        const t = this.data.item_names;
+        name = t ? t[(id >>> 0).toString(16).padStart(8, '0')] : null;
+        if (!name) { warn(`hud: no name for item 0x${(id >>> 0).toString(16)} (re-run export_web_hud.py; message 6 not translated)`); name = []; }
+      }
+      e1b.text = name.slice();
+      if (name[0] === 0x24 && name[1] === 0x26) { e1b.tflags |= 0x480; warn('hud: a \'$&\' item name (text codes) not translated'); }
+      else e1b.tflags &= 0xfb7f;
+    }
+    if (e1c) e1c.text = count >= 1 ? numberCodes(count) : [0x10];
+  }
   // FUN_003b4f28 (from the shot, FUN_00577480 after the fire sound): with +0xbb0 clear, FUN_003b4e08(HUD, 0): count =
   // min(n, 99), the gauge 0xbbc = min(count, 10) x 100 with the 1000 ms lag (FUN_003aec10), FUN_00321290(value) (the
   // game's chain bonus DAT_0046e248 +0x24 = count < 5 ? 30 count : 100 (count - 5) + 200: nothing on the page reads it),

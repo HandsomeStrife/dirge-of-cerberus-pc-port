@@ -34,6 +34,8 @@ from export_web_pause import kelstr_keys, kelstr_decode, kelstr_message, LOCALE 
 import kel_class as K  # noqa: E402
 import export_web_event as E  # noqa: E402
 
+FED_FILE = 'data/effect/anything/a0050/a0093/fer/a0093.fed'   # the Status screen's effects, FED 0x81740000 (worker 0241)
+FED_ID = 0x81740000
 LANGUAGE = 2                                    # FUN_00242450 for the uk build (as export_web_pause.py)
 STEPS_AT, STEPS_END = 0x479650, 0x47a028        # FUN_003c54f8 default case; 0x47a028 = kind 0x1e's table
 LAYOUTS = {'title': (0x479190, None), 'rows': (0x4791d0, 0x51f960), 'points': (0x479420, 0x51f980),
@@ -125,7 +127,7 @@ def main():
         'text388': u32s(0x47a388, 0x28), 'text428': u32s(0x47a428, 0x28),
         'rankFxA': u32s(0x47a4c8, 5), 'rankFxB': u32s(0x47a4e0, 5),
         'rankSlots': s8(elf.read(0x47a4f8, 0x24)),
-        'rankPosPal': list(struct.unpack('<40h', elf.read(0x51d0e0, 80))),
+        'rankPosPal': list(struct.unpack('<48h', elf.read(0x51d0e0, 96))),   # 4 shorts for each of rankSlots' 12 triples (worker 0241: was 10 rows)
         'pack315': s8(elf.read(0x47a314, 0x10)), 'pack338': s8(elf.read(0x47a338, 4)),
         'kinds': list(elf.read(0x4a8250, 7)),
     }
@@ -159,8 +161,16 @@ def main():
         raise SystemExit('%s: the class checksum fails (wrong ELF or file?)' % CALC)
     calc = E.read_class(d)
     doc = {'source': 'export_web_results.py (worker 0232)', 'language': LANGUAGE, 'steps': steps,
-           'layouts': layouts, 'overrides': overrides, 'tables': tables, 'messages': msgs, 'calc': calc}
+           'layouts': layouts, 'overrides': overrides, 'tables': tables, 'messages': msgs, 'calc': calc,
+           'fed': 'results.fed', 'fedId': FED_ID}
     os.makedirs(os.path.dirname(os.path.abspath(a.o)), exist_ok=True)
+    # worker 0241: the screen's effects (FED 0x81740000 = a0093.fed: its own FileCode; manager DAT_004ee580 by
+    # FUN_002f0878's 0x5d) copied as is for native/web/menu_fx.js
+    fed = open(os.path.join(a.disc, FED_FILE), 'rb').read()
+    if fed[:4] != b'FED\x08' or int.from_bytes(fed[4:8], 'little') != FED_ID:
+        raise SystemExit('%s: not FED %#x' % (FED_FILE, FED_ID))
+    with open(os.path.join(os.path.dirname(os.path.abspath(a.o)), 'results.fed'), 'wb') as f:
+        f.write(fed)
     with open(a.o, 'w') as f:
         json.dump(doc, f, separators=(',', ':'))
     for item in a.dump:

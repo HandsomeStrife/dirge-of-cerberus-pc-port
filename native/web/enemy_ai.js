@@ -633,7 +633,8 @@ export function createEnemyAI(opts) {
   // ------------------------------------------------ script VM FUN_00371318 (ops: tools/stage_events.py)
   // Runs event `ev` of object o's script (vtable +0x2f4, FUN_003715e0) with args r0..r3.
   function runEvent(o, ev, args = []) {
-    const sc = scripts[String(o.script)];
+    // worker 0243: an object may carry its own table (o.scripts): items.js runs an item's bgd script (FUN_00310718) for Vincent
+    const sc = (o.scripts || scripts)[String(o.script)];
     let fn = sc && sc[String(ev)];
     // FUN_00568f98: no script (-1) or no such event -> the parameter set's script (Vincent only here)
     if (!fn && o.fallback >= 0) fn = (scripts[String(o.fallback)] || {})[String(ev)];
@@ -832,6 +833,8 @@ export function createEnemyAI(opts) {
     // a gimmick's own handler (barrel vt+0xc FUN_00586520 -> FUN_00588b78 -> FUN_0054cd70: props.js); undefined = the generic cases below
     if (t.kind === 'prop' && opts.props) { const v = opts.props.cmd(t, cmd, r); if (v !== undefined) return v; }
     if (t.kind === 'item' && opts.items) { const v = opts.items.cmd(t, cmd, r); if (v !== undefined) return v; }   // FUN_00580d38 (worker 0224)
+    // worker 0243: Vincent's FUN_00571b60 -> FUN_005661e8 cases the item scripts send (0x12d / 0x12e / 0x14b / 0x172 / 0x173: items.js)
+    if (t.kind === 'player' && opts.items && opts.items.playerCmd) { const v = opts.items.playerCmd(t, cmd, r); if (v !== undefined) return v; }
     switch (cmd) {
       // FUN_0054cd70 case 0x125 (worker 0174): FUN_0033cc48(r0 name, FUN_0054a720(object) = its +0x90 position, 1),
       // a released one-shot. r1 != 0: FUN_0033cc48(.., 0) keeps the slot, FUN_003e8ec8(r1, DAT_0047d728, slot)
@@ -4608,7 +4611,8 @@ export function createEnemyAI(opts) {
   function drainManager() {
     for (let n = 0; mgrQueue.length && n < 0x1000; n++) {
       const e = mgrQueue.shift();
-      const o = objects.get(e.id);
+      // worker 0243: Vincent (PLAYER_OBJ, not in `objects`) for requests 0x1c (the item use) and 5 (the heal)
+      const o = objects.get(e.id) ?? (PLAYER_OBJ && e.id === PLAYER_OBJ.id && (e.type === 0x1c || e.type === 5) ? PLAYER_OBJ : null);
       if (!o) continue;
       if (e.type === 7) { runEvent(o, 3); objects.get(e.id).flags28 &= ~0x100000; }
       else if (e.type === 8) runEvent(o, 4);
@@ -4637,6 +4641,10 @@ export function createEnemyAI(opts) {
       // case 1 (cmd 0x10a's FUN_0053fa08; worker 0212): the key (+0x4c << 16 | id) still matches -> FUN_0053e1e0. The page
       // never re-creates an object under the same id, so the id alone is the key.
       else if (e.type === 0) destroyObject(o);
+      // worker 0243: case 0x1d (FUN_00573db0's request 0x1c): FUN_00573eb0(o, +0xc = the slot); case 6 (cmd 0x12d / 0x12e's
+      // request 5): vt+0x1f4(o, +0xc) = FUN_0055c910 for Vincent (items.js heal). An actor's request 5 is not translated (warned).
+      else if (e.type === 0x1c && opts.items && opts.items.useSlot) opts.items.useSlot(o, e.arg);
+      else if (e.type === 5 && o.kind === 'player' && opts.items && opts.items.heal) opts.items.heal(e.arg);
       else warnOnce(`enemy_ai: manager event ${e.type} (FUN_0053fde8 case ${e.type + 1}) not translated`);
     }
   }
@@ -4653,7 +4661,8 @@ export function createEnemyAI(opts) {
   // boneWorld: (actor) => (bone) => world rows of that bone (the MP's last posed skeleton), set by the
   // page (enemies.js partPose) or a test; the part test needs it. playerShot(muzzle, aim, W): Vincent
   // fired, now; queueShot: the same at this frame's player slot inside the next tick (the page).
-  const world = { S, actors, triggers, bullets, attackObjs, objects, addActor, tick, runEvent, recById, events, activated, setActive, stageLoad, scheduleHandOff, handOffs, delayed,
+  // postManager: worker 0243 (FUN_0053fbe8: items.js posts the item use's request 0x1c)
+  const world = { S, actors, triggers, bullets, attackObjs, objects, addActor, tick, runEvent, postManager, recById, events, activated, setActive, stageLoad, scheduleHandOff, handOffs, delayed,
                   event23,                                // worker 0235: FUN_005459d8 (script event 0x23 to every object)
                   stageInit, loadPass,                    // worker 0240: FUN_0053ca50(mgr, 1) (0x22 then 0x23); FUN_005453b0's loop alone
                   stageObj: STAGE_OBJ,                    // worker 0237: the stage object (type 0xc, script 0 on z128)

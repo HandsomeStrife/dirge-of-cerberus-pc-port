@@ -16,8 +16,8 @@
 //     (FUN_003d6f88; draw FUN_003d7040 -> FUN_003cc0a8 -> FUN_003cd7e8) with the '$' codes (FUN_003d1d98): c (colour,
 //     DAT_0047a7c0), r (line break), i (inline image, FUN_003d1d08 / FUN_003d1c90 records).
 // Not on the page (warned once):
-//   - the box's effects (slot 0 panel 0x834c0000, slot 1 the item picture, FED a0211 / file 0x3100085): effects.js has
-//     no channel type 18, draw type 103, nor FUN_002e7198's soft end. The step / life book-keeping still runs.
+//   - (worker 0241: the box's effects, slot 0 the panel 0x834c0000, slot 1 the item picture, FED a0211, now run on the
+//     menu managers: menu_fx.js; the parts still left out are effects.js's warnings: type 119's backdrop, children)
 //   - kinds 0 / 2 / 4 / 5 (results, other screens) and kind 1's drawing (objective text DAT_0047a388[stat 0x32], layout
 //     0x479168): kind 1 keeps its timing (step table 0x47a0a0: open 3700 ms) so the controller's waits are right.
 //   - kind 3 is the game over (gameover.js owns it).
@@ -32,6 +32,9 @@ export const BOX_KIND_ITEM = 0x2b, BOX_KIND_OBJECTIVE = 0x1f;
 // opens in frame 226 (state 5 at record 227): FUN_003fdf00 state 3 waits for the effect file on PCSX2's disc. GUESS: the
 // page loads it with the page and keeps the measured 8 frames in state 3 (as gameover_title.js TITLE_DELAY). notes/fidelity-audit.md 'Stage-info file read'.
 export const READ_FRAMES = 8;                   // frames waiting in state 3 after the frame that ran states 0 -> 3
+// MEASURED: script flags DAT_004b8980 = 0xc0026001 in the w220 (open330) and w232 states: bit 0x1e (FUN_002413c0(0x1e))
+// set. It picks the slot positions of FUN_003c58b8 / FUN_003c6d70 (worker 0241).
+export const SCRIPT_FLAG_1E = true;
 export const FRAME_MS = 20;                       // GUESS: FUN_0023c1f0 is real time (ms); 20 ms a game frame (notes/fidelity-audit.md 'stage-info clock')
 
 const warned = new Set();
@@ -243,7 +246,7 @@ class StageBox {
     this.mode = 0;                                 // +0x48d
     this.result = 2;                               // +0x48e
     this.f48f = 0;
-    this.fx = Array.from({ length: 0x26 }, () => ({ id: -1, h: -1, life: 0, mv: 0 }));   // +0x54 + 0x1c i
+    this.fx = Array.from({ length: 0x26 }, () => ({ id: -1, h: -1, life: 0, mv: 0, x: 0, y: 0 }));   // +0x54 + 0x1c i (+0x60 / +0x62 x, y)
     this.ws = Array.from({ length: 40 }, () => ({ op: 0, mode: 0, end: 0, life: 0, w: null }));   // +0x490 + 0x3c i
     this.screen = null;
     this.closed = false;                           // FUN_003b7830 ran: slot result +1 = this.result
@@ -314,15 +317,17 @@ class StageBox {
         return 'next';
     }
   }
-  // FUN_003c58b8: an effect in slot s[2] (book-keeping; the effect itself is not drawn, see the header)
+  // FUN_003c58b8: an effect in slot s[2]: FUN_003c5c50 (the slot's emitter goes), the id (-1: the slot's own) and the
+  // position: the step's (+0x10 / +0x12), or with id -1 and script flag 0x1e the slot's (+0x60 / +0x62), kept in the slot
+  // unless that case; the spawn itself is menu_fx.js's (worker 0241), through the event { fxOp }
   slot(s, now) {
-    const S = this.fx[s[2]];
-    if (S.h !== -1) S.h = -1;                      // FUN_003c5c50
-    let id = s[3];
-    if (id === -1) { id = S.id; if (id === -1) return; }
-    warnOnce('fx', 'stage info: the box effects (FED a0211, ids 0x834c....: channel type 18, draw type 103) are not drawn');
+    const k = s[2], S = this.fx[k];
+    if (S.h !== -1) { S.h = -1; this.events.push({ fxOp: { remove: k } }); }   // FUN_003c5c50
+    let id = s[3], x = s[4] | 0, y = s[5] | 0;
+    if (id === -1) { id = S.id; if (id === -1) return; if (SCRIPT_FLAG_1E) { x = S.x; y = S.y; } }
     S.h = 1; S.id = id; S.mv = 0; S.since = now;
-    this.events.push({ fx: u32(id) });
+    if (!(s[3] === -1 && SCRIPT_FLAG_1E)) { S.x = s[4] | 0; S.y = s[5] | 0; }
+    this.events.push({ fx: u32(id), fxOp: { spawn: k, id: u32(id), x, y } });
   }
   // FUN_003c5db0: a widget slot (+0x490 + 0x3c x arg): fade in over 100 ms (op != -0xd), life
   c5db0(s, w, now) {
@@ -336,7 +341,7 @@ class StageBox {
   fades(el, now) {
     for (const S of this.fx) {
       if (S.h === -1) continue;
-      if (!(el < u32(S.life))) { S.h = -1; this.events.push({ fxEnd: u32(S.id) }); }   // FUN_003c5a98 -> FUN_002e7198
+      if (!(el < u32(S.life))) { S.h = -1; this.events.push({ fxEnd: u32(S.id), fxOp: { end: this.fx.indexOf(S) } }); }   // FUN_003c5a98 -> FUN_002e7198
     }
     if (!this.screen || this.screen === 'nodraw') return;
     for (const W of this.ws) {
@@ -399,7 +404,7 @@ export class StageInfo {
   isDisplay(k) { return (k | 0) >= 0 ? this.kind === (k | 0) : this.kind >= 0; }
   // FUN_003fdd58 (also FUN_004012c0's before FUN_003fdb48(3): play.js calls it when the game over starts)
   stop() {
-    if (this.box) { this.box = null; }             // FUN_003b6978: the box goes (FUN_003c5428 -> FUN_003c5cc0: its effects too)
+    if (this.box) { this.box = null; this.events.push({ fxOp: { clear: true } }); }   // FUN_003b6978: the box goes (FUN_003c5428 -> FUN_003c5cc0: its effects too)
     this.kind = -1; this.state = 0;
     this.events.push({ end: true });
   }
@@ -439,23 +444,44 @@ export class StageInfo {
     }
   }
   draw() { return this.box ? this.box.draw(this.now) : null; }
-  reset() { this.kind = -1; this.state = 0; this.box = null; this.now = 0; }
+  reset() { this.kind = -1; this.state = 0; this.box = null; this.now = 0; if (this.fx) this.fx.reset(); }
 }
 
 // ---------------------------------------------------------------- the page (play.js): data, drawing, sounds
 // Returns at once (worker 0219's stage controller calls display() before the data has loaded: it then runs without a
 // screen). opts.output: output.js (draws after the HUD in output.hud, as the menus); opts.pause: setupPause's result
 // (its layer draws the primitives, its menuSound latch takes the box's sounds).
-export function createStageInfo({ output = null, pause = null, flags = null, url = 'data/stage_info.json', pauseUrl = 'data/pause.json' } = {}) {
+// Worker 0241: with THREE / root (the 3D scene) the boxes' effects run on the menu managers (menu_fx.js, FEDs
+// data/stage_info.fed and data/results.fed); play.js calls si.fxBegin(step) at the frame start (FUN_002efc78) and
+// si.fxEnd(camera) after the frame's logic (FUN_002efe98, the menu update's slot operations, the draw).
+export function createStageInfo({ output = null, pause = null, flags = null, url = 'data/stage_info.json', pauseUrl = 'data/pause.json',
+  THREE = null, root = null, fxRng = null, resultsUrl = 'data/results.json' } = {}) {
   const si = new StageInfo(null, { flags });
+  si.fx = null; si.fxLayer = null;
   si.ready = (async () => {
     try {
       const [sj, pj] = await Promise.all([url, pauseUrl].map(u => fetch(u).then(r => (r.ok ? r.json() : null))));
       if (!sj || !pj) { console.warn('stage info: no ' + url + ' or ' + pauseUrl + ' (export_web_stageinfo.py): boxes run without a screen'); return; }
       const { loadPauseData } = await import('./pause.js');
       si.D = loadStageInfoData(sj, loadPauseData(pj));
+      if (THREE && root) {
+        const rj = await fetch(resultsUrl).then(r => (r.ok ? r.json() : null)).catch(() => null);
+        const base = u => u.replace(/[^/]*$/, '');
+        const names = [sj.fed ? base(url) + sj.fed : null, rj && rj.fed ? base(resultsUrl) + rj.fed : null];
+        if (rj && !rj.fed) console.warn('stage info: data/results.json has no "fed" (re-run export_web_results.py): the Status screen\'s effects are left out');
+        const feds = await Promise.all(names.map(u => (u ? fetch(u).then(r => (r.ok ? r.arrayBuffer() : null)).catch(() => null) : null)));
+        if (!feds[0]) console.warn('stage info: no ' + names[0] + ' (export_web_stageinfo.py): the box effects are left out');
+        if (feds.some(Boolean)) {
+          const { createMenuFx, menuFxLayer } = await import('./menu_fx.js');
+          si.fx = createMenuFx(feds.filter(Boolean), { rng: fxRng });
+          si.fxLayer = menuFxLayer(THREE, si.fx);
+          root.add(si.fxLayer.group);
+        }
+      }
     } catch (e) { console.warn('stage info: bad data, boxes run without a screen', String(e)); }
   })();
+  si.fxBegin = step => { if (si.fx) si.fx.begin(step); };
+  si.fxEnd = camera => { if (si.fx) { si.fx.end(); si.fxLayer.update(camera); } };
   // The draw hook wraps output.hud. The opening (play.js startIntro / finishIntro) parks output.hud (null) and puts the
   // parked chain back afterwards, which drops a wrapper made in between; so the hook is (re)installed at each game
   // frame when output.hud is set and is not the wrapper already, and never while it is parked (null).
@@ -480,7 +506,12 @@ export function createStageInfo({ output = null, pause = null, flags = null, url
   };
   hook();
   const frame = si.frame.bind(si);
-  si.frame = cross => { hook(); return frame(cross); };
+  si.frame = cross => {
+    hook();
+    const r = frame(cross);
+    if (si.fx) for (const e of si.events) if (e.fxOp) si.fx.op(e.fxOp);   // applied after this frame's fxEnd (state 9)
+    return r;
+  };
   si.sounds = () => {                              // the box's FUN_003e1d10 ids of this frame -> the pause's latch
     for (const e of si.events) if (e.se !== undefined && pause && pause.menuSound) pause.menuSound.set(e.se);
   };

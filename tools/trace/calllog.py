@@ -559,3 +559,32 @@ SETS["w240"] = [
 SETS["w240b"] = SETS["w240"] + [
     dict(id=279, kind="vt", where=(0x58E1F8, 0x144), name="activate", copy=[cpr("ra"), cpr("a1"), cpr("a2"), cp("a0", 0x20, 1)]),
 ]
+# worker 0243 (notes/items-research.md 'Item use'): pad 0x1d -> FUN_00573db0 (request 0x1c), the manager's FUN_00573eb0,
+# the item script's events 0x68 / 100 (FUN_0054e138), Vincent's event 0x39 (FUN_00568ea0), the remove (FUN_0031eb60), the
+# heal FUN_003168e8 (status +0x20 after), cmd 0x14b's effect (FUN_00336658), the cycle (FUN_00574058), the HUD item text
+# (FUN_00339590 -> FUN_003ae308), the sounds by name.
+SETS["w243"] = [
+    SETS["sound"][0],
+    dict(id=2430, kind="site", where=(0x3320C0, 0x333150, 0x573DB0), name="use_req", copy=[]),
+    dict(id=2431, kind="site", where=(0x53FDE8, 0x5405B0, 0x573EB0), name="use", copy=[cpr("a1")]),
+    dict(id=2432, kind="site", where=(0x573EB0, 0x574058, 0x54E138), name="ev68", copy=[cpr("a1"), cpr("a2")]),
+    dict(id=2433, kind="site", where=(0x573EB0, 0x574058, 0x568EA0), name="ev39", copy=[cpr("a1")]),
+    dict(id=2434, kind="site", where=(0x573EB0, 0x574058, 0x31EB60), name="remove", copy=[cpr("a1"), cpr("a2")]),
+    dict(id=2435, kind="site", where=(0x568EA0, 0x568F98, 0x54E138), name="ev100", copy=[cpr("a1"), cpr("a2")]),
+    dict(id=2436, kind="site", where=(0x55C910, 0x55C978, 0x3168E8), name="heal", copy=[cpr("a1"), cp("a0", 0, 12)]),
+    dict(id=2437, kind="site", where=(0x5661E8, 0x567C08, 0x336658), name="effect", copy=[cpr("a0"), cpr("a1")]),
+    dict(id=2438, kind="site", where=(0x3320C0, 0x333150, 0x574058), name="cycle", copy=[cpr("a1")]),
+    dict(id=2439, kind="site", where=(0x339590, 0x339988, 0x3AE308), name="hud_item", copy=[cpr("a1"), cpr("a2")]),
+    dict(id=2440, kind="site", where=(0x339590, 0x339988, 0x3ADDA8), name="hud_hp", copy=[cpr("a1"), cpr("a2")]),
+]
+# worker 0244 (the camera after the rescue's battle()): camera type 0xc's update (vt 0x4a07a8 +0x14 = FUN_00330478) and
+# enter (+0xc = FUN_00330240) with the caller and CAM+0x17c / +0x1c0 / eye after; the reset FUN_003285d0, battle()'s
+# FUN_00324e70, FUN_0053d420 (the 0x7d5 re-enter) and FUN_00325880
+SETS["w244"] = [
+    dict(id=2441, kind="vt", where=(0x4A07A8, 0x14), name="cam_update", copy=[cpr("ra"), cp("a1", 0x17C, 1), cp("a1", 0x1C0, 1), cp("a1", 0x90, 3)]),
+    dict(id=2442, kind="vt", where=(0x4A07A8, 0xC), name="cam_enter", copy=[cpr("ra"), cp("a1", 0x17C, 1)]),
+    dict(id=2443, kind="site", where=_ELF + (0x3285D0,), name="cam_reset", copy=[cpr("ra")]),
+    dict(id=2444, kind="site", where=_ELF + (0x324E70,), name="battle_end", copy=[cpr("ra")]),
+    dict(id=2445, kind="site", where=_ELF + (0x53D420,), name="msg7d5", copy=[cpr("ra")]),
+    dict(id=2446, kind="site", where=_ELF + (0x325880,), name="wmode1", copy=[cpr("ra")]),
+]

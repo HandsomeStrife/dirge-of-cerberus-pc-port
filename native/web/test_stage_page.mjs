@@ -1,8 +1,9 @@
 // The stage controller on the real play.html (worker 0219; stage_controller.js, notes/stage-controller.md): ev0100 main
 // runs from the page's start (?intro=0: the save's state), reaches the save's global flags and battle loop; when the
-// current world's stage flag 0 becomes 2 (script 88: the start deck cleared) the next beat runs with rv_matiawase
-// skipped through the game's Skip: load(128, 2, 3) -> area_stream.js request(2, 3), scene_save 1, back to battle.
-// ?stage=0 leaves the controller out.
+// current world's stage flag 0 becomes 2 (script 88: the start deck cleared) the next beat runs: load(128, 2, 3) ->
+// area_stream.js request(2, 3), rv_matiawase, scene_save 1, back to battle. Worker 0248: rv_matiawase plays by default
+// (stage_controller.js PLAYS): its event camera is the render camera, p000 / p005 are drawn (stage_view.js), the
+// window MES_10201VN opens; ?autoskip=1 skips it through the game's Skip (the old aid). ?stage=0 leaves the controller out.
 //   node native/web/test_stage_page.mjs (needs playwright + data; else SKIP; network for the three.js CDN)
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
@@ -44,8 +45,8 @@ async function open(q = '') {
 const st = (pg) => pg.evaluate(() => { const s = window.__play.stage; if (!s) return null;
   return { g: [...s.globalFlags].map((v, i) => (v ? i + ':' + v : '')).filter(Boolean).join(' '), battle: s.battle,
            log: s.rt.log.map(([f, m]) => f + ' ' + m), where: s.rt.vm.where(), calls: s.rt.vm.calls.join(' ') }; });
-try {
-  const { pg, errs } = await open();
+async function beat(q) {
+  const { pg, errs } = await open(q);
   await pg.waitForFunction(() => window.__play.stage && window.__play.stage.rt.frameNo > 20, null, { timeout: 60000 });
   let s = await st(pg);
   ok(s.g === '0:1 1:3', 'main from the save: global flags 0 = 1, 1 = 3 (the save\'s RAM)', s.g);
@@ -57,17 +58,37 @@ try {
     window.__req = []; S.request = (a, b) => { window.__req.push(a + ',' + b + (S.busy ? ' busy' : '')); return r(a, b); };
     P.enemyAI.eventFlags[0] = 2; P.enemyAI.eventFlags[63] = 6;
   });
-  await pg.waitForFunction(() => window.__play.stage.rt.log.some(([, m]) => m === 'scene_save 1'), null, { timeout: 60000 });
+  // during the event (worker 0248): the stage view's camera and actors, sampled each animation frame
+  await pg.evaluate(() => { const P = window.__play; window.__ev = { cam: 0, bodies: new Set(), shown: new Set(), win: 0 };
+    const f = () => { const v = P.stageView; if (v && v.active) { window.__ev.cam++;
+        const c = P.camera, e = P.stage.rt.view.eye; if (Math.hypot(c.position.x - e[0], c.position.y - e[1], c.position.z - e[2]) < 1e-3) window.__ev.at = (window.__ev.at || 0) + 1; }
+      const g = P.root.getObjectByName('event actors'); if (g) for (const a of P.stage.rt.actors.slots) if (a.drawn && a.drawn.shown && !a.lent) window.__ev.shown.add(a.model);
+      if (P.stageWin && P.stageWin.drawAll(performance.now()).length) window.__ev.win++;
+      if (!P.stage.battle || !window.__evDone) requestAnimationFrame(f); };
+    requestAnimationFrame(f); });
+  await pg.waitForFunction(() => window.__play.stage.rt.log.some(([, m]) => m === 'scene_save 1'), null, { timeout: 120000 });
   await pg.waitForFunction(() => window.__play.stage.battle, null, { timeout: 60000 });
   s = await st(pg);
   const req = await pg.evaluate(() => window.__req);
   ok(s.calls.includes('ev0101.rv_matiawase'), 'rv_matiawase ran', s.calls);
-  ok(s.log.some(m => / skip ev0101\.rv_matiawase/.test(m)), 'skipped inside rv_matiawase (after Zone.event)');
+  const ev = await pg.evaluate(() => { window.__evDone = true; const e = window.__ev; return { cam: e.cam, at: e.at || 0, shown: [...e.shown], win: e.win }; });
+  if (q.includes('autoskip=1')) ok(s.log.some(m => / skip ev0101\.rv_matiawase/.test(m)), '?autoskip=1: skipped inside rv_matiawase (after Zone.event)');
+  else {
+    ok(!s.log.some(m => / skip /.test(m)), 'default: rv_matiawase plays (no Skip in it or in main after it)', s.log.filter(m => / skip/.test(m)).join(' | '));
+    ok(ev.cam > 20 && ev.at === ev.cam, 'the event camera is the render camera while it runs (FUN_00379148)', JSON.stringify(ev));
+    ok(ev.shown.includes('p000') && ev.shown.includes('p005') && ev.shown.includes('weapon'), 'p000, p005 and the weapon drawn (stage_view.js)', ev.shown.join(' '));
+    ok(ev.win > 0, 'the window MES_10201VN drawn (event_window.js)', 'frames ' + ev.win);
+    ok(s.log.some(m => / voice 10201vn$/.test(m)) && s.log.some(m => / fadein 1500$/.test(m)), 'playVoice 10201vn, then main\'s fadein 1500 unskipped');
+  }
   ok(s.log.some(m => / zone 128,2,3$/.test(m)) && req.filter(x => x.startsWith('2,3')).length >= 2, 'load(128, 2, 3) -> FUN_002677a0(2, 3) twice', req.slice(0, 6).join(' | '));
   ok(s.g === '0:1 1:5', 'global flags after the beat (the game: 0 = 1, 1 = 5)', s.g);
   ok(s.battle, 'back in battle mode');
   ok(!errs.length, 'no page errors', errs.slice(0, 3).join(' | '));
   await pg.close();
+}
+try {
+  await beat('');
+  await beat('&autoskip=1');
   // ?stage=0: no controller
   const o2 = await open('&stage=0');
   ok(await o2.pg.evaluate(() => window.__play.stage === null), '?stage=0: no stage controller');

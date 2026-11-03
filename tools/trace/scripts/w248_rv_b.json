@@ -1,0 +1,47 @@
+{
+ "name": "w248_rv_b",
+ "frames": 1560,
+ "log_from": 1300,
+ "doc": "worker 0248: w219_beat's route (zone flag 0 = 2 at ~f783, then no input: rv_matiawase unskipped) with the event clock and cameras. Run with TRACE_POKE=9540a4=58,10a2140=58 TRACE_FIELDSET=event TRACE_CALLLOG=stage TRACE_LOG_AT=A6000.",
+ "events": [
+  {
+   "from": 10,
+   "to": 230,
+   "lx": 0.6,
+   "ly": -1.0
+  },
+  {
+   "from": 240,
+   "to": 244,
+   "buttons": [
+    "cross"
+   ]
+  },
+  {
+   "from": 280,
+   "to": 284,
+   "buttons": [
+    "cross"
+   ]
+  },
+  {
+   "from": 300,
+   "to": 470,
+   "lx": 0.6,
+   "ly": -1.0
+  },
+  {
+   "from": 490,
+   "to": 494,
+   "buttons": [
+    "cross"
+   ]
+  },
+  {
+   "from": 500,
+   "to": 787,
+   "lx": 0.6,
+   "ly": -1.0
+  }
+ ]
+}

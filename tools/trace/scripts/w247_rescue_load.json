@@ -1,0 +1,7 @@
+{
+ "name": "w247_rescue_load",
+ "frames": 600,
+ "log_from": 0,
+ "doc": "worker 0247: worker 0244's w244_rescue_slots inputs (first 600 frames) from state s826.p2s with TRACE_POKE=a06338=91379f02 (main takes the rescue beat), log f0-600, TRACE_FIELDSET=stage TRACE_SLOTS=1 TRACE_STREAMJOB=1: the event's load(128, 2, 3) frame by frame (FUN_00266ae0 cases).",
+ "events": []
+}

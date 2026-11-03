@@ -69,7 +69,7 @@ The Status rows show stat 13 in the Limit row and stat 24 for 25: FUN_003c54f8 c
 FUN_003fdf00 -> FUN_003b66c0 -> FUN_003c52b0 -> FUN_003c5358; FUN_003c54f8: stats -> +0xff0 (totals when stat 14 ==
 0x10: title message 0xb878 instead of 0xb800), the four point rows packed (DAT_0047a315 / 0x47a338), step table 0x479650 (126 records to
 0x47a028), FUN_003c6d70: rank effect ids (DAT_0047a4f8 triples: stat < 5 -> slot ids DAT_0047a4c8 / 0x47a4e0; positions
-0x51d0e0 with script flag 0x1e), slot 27 = 0x81744800.
+0x51d0e0 with script flag 0x1e), slot 25 (+0x310; worker 0241: not 27) = 0x81744800 at (0, 0x91).
 Commands (FUN_003c6600, op + 0x1d): 0 / 2 skip the close unless totals / tutorial; 1 totals lives; 3 sound; 5 effect
 slot move; 6 skip the rest of the section when the row's stat is 0; 7 auto-advance (+0x48f); 8 title 0xb842 (layout
 0x479190 widget 4); 9 points layout 0x479420 (override 0x51f980) + FUN_003c7318; 10 wait for ✕; 0xb hold (✕ jumps to

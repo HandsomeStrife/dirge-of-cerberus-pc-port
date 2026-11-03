@@ -37,6 +37,10 @@ if (MUT) {
     // worker 0240: the battle() before the stage init (no stage object yet) runs the pass too; or no pass at all
     stageobj: ["if (!this.stageObj) this.log.push(", "if (false) this.log.push("],
     nopass: ["else if (this.o.stagePass) this.o.stagePass();", "else if (false) this.o.stagePass();"],
+    // worker 0248: no event played (PLAYS empty); main's own waits skipped too (no unplayedEvent test)
+    plays: ["export const PLAYS = new Set(['ev0101.rv_matiawase']);", "export const PLAYS = new Set([]);"],
+    mainskip: ["(this.autoSkip === true || this.unplayedEvent())", "(this.autoSkip === true || !this.playing())"],
+    hud: ["if (o().hudControl) o().hudControl(!!v);", ""],
     bname: ["return block(() => R.frameNo > f0, () => { const a = R.actors.get(id); if (a) { a.tag = str(s).slice(0, 8); log('battlename ' + id + ' ' + a.tag); } });",
             "const a = R.actors.get(id); if (a) { a.tag = str(s).slice(0, 8); log('battlename ' + id + ' ' + a.tag); } return undefined;"],
   }[MUT];
@@ -323,6 +327,24 @@ const gf = (c) => Object.fromEntries([...c.globalFlags].map((v, i) => [i, v]).fi
   ok(O.c.battle && m === 0 && O.c.rt.log.some(([, x]) => x.startsWith('battle ')), `with the opening: the hand-off's battle() sends none either (${m})`);
   O.c.rt.enterBattle(0); O.c.rt.enterBattle(0);
   ok(m === 2, `later battles: one pass each (${m})`);
+}
+
+// 8. worker 0248: autoSkip 'unplayed' (play.js's default): rv_matiawase (PLAYS) plays out, main's code after it is not
+// skipped (its fadein 1500 runs), while autoSkip true still skips inside rv_matiawase
+{
+  const F = { v: {} };
+  const hudc = [];
+  const S = make(F, { autoSkip: 'unplayed', hudControl: (b) => hudc.push(b ? 1 : 0) });
+  run(S, 60); hudc.length = 0; F.v = { 0: 2, 63: 6 }; run(S, 700);
+  ok(hudc.join('') === '01', 'set_usercontrol -> FUN_003b01b0(HUD, b): the HUD out at the event, in after it (T w248_gs: no HUD in the event): ' + hudc.join(''));
+  const L = S.c.rt.log.map(([, m]) => m);
+  ok(S.c.rt.vm.calls.includes('ev0101.rv_matiawase') && !L.some(m => /^skip/.test(m)), "'unplayed': rv_matiawase plays, no Skip anywhere: " + L.filter(m => /^skip/.test(m)).join(' | '));
+  ok(L.includes('fadein 1500') && L.includes('fadeout 1000'), "'unplayed': the event's fadeout and main's fadein run unskipped");
+  ok(S.c.battle && L.includes('scene_save 1'), "'unplayed': the beat ends in battle with scene_save 1");
+  const FT = { v: {} };
+  const T = make(FT, { autoSkip: true });
+  run(T, 60); FT.v = { 0: 2, 63: 6 }; run(T, 200);
+  ok(T.c.rt.log.some(([, m]) => /^skip ev0101\.rv_matiawase/.test(m)), 'autoSkip true: skipped inside rv_matiawase (the ?autoskip=1 aid)');
 }
 
 console.log((fails ? 'FAILED ' : 'ok ') + oks + ' / ' + (oks + fails) + (MUT ? ' (mutant ' + MUT + ')' : ''));
