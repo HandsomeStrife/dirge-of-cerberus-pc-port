@@ -188,6 +188,11 @@ def decode(buf, NB, sk, variant=None):
                 mat = buf[P + doff]; flags = buf[P + doff + 4]; env = buf[P + doff + 2]
                 for sub in parse_drawpackets_cycl(buf, NB, P + vifptr, end):
                     idx = sub.get('idx'); uv = sub.get('uv'); col = sub.get('col')
+                    if idx is None:
+                        # worker 0223: a sub-packet with no index run (and no GIFtag) has no triangles to give; n028 variant
+                        # 1 has one (a 2-entry colour stream only) after its last real sub-packet
+                        print(f"WARN {name}@{blk:#x}.g{gi}: sub-packet without an index run ({sorted(sub)}); no triangles")
+                        continue
                     fill = 0x7e in sub.get('fill', {}) or 0x6e in sub.get('fill', {})
                     for ja, jb, jc in R.sub_tris(idx, sub.get('prim')):
                         a, b, c = idx[ja], idx[jb], idx[jc]

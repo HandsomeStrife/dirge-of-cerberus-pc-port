@@ -1,0 +1,1 @@
+{"name": "w222_skip", "frames": 934, "log_from": 640, "doc": "worker 0222: as w222_snd, Start at f700 (the event pause) and cross at f740 (Skip: FUN_003c0520 button 3). TRACE_CALLLOG=evsound TRACE_FIELDSET=event TRACE_LOG_AT=B4000", "events": [{"from": 700, "to": 704, "buttons": ["start"]}, {"from": 740, "to": 744, "buttons": ["cross"]}]}

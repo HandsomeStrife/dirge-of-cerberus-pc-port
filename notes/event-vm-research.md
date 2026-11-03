@@ -123,3 +123,57 @@ Decoded and on the page (event_actor_rt.js natives + update, event_actors.js dra
   `TRACE_FIELDSET=evactor TRACE_EVMP=...`), GS dumps w218_gs f650 / 800 / 900 (`TRACE_STATE=` in grab_gs.py). test_event_actors.mjs.
 - **Open**: p000 (Vincent's own event actor, the last block) and his gun; hide_model_l / setanim_l (eye / face texture animation) /
   setshadow_l; blended requests; setLOD; the effect sequences on actors (the e063 visor glow is FEDEF HEAD02_ENEMY_HEAD, playseqstr_l).
+
+## Event sound, Skip, the event pause, windows (worker 0222, 2026-11-03)
+Natives (method +0x0c, class registry DAT_004ef498 in the w210 start1704 state). Code: native/web/event_sound.js,
+event_rt.js (skip), intro.js (pause / skip), play.js (wiring, the Start / ✕ keys); tools/audio/voice.py; build steps
+music (+ bgm_274) and voice.
+- **Sound natives**: setVoiceBufferType 0x3a0ac8 (-> FUN_0037fc88: load waits, buffer sizes; no page effect),
+  loadVoice2 0x3a0968 -> FUN_00378c88 (skip 0: command 0x11 with the 7-char name; skip != 0: 0x7fffffff), playVoice
+  0x3a0900 -> FUN_003eaf10(pi / 4, name, 0) -> FUN_003ead30 -> FUN_003eacb8 (gains (short)(cos / sin x 4096) = 2896),
+  setSoundEffect2_l 0x39ff68 (name, p1, p2, at, vol, release; skip 0 only: at 0 -> the active event camera's eye,
+  slot bit 18 = 0x40000 (FUN_003e8a30), fixed volume (FUN_003e8b70); FUN_003e97f8 request; release -> FUN_003e8ff8),
+  playMusic2 0x3a02b8 (skip 0 or FUN_003eb930 -> FUN_003ec500(name, 0); FUN_003ebb18 polls <= 1000 x 200 us for the
+  stream), playMusic3 0x3a0198, playBgAreaSound_l 0x39dd80. **FUN_003eb930(name)** = the sdb row's +0xc & 0x84 == 0x84
+  (bgm_001 0x94 yes, bgm_274 0x04 no: a skipped opening never starts bgm_274). Other KerberosSound / Window / Effect /
+  Light natives' addresses: the table below.
+- **Voices**: rows 10109vn / 10109v2 / 10110sk = streams (+0xc bit 1), FileCode 0x0c064502.. (disc
+  data/event/scene/ev0100/sound/*.at2), +0x14 = length in ms (scr001 sleeps that long). FUN_003ed000 per 1024-sample
+  frame of the 48 kHz music ring, for each of 6 channels: FUN_003eaf90 -> FUN_003eab20 decodes one 0x60-byte ATRAC3
+  frame (libat3dec, mono, not scrambled; the frame at offset 0 is never returned) and FUN_003eb330 adds x gain >> 12
+  to L and R (pmulth / psraw / paddsh), after the music's crossfade mix. So 48 kHz sample for sample, no resampling
+  (the row lengths agree: 59 frames = 1.26 s for a 1292 ms row; 44.1 kHz would be 1.37 s). With no music stream the
+  ring is zeroed and the voices still go out. The music's decoder offset (changeMusicVol) does not reach them.
+- **Skip** FUN_00372f70: +0x156c = 1, bit 36, FUN_003e9950 (stream SEs), FUN_003ea5f0 -> FUN_003ea3d0 ->
+  FUN_003ea2c0 x 6 (voice channels **freed**: a later playVoice plays nothing), FUN_003b7118 for each open window
+  (+0x9804, 5 x 0xc); also FUN_00380ca0(0xb4), FUN_002420e0, FUN_002f47e0, FUN_002574a0, FUN_003e6fc8, event effects
+  FUN_002ebdb8(.., 2) (not on the page, warned). Under skip: sleeps / timers end, moves jump (2), fades do nothing
+  (FUN_003736c8: skip != 0 and not _noskip), SEs and voice loads are refused, window commands open closed
+  (FUN_00383408: FUN_003b75b0 + FUN_003b7118). setSkipMode bits (+0x9860): bit 0 read by the actor update
+  FUN_003772c8 and the motion load FUN_00382220; bit 1 by the window / voice commands (FUN_00381658, FUN_00381860,
+  FUN_003837d0) under skip.
+- **The event pause**: the pause object in its event state (+0x44 = 1, FUN_003bf550 on messages 9 / 0xb) with
+  FUN_00376ee0(ev, 1, 1) (+0x1558 bit 39, +0x9854 = clock, voices FUN_003ea9f0, SEs FUN_003e86e0(1), effects
+  FUN_002f24b0(1, 1, 1), BGM volume FUN_003ed7d0(0)). FUN_003c0520 state 1 draws widgets 0x23 / 0x22 pulsing
+  (FUN_003d0a90(w, clock - 0x100, 0x200, 0x20, 0x80)) and on ✕ (FUN_003de918(0, 3)) with FUN_003e0d00() == 0 sets
+  +0x48 = 1 and closes; FUN_003c0110 then calls FUN_003dfdc8 (skip + FUN_00376ee0(ev, 0, 1)); a close without ✕ ->
+  FUN_003dfd90 (resume only). The layout holding widgets 0x22 / 0x23 is not exported (the draw is left out).
+- **Windows (subtitles), decoded, not on the page**: open_l 0x39ec20 (pops: unused last int, the key -> FUN_003a6698
+  in the event's message file, then h, w, y, x, kind, id) -> FUN_0037c3c8: command 10 {id +0x20, x +0x24, y +0x26,
+  w +0x28, h +0x2a, kind +0x34, text +0x2c}; FUN_00377c68 case 10 -> FUN_00383408: FUN_003b66c0(DAT_00472a80, kind
+  4, 0, 1, 0, -1) -> PTR_FUN_00472d68[4] = FUN_003b84a8 -> FUN_003b8598 (layout script **0x472c48**, text widget 0x14,
+  widget 0x13; the 0x472d28 variant with a 300 ms start is param_7 != 0), FUN_003b6c10(x, y), FUN_003b6c98(w, h),
+  FUN_003b6ab8(text) (a string, not an id); the id goes into +0x9804's 5 entries. close_l 0x39e6c0 -> FUN_00378b00
+  (entry -> -1, the pending command freed by FUN_003789b8). scr001: kind 4 at (0, 380) size (512, 448), keys
+  MES_10109VN1 / MES_10109VN2 / MES_10110SK. To do: export 0x472c48 (export_web_pause.py LAYOUTS), the kind-4 resize,
+  the string text through pause.js type-9 text, the keys through 0220's message export, GS dumps at the windows.
+- **Fade draw, partly**: FUN_003736c8 -> FUN_002f21d8 / FUN_002f21f8 -> FUN_002f4480 / FUN_002f4578: FUN_002f3f08
+  spawns emitter table[a] + b of the FED in DAT_0050d310[DAT_0050d718] on the manager DAT_0050d710 (not one of the
+  three managers on the page); FUN_002f2238(0x373690) -> FUN_002f4698. The FED file and its emitter's draw (an
+  effects.js emitter) are the next step; the veil stays GUESS.
+
+- **Native -> C table** (method +0x0c, start1704 registry):
+  KerberosWindow: enableMenuSe 3a04b0, getstate_l 3a06b8, close_l 39e6c0, unload_l 39e4b8, resetstate_l 39e400, getvalue_l 3a0398, select_l 39e5e0, closeall 39e710, load_l 39e648, hide_l 39e450, isExist 3a0478, isBackToPreviousState 3a0680, move_l 39e508, open_l_str 39ed48, open_l 39ec20, addChatLog_l 3a05e0, addHelpMessage 3a0508.
+  KerberosSound: enableDucking 39f9f8, enableSoundEffectEarCamera 39faa8, enableSoundControl 39fa40, loadVoice 3a07d8, loadMusic 3a0750, loadSoundEffect 3a0b90, loadSoundEffectBySituationId 3a0c68, loadOnlineQuestSoundEffect 3a0b38, loadWave 3a07a0, setReverb 3a0b08, playMusic 3a0378, setVoiceBufferType 3a0ac8, setBgSoundVolume 39deb8, setDatabaseZoneNum 39fa20, changeSoundEffectVol 39dd58, loadSoundEffectEx_l 3a0be8, changeMusicVol 3a5308, stopMusic 3a0148, stopBgAreaSound 39ddf0, flushSoundEffect 39dd10, isCrossfadeBusy 3a0168, setSoundEffectEarPos_l 39fb00, setSoundEffect_l 39fd60, setSoundEffect2_l 39ff68, playBgSound 39de38, playBgAreaSound_l 39dd80, playVoiceWithPanning 3a0808, playMusic3 3a0198, playVoice2 3a0880, isVoicePlaying 3a0a38, playVoice 3a0900, stopVoice 3a0aa0, playMusic2 3a02b8, waitVoiceFinish 3a09b8, unsetSoundEffect 39ff08, loadVoice2 3a0968.
+  KerberosEffect: workaround_problem 3a1510, load 3a2580, loadPadVibData 3a1598, stop_l 3a28d8, unload 3a24c0, playEventEffect_l 3a2548, test 3a2978, isPlayingEventEffect 3a24f8, setFocusBlur 3a2090, fadeout 3a2420, fadein 3a22e0, shake 3a2140, cblur_out 3a1bf8, playActor 3a25d8, flash_out 3a1810, fadein_noskip 3a2380, setVisible_l 3a21c0, stop2_l 3a1638, changeTargetActor 3a15e8, cblur_off 3a1bb0, shake_off 3a2118, flash_off 3a17c8, reset_field 3a2890, stopfadeinout 3a2228, unloadPadVibData 3a1538, deleteBulletMark 3a2958, play_l 3a2640, enableloop_l 3a2038, setPadVibration 3a28e0, isfadeinout 3a2278, playseq_l 3a1f78, cblur_in 3a1a70, flash_in 3a1688, cblur_smooth 3a1ca0, flash_smooth 3a18b8, playseqstr_l 3a1ea8, playPadVibration 3a1560, strid2numid 3a1e58.
+  KerberosLight: set_shadowalpha 3a5048, set_ambientcolor 3a50a8, set_directionvector_l 3a5248, set_directioncolor 3a5140, reset 3a5200.

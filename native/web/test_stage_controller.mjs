@@ -3,7 +3,7 @@
 // Needs data/event/ev0100_stage.json (build step stage). The trace checks need tools/trace/out/w219_beat / w219_skip
 // (.jsonl + .calls.jsonl, TRACE_FIELDSET=stage TRACE_CALLLOG=stage) and w219_keys.json (tools/trace/stage_keys.py);
 // without them those checks are skipped (reported).
-// MUTATE=getflag|setflag|skip|sleep|preempt runs one mutant of stage_controller.js (a scratch copy) and expects a failure.
+// MUTATE=getflag|setflag|skip|sleep|preempt|opening|skipinit|bit6|card|wait runs one mutant of stage_controller.js (a scratch copy) and expects a failure.
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -21,6 +21,11 @@ if (MUT) {
     skip: ["if (this.autoSkip && this.skip === 0 && this.skippable()", "if (false && this.skippable()"],
     sleep: ["return block(() => R.skip !== 0 || (u !== 0", "return block(() => (u !== 0"],
     preempt: ["if (++n > this.budget) return 'preempted';", "if (++n > 5e6) throw new Error('step limit');"],
+    opening: ["const a = !R.beforeOpening && o().area && o().area();", "const a = o().area && o().area();"],
+    skipinit: ["this.skip = o.skip ?? 0;", "this.skip = 0;"],
+    bit6: ["if (gs) { gs.set(6); gs.set(2); }", "if (gs) { gs.set(2); }"],
+    card: ["return this.running && !this.battle && !this.skipOff && !this.cardOn;", "return this.running && !this.battle && !this.skipOff;"],
+    wait: ["if (o.openingDone && !o.openingDone()) return block(() => o.openingDone(), end);", ""],
   }[MUT];
   if (!sub || !s.includes(sub[0])) throw new Error('mutant ' + MUT + ': anchor not found');
   s = s.replace(sub[0], sub[1]).replaceAll("from './", "from '" + HERE + '/');
@@ -61,12 +66,70 @@ const gf = (c) => Object.fromEntries([...c.globalFlags].map((v, i) => [i, v]).fi
   ok(S.c.battle, 'hand-off: battle mode (bit 37, as the save)');
   ok(S.c.rt.log.some(([, m]) => m === 'played elsewhere ev0101.first_event()V'), 'first_event left to intro.js');
   ok(!S.c.rt.log.some(([, m]) => m === 'skip ' + 'x') && S.c.rt.skip === 0, 'no skip at the hand-off (first_event not skipped)');
-  ok(S.calls.some(c => c[0] === 'area' && c[1] === 'asj_033' && c[2] === 127), 'playBgAreaSound("asj_033") -> 127 (the wrapper\'s bipush 127)');
+  ok(S.c.rt.log.some(([, m]) => m.startsWith('area asj_033 127')), 'playBgAreaSound("asj_033") -> 127 (the wrapper\'s bipush 127)');
+  ok(!S.calls.some(c => c[0] === 'area'), 'the prelude\'s asj_033 is not replayed after the opening (T w222_snd: the game plays it before; scr001\'s asj_036 replaces it)');
   ok(!S.c.done && /ev0100\.(main|deb_jump)/.test(S.c.rt.vm.where()), 'main polls in its battle loop (preempted, not ended): ' + S.c.rt.vm.where());
   // 2. a Restart replaces the world: main reads the new world's flags
   F.v = { 0: 2, 63: 6 };
   run(S, 40);
   ok(S.c.rt.vm.calls.includes('ev0101.rv_matiawase'), 'new world flag 0 = 2 -> rv_matiawase runs');
+}
+
+// 1b. the opening skipped (worker 0222: +0x156c = 2 at the hand-off): main's isSkip() after first_event -> kalm_ld(100)
+{
+  const S1 = make({ v: {} }, { skip: 2 });
+  run(S1, 30);
+  ok(S1.c.rt.log.some(([, m]) => /^isSkip 1 ev0100\.main pc 75\d/.test(m)), 'skipped opening: isSkip() 1 after first_event');
+  ok(S1.c.rt.vm.calls.includes('ev0100.kalm_ld'), 'skipped opening: kalm_ld(100) runs');
+  ok(S1.c.battle && S1.c.rt.skip === 0, 'skipped opening: battle() clears +0x156c');
+  const S0 = make({ v: {} });
+  run(S0, 30);
+  ok(!S0.c.rt.vm.calls.includes('ev0100.kalm_ld'), 'played opening: no kalm_ld');
+}
+
+// 1c. with the opening (play.js startStage(true)): main's prelude runs in the opening's first frames, first_event waits
+// for the hand-off; the global flags during the opening = the game's (T w210 state_1: {0: 1, 1: 3, 13: 64})
+{
+  let done = false, oskip = 0;
+  const bits = new Set();
+  const gsx = { set: n => bits.add(n), clear: n => bits.delete(n), test: n => (bits.has(n) ? 1 : 0) };
+  const S3 = make({ v: {} }, { openingDone: () => done, openingSkip: () => oskip, gameState: () => gsx });
+  run(S3, 40);
+  ok(JSON.stringify(gf(S3.c)) === '{"0":1,"1":3,"13":64}', 'during the opening: global flags ' + JSON.stringify(gf(S3.c)));
+  ok(!S3.c.rt.log.some(([, m]) => m.startsWith('played elsewhere')), 'first_event waits until the hand-off');
+  ok(bits.has(11) && bits.has(6), 'prelude usercontrol(0): game-state bits 11 and 6 (FUN_00325b60 / FUN_0037def0)');
+  done = true; oskip = 2;
+  run(S3, 20);
+  ok(S3.c.rt.vm.calls.includes('ev0100.kalm_ld'), 'hand-off with the opening skipped (+0x156c 2): kalm_ld(100)');
+  ok(S3.c.battle && S3.c.rt.skip === 0 && !bits.has(11) && !bits.has(6), 'then usercontrol on, battle: bits 11 / 6 clear, skip 0');
+  // event mode pauses the AI (FUN_0037e048 -> FUN_0037def0(ev, 1)); peace / chaos count (FUN_003809a8)
+  const N = S3.c.rt.vm.natives;
+  N['fake/KerberosZone.event2()V'](S3.c.rt.vm, []);
+  ok(bits.has(6) && bits.has(2), 'Zone.event(): bits 6 and 2');
+  N['fake/KerberosZone.peace()V'](S3.c.rt.vm, []); N['fake/KerberosZone.peace()V'](S3.c.rt.vm, []);
+  N['fake/KerberosZone.chaos()V'](S3.c.rt.vm, []);
+  ok(bits.has(10), 'peace x2, chaos x1: bit 10 still on (the count)');
+  N['fake/KerberosZone.chaos()V'](S3.c.rt.vm, []);
+  ok(!bits.has(10), 'chaos x2: bit 10 off');
+  // the stage-info card holds Skip off (FUN_003fdb48 / FUN_003fdd58)
+  let up = true;
+  const S4 = make({ v: {} }, { stageInfo: () => ({ display: () => {}, isDisplay: () => up }) });
+  run(S4, 10);
+  S4.c.rt.battle = false;
+  N.call; S4.c.rt.vm.natives['fake/KerberosEvent.displayStageInfo_l(ILjava/lang/String;)V'](S4.c.rt.vm, [6, 'x']);
+  ok(!S4.c.rt.skippable(), 'card up: no Skip (DAT_004f3044 0x2000)');
+  up = false; S4.c.rt.cardStep();
+  ok(S4.c.rt.skippable(), 'card down: Skip again (the bit was clear before)');
+  S4.c.rt.skip = 2;
+  ok(S4.c.rt.requestSkip() === false && S4.c.rt.skip === 2, 'requestSkip: event_rt.js guard (+0x156c != 0)');
+}
+// 1d. autoSkip off (?autoskip=0): rv_matiawase plays out (its sleeps run their time)
+{
+  const F = { v: { 2: 7, 46: 1 } };
+  const S5 = make(F, { autoSkip: false });
+  run(S5, 10); F.v[0] = 2; F.v[63] = 6;
+  run(S5, 120);
+  ok(!S5.c.rt.log.some(([, m]) => m.startsWith('skip ')) && !S5.c.battle, 'autoskip off: no Skip, still in the event after 120 frames');
 }
 
 // 2b. deb_jump's help box (the x -1186 message): stage flag 2 == 7 and flag 46 < 1 -> peace, flag 46 = 1, global

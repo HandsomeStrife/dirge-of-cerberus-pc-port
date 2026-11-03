@@ -4,7 +4,8 @@ Code: `native/web/stage_controller.js` (StageRuntime extends 0210's EventRuntime
 file edited), play.js `startStage` + one `stage.tick(20)` per game frame, exporter
 `native/assets/models/export_web_stage.py` -> data/event/ev0100_stage.json (build step `stage`; disc.py INPUTS: 0c064000,
 0c064002..7, the 51 camera files 0c0642xx). Tests: `node --import ./native/web/test_hooks.mjs
-native/web/test_stage_controller.mjs` (37; MUTATE=getflag|setflag|skip|sleep|preempt: 5 / 5 killed),
+native/web/test_stage_controller.mjs` (54; MUTATE=getflag|setflag|skip|sleep|preempt|opening|skipinit|bit6|card|wait:
+10 / 10 killed),
 `node native/web/test_stage_page.mjs` (9; the play.js tick hook mutant killed). Audit section 'Stage controller'.
 
 ## Classes
@@ -63,7 +64,18 @@ the skipped beat in ~10 frames (its loads are at once); the game's 7 frames befo
 ## Open
 - After scene_save(1) the game holds its event loop (+0x1558 bit 39, one command live) 600+ frames (to f1600): likely
   the checkpoint save itself (FUN_0023d690 / FUN_003bf250), not translated. The page goes back to battle at once.
-- Nothing on the page consumes usercontrol / battlecontrol / the game-state bits yet (worker 0220's game_state.js);
+- Game-state bits: bit 11 (play.js neutral input) and bit 6 (enemy_ai AI pause) are read on the page; bit 2 (the stick in
+  the event camera's frame, FUN_00333150) and bit 10 (FUN_005728d8's hit gate) are not;
   the skipped events' actor / camera / window / voice natives are left out (warned); Vincent is not moved by an event.
 - scene_save -> checkpoint.js (P?), endSection / Zone.exit -> P12, displayStageInfo -> 0220's stage_info.js.
 - Only the first beat is traced; later beats (chunks 6 / 7, 10 / 11, the bosses) need route states (worker 0217).
+
+## Review fixes (2026-11-03, manager review)
+- Auto-skip is a GUESS (audit 'GUESS: auto-skip'): at the event's first wait (vm.pending), off with `?autoskip=0`.
+- skippable() includes the stage-info card's DAT_004f3044 bit 0x2000 (FUN_003fdb48 saves and sets it, FUN_003fdd58
+  clears it unless it was set before); requestSkip calls event_rt.js's (guard, event sounds, windows; worker 0222).
+- Event mode and set_usercontrol(0) set bit 6 (the AI paused), as FUN_0037def0 does; peace / chaos keep FUN_003809a8's count.
+- With the opening, main starts with it (play.js startStage(true) in startIntro's wake, ticked in the opening branch):
+  the prelude runs in its first frames, first_event waits for the hand-off (opts.openingDone), then main reads the
+  opening's +0x156c (opts.openingSkip). From the save (?intro=0) the stage load is awaited before the first frame and
+  main settles there (no synchronous work mid-play).

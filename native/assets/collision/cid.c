@@ -63,6 +63,7 @@ typedef struct {
     int oom;
     uint16_t cur_mask;   /* tag-2 packet surface-type mask (pkt+0x08); 0 otherwise */
     uint8_t cur_subtree; /* sub-tree being walked (0..3 = +0x38/+0x58/+0x78/+0x98) */
+    int16_t cur_index;   /* tag-2 packet header[3] (surface-table index); -1 otherwise */
 } builder;
 
 static uint32_t push_vert(builder *bd, float x, float y, float z) {
@@ -73,7 +74,7 @@ static uint32_t push_vert(builder *bd, float x, float y, float z) {
 static void push_tri(builder *bd, uint32_t a, uint32_t b, uint32_t c,
                      uint32_t surf, uint8_t src) {
     cid_tri t; t.v[0] = a; t.v[1] = b; t.v[2] = c; t.surface = surf; t.source = src;
-    t.subtree = bd->cur_subtree; t.mask = bd->cur_mask;
+    t.subtree = bd->cur_subtree; t.mask = bd->cur_mask; t.vis_index = bd->cur_index;
     if (!vec_push(&bd->tris, &t)) bd->oom = 1;
 }
 
@@ -287,6 +288,7 @@ static int decode_vu_packet(blob *b, builder *bd, size_t pkt, cid_mesh *out) {
     uint16_t smask = rd_u16(b, pkt + 0x08, &ok);
     if (!ok || qwc <= 0) return -1;
     bd->cur_mask = smask;
+    bd->cur_index = -1;
     size_t nwords_total = (size_t)qwc * 4;
     if (!in_range(b, pkt, (size_t)qwc * 16)) return -1;
 
@@ -341,6 +343,8 @@ static int decode_vu_packet(blob *b, builder *bd, size_t pkt, cid_mesh *out) {
 
         if (ncomp == 1 && ew == 16 && addr == 0) {       /* header */
             if (num >= 1) Ntri = (int)(ELEM(0, 0));
+            /* [Ntri, nquad, mask, index, 0, QWC]: FUN_0026f8a0 reads index as VU0 vi3 */
+            if (num >= 4) bd->cur_index = (int16_t)ELEM(3, 0);
         } else if (ncomp == 1 && ew == 32) {             /* per-poly words */
             nfaces = (int)num;
             if (nfaces > 0 && nfaces <= VU_MAXPOLY) {
@@ -433,7 +437,7 @@ static void parse_vu_node(blob *b, builder *bd, size_t node, cid_mesh *out) {
         uint32_t pkt = rd_u32(b, node + 0x40 + (size_t)p * 4, &ok);
         if (!ok || (size_t)pkt >= b->len) { out->n_tag2_pkts_boxed++; continue; }
         int tris = decode_vu_packet(b, bd, (size_t)pkt, out);
-        bd->cur_mask = 0;
+        bd->cur_mask = 0; bd->cur_index = -1;
         if (bd->oom) return;
         if (tris >= 0) { out->n_tag2_pkts_decoded++; node_tris += tris;
                          out->n_tag2_tris += tris; }
@@ -532,6 +536,13 @@ static void parse_tree(blob *b, builder *bd, cid_mesh *out) {
     int ok = 1;
     out->surf_table_count = rd_i32(b, 0x20, &ok);
     if (!ok || out->surf_table_count < 0) out->surf_table_count = 0;
+    if (out->surf_table_count > 0) {             /* +0x24: 16-byte entries (FUN_0026f8a0) */
+        uint32_t tp = rd_u32(b, 0x24, &ok);
+        if (ok && in_range(b, tp, (size_t)out->surf_table_count * 16)
+            && (out->surf_table = malloc((size_t)out->surf_table_count * 16)) != NULL)
+            for (int i = 0; i < out->surf_table_count * 4; i++)
+                out->surf_table[i] = rd_u32(b, tp + (size_t)i * 4, &ok);
+    }
 
     for (int s = 0; s < 4; s++) {
         size_t sub = SUBTREE_OFF[s];
@@ -678,7 +689,7 @@ int cid_load_mem(const uint8_t *buf, size_t len, cid_mesh *out,
     out->version = rd_i32(&b, 4, &ok);
     if (!ok) return CID_ERR_FORMAT;
 
-    builder bd; memset(&bd, 0, sizeof bd);
+    builder bd; memset(&bd, 0, sizeof bd); bd.cur_index = -1;
     bd.verts.esz = sizeof(cid_vec3);
     bd.tris.esz  = sizeof(cid_tri);
     bd.boxes.esz = sizeof(cid_box);
@@ -730,6 +741,6 @@ int cid_load_file(const char *path, cid_mesh *out, char *errbuf, size_t errlen) 
 
 void cid_free(cid_mesh *m) {
     if (!m) return;
-    free(m->verts); free(m->tris); free(m->boxes); free(m->polys);
+    free(m->verts); free(m->tris); free(m->boxes); free(m->polys); free(m->surf_table);
     memset(m, 0, sizeof *m);
 }

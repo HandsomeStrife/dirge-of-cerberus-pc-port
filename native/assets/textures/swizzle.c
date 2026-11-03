@@ -138,9 +138,13 @@ int dtex_unswizzle4(uint8_t *dst, const uint8_t *src, int w, int h)
     return 1;
 }
 
-/* PS2 32-bit CLUT alpha is 0..0x80 (0x80 == fully opaque). */
+/* PS2 32-bit CLUT alpha is 0..0x80 (0x80 == fully opaque), but the GS takes the whole byte: As = A / 128
+ * reaches 0xff / 0x80 (ff88's CLUT has 29% of its texels above 0x80). dtex_raw_alpha = 1 keeps the byte
+ * (128 == 1.0) for a renderer that scales it itself (export_web_room.py -> room.js; worker 0226). */
+int dtex_raw_alpha = 0;
 static inline uint8_t ps2_alpha(uint8_t a)
 {
+    if (dtex_raw_alpha) return a;
     int v = (a * 255) / 128;
     return (uint8_t)(v > 255 ? 255 : v);
 }

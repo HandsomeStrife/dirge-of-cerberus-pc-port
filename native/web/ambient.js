@@ -5,6 +5,8 @@
 // Its init vt+0x2fc = FUN_0057dcd0 builds the box spaces; every frame its update FUN_0057d4f8 runs FUN_0057d550 while
 // active (+0x28 bit 0): the point FUN_005635e0 (Vincent's position + (0, -7, 0)) inside the shape (vt+0x194 =
 // FUN_0057dab8) starts the sound (FUN_0057e188), outside stops it (FUN_0057e220). An inactive object stops it too.
+// Active: record +0xa8 (json `actor`) is an AREA index (manager +0x2b4, FUN_0053b920), not a section-1 record; with an
+// area the object switches with it, without one it is on from the stage start (stageStart / areaSwitch; worker 0223).
 // A positioned sound (+0xbd != 1) is FUN_003e6d70: an emitter slot at the shape's centre (obj+0x1e0) with a fixed
 // volume (FUN_003e8b70: slot flag 0x40) = FUN_003e6438(FUN_0057e310(obj, listener)), kept in the table DAT_004f5920
 // (8 entries); FUN_003e6ec8 resets that volume every frame (FUN_003e8f70) and FUN_003e9ed0 / FUN_003e9220 send the
@@ -122,13 +124,27 @@ export function distVolume(d) {
 export class PlacedSounds {
   constructor(data, backend) {
     this.be = backend;
-    this.objs = (data.objects || []).map((o) => ({ o, sp: soundSpace(o), playing: false }));   // +0xe0 bit 0
+    // +0xe0 bit 0 = playing; on = +0x28 bit 0. Until stageStart: an object with no parent area (+0xa8 < 0) is on
+    this.objs = (data.objects || []).map((o) => ({ o, sp: soundSpace(o), playing: false, on: o.actor < 0 && !(o.flags >> 17 & 1) }));
     this.table = new Array(8).fill(null);                                          // DAT_004f5920
     this.d710 = 0x14;                                                               // _DAT_0047d710 (20 in the save)
     this.warned = new Set();
   }
 
   warnOnce(m) { if (!this.warned.has(m)) { this.warned.add(m); console.warn(m); } }
+
+  // the stage-start pass FUN_0053ced8 (class 0xe is in its lists, DAT_0058b090): vt+0x14c(1) on every object without a
+  // parent area (+0x40 bit 0x100 clear: +0xa8 < 0 or an empty manager +0x2b4 slot; hasArea = areas.js has); the others
+  // are off until their area switches on (worker 0223)
+  // isOn(k): PAGE AID: the sound data loads after the stage, so an area already on when this runs passes its state on now
+  stageStart(hasArea = (k) => k >= 0, isOn = () => false) {
+    for (const e of this.objs) e.on = false;
+    for (const e of this.objs) if (!hasArea(e.o.actor) || isOn(e.o.actor)) this.vt14c(e, 1);
+  }
+  // vt+0x14c = FUN_00550ad8: +0x144(on, 1) unless record +0xa4 bit 17 (z128: records 27, 29-33)
+  vt14c(e, on) { if (!(e.o.flags >> 17 & 1)) e.on = !!on; }
+  // FUN_0054ef68: area k (the record's +0xa8) switched on / off -> vt+0x14c on its children (areas.js onSwitch)
+  areaSwitch(k, on) { for (const e of this.objs) if (e.o.actor === k) this.vt14c(e, on); }
 
   // FUN_003e8708
   req15(v) {
@@ -174,8 +190,9 @@ export class PlacedSounds {
 
   // One game frame. L: Vincent's position + (0, -7, 0) (FUN_005635e0) for the inside test; Lv: the sound manager's
   // listener +0x3850 (same point, read by FUN_003e6ec8 / FUN_0057e310: audio.js soundListener .alt).
-  // active(actor): whether the section-1 record the object follows is active (FUN_0054ef68 passes it on); -1 = none.
-  frame(L, Lv = L, active = () => true) {
+  // The object's +0x28 bit 0 is e.on (stageStart / areaSwitch). active(area), optional (tests): overrides it for the
+  // objects with a parent area (+0xa8 >= 0, an area index: manager +0x2b4, FUN_0053b920).
+  frame(L, Lv = L, active = null) {
     // FUN_003e6ec8 first (T: w215_routeA: the slot stopped on frame 102 still gets its volume on 102). DAT_0047d6b8 == 0
     // in the save; GUESS: game-state bit 7 (FUN_00326068(7)) clear, what sets it not decoded. FUN_003e6990's
     // surface-averaged sound (DAT_004f5a3c) is -1 in z128 (none).
@@ -186,9 +203,9 @@ export class PlacedSounds {
       this.be.setVol(t.h, t.vol);
     }
     for (const e of this.objs) {
-      // GUESS: an object that follows no actor is active from the stage load (+0x28 0x200003 in the save; the code that
-      // sets it for them was not traced). One that follows an actor takes the actor's state (FUN_0054ef68 -> vt+0x14c).
-      const on = e.o.actor < 0 ? true : !!active(e.o.actor);
+      // +0x28 bit 0: on from the stage start when it has no parent area (FUN_0053ced8), else as its area switches it
+      // (FUN_0054ef68 -> vt+0x14c FUN_00550ad8; T: the save RAM, 0x200003 for the unparented ones)
+      const on = active && e.o.actor >= 0 ? !!active(e.o.actor) : e.on;
       if (!on) { if (e.playing) this.stop(e); continue; }                          // FUN_0057d4f8
       const inn = inside(e.o, e.sp, L);                                              // FUN_0057d550
       if (!inn) { if (e.playing) this.stop(e); } else if (!e.playing) this.start(e, Lv);

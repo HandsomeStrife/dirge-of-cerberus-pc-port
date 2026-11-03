@@ -173,6 +173,29 @@ try {
     const e = await pg.evaluate(() => ({ count: window.__play.restart.count, hp: window.__play.php.hp, go: window.__play.gameOver.go.active }));
     ok(e.count === 2 && e.hp === 780 && !e.go, `after it: two Restarts counted, HP ${e.hp}, game over cleared`);
   }
+  // worker 0222: the event pause and Skip (game over -> Restart -> the event; Start holds it (FUN_00376ee0), ✕ = Skip
+  // (FUN_00372f70): sleeps / timers end, moves jump, the script runs to its end and the hand-off runs as usual)
+  {
+    const until = (fn, arg, t = 60000) => pg.waitForFunction(fn, arg, { timeout: t });
+    await pg.evaluate(() => { window.__play.php.hp = 0; });
+    await until(() => window.__play.gameOver.go.menu && window.__play.gameOver.go.menu.focus && window.__play.gameOver.go.menu.focus.id === 3, null, 60000);
+    await pg.waitForTimeout(500);
+    await pg.keyboard.press('Space');
+    await until(() => window.__play.restart.count === 3 && window.__play.intro.active && window.__play.intro.rt.frameNo > 60, null, 120000);
+    await pg.keyboard.press('Enter');
+    await until(() => window.__play.intro.paused);
+    const f0 = await pg.evaluate(() => window.__play.intro.rt.frameNo);
+    await pg.waitForTimeout(1500);
+    const f1 = await pg.evaluate(() => ({ n: window.__play.intro.rt.frameNo, pause: window.__play.pause.active }));
+    ok(f1.n === f0 && !f1.pause, `Start in the event: the event is held (frame ${f0} -> ${f1.n}), not the gameplay pause menu`);
+    await pg.keyboard.press('Space');
+    await until(() => window.__play.intro.ended === 4 && !window.__play.intro.active, null, 120000);
+    await until(t => window.__play.stats.ticks > t + 10, (await pg.evaluate(() => window.__play.stats.ticks)), 60000);
+    const k = await pg.evaluate(() => { const P = window.__play, r = P.intro.rt, p = P.ctrl.pos;
+      return { skip: r.skip, n: r.frameNo, log: r.log.filter(x => x[1] === 'skip').map(x => x[0]), pos: [p.x, p.z], bm: r.state.battlemode, count: P.restart.count }; });
+    ok(k.skip === 2 && k.log.length === 1 && k.n - k.log[0] < 40, `✕ skips: +0x156c = ${k.skip}, the event ends ${k.n - k.log[0]} frames after the Skip (frame ${k.n})`);
+    ok(k.bm === 1 && k.count === 3 && Math.hypot(k.pos[0] + 1395.1516, k.pos[1] + 1111.0149) < 2, `the skipped event still hands off (battle mode ${k.bm}, ${k.pos.map(x => x.toFixed(2))})`);
+  }
   // ?intro=0: straight to play from the save, as before
   const pg2 = await browser.newPage({ viewport: { width: 640, height: 360 } });
   await pg2.goto(`http://127.0.0.1:${port}/play.html?sound=0&intro=0`, { waitUntil: 'load' });
@@ -180,6 +203,23 @@ try {
   const d = await pg2.evaluate(() => ({ active: window.__play.intro.active, rt: !!window.__play.intro.rt }));
   ok(!d.active && !d.rt, '?intro=0 skips the event');
   await pg2.close();
+  // worker 0222: with sound on, the opening's own sound reaches the page's back ends: asj_036 (playBgAreaSound), the
+  // voices (VoicePlayer: fetched, decoded, started), bgm_274 (playMusic2 -> GameMusic.open)
+  {
+    const pg3 = await browser.newPage({ viewport: { width: 640, height: 360 } });
+    const errs3 = []; pg3.on('pageerror', e => errs3.push(String(e)));
+    await pg3.goto(`http://127.0.0.1:${port}/play.html`, { waitUntil: 'load' });
+    await pg3.waitForFunction(() => window.__play && window.__play.intro.rt && window.__play.intro.rt.frameNo > 5, null, { timeout: 120000 });
+    await pg3.keyboard.press('ShiftLeft');                // the browser's first gesture (AudioContext)
+    await pg3.waitForFunction(() => window.__play.intro.rt.frameNo > 140, null, { timeout: 300000 });
+    const v = await pg3.evaluate(() => { const r = window.__play.intro.rt, V = r.sound.voices(); return { log: V.log.slice(), out: !!V.out, area: r.lastArea, ctx: !!(window.__play.pauseSound.audio && window.__play.pauseSound.audio.ctx) }; });
+    ok(v.ctx && v.log[0] === '10109vn' && v.out && v.area && v.area[0] === 'asj_036', `sound on: AudioContext ${v.ctx}, voice ${v.log[0]} started (${v.out}), area ${v.area && v.area[0]}`);
+    await pg3.waitForFunction(() => window.__play.intro.rt.frameNo > 960, null, { timeout: 600000 });
+    const m = await pg3.evaluate(() => window.__play.pauseSound.music && window.__play.pauseSound.music.name);
+    ok(m === 'bgm_274', `playMusic2: the music stream is ${m}`);
+    ok(errs3.length === 0, `sound on: no page errors (${errs3.slice(0, 2).join(' | ')})`);
+    await pg3.close();
+  }
 } finally {
   await browser.close();
   srv.kill();

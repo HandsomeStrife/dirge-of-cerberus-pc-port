@@ -1,0 +1,1 @@
+{"name": "w222_snd", "frames": 2400, "log_from": 2110, "doc": "worker 0222: the opening event's sound / window / fade calls from the stage start (0210's start1704 state), no input. TRACE_CALLLOG=evsound TRACE_FIELDSET=event TRACE_LOG_AT=B4000", "events": []}

@@ -303,7 +303,7 @@ which no z128 record uses: not reachable on the page.
   page (0x20000400, flag 2, is one such record). FUN_002e4fb0 (header +0x20 table): empty in these FEDs.
 - **Cull** FUN_002ea6a0 (after FUN_002e7cd0, per emitter): clears +0x0a / +0x0e & 0x380; 0x100 when the param cell (+0x66,
   s16 >= 0) has its bit set in the manager's copy (+0x30) of DAT_004e8710 = DAT_004e86f0 | DAT_004e8700 (the room's hidden
-  groups: export_z128_room.py HIDDEN_GROUPS 0 / 19 / 25 / 56 / 57 in the save; ids.json `hidden`); camera 1: no test; else by
+  groups: 0 / 19 / 25 / 56 / 57 in the save, ids.json `hidden`; the page computes it per frame, room_vis.js, worker 0225); camera 1: no test; else by
   +0x1e: 1 / > 3 no test, 0 = box DAT_0046d280 (100) at the origin, 2 / 3 = box +0x40 at +0x50 (the stack copy of +0xe0 is
   48 bytes and the centre FUN_002d8578 writes lands on its row 3: MEASURED, only so do E15's flags / alpha match):
   FUN_002da928 (8 corners x M x camera +0x210 (= view x clip +0x250), VU0 CLIP, all outside one plane) -> 0x80; FUN_00269978

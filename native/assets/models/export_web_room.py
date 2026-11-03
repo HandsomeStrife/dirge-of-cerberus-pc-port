@@ -78,7 +78,10 @@ def largest_image(container, cache):
     best = max(range(len(imgs)), key=lambda i: (imgs[i][2] * imgs[i][3], -i))
     fc, name, w, h = imgs[best]
     with tempfile.TemporaryDirectory() as td:
-        subprocess.run([DTEX, container, "-o", td], capture_output=True, timeout=60, check=True)
+        # --raw-alpha: the PS2 alpha byte as is (128 == 1.0, up to 255; the GS As = A / 128 is not capped at 1).
+        # scene.json marks these textures alpha 'ps2'; room.js scales them (worker 0226: ff88's CLUT has 29% of
+        # its texels above 0x80, which the 0..255 rescale clamped)
+        subprocess.run([DTEX, "--raw-alpha", container, "-o", td], capture_output=True, timeout=60, check=True)
         png = os.path.join(td, f"{fc}_{name}.png")
         if not os.path.exists(png):
             raise SystemExit(f"dtex: expected {png}, got {os.listdir(td)}")
@@ -158,6 +161,8 @@ def main():
         try:
             prev = json.load(open(old))
             names = [m["file"] for m in list(prev.get("meshes", {}).values()) + list(prev.get("textures", {}).values())]
+            names += [m["uvt"] for m in prev.get("meshes", {}).values() if m.get("uvt")]
+            names += [m["cul"] for m in prev.get("meshes", {}).values() if m.get("cul")]
         except (ValueError, KeyError, TypeError, AttributeError) as x:
             raise SystemExit(f"{old}: unreadable ({x}); remove the stale export by hand")
         for f in names:
@@ -170,9 +175,13 @@ def main():
     fog, nofog, groups = parse_list(a.room)
     # per-chunk vertex ranges (export_z128_room.py manifest `chunks`); a room without them draws whole
     man = os.path.splitext(a.room)[0] + "_manifest.json"
-    chunk_ranges = {}
+    chunk_ranges = {}; uvt_of = {}; cul_of = {}; uv_anims = None
     if os.path.exists(man):
-        chunk_ranges = {g["mesh"]: g["chunks"] for g in json.load(open(man))["groups"] if g.get("chunks")}
+        mj = json.load(open(man))
+        chunk_ranges = {g["mesh"]: g["chunks"] for g in mj["groups"] if g.get("chunks")}
+        uvt_of = {g["mesh"]: g["uvt"] for g in mj["groups"] if g.get("uvt")}   # scrolling UVs (bmd_uvanim.py)
+        cul_of = {g["mesh"]: g["cul"] for g in mj["groups"] if g.get("cul")}   # back faces (export_z128_room cull_tag)
+        uv_anims = mj.get("uv_anims")
     if not chunk_ranges:
         print("warning: no per-chunk ranges in %s: the page will draw every chunk (no area streaming)" % man,
               file=sys.stderr)
@@ -189,12 +198,25 @@ def main():
         mid = os.path.splitext(g["mesh"])[0]
         v.astype("<f4").tofile(os.path.join(out, mid + ".bin"))
         meshes[mid] = dict(file=mid + ".bin", vcount=len(v))
+        if g["mesh"] in uvt_of:            # int16 UV track per vertex (-1 none): room.js RoomUVAnim
+            ut = np.fromfile(os.path.join(ldir, uvt_of[g["mesh"]]), "<i2")
+            if len(ut) != len(v):
+                raise SystemExit(f"{uvt_of[g['mesh']]}: {len(ut)} tracks for {len(v)} vertices")
+            ut.tofile(os.path.join(out, mid + ".uvt.bin"))
+            meshes[mid]["uvt"] = mid + ".uvt.bin"
+        if g["mesh"] in cul_of:            # int16 x 4 per vertex (partner normal, mode): room.js back faces
+            ct = np.fromfile(os.path.join(ldir, cul_of[g["mesh"]]), "<i2")
+            if len(ct) != 4 * len(v):
+                raise SystemExit(f"{cul_of[g['mesh']]}: {len(ct) // 4} cull tags for {len(v)} vertices")
+            ct.tofile(os.path.join(out, mid + ".cul.bin"))
+            meshes[mid]["cul"] = mid + ".cul.bin"
         lo, hi = np.minimum(lo, v[:, :3].min(0)), np.maximum(hi, v[:, :3].max(0))
         tid = None
         if g["tex"] != "NONE":
             tid = "t_" + os.path.basename(g["tex"]).split(".")[0]
             if tid not in textures:
                 add_tex(tid, largest_image(g["tex"], cache))
+                textures[tid]["alpha"] = "ps2"     # raw PS2 alpha (128 == 1.0): room.js uTexA
         aref = g["aref"] if tid else -1.0
         d = dict(name=g["mesh"], kind="room", mesh=mid, first=0, count=len(v),
                  tex=tid, aref=aref, fog=fog is not None and g["mesh"] not in nofog)
@@ -239,6 +261,8 @@ def main():
                  textures=textures, meshes=meshes, draws=draws,
                  char=dict(mesh="vincent", s=s, yaw=yaw, x=tx, y=fy, z=tz, pivot=piv, runs=runs, aref=aref,
                            bbox=dict(min=placed[:, :3].min(0).tolist(), max=placed[:, :3].max(0).tolist())))
+    if uv_anims and uv_anims["tracks"]:
+        scene["uvanim"] = uv_anims         # bmd_uvanim.py curves: room.js RoomUVAnim
     if os.path.isfile(os.path.join(out, "hud", "hud.json")):
         scene["hud"] = "hud/hud.json"      # export_web_hud.py's data: play.js fetches it only when declared
     if os.path.isfile(os.path.join(out, "effects", "r0001.fed")):

@@ -180,11 +180,14 @@ if [ $have_extract -eq 0 ]; then
   echo "  unpacking KEL.DAT (a few minutes)"
   # .bin: models, stages, textures, menus; .fed: effects; .irx + .wd: the sound driver and wave
   # banks; .at3: the music (only the zone's track is kept, the other ~380 streams are deleted)
-  run kel_unpack $PY "$REPO/tools/kel_unpack.py" "$WORK/FILELIST.BIN" "$WORK/KEL.DAT" "$KEL.tmp" bin,fed,irx,wd,at3
+  run kel_unpack $PY "$REPO/tools/kel_unpack.py" "$WORK/FILELIST.BIN" "$WORK/KEL.DAT" "$KEL.tmp" bin,fed,irx,wd,at3,at2
   tail -n 1 "$LOGS/kel_unpack.log" | sed 's/^/  /'
   grep -q ' fail=0$' "$LOGS/kel_unpack.log" || fail "kel_unpack reported failures (see $LOGS/kel_unpack.log)"
   (cd "$KEL.tmp" && find . -name '*.at3' ! -path ./data/zone/z128/sound/bgm_001.at3 ! -path ./data/zone/z128/sound/bgm_012.at3 \
-    ! -path ./data/zone/z128/sound/bgm_013.at3 ! -path ./data/zone/z128/sound/bgm_014.at3 ! -path ./data/zone/z128/sound/bgm_018.at3 -delete)
+    ! -path ./data/zone/z128/sound/bgm_013.at3 ! -path ./data/zone/z128/sound/bgm_014.at3 ! -path ./data/zone/z128/sound/bgm_018.at3 ! -path ./data/zone/z128/sound/bgm_274.at3 -delete)
+  # .at2: only the opening event's voices (tools/audio/voice.py; worker 0222)
+  (cd "$KEL.tmp" && find . -name '*.at2' ! -path ./data/event/scene/ev0100/sound/10109vn.at2 \
+    ! -path ./data/event/scene/ev0100/sound/10109v2.at2 ! -path ./data/event/scene/ev0100/sound/10110sk.at2 -delete)
   $PY "$BYO/disc.py" verify "$KEL.tmp/noPath" || fail "the unpacked files do not match the supported disc"
   date -u +%Y-%m-%dT%H:%M:%SZ > "$KEL.tmp/.byo-extract"
   rm -rf "$KEL"
@@ -221,6 +224,11 @@ tail -n 1 "$LOGS/web_room.log"
 step "collision (DCOL v2 with the walk mesh)"
 run collision make -C "$REPO/native/assets/collision" CC="$CC_FOUND" KEL="$NOPATH" z128web
 cp "$REPO/native/assets/collision/out/web/z128_collision.bin" "$DATA/z128_collision.bin"
+echo "ok"
+
+step "room visibility probe (cid +0x58 class-0x80 packets + surface tables, FUN_00264ee0)"
+run cidvis make -C "$REPO/native/assets/collision" CC="$CC_FOUND" cidvis
+run room_vis "$REPO/native/assets/collision/cidvis" "$DATA/z128_vis.json" "$NOPATH"/0680?[0-9a-c]11.bin
 echo "ok"
 
 step "ladders (stage file section 8)"
@@ -277,6 +285,21 @@ for mc in e048:$E048_CLIPS e030:$E030_CLIPS e036:m_gst e023:idle e024:idle e001:
 done
 echo "ok"
 
+step "z128's townspeople and WRO men (stage section 1 n0xx records) -> data/enemies"
+# worker 0223 (notes/npc-research.md): the stance's row-0 idle (FUN_00564228: r_gst for the WRO men, st for the rest)
+# and the clips their scripts request with cmd 0x141 (fear, fear2, fear3, breath1 / 2, r_gst_lk, r_look, m_look).
+# worker 0228: + the stance rows the townspeople's actors reach (enemy_ai NPC_TYPES): look, wk / rn (path runs, motion 3) and
+# dead1-3 (death rows 0x2a-0x35), where the model's motion file 0 has them.
+D3=rn,look,dead1,dead2,dead3
+for mc in n017:r_gst,r_gst_lk,r_look n018:r_gst,r_gst_lk n022:r_gst,m_look n023:st,breath1,fear,$D3 n024:st,fear,fear2,fear3,$D3 \
+          n025:st,fear,$D3 n026:st,fear,fear3,$D3 n028:st,fear,wk,rn,look n029:st,fear,$D3 n030:st,fear,$D3 n031:st,breath2,fear,$D3 \
+          n032:st,fear,$D3 n033:st,fear,wk,rn,look n034:st,fear,wk,rn,look; do
+  m=${mc%%:*}
+  run enemy_$m $PY export_web_enemy.py export --model $m --out "$DATA/enemies" --clips ${mc#*:}
+  [ -s "$DATA/enemies/$m.glb" ] || fail "data/enemies/$m.glb missing after the NPC export (log: $LOGS/enemy_$m.log)"
+done
+echo "ok"
+
 step "enemy weapons (e027 slot 0: parameter set +0x44 -> w003 / w004 at marker 15) -> data/enemies"
 # inputs 077700c1/c2 (w003) and 07770101/02 (w004), checked by disc.py verify; the skip only guards a partial tree
 if [ -s "$NOPATH/077700c1.bin" ] && [ -s "$NOPATH/077700c2.bin" ] && [ -s "$NOPATH/07770101.bin" ] && [ -s "$NOPATH/07770102.bin" ]; then
@@ -310,6 +333,17 @@ run props $PY export_web_props.py "$NOPATH/06800001.bin" "$DATA/props"
 run props_e057 $PY export_web_enemy.py export --model e057 --out "$DATA/props" --clips ''
 [ -s "$DATA/props/e057.glb" ] || fail "data/props/e057.glb missing (log: $LOGS/props_e057.log)"
 grep '^wrote' "$LOGS/props.log" "$LOGS/props_e057.log" | sed "s#$REPO/##" | cut -c1-160
+echo "ok"
+
+step "item pickups and drops (stage sections 0/1/14/15, bgd.bin items, ELF tables -> data/items/items.json; models g038 g039 g040 g041 g067 g068)"
+# items.js / items_view.js; notes/items-research.md (worker 0224). The models have no clips (--clips '').
+run items $PY export_web_items.py --elf "$ELF" --stage "$NOPATH/06800001.bin" --bgd "$KEL/data/bgd/bgd.bin" -o "$DATA/items/items.json"
+[ -s "$DATA/items/items.json" ] || fail "data/items/items.json missing (log: $LOGS/items.log)"
+for m in g038 g039 g040 g041 g067 g068; do
+  run items_$m $PY export_web_enemy.py export --model $m --out "$DATA/items" --clips ''
+  [ -s "$DATA/items/$m.glb" ] || fail "data/items/$m.glb missing (log: $LOGS/items_$m.log)"
+done
+grep -h '^wrote' "$LOGS/items.log" | sed "s#$REPO/##" | cut -c1-160
 echo "ok"
 
 step "the opening cutscene's hand-off (ev0100 scr001 class + its battle clips, ELF table) -> data/checkpoint.json"
@@ -387,7 +421,7 @@ run ambient $PY export_web_ambient.py "$NOPATH/06800001.bin" "$NOPATH/07703201.b
 tail -n 1 "$LOGS/ambient.log" | sed "s#$REPO/##" | cut -c1-160
 
 if [ $MUSIC -eq 1 ]; then
-  step "zone music bgm_001 + 012 / 013 / 014 / 018 (ATRAC3 descrambled with the ELF's keys, decoded, FLAC) -> data/audio/bgm"
+  step "zone music bgm_001 + 012 / 013 / 014 / 018 + the opening's 274 (ATRAC3 descrambled with the ELF's keys, decoded, FLAC) -> data/audio/bgm"
   if ! make -C "$REPO/native/assets/audio" CC="$CC_FOUND" dirge_atdec > "$LOGS/make_atdec.log" 2>&1; then
     tail -n 10 "$LOGS/make_atdec.log" >&2
     echo "warning: dirge_atdec did not compile (log: $LOGS/make_atdec.log): the zone music is skipped." >&2
@@ -396,9 +430,16 @@ if [ $MUSIC -eq 1 ]; then
 fi
 if [ $MUSIC -eq 1 ]; then
   # bgm.py also adds "bgm" to se_z128.json (music.js fetches bgm.json only then), so it runs after extract.py
-  run music $PY "$REPO/tools/audio/bgm.py" --kel "$KEL" --elf "$ELF" --zone 128 --out "$DATA/audio/bgm" --names bgm_001 bgm_012 bgm_013 bgm_014 bgm_018
+  run music $PY "$REPO/tools/audio/bgm.py" --kel "$KEL" --elf "$ELF" --zone 128 --out "$DATA/audio/bgm" --names bgm_001 bgm_012 bgm_013 bgm_014 bgm_018 bgm_274
   [ -s "$DATA/audio/bgm/bgm_001.flac" ] || fail "data/audio/bgm/bgm_001.flac missing (log: $LOGS/music.log)"
   echo "ok"
+  step "the opening event's voices (ATRAC3 .at2, decoded, FLAC) -> data/audio/voice"
+  if [ -s "$KEL/data/event/scene/ev0100/sound/10109vn.at2" ]; then
+    run voice $PY "$REPO/tools/audio/voice.py" --kel "$KEL" --zone 128 --event 100 --out "$DATA/audio/voice"
+    echo "ok"
+  else
+    echo "skipped: the extract predates the voices (delete $KEL and run again to unpack them); the opening plays without voices."
+  fi
 else
   step "zone music: skipped (needs ffmpeg, the libavcodec / libavutil / libswresample dev packages and a dirge_atdec that compiles)"
   echo "play.html runs without music (sound effects still play)."

@@ -18,7 +18,7 @@
 //   Vincent C+0x30 (-1395.1516, ground -98.6444, -1111.0149) [the save: the same], facing C+0x20 (0.00082, 0, 1.0)
 //   [save (0.1753, 0, 0.9845)], HP 780 [780], P+0x118 0x20209 [0x20209], gun drawn (h_st_a) [holstered, h_st];
 //   soldiers 44-49 / 66: state +0x104, +0x118, HP, position and clip equal to the save's; 41-43 alive and attacking
-//   (HP 10 / 28 / 24, astate 3) [dead in the save]; event flags all 0 [the page's start: {2: 7, 46: 1}].
+//   (HP 10 / 28 / 24, astate 3) [dead in the save]; event flags all 0 [the save's too: all 0 (worker 0224)].
 // The start position and 41-43's moves are the opening event's hand-off (worker 0205, notes/checkpoint-research.md
 // "The opening cutscene's hand-off"): the stage's event ev0100 runs its class scr001 (decrypted by FUN_003a8320; T: in
 // RAM in the reload state), whose first_event() ends with setpos / setdir / setmotionofbattle per actor, then

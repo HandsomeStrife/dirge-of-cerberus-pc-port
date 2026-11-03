@@ -59,6 +59,11 @@ const CLIP = 'r_gst';            // GUESS: the idle the brain requests at activa
 // state; notes/enemy-model.md "Other types"). The stand clip of the motion set the type would use:
 // e048 carries a rifle like e027 and has the same m001 r_* set; the others' stand clip in m000 / m001.
 const IDLE = { e027: CLIP, e048: 'r_gst', e030: 'st_a', e036: 'm_gst', e023: 'idle', e024: 'idle', e001: 'n_st' };
+// The n0xx townspeople and WRO men (worker 0223; notes/npc-research.md): the clip of their stance's motion row 0 (FUN_00564228:
+// WRO 0x1f -> r_gst, townspeople 0xc / 0xd / 0xe -> st; bmd rows). T: w223_npc95, the woken NPCs' MP layer 0 = 'st' (114: under
+// the 'fear' their script asks for with cmd 0x141, enemy_ai t.motion). Not n112 (e_Shc).
+for (const m of ['n017', 'n018', 'n022']) IDLE[m] = 'r_gst';
+for (const m of ['n023', 'n024', 'n025', 'n026', 'n028', 'n029', 'n030', 'n031', 'n032', 'n033', 'n034']) IDLE[m] = 'st';
 const ALL = typeof location !== 'undefined' && new URLSearchParams(location.search).get('enemies') === 'all';
 const RATE = 0.5;                // MP+0x40c of every idle e027 in the save state (= FUN_003456c0 rate 1.0, as Vincent's)
 // A request's blend length = C+0x591 + 1 at the request (enemy_ai C.blendLen, FUN_00344608; C+0x591 is
@@ -363,6 +368,23 @@ export async function setupEnemies({ root, litPatch, light, extra = [] }) {
             a.head = { clip: s.C.clip, frame: fr, loop: s.C.loop !== false, partner: s.C.partner ?? null };
             const len = (s.C.blendLen ?? BLEND_DEFAULT) + 1;
             a.blend = { len, rem: len };
+          }
+        }
+        // a body-only record (no page actor: the n0xx NPCs): the clip its script asks for with cmd 0x141 (enemy_ai t.motion,
+        // worker 0223), switched in as an AI soldier's request (blend C+0x591 + 1). L: the motion state FUN_00341780(C, 2, 0)
+        // starts was not read; T: w223_npc95 MP layers (114 'fear' over a blending-out 'st'). Their bodies are in enemy_ai's
+        // push-out and lock-on lists (npcBodies; +0x38 0x391, never lockable). Worker 0228: only the WRO men (n017 / n018 / n022)
+        // take this path now; the townspeople are enemy_ai actors (drawn above from their clip requests, hit by the bullets).
+        if (!s && ai && ai.objects) {
+          let o = a.recObj;                                                    // (a Restart builds a new world: look again)
+          if (!o || ai.objects.get(o.id) !== o) o = a.recObj = [...ai.objects.values()].find(x => x.kind === 'record' && x.rec === a.rec) || null;
+          if (o && o.motionSeq !== a.mseq) {
+            a.mseq = o.motionSeq;
+            if (o.motion && has(o.motion)) {
+              a.out = a.head;
+              a.head = { clip: o.motion, frame: 0, loop: a.side.clips[o.motion].loop !== false, partner: null };
+              a.blend = { len: BLEND_DEFAULT + 1, rem: BLEND_DEFAULT + 1 };
+            } else if (o.motion) console.warn(`enemies: record ${a.rec} (${a.model}): clip ${o.motion} not exported; idle kept`);
           }
         }
         const b = a.blend, blending = a.out && b && b.rem > 0;

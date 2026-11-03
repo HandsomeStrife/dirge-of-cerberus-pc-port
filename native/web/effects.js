@@ -1480,8 +1480,9 @@ function angleFade(em, r, am, view) {
 }
 // worker 0208: `stage` = more FEDs for this manager (z128's level manager DAT_004ee3c0: the area FEDs 06800014 / 114 / 214,
 // FileCodes 0x20000000 | area << 18), in load order; `cull` = run FUN_002ea6a0's emitter cull in end(view) (`hidden`: the
-// cell numbers whose bit is set in DAT_004e8710 = DAT_004e86f0 | DAT_004e8700, from the save state)
-export function createEffects({ fed, fed0 = null, core, warn = console.warn, twister = null, rand = null, rng = null, proj = PROJ, reseed = true, stage = [], cull = false, hidden = null, hiddenScript = null, models0 = false } = {}) {
+// cell numbers whose bit is set in DAT_004e8710 = DAT_004e86f0 | DAT_004e8700, from a save state: tests; `mask`: the live
+// mask object, room_vis.js createVisMask, shared with the room, worker 0225)
+export function createEffects({ fed, fed0 = null, core, warn = console.warn, twister = null, rand = null, rng = null, proj = PROJ, reseed = true, stage = [], cull = false, hidden = null, hiddenScript = null, mask = null, models0 = false } = {}) {
   const rngGiven = !!rng;
   rng ??= new EffectRng(undefined, undefined, twister, rand);
   const F0 = parseFed(fed);
@@ -1493,13 +1494,17 @@ export function createEffects({ fed, fed0 = null, core, warn = console.warn, twi
   const stageFeds = stage.map(b => parseFed(b));
   for (const S of stageFeds) { feds.set(S.code, S); for (const [k, t] of parseFedTextures(S)) tex.set(k, t); }
   // DAT_004e8710 = DAT_004e86f0 | DAT_004e8700 (FUN_00269410). Script cmds 0x54 / 0x55 (FUN_00545b20 -> FUN_002693a8 /
-  // FUN_00269368) clear / set bits of DAT_004e8700 only: cellMask(bit, on), wired from enemy_ai.js. FUN_00269400 writes
-  // DAT_004e86f0; its caller is not decoded.
-  // GUESS: both halves start as the sea-of-flames save's (86f0 = cells 0 / 19 / 25 / 56 / 57, 8700 = none; ids.json `hidden` /
-  // `hidden_script`) at page load, after the intro hand-off and after Restart (what the stage load / the checkpoint set them
-  // to is not decoded; not decoded: see notes/effects-research.md "Stage effects")
-  const hiddenSet = new Set(hidden ?? []), scriptCells = new Set(hiddenScript ?? []);
-  const cellMask = (bit, on) => { if (on) scriptCells.add(bit); else scriptCells.delete(bit); };
+  // FUN_00269368) clear / set bits of DAT_004e8700 only: cellMask(bit, on), wired from enemy_ai.js. DAT_004e86f0 is the
+  // room's camera probe (FUN_00264ee0, room_vis.js, worker 0225): with `mask` (createVisMask) both halves are the live
+  // shared ones, read at the cull (FUN_002ea6a0 copies FUN_00269498() to mgr +0x30 first). Without it (tests), `hidden` /
+  // `hiddenScript` are a save state's halves.
+  // GUESS: the script half starts empty (the sea-of-flames save's 8700; ids.json `hidden_script`) at page load, after the
+  // intro hand-off and after Restart (what the stage load / the checkpoint set it to is not decoded; see
+  // notes/effects-research.md "Stage effects")
+  const hiddenSet = new Set(mask ? [] : hidden ?? []), scriptCells = new Set(hiddenScript ?? []);
+  if (mask) { mask.clearScript(); for (const b of hiddenScript ?? []) mask.setScript(b, true); }
+  const cellMask = (bit, on) => { if (mask) mask.setScript(bit, on); else if (on) scriptCells.add(bit); else scriptCells.delete(bit); };
+  const cellHidden = cell => mask ? mask.has(cell) : hiddenSet.has(cell) || scriptCells.has(cell);
   const warned = new Set();
   const warnOnce = m => { if (!warned.has(m)) { warned.add(m); warn(m); } };
   // Without rand() the frame reseed (FUN_002d97f8) cannot run: every LCG / VU0 R draw would diverge from the
@@ -1825,7 +1830,7 @@ export function createEffects({ fed, fed0 = null, core, warn = console.warn, twi
     const cell = F.s16(r + 0x66);
     if (cell >= 0) {
       if (cell > 0x7f) warnOnce(`effects: param cell ${cell} past the 128-bit mask (FUN_002ea6a0 reads the manager past +0x40): taken as visible`);
-      else if (hiddenSet.has(cell) || scriptCells.has(cell)) { em.f0a |= 0x100; return true; }
+      else if (cellHidden(cell)) { em.f0a |= 0x100; return true; }
     }
     let fade = 1;
     if (em.cat === 1) fade = 1;                                    // camera 1: +0xbc = +0xd0, no test
@@ -1893,7 +1898,10 @@ export function createEffects({ fed, fed0 = null, core, warn = console.warn, twi
   }
   // Restart (checkpoint.js, worker 0201). GUESS: the stage reload frees every emitter and zeroes mgr +0x8c (the manager's
   // teardown / rebuild across a reload is not decoded); the RNGs run on (no reseed found on the reload path)
-  const reset = () => { emitters.length = 0; counter = 0; scriptCells.clear(); for (const b of hiddenScript ?? []) scriptCells.add(b); };
+  const reset = () => {
+    emitters.length = 0; counter = 0; scriptCells.clear(); for (const b of hiddenScript ?? []) scriptCells.add(b);
+    if (mask) { mask.clearScript(); for (const b of hiddenScript ?? []) mask.setScript(b, true); }
+  };
   // FUN_002f15d0 (a stage FED's load, DAT_0046d354 == 0) -> FUN_002e4d80(mgr, fed, 0, 0): FUN_002e4e38 spawns, in table A
   // order (groups 0.., records 0..), every param record whose flag word +4 has bit 0 set (FUN_002e63d0 with age 0, no
   // position: the record's +0x10 places it), then FUN_002e4fb0 the header +0x20 table's flagged entries (FUN_002e8830).
@@ -1916,7 +1924,7 @@ export function createEffects({ fed, fed0 = null, core, warn = console.warn, twi
     }
     return out;
   }
-  return { spawn, begin, end, update, sprites, emitters, rng, fed: F0, feds, tex, warn: warnOnce, reset, stageLoad, cellMask, cells: () => [...new Set([...hiddenSet, ...scriptCells])].sort((a, b) => a - b) };
+  return { spawn, begin, end, update, sprites, emitters, rng, fed: F0, feds, tex, warn: warnOnce, reset, stageLoad, cellMask, cells: () => mask ? mask.bits() : [...new Set([...hiddenSet, ...scriptCells])].sort((a, b) => a - b) };
 }
 
 // ---------------------------------------------------------------------------------------------

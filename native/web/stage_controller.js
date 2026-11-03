@@ -12,7 +12,8 @@
 // the main thread waits for the frame, so a polling loop in a script (main's `while (no flag) deb_jump()`) runs in the
 // frame's idle time, preempted, not blocked. StageVM.run takes a step budget per frame and goes on next frame.
 //
-// Skip (decoded; the page "presses Skip" for every event, the stand-in for the player choosing Skip in the pause menu):
+// Skip (the path decoded; WHEN to skip is the page's GUESS: it chooses Skip in every event, at the event's first wait, as
+// a stand-in for the player; ?autoskip=0 (opts.autoSkip false) leaves the events to play out):
 //   FUN_003c0520 (the pause menu) offers Skip when FUN_003e0d00() == 0 (DAT_004f3044 bit 0x2000: enableSkip(0) sets
 //   it, FUN_003e0cc8; the stage title card FUN_003fdb48 too); choosing it: FUN_003c0110 -> FUN_003dfdc8: if
 //   FUN_003dfd18 (+0x1558 & 0x102000000000 == 0x100000000000: an event program runs, bit 44 from FUN_00374d08 /
@@ -29,10 +30,11 @@ const f32 = Math.fround;
 // GUESS: the VM thread's instructions per frame (the game's count is the main thread's idle time; not decoded). Any
 // budget that lets one poll loop iteration finish gives the same result: what a poll reads only changes on the main
 // thread, between VM windows (notes/fidelity-audit.md 'GUESS: the stage VM's steps per frame').
-export const STEP_BUDGET = 200000;
+export const STEP_BUDGET = 5000;
 
-// methods the page plays elsewhere: main's call returns at once. ev0101.first_event (the opening, scr001) is played by
-// intro.js before main starts (worker 0210 / 0218); main runs from the hand-off on.
+// methods the page plays elsewhere. ev0101.first_event (the opening, scr001) is played by intro.js (worker 0210 / 0218):
+// main's call waits there until opts.openingDone() (the hand-off), then returns; without opts.openingDone it returns at
+// once (the page started from the save, past the opening).
 export const PLAYED_ELSEWHERE = ['ev0101.first_event()V'];
 
 class StageVM extends EventVM {
@@ -45,7 +47,7 @@ class StageVM extends EventVM {
 
   invoke(hit, cls, name, desc, args, self) {
     const key = cls + '.' + name + desc;
-    if (this.played.has(key)) { this.onPlayed && this.onPlayed(key); return { value: undefined }; }
+    if (this.played.has(key)) return { value: this.onPlayed ? this.onPlayed(key) : undefined };
     if (hit && !(hit.m.access & 0x100) && /^ev\d{4}$/.test(hit.cls) && !this.calls.includes(hit.cls + '.' + name)) this.calls.push(hit.cls + '.' + name);
     return super.invoke(hit, cls, name, desc, args, self);
   }
@@ -75,18 +77,37 @@ export class StageRuntime extends EventRuntime {
   constructor(data, o = {}) {
     super(data, { warn: o.warn, lang: o.lang });
     this.o = o;
-    this.skip = 0;                    // +0x156c
+    // +0x156c. opts.skip: its value at the hand-off (the opening's runtime, intro.js: 2 when the player skipped it), so
+    // main's isSkip() after first_event takes the game's branch (kalm_ld(100)) until battle() clears it (worker 0222)
+    this.skip = o.skip ?? 0;
+    // main's prelude runs before the opening (asj_033 at f20, then scr001's asj_036 replaces it: T w222_snd). Until
+    // first_event returns its sounds are logged only: the page's opening sound (play.js / event_sound.js, worker 0222)
+    // owns that stretch, and from the save the prelude is already past
+    this.beforeOpening = true;
     this.skipMode = 0;                // +0x9860 (setSkipMode bits)
     this.battle = true;               // +0x1558 bit 37. T: set in the save and at the hand-off (trace_w205_reload)
     this.running = true;              // +0x1558 bit 44: the event program runs (FUN_00374d08), set before main
     this.skipOff = false;             // DAT_004f3044 bit 0x2000 (FUN_003e0cc8 / FUN_003e0d00)
     this.autoSkip = o.autoSkip !== false;
-    this.gflags = o.globalFlags || new Uint8Array(64);   // DAT_0050db20 (stored XOR DAT_0046f608; kept plain here)
+    // DAT_0050db20 (stored XOR DAT_0046f608; kept plain here). A new controller = a stage (re)load: all 0. The clearing is
+    // traced only (w210 start1704: 0 mid stage load); its writer is not decoded
+    this.gflags = o.globalFlags || new Uint8Array(64);
+    this.peaceN = 0;                  // DAT_0046f854 (FUN_003809a8's peace count)
+    this.cardOn = false; this.cardSaved = false;
     this.sectionStat = {};            // KerberosIntermission section stats (FUN_003a53e0)
     this.zoneCmd = null;              // the live command 4 (+0x985c: one at a time)
     this.music = null;                // the last music request (tests)
     this.vm = new StageVM(data, this.natives(), { warn: this.warn, played: o.played || PLAYED_ELSEWHERE, budget: o.budget });
-    this.vm.onPlayed = (k) => this.log.push([this.frameNo, 'played elsewhere ' + k]);
+    this.vm.onPlayed = (k) => {
+      const end = () => {
+        this.beforeOpening = false;
+        // the opening's +0x156c at its end (intro.js / event_rt.js Skip, worker 0222): main's isSkip() after first_event
+        if (o.openingSkip) this.skip = o.openingSkip() | 0;
+        this.log.push([this.frameNo, 'played elsewhere ' + k]);
+      };
+      if (o.openingDone && !o.openingDone()) return block(() => o.openingDone(), end);
+      end(); return undefined;
+    };
   }
 
   // the current world's stage flags (DAT_0047dbb0 +0x38): enemy_ai's eventFlags, looked up every time (a Restart
@@ -95,20 +116,31 @@ export class StageRuntime extends EventRuntime {
 
   warnOnce(m) { this.vm.warnOnce(m, m); }
 
-  // FUN_003dfd18 + FUN_003e0d00: the pause menu's Skip is offered and takes
-  skippable() { return this.running && !this.battle && !this.skipOff; }
+  // FUN_003dfd18 + FUN_003e0d00: the pause menu's Skip is offered and takes. DAT_004f3044 bit 0x2000 = enableSkip(0)
+  // (skipOff) or a stage-info card up (FUN_003fdb48 sets it, FUN_003fdd58 clears it unless it was set before: cardSaved)
+  skippable() { return this.running && !this.battle && !this.skipOff && !this.cardOn; }
 
-  // FUN_00372f70 (the Skip choice)
+  // FUN_003fdd58's half: the card is down (worker 0220's stage_info.js) -> the bit back as FUN_003fdb48 found it
+  cardStep() {
+    if (!this.cardOn) return;
+    const si = this.o.stageInfo && this.o.stageInfo();
+    if (si && si.isDisplay(-1)) return;
+    this.cardOn = false;
+    if (this.cardSaved) this.skipOff = true;
+  }
+
+  // FUN_00372f70 (the Skip choice): event_rt.js's (its +0x156c guard, the event sounds' and windows' skip; worker 0222)
   requestSkip() {
-    this.skip = 1;
+    if (!super.requestSkip()) return false;
     this.log.push([this.frameNo, 'skip ' + this.vm.where()]);
-    this.warnOnce('stage: FUN_00372f70\'s other calls on Skip (FUN_00380ca0(0xb4), sound stop FUN_002420e0, effects FUN_002f47e0, FUN_002574a0, FUN_003e6fc8, the event effects / voices) left out');
+    return true;
   }
 
   frame(dtMs = 20) {
     this.frameNo++;
     if (this.log.length > 4000) this.log.splice(0, 2000);              // page memory: the log is for tests
     if (!this.vm.done) this.vm.run();                                   // the VM thread's time this frame
+    this.cardStep();
     this.clock = (this.clock + dtMs) >>> 0;                              // FUN_003798a0
     for (const c of this.slots.slice()) {                                // FUN_00377c68's slot loop, slots in order
       let fin = false;
@@ -122,9 +154,12 @@ export class StageRuntime extends EventRuntime {
     }
     if (this.skip === 1) this.skip = 2;                                  // FUN_00377c68's tail
     if (!this.battle) this.camOutput(); else this.view = null;           // FUN_00379148 only out of battle mode
-    // the page presses Skip the moment the menu would offer it (see the header). The pause menu runs after the event
-    // update in the game's frame, so +0x156c goes 1 -> 2 on the next frame (T w219_skip: 1 at f961, 2 at f962)
-    if (this.autoSkip && this.skip === 0 && this.skippable() && !this.vm.done) this.requestSkip();
+    // GUESS: the page chooses Skip for every event, once the menu would offer it and the event has reached a wait (its
+    // code up to there runs as unskipped). The player's own timing is not the game's code (w219_skip: ✕ 63 frames into
+    // rv_matiawase). It forces main's skip branches (heri_taijou -> no sk_mituketa2, heri_lasted -> no kita_ev0145) and
+    // a skipped event's timing; ?autoskip=0 (opts.autoSkip false) turns it off (notes/fidelity-audit.md 'GUESS: auto-skip').
+    // The pause menu runs after the event update, so +0x156c goes 1 -> 2 on the next frame (T w219_skip: f961 / f962)
+    if (this.autoSkip && this.skip === 0 && this.skippable() && !this.vm.done && this.vm.pending) this.requestSkip();
   }
 
   // FUN_003779d0: with +0x156c == 2 the key time is the move's end
@@ -172,7 +207,9 @@ export class StageRuntime extends EventRuntime {
   enterEvent(n) {
     this.warnOnce('stage: FUN_0037e048\'s waits and calls (FUN_003e9950, FUN_0037ddd0, FUN_005a6d70, FUN_0037dbf8, FUN_003e8888 / FUN_003e6538 ...) left out');
     const gs = this.o.gameState && this.o.gameState();
-    if (gs) gs.set(2);
+    // FUN_002419d8(0) == 0 (DAT_004b8ac8 bit 0: 0 in the z128 states): FUN_0037dc78(ev, 1), FUN_0037def0(ev, 1) ->
+    // FUN_00325b10(1): game-state bit 6, the AI paused (enemy_ai FUN_00365008); then FUN_00326018(2)
+    if (gs) { gs.set(6); gs.set(2); }
     this.battle = false;
     this.log.push([this.frameNo, 'event ' + n]);
     if (this.o.onMode) this.o.onMode('event');
@@ -201,8 +238,9 @@ export class StageRuntime extends EventRuntime {
       // set when off (FUN_00325b60(b == 0)), FUN_0037def0, FUN_00380a28, FUN_003edaa8 (left out)
       'fake/KerberosEvent.set_usercontrol(Z)V': (vm, [v]) => {
         R.state.usercontrol = v; log('usercontrol ' + v);
-        const g = gs(); if (g) (v ? g.clear(11) : g.set(11));
-        R.warnOnce('stage: set_usercontrol\'s FUN_003b01b0 / FUN_0037def0 / FUN_00380a28 / FUN_003edaa8 left out');
+        // FUN_00325b60(b == 0): bit 11; FUN_0037def0(ev, b == 0) -> FUN_00325b10: bit 6 (the AI paused while off)
+        const g = gs(); if (g) { if (v) { g.clear(11); g.clear(6); } else { g.set(11); g.set(6); } }
+        R.warnOnce('stage: set_usercontrol\'s FUN_003b01b0 / FUN_00380a28 / FUN_003edaa8 left out');
         const s = o().stream && o().stream();
         return s && s.busy ? block(() => !s.busy) : undefined;
       },
@@ -233,7 +271,11 @@ export class StageRuntime extends EventRuntime {
       'fake/KerberosEvent.displayStageInfo_l(ILjava/lang/String;)V': (vm, [k, s]) => {
         log('stageinfo ' + k + ' ' + str(s));
         const si = o().stageInfo && o().stageInfo();
-        if (si) si.display(k, str(s)); else R.warnOnce('stage: displayStageInfo (stage_info.js) not on the page: left out');
+        if (si) {
+          si.display(k, str(s));
+          // FUN_003fdb48: DAT_0047db80 = FUN_003e0d00(); FUN_003e0cc8(1) (no Skip while the card is up)
+          if (!R.cardOn) { R.cardSaved = R.skipOff; R.cardOn = true; }
+        } else R.warnOnce('stage: displayStageInfo (stage_info.js) not on the page: left out');
       },
       'fake/KerberosEvent.isDisplayStageInfo(I)Z': (vm, [k]) => { const si = o().stageInfo && o().stageInfo(); return si && si.isDisplay(k) ? 1 : 0; },
       'fake/KerberosEvent.drawNowLoading(Z)I': () => 0,                            // FUN_003a2770: no loading screen (page loads are resident)
@@ -258,8 +300,16 @@ export class StageRuntime extends EventRuntime {
       'fake/KerberosZone.event3(I)V': (vm, [n]) => { R.enterEvent(n); },           // FUN_0039c6b8
       // peace / chaos (FUN_0039def0 / FUN_0039df18 -> FUN_00380290(ev, 1 / 0)): FUN_0037df80 -> FUN_003809a8 (bit 10
       // counter); peace: FUN_0037dc78, FUN_0037def0 (bit 6), waits FUN_00323538; chaos: FUN_003e0d18(0), FUN_00325b10(0)
-      'fake/KerberosZone.peace()V': () => { const g = gs(); if (g) { g.set(10); g.set(6); } R.state.peace = 1; log('peace'); },
-      'fake/KerberosZone.chaos()V': () => { const g = gs(); if (g) { g.clear(10); g.clear(6); } R.state.peace = 0; log('chaos'); },
+      // FUN_003809a8's counter DAT_0046f854: peace +1 (bit 10 on at 0 -> 1), chaos -1 (bit 10 off when it drops below 1)
+      'fake/KerberosZone.peace()V': () => {
+        const g = gs(); if (g) { if (R.peaceN === 0) g.set(10); g.set(6); }
+        R.peaceN++; R.state.peace = 1; log('peace');
+      },
+      'fake/KerberosZone.chaos()V': () => {
+        const g = gs(); R.peaceN--;
+        if (R.peaceN < 1) { R.peaceN = 0; if (g) g.clear(10); }
+        if (g) g.clear(6); R.state.peace = 0; log('chaos');
+      },
       // scene_save (FUN_0039c728): unless game-state bits 0xc / 0x10 / 0x14: wait_save, then FUN_0023d690(0, n, 0) ->
       // FUN_003bf250 (the checkpoint save)
       'fake/KerberosZone.scene_save(I)V': (vm, [n]) => {
@@ -275,7 +325,7 @@ export class StageRuntime extends EventRuntime {
       // playMusic3 (FUN_003a0198): name, vol, fade; known name (FUN_003eb9a0) -> skip 0: fade < 1 FUN_003ec500(vol) else
       // FUN_003ec560(fade, vol); skip != 0: stopMusic FUN_003ebfa0, then FUN_003ec500(vol) when FUN_003eb930
       'fake/KerberosSound.playMusic3(Ljava/lang/String;II)V': (vm, [s, vol, fade]) => {
-        const m = o().music && o().music(), name = str(s);
+        const m = !R.beforeOpening && o().music && o().music(), name = str(s);
         R.music = { name, vol, fade, skip: R.skip }; log('music ' + name + ' ' + vol + ' ' + fade + (R.skip ? ' (skip)' : ''));
         if (!m) return;
         if (R.skip === 0) m.playMusic3(name, vol, fade);
@@ -290,7 +340,10 @@ export class StageRuntime extends EventRuntime {
       'fake/KerberosSound.changeMusicVol(II)V': (vm, [vol, t]) => { log('musicvol ' + vol + ' ' + t); const m = o().music && o().music(); if (m) m.changeMusicVol(vol, t); },   // FUN_003a5308 -> FUN_003ed740
       'fake/KerberosSound.stopMusic()V': () => { log('stopmusic'); const m = o().music && o().music(); if (m) m.stopMusic(); },   // FUN_003a0148 -> FUN_003ebfa0
       // playBgAreaSound_l (FUN_0039dd80 -> FUN_003e6c88(name, vol)) / stopBgAreaSound (FUN_0039ddf0 -> FUN_003e65b0)
-      'fake/KerberosSound.playBgAreaSound_l(Ljava/lang/String;I)V': (vm, [s, v]) => { log('area ' + str(s) + ' ' + v); const a = o().area && o().area(); if (a) a.play(str(s), v); },
+      'fake/KerberosSound.playBgAreaSound_l(Ljava/lang/String;I)V': (vm, [s, v]) => {
+        log('area ' + str(s) + ' ' + v + (R.beforeOpening ? ' (before the opening: not replayed)' : ''));
+        const a = !R.beforeOpening && o().area && o().area(); if (a) a.play(str(s), v);
+      },
       'fake/KerberosSound.stopBgAreaSound()V': () => { log('area stop'); const a = o().area && o().area(); if (a) a.stop(); },
       // ---- fake/KerberosIntermission
       'fake/KerberosIntermission.setSectionStat(II)V': (vm, [k, v]) => { R.sectionStat[k] = v; },   // FUN_003a53e0
@@ -308,6 +361,14 @@ export class StageRuntime extends EventRuntime {
 export function createStageController(opts) {
   const rt = new StageRuntime(opts.data, opts);
   rt.vm.start(opts.data.main, 'main', '([Ljava/lang/String;)V', [{ $arr: true, kind: 'L', a: [] }]);
+  // PAGE STRUCTURE (from the save only, ?intro=0): the save is past main's prelude, first_event and the hand-off; the page
+  // runs them here, before its first game frame, up to the battle loop (4 controller frames, counted). With the opening
+  // (opts.openingDone) main runs from the opening's start in page frames, as the game: the prelude, then first_event's
+  // wait until the hand-off.
+  if (opts.settle !== false && !opts.openingDone) {
+    const played = () => rt.log.some(([, m]) => m.startsWith('played elsewhere '));
+    for (let i = 0; i < 16 && !rt.vm.done && !(played() && rt.battle && rt.skip === 0 && rt.vm.pending === null); i++) rt.frame(20);
+  }
   return {
     rt,
     tick(dtMs = 20) { if (!rt.vm.done) rt.frame(dtMs); },

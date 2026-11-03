@@ -124,6 +124,11 @@ Sizes: S = under a session, M = one worker-night, L = several. "Files" = what th
 - Evidence: one GS dump with townspeople in view (chunk 03 or 06) for placement / colour; a trace of one NPC's
   actor state after its wake.
 - Files: export_web_enemy.py, enemies.js, enemy_ai.js (no-AI body path). Conflicts with P1 / P6 in enemy_ai.js.
+- **Part done (worker 0223, 2026-11-03; notes/npc-research.md):** stances, wake (0x108 + event 3's cmd 0x141 'fear'), models,
+  bodies drawn at their locators; the stage areas (areas.js) replace AMB_SAVE_ACTIVE. Open: the NPC AI / rescue events, 113's
+  path slide, WRO rifles, n028.
+- **Part done (worker 0228, 2026-11-03; npc-research.md §8):** townspeople are actors (brain mode 0 = empty), 0x141 / 0x16a /
+  path node event 0x14, bullets + death, the trigger-24 rescue (flag 1 = 5), 113's slide. Open: WRO men (rifles, brain modes 3 / 5).
 
 ### P5. Ammo, reload, items and the HUD item list — M/L
 - Missing: the HUD shows static 18/18 180 and "Potion 2"; no magazine count, no reload (aim_core states 5-11 not
@@ -183,6 +188,9 @@ Sizes: S = under a session, M = one worker-night, L = several. "Files" = what th
   enemy-research.md §7) and displayStageInfo(1) objective text with flag 13.
 - Leads: FUN_0037def0 / FUN_0037cf30 (event VM), FUN_00325b10, the second text renderer (worker 0189).
 - Files: new message layer, pause_layer.js style. Independent of P1-P6.
+- **Done in part (worker 0220, 2026-11-03):** the box is displayStageInfo(6, MES_ITEM_07) from deb_jump after the record-22 item
+  pickup sets zone flag 2 = 7; one ✕ closes it. Flow, text, AI pause on the page (notes/message-research.md). Open: its
+  effects (FED a0211), kind 1's drawing, the pickup itself (P5).
 
 ### P12. Level end and the results screen — M (after P3, P6)
 - Missing: endSection, displayStageInfo(2), the Status results screen, the next-stage request (FUN_00241ed8,

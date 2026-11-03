@@ -1,0 +1,1 @@
+{"name": "w224_drop", "doc": "worker 0224: from tools/trace/out/route/r02_barrier.p2s (soldier 45 dead, his drop 0x62300000 x36 at object 0x13cec0), stick forward over it (w221_stop1's input). TRACE_FIELDSET=items TRACE_ITEMS=13cec0.", "frames": 90, "events": [{"from": 4, "to": 90, "ly": -1}]}

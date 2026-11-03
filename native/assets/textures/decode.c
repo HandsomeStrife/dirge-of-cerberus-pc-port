@@ -28,7 +28,7 @@ void dtex__emit_direct(dtex_image *out, const uint8_t *src, int psm)
         uint8_t r = 0, g = 0, b = 0, a = 255;
         if (psm == PSM_CT32) {
             r = src[i * 4 + 0]; g = src[i * 4 + 1]; b = src[i * 4 + 2];
-            int av = (src[i * 4 + 3] * 255) / 128; a = (uint8_t)(av > 255 ? 255 : av);
+            int av = dtex_raw_alpha ? src[i * 4 + 3] : (src[i * 4 + 3] * 255) / 128; a = (uint8_t)(av > 255 ? 255 : av);
         } else if (psm == PSM_CT24) {
             r = src[i * 3 + 0]; g = src[i * 3 + 1]; b = src[i * 3 + 2]; a = 255;
         } else { /* PSM_CT16 / CT16S : RGBA5551 */

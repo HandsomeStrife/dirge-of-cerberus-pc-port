@@ -1,8 +1,10 @@
 // z128 room drawing shared by the web pages: loads data/scene.json (export_web_room.py)
 // and builds one three.js mesh per draw (two for a GS alpha-test draw), drawn the way
 // native/gpu/render_scene_textured does: prelit vertex colour, PS2 MODULATE
-// (texel*vcol*2), per-vertex screen-linear GS fog, GS alpha test as two passes, no
-// culling, draw order = scene.json order (the renderer needs sortObjects = false).
+// (texel*vcol*2), per-vertex screen-linear GS fog, GS alpha test as two passes, the VU1
+// back-face test per triangle / strip quad (worker 0227: meshes[].cul, export_z128_room.py cull_tag;
+// ?cull=0 draws both sides, a page aid), draw order = scene.json order (the renderer needs
+// sortObjects = false).
 //
 // Taken from main.js (which still has its own copy; it can switch to this module).
 // play.js uses it, so the z-fight fixes live in one place:
@@ -19,16 +21,29 @@ precision highp float;
 in vec3 position;
 in vec2 uv;
 in vec4 color;
+in float uvTrack;          // scrolling UVs: the chain's track (-1 none; bmd_uvanim.py)
+in vec4 cullN;             // back faces: partner game-front normal (x 32767), mode (export_z128_room.py cull_tag)
 uniform mat4 modelViewMatrix, projectionMatrix;
-uniform bool uFog;
+uniform mat3 normalMatrix;
+uniform bool uFog, uUVAnim, uCull;
+uniform sampler2D uUVOff;  // RoomUVAnim: (u, v) offset per track (FUN_00265560: node +0xdc / +0xde / 4096)
 uniform float uFogA, uFogB, uFogMin;
 out vec2 vUV;
 out vec4 vCol;
 out float vFogW, vW;   // fog*w and w: their ratio interpolates screen-linearly (= native noperspective)
+flat out float vCull;  // 1: drop the triangle where it is a WebGL front face (= the game's back face)
 void main() {
-  vec4 clip = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  vec4 eyeP = modelViewMatrix * vec4(position, 1.0);
+  vec4 clip = projectionMatrix * eyeP;
+  // VU1 program A back faces (export_z128_room.py cull_tag): mode 0 never culled, 1 culled when back-facing,
+  // 2 culled only when the strip quad's partner is back-facing too (instr 255-260). The flat value comes from
+  // the provoking (last) vertex, which lies on the partner's plane. Facing kept on a zero cross (>= 0).
+  vCull = 0.0;
+  if (uCull && cullN.w > 0.5)
+    vCull = (cullN.w > 1.5 && dot(normalMatrix * cullN.xyz, -eyeP.xyz) >= 0.0) ? 0.0 : 1.0;
   float f = uFog ? clamp(uFogA * clip.w + uFogB, uFogMin, 1.0) : 1.0;
-  vUV = uv; vCol = color; vFogW = f * clip.w; vW = clip.w;
+  vUV = uv; vCol = color;
+  if (uUVAnim && uvTrack >= 0.0) vUV += texelFetch(uUVOff, ivec2(int(uvTrack), 0), 0).xy; vFogW = f * clip.w; vW = clip.w;
   gl_Position = clip;
 }`;
 
@@ -37,28 +52,36 @@ precision highp float;
 in vec2 vUV;
 in vec4 vCol;
 in float vFogW, vW;
+flat in float vCull;
 uniform sampler2D uTex;
-uniform bool uTexOn, uFog, uOutAlpha;
+uniform bool uTexOn, uFog, uOutAlpha, uAdd;
 uniform vec3 uFogColor;
 uniform float uARef;
+uniform float uTexA;     // texel alpha scale: 255 / 128 for raw PS2 alpha (scene.textures[].alpha 'ps2'), else 1
 uniform int uAMode;      // 0 none, 1 keep a>=ref, 2 keep a<ref
 out vec4 fragColor;
 void main() {
+  if (vCull > 0.5 && gl_FrontFacing) discard;   // the game's screen cross z < 0 (GS y down) = WebGL CCW
   vec4 c = vCol;
+  float aS = vCol.a * 2.0;                      // GS As (128 == 1.0), not capped: up to 0xff / 0x80
   if (uTexOn) {
     vec4 t = texture(uTex, vUV);
     c.rgb = min(t.rgb * vCol.rgb * 2.0, 1.0);   // PS2 MODULATE: 128 == 1.0
-    c.a   = min(t.a   * vCol.a   * 2.0, 1.0);
+    aS = t.a * uTexA * vCol.a * 2.0;              // At / 128 (raw PS2 byte: up to 0xff / 0x80, not capped)
   }
+  c.a = min(aS, 1.0);                           // GS As = A / 128 (textured: At * Av / 128)
   if (uAMode == 1 && c.a <  uARef) discard;
   if (uAMode == 2 && c.a >= uARef) discard;
   if (uFog) c.rgb = mix(uFogColor, c.rgb, vFogW / vW);
+  // additive (ALPHA 0x48, Cs * As + Cd): the shader applies As itself (blend factors One, One),
+  // because a blend factor would clamp As to 1 and ff88's vertex alpha reaches 192 (As 1.5)
+  if (uAdd) { fragColor = vec4(c.rgb * aS, 1.0); return; }
   fragColor = vec4(c.rgb, uOutAlpha ? c.a : 1.0);
 }`;
 
-// The two depth-tie offsets, read from the page URL (both on unless =0).
+// The two depth-tie offsets and the back-face test, read from the page URL (all on unless =0).
 export function roomOptions(params = new URLSearchParams(location.search)) {
-  return { zprio: params.get('zprio') !== '0', zunder: params.get('zunder') !== '0' };
+  return { zprio: params.get('zprio') !== '0', zunder: params.get('zunder') !== '0', cull: params.get('cull') !== '0' };
 }
 
 // mode: 0 = plain draw; 1 / 2 = GS ATE pass keeping alpha >= ref / < ref.
@@ -69,12 +92,17 @@ export function makeMaterial(scene, tex, draw, mode, opts = roomOptions()) {
     side: THREE.DoubleSide, depthFunc: THREE.LessDepth,
     uniforms: {
       uTex: { value: tex }, uTexOn: { value: !!tex },
+      uTexA: { value: scene.textures?.[draw.tex]?.alpha === 'ps2' ? 255 / 128 : 1 },
       uFog: { value: !!(fog && draw.fog) },
       uFogA: { value: fog ? -1 / (fog.far - fog.near) : 0 },
       uFogB: { value: fog ? fog.far / (fog.far - fog.near) : 0 },
       uFogMin: { value: fog ? fog.min : 0 },
       uFogColor: { value: new THREE.Vector3(...(fog ? fog.color : [0, 0, 0])) },
       uARef: { value: draw.aref }, uAMode: { value: mode }, uOutAlpha: { value: mode !== 0 },
+      uAdd: { value: draw.blend === 'add' },
+      uUVAnim: { value: !!(opts.uvOff && scene.meshes?.[draw.mesh]?.uvt) },
+      uUVOff: { value: opts.uvOff || null },
+      uCull: { value: !!scene.meshes?.[draw.mesh]?.cul && opts.cull !== false },
     },
   });
   // A few depth steps only: anything really in front still shows.
@@ -87,10 +115,9 @@ export function makeMaterial(scene, tex, draw, mode, opts = roomOptions()) {
     // AFAIL FB_ONLY, so colour is written and depth never).
     m.blending = THREE.CustomBlending;
     m.blendEquation = THREE.AddEquation;
-    m.blendSrc = THREE.SrcAlphaFactor; m.blendDst = THREE.OneFactor;
+    m.blendSrc = THREE.OneFactor; m.blendDst = THREE.OneFactor;        // FS outputs Cs * As
     m.blendSrcAlpha = THREE.ZeroFactor; m.blendDstAlpha = THREE.OneFactor;
     m.depthWrite = false;
-    m.uniforms.uOutAlpha.value = true;
   } else if (mode === 0) {
     m.blending = THREE.NoBlending;
   } else {
@@ -116,7 +143,7 @@ async function fetchBuf(url) {
 //   normals         - also bind the normal attribute (no shader reads it; main.js binds only
 //                     position, uv and color)
 //   opts            - roomOptions() unless given
-// Returns { scene, root, lo, hi, floats }: floats[mesh id] = the raw 12-float vertex
+// Returns { scene, root, lo, hi, floats, uvAnim }: uvAnim = RoomUVAnim (null without scene.uvanim); floats[mesh id] = the raw 12-float vertex
 // buffer (report.js ray casts read it); each mesh's userData.draw indexes scene.draws.
 export async function loadRoom({ skip = null, onProgress = null, normals = false, opts = roomOptions(), base = 'data/' } = {}) {
   const r = await fetch(base + 'scene.json');
@@ -127,7 +154,9 @@ export async function loadRoom({ skip = null, onProgress = null, normals = false
   const texUsed = new Set(draws.map(([d]) => d.tex).filter(Boolean));
   const meshes = Object.entries(scene.meshes).filter(([id]) => used.has(id));
   const texs = Object.entries(scene.textures).filter(([id]) => texUsed.has(id));
-  const files = [...meshes.map(e => e[1]), ...texs.map(e => e[1])];
+  const files = [...meshes.map(e => e[1]), ...texs.map(e => e[1]),
+                 ...meshes.filter(e => e[1].uvt).map(e => ({ file: e[1].uvt })),
+                 ...meshes.filter(e => e[1].cul).map(e => ({ file: e[1].cul }))];
   let done = 0;
   const bufs = {};
   await Promise.all(files.map(async f => {
@@ -154,7 +183,12 @@ export async function loadRoom({ skip = null, onProgress = null, normals = false
       uv: new THREE.InterleavedBufferAttribute(ib, 2, 6),
       color: new THREE.InterleavedBufferAttribute(ib, 4, 8),
     };
+    if (m.uvt) attrs[id].uvTrack = new THREE.BufferAttribute(new Int16Array(bufs[m.uvt]), 1);
+    if (m.cul) attrs[id].cullN = new THREE.BufferAttribute(new Int16Array(bufs[m.cul]), 4);   // back faces
   }
+  // scrolling UVs (worker 0226): one offset texture for every room material
+  const uvAnim = scene.uvanim ? new RoomUVAnim(scene.uvanim) : null;
+  if (uvAnim) opts = { ...opts, uvOff: uvAnim.tex };
 
   const root = new THREE.Scene();
   const lo = new THREE.Vector3(...scene.bbox.min), hi = new THREE.Vector3(...scene.bbox.max);
@@ -162,52 +196,146 @@ export async function loadRoom({ skip = null, onProgress = null, normals = false
   for (const [d, di] of draws) {
     const a = attrs[d.mesh];
     const tex = d.tex ? textures[d.tex] : null;
-    // a draw with per-chunk ranges gets CHUNK_SLOTS geometries (shared attributes) that showChunks
-    // points at the runs of loaded chunks; until then slot 0 draws everything
-    const nslot = d.chunks ? CHUNK_SLOTS : 1;
-    for (let k = 0; k < nslot; k++) {
+    // a draw with per-chunk ranges ([chunk, first, count, visibility group]) is drawn through an index
+    // that showChunks fills with the ranges of loaded chunks whose group is not hidden; until then
+    // it draws everything
+    {
       const g = new THREE.BufferGeometry();
       for (const n of normals ? ['position', 'normal', 'uv', 'color'] : ['position', 'uv', 'color']) g.setAttribute(n, a[n]);
-      g.setDrawRange(d.first, k === 0 ? d.count : 0);
+      if (a.uvTrack) g.setAttribute('uvTrack', a.uvTrack);
+      for (const n of Object.keys(a)) if (!['position', 'normal', 'uv', 'color'].includes(n)) g.setAttribute(n, a[n]);
+      g.setDrawRange(d.first, d.count);
+      if (d.chunks) g.userData.visIndex = new THREE.BufferAttribute(new Uint32Array(d.count), 1);   // showChunks fills it
       g.boundingSphere = sphere.clone();
       for (const mode of (d.aref >= 0 && tex ? [1, 2] : [0])) {
         const mesh = new THREE.Mesh(g, makeMaterial(scene, tex, d, mode, opts));
         mesh.frustumCulled = false; mesh.matrixAutoUpdate = false;
-        mesh.name = d.name + (mode ? `#ate${mode}` : '') + (k ? `#c${k}` : '');
-        mesh.userData = d.chunks ? { draw: di, mode, chunks: d.chunks, slot: k } : { draw: di, mode };
+        mesh.name = d.name + (mode ? `#ate${mode}` : '');
+        mesh.userData = d.chunks ? { draw: di, mode, chunks: d.chunks } : { draw: di, mode };
         root.add(mesh);
       }
     }
   }
-  return { scene, root, lo, hi, floats };
+  return { scene, root, lo, hi, floats, uvAnim };
 }
 
 // Area streaming (worker 0213): the game draws chunk 00 and the pair in slots 1 / 2 of its chunk
 // table DAT_004e4c60 only (FUN_002673d8 / FUN_002677a0, streamed by FUN_0026a0c0's area boxes;
-// area_stream.js keeps that table). export_z128_room.py stores each draw's triangles in chunk order
-// with [chunk, first, count] ranges (scene.json draws[].chunks), so the loaded chunks are at most
-// CHUNK_SLOTS runs. loaded: iterable of chunk numbers (AreaStream.loaded()), or null = every chunk.
-// GUESS-free but not timed: a chunk shows the frame its slot is marked loaded (see area_stream.js).
-export const CHUNK_SLOTS = 3;
-export function showChunks(root, loaded) {
+// area_stream.js keeps that table). Visibility groups (worker 0225): FUN_0026ccc8 skips a chain whose
+// group byte +0xaa has its bit set in DAT_004e8710 (FUN_00269450; > 0x7f never). export_z128_room.py
+// stores each draw's triangles in chunk order with [chunk, first, count, group] ranges (scene.json
+// draws[].chunks; group -1 = never hidden). loaded: iterable of chunk numbers (AreaStream.loaded()), or
+// null = every chunk. hidden: the mask (room_vis.js createVisMask: has(group)), or null = none hidden.
+// Timing is area_stream.js's GUESS (fidelity-audit): a chunk shows the frame its slot is marked loaded.
+export function visibleRanges(chunks, want, hidden) {
+  const runs = [];
+  for (const [c, first, count, group = -1] of chunks) {
+    if (want && !want.has(c)) continue;
+    if (hidden && group >= 0 && hidden.has(group)) continue;
+    const r = runs[runs.length - 1];
+    if (r && r[0] + r[1] === first) r[1] += count; else runs.push([first, count]);
+  }
+  return runs;
+}
+export function showChunks(root, loaded, hidden = null) {
   const want = loaded == null ? null : new Set(loaded);
   const key = want == null ? '*' : [...want].sort((x, y) => x - y).join(',');
-  if (root.userData.chunksShown === key) return;
-  root.userData.chunksShown = key;
+  const vkey = hidden ? hidden.words().join(',') : '-';       // the mask the ranges were cut with (visShown)
+  if (root.userData.chunksShown === key && root.userData.visShown === vkey) return;
+  root.userData.chunksShown = key; root.userData.visShown = vkey;
   const done = new Set();
   for (const m of root.children) {
     const u = m.userData;
     if (!u.chunks || done.has(m.geometry)) continue;
     done.add(m.geometry);
-    const runs = [];
-    for (const [c, first, count] of u.chunks) {
-      if (want && !want.has(c)) continue;
-      const r = runs[runs.length - 1];
-      if (r && r[0] + r[1] === first) r[1] += count; else runs.push([first, count]);
+    // one indexed draw over the visible runs (the same triangles in the same order)
+    const g = m.geometry, runs = visibleRanges(u.chunks, want, hidden);
+    let n = 0;
+    for (const [, c] of runs) n += c;
+    let ix = g.userData.visIndex;
+    if (!ix) {                                    // a geometry not built by loadRoom (tests): a bare index
+      let total = 0;
+      for (const [, , c] of u.chunks) total += c;
+      ix = g.userData.visIndex = { array: new Uint32Array(total), needsUpdate: false };
     }
-    if (u.slot === 0 && runs.length > CHUNK_SLOTS)
-      console.warn(`room: ${runs.length} chunk runs for ${m.name}, ${CHUNK_SLOTS} slots; the rest not drawn`);
-    const r = runs[u.slot];
-    m.geometry.setDrawRange(r ? r[0] : 0, r ? r[1] : 0);
+    let k = 0;
+    for (const [first, count] of runs) for (let v = 0; v < count; v++) ix.array[k++] = first + v;
+    ix.needsUpdate = true;
+    if (g.index !== ix) g.setIndex(ix);
+    g.setDrawRange(0, n);
+  }
+}
+
+// ---- Scrolling UVs (worker 0226; native/assets/models/bmd_uvanim.py, notes/room-blend-streaming.md
+// "Scrolling UVs"). Each chunk's animation file scrolls the UVs of some chains (z128: the fire glow ff88,
+// the sky ff35, ff34, ff4a). FUN_00248110 -> FUN_00265350 -> FUN_00263e90 per loaded slot ->
+// FUN_0026c198: per playing animation, each track's curves set node +0xdc = (short)(int)(u(t) * 4096) and
+// +0xde = (short)(int)(-v(t) * 4096), then time += DAT_004fc7e8 * 0.5. FUN_00265bf0 copies them to the
+// chain (+0xa4 / +0xa6) and FUN_00265560 sends them / 4096 (0.00024414062): the GS UV = file UV + offset.
+// The times are zeroed when the chunk loads (FUN_00266ae0 -> FUN_002680e0) and freed when it unloads.
+
+// PS2 FPU: float adds round toward zero (the RAM times match only that: 408 x 0.6 = 244.79793).
+const f32 = new Float32Array(1), i32 = new Int32Array(f32.buffer);
+function addRTZ(a, b) {
+  const x = a + b;                       // exact in double for these magnitudes
+  f32[0] = x;
+  if (Math.abs(f32[0]) > Math.abs(x)) i32[0] -= 1;   // one step toward zero (same sign, non-zero)
+  return f32[0];
+}
+const fr = Math.fround;
+
+// FUN_00262328 (with FUN_002621c8): keys [time, value, in tangent, out tangent]; loop = fmodf.
+export function evalCurve(K, t, loop) {
+  const n = K.length;
+  if (n === 0) return 0;
+  const last = K[n - 1][0];
+  t = loop ? fr(t % last) : Math.min(t, last);
+  if (!(K[0][0] < t)) return K[0][1];
+  if (!(t < last)) return K[n - 1][1];   // FUN_002621c8 returns n: the last key's value
+  let lo = 0, hi = n - 1;                // the binary search's result: the key at or before t
+  while (hi - lo > 1) { const m = (lo + hi) >> 1; if (K[m][0] < t) lo = m; else hi = m; }
+  const i = lo, dt = fr(K[i + 1][0] - K[i][0]), s = fr(fr(t - K[i][0]) / dt);
+  const s2 = s * s, s3 = s2 * s;         // Hermite matrix DAT_0046be50
+  return (2 * s3 - 3 * s2 + 1) * K[i][1] + (-2 * s3 + 3 * s2) * K[i + 1][1]
+       + (s3 - 2 * s2 + s) * fr(K[i][3] * dt) + (s3 - s2) * fr(K[i + 1][2] * dt);
+}
+// (short)(int)(x * 4096.0)
+export const toS16 = x => (Math.trunc(fr(fr(x) * 4096)) << 16) >> 16;
+
+export class RoomUVAnim {
+  constructor({ anims, tracks }) {
+    this.anims = anims; this.tracks = tracks;
+    this.n = tracks.length;
+    this.off = new Float32Array(2 * Math.max(1, this.n));
+    this.tex = new THREE.DataTexture(this.off, Math.max(1, this.n), 1, THREE.RGFormat, THREE.FloatType);
+    this.tex.magFilter = this.tex.minFilter = THREE.NearestFilter;
+    this.tex.generateMipmaps = false; this.tex.flipY = false; this.tex.needsUpdate = true;
+    this.byChunk = new Map();            // chunk -> anim positions
+    anims.forEach((a, i) => { if (!this.byChunk.has(a.chunk)) this.byChunk.set(a.chunk, []); this.byChunk.get(a.chunk).push(i); });
+    this.time = new Map();               // loaded chunk -> Float32Array (one time per anim position)
+    this.node = new Int16Array(2 * Math.max(1, this.n));   // the nodes' +0xdc / +0xde
+  }
+  // One game frame (FUN_00265350, late in FUN_00248110). loaded: the loaded chunks (AreaStream.loaded()),
+  // or null = every chunk. advance: DAT_004fc7e8 (1.2; 0 while DAT_004fc7e4 == 1).
+  frame(loaded, advance = 1.2) {
+    const want = loaded == null ? new Set(this.byChunk.keys()) : new Set(loaded);
+    for (const c of [...this.time.keys()]) if (!want.has(c)) this.time.delete(c);   // FUN_002681b0
+    for (const c of want) {
+      const list = this.byChunk.get(c);
+      if (!list) continue;
+      if (!this.time.has(c)) this.time.set(c, new Float32Array(list.length));      // FUN_002680e0
+    }
+    const step = fr(fr(advance) * 0.5);
+    for (let ti = 0; ti < this.n; ti++) {
+      const tr = this.tracks[ti], an = this.anims[tr.anim], T = this.time.get(an.chunk);
+      if (!T) continue;                  // chunk not loaded: its chains are not drawn
+      const t = T[this.byChunk.get(an.chunk).indexOf(tr.anim)];
+      if (tr.u) this.node[2 * ti] = toS16(evalCurve(tr.u, t, an.loop));
+      if (tr.v) this.node[2 * ti + 1] = toS16(-evalCurve(tr.v, t, an.loop));
+      this.off[2 * ti] = this.node[2 * ti] * 0.00024414062;
+      this.off[2 * ti + 1] = this.node[2 * ti + 1] * 0.00024414062;
+    }
+    for (const T of this.time.values()) for (let k = 0; k < T.length; k++) T[k] = addRTZ(T[k], step);
+    this.tex.needsUpdate = true;
   }
 }

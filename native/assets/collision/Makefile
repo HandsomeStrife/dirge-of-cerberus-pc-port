@@ -6,6 +6,7 @@ CFLAGS  ?= -std=c99 -O2 -Wall -Wextra -Wpedantic
 BIN      = cidtool
 OBJS     = main.o cid.o obj_export.o
 WEB      = cidweb
+VIS      = cidvis
 
 # Real samples (adjust KEL if your extract lives elsewhere)
 KEL     ?= ../../../extract/_KEL/noPath
@@ -13,10 +14,13 @@ OUT      = out
 
 .PHONY: all clean check validate z128web
 
-all: $(BIN) $(WEB)
+all: $(BIN) $(WEB) $(VIS)
 
 $(WEB): web_export.o cid.o
 	$(CC) $(CFLAGS) -o $@ web_export.o cid.o -lm
+
+$(VIS): vis_export.o cid.o
+	$(CC) $(CFLAGS) -o $@ vis_export.o cid.o -lm
 
 # z128 (FileCode 0680, sea of flames) -> browser collision
 z128web: $(WEB)
@@ -52,5 +56,5 @@ validate: all
 	./$(BIN) $(KEL)/06080111.bin $(OUT)/06080111.obj --boxes
 
 clean:
-	rm -f $(BIN) $(WEB) $(OBJS) web_export.o
+	rm -f $(BIN) $(WEB) $(VIS) $(OBJS) web_export.o vis_export.o
 	rm -rf $(OUT)

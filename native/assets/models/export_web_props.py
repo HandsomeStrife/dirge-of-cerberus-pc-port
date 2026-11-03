@@ -24,12 +24,8 @@ import stage_events as SE  # noqa: E402
 
 SEC14_STRIDE, SEC15_STRIDE = 0x48, 0x90
 MODELS = ('e057',)
-# GUESS: the area objects (class vt 0x58c308, manager +0x2b4 table = cmd 0x3b) active at the save, read from
-# the save state's RAM (indexes 2 and 15 -> objects 3 and 7; object 2 is active too but no index maps to it).
-# FUN_00548348 parents each gimmick to area +0x4c (FUN_0053b920 -> FUN_0054c550, +0x40 |= 0x100); in the save
-# only the gimmicks of active areas are active (record 17 in area 2: on; 18 / 19 in 18, 60 / 61 in 1: off).
-# What activates an area (the player's position?) is not decoded (notes/barrel-research.md).
-SAVE_ACTIVE_AREAS = (2, 15)
+# The parent area +0x4c (FUN_00548348 -> FUN_0053b920 / FUN_0054c550) decides when a gimmick is switched on: the page's
+# areas.js (worker 0223; notes/npc-research.md "Areas"), not this exporter.
 
 
 def gitignored(path):
@@ -69,9 +65,7 @@ def records(d, tys):
             rec=k, type=ti, model=ty['name'], m=[[round(x, 6) for x in row] for row in m],
             script=struct.unpack_from('<h', r, 0x44)[0], flags48=struct.unpack_from('<I', r, 0x48)[0],
             f4c=struct.unpack_from('<h', r, 0x4c)[0], f4e=struct.unpack_from('<b', r, 0x4e)[0],
-            # FUN_00584220 (vt+0x14c): +0x144(1, 1) unless +0x48 bit 2 (L: called once per gimmick at stage start),
-            # and only in an active area (SAVE_ACTIVE_AREAS, GUESS)
-            start_active=not (struct.unpack_from('<I', r, 0x48)[0] & 4) and struct.unpack_from('<h', r, 0x4c)[0] in SAVE_ACTIVE_AREAS))
+            ))
     return out
 
 
@@ -89,7 +83,7 @@ def main():
     with open(os.path.join(out, 'props.json'), 'w') as f:
         json.dump(res, f, separators=(',', ':'))
     print('wrote %s/props.json: %d records (%s), types %s' % (
-        out, len(recs), ', '.join('%d%s' % (r['rec'], '' if r['start_active'] else ' off') for r in recs), used))
+        out, len(recs), ', '.join('%d (area %d)' % (r['rec'], r['f4c']) for r in recs), used))
 
 
 if __name__ == '__main__':

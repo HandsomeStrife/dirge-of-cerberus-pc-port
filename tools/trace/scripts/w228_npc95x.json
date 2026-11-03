@@ -1,0 +1,47 @@
+{
+ "name": "w228_npc95x",
+ "frames": 1100,
+ "log_from": 783,
+ "doc": "worker 0228: w223_npc95 extended to f1100 (log f783-1099, 317 frames after the NPC wake): 113's path 96 slide, the three in 'fear', soldiers 69-71 coming. Run with the same env as w223_npc95: TRACE_POKE=9540a4=17,10a2140=17 TRACE_FIELDSET=enemy TRACE_ERECS=113,114 TRACE_ENEMIES=2 TRACE_EPIN=113:91f6e0:9317e0,114:91ff00:9318f0.",
+ "events": [
+  {
+   "from": 10,
+   "to": 230,
+   "lx": 0.6,
+   "ly": -1.0
+  },
+  {
+   "from": 240,
+   "to": 244,
+   "buttons": [
+    "cross"
+   ]
+  },
+  {
+   "from": 280,
+   "to": 284,
+   "buttons": [
+    "cross"
+   ]
+  },
+  {
+   "from": 300,
+   "to": 470,
+   "lx": 0.6,
+   "ly": -1.0
+  },
+  {
+   "from": 490,
+   "to": 494,
+   "buttons": [
+    "cross"
+   ]
+  },
+  {
+   "from": 500,
+   "to": 787,
+   "lx": 0.6,
+   "ly": -1.0
+  }
+ ]
+}

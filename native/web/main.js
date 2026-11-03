@@ -45,7 +45,7 @@ in float vFogW, vW;
 uniform sampler2D uTex;
 uniform bool uTexOn, uFog, uOutAlpha;
 uniform vec3 uFogColor;
-uniform float uARef;
+uniform float uARef, uTexA;   // uTexA: 255 / 128 for raw PS2 alpha (scene.textures[].alpha 'ps2'; room.js)
 uniform int uAMode;      // 0 none, 1 keep a>=ref, 2 keep a<ref
 out vec4 fragColor;
 void main() {
@@ -53,7 +53,7 @@ void main() {
   if (uTexOn) {
     vec4 t = texture(uTex, vUV);
     c.rgb = min(t.rgb * vCol.rgb * 2.0, 1.0);   // PS2 MODULATE: 128 == 1.0
-    c.a   = min(t.a   * vCol.a   * 2.0, 1.0);
+    c.a   = min(t.a * uTexA * vCol.a * 2.0, 1.0);
   }
   if (uAMode == 1 && c.a <  uARef) discard;
   if (uAMode == 2 && c.a >= uARef) discard;
@@ -68,6 +68,7 @@ function makeMaterial(scene, tex, draw, mode) {
     side: THREE.DoubleSide, depthFunc: THREE.LessDepth,
     uniforms: {
       uTex: { value: tex }, uTexOn: { value: !!tex },
+      uTexA: { value: scene.textures?.[draw.tex]?.alpha === 'ps2' ? 255 / 128 : 1 },
       uFog: { value: !!(fog && draw.fog) },
       uFogA: { value: fog ? -1 / (fog.far - fog.near) : 0 },
       uFogB: { value: fog ? fog.far / (fog.far - fog.near) : 0 },

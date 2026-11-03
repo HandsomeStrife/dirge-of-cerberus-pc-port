@@ -124,7 +124,7 @@ function check(s, how, n, f) {
 try {
   const { pg, errs, warns } = await open();
   const start = await bodies(pg);
-  ok(await pg.evaluate(() => JSON.stringify(window.__play.enemyAI.eventFlags)) === '{"2":7,"46":1}', 'the page start: event flags {2: 7, 46: 1}');
+  ok(await pg.evaluate(() => JSON.stringify(window.__play.enemyAI.eventFlags)) === '{}', 'the page start: event flags {} (the save\'s all 0; worker 0224: 2 = 7 comes from the pickup)');
   { const lr = await pg.evaluate(() => JSON.stringify(window.__play.enemies.loadRecs));
     ok(lr === '[41,42,43]', `enemies.loadRecs ${lr} (the stage-load statuses without Vincent's record 0)`); }
   { // 1. game over -> Restart

@@ -55,10 +55,11 @@ int main(int argc, char **argv) {
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) outdir = argv[++i];
         else if (strcmp(argv[i], "--info") == 0) info_mode = 1;
+        else if (strcmp(argv[i], "--raw-alpha") == 0) dtex_raw_alpha = 1;   /* PS2 alpha byte as is (128 == 1.0) */
         else inputs[ninput++] = argv[i];
     }
     if (ninput == 0) {
-        fprintf(stderr, "usage: %s [--info] <input.txd|.rfd|.bin ...> [-o OUTDIR]\n", argv[0]);
+        fprintf(stderr, "usage: %s [--info] [--raw-alpha] <input.txd|.rfd|.bin ...> [-o OUTDIR]\n", argv[0]);
         return 2;
     }
 

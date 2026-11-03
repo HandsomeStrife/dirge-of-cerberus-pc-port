@@ -1,0 +1,7 @@
+{
+ "name": "w223_npcview",
+ "frames": 120,
+ "log_from": 60,
+ "doc": "worker 0223: from w223_npc95's f826 state (NPCs 111 / 113 / 114 awake in 'fear'; TRACE_STATE = that p2s, gitignored scratch), Vincent's five position copies poked to (-1125, -1, -1255) with C+0x4c0 = 0 (no walk polygon, as r06_tp), no input: the camera behind him faces 113 / 114 for a GS dump.",
+ "events": []
+}

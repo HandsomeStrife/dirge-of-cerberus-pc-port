@@ -141,18 +141,15 @@ def main():
         ids['rand'] = struct.unpack_from('<I', ee, (struct.unpack_from('<I', ee, 0x495844)[0] & 0x1ffffff) + 0x58)[0]
         # worker 0208: the hidden-cell mask DAT_004e8710 = DAT_004e86f0 | DAT_004e8700 (FUN_00269410; 128 bits, set /
         # cleared by scripts FUN_00269368 / FUN_002693a8): FUN_002ea6a0 culls a stage emitter whose param cell (+0x66) is
-        # set (export_z128_room.py's HIDDEN_GROUPS are the same bits). Game state at the save, not level data.
+        # set. Game state at the save, not level data. Worker 0225: the page computes DAT_004e86f0 every frame (room_vis.js,
+        # FUN_00264ee0's probe); `hidden` is kept for the tests that replay this save (test_effects / test_effects_page).
         # the two halves apart (review): `hidden` = DAT_004e86f0, `hidden_script` = DAT_004e8700 (the half script cmds 0x54 / 0x55
         # change: enemy_ai.js -> effects.js cellMask)
         bits = lambda b: [i for i in range(128) if b[i >> 3] >> (i & 7) & 1]
         ids['hidden'] = bits(ee[0x4e86f0:0x4e8700])
         ids['hidden_script'] = bits(ee[0x4e8700:0x4e8710])
     else:
-        # worker 0208: the hidden-cell mask then comes from the room exporter's constant (the same bits, read from the save:
-        # export_z128_room.py HIDDEN_GROUPS), so the fire is never drawn inside geometry the room hides
-        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-        from export_z128_room import HIDDEN_GROUPS
-        ids['hidden'] = sorted(HIDDEN_GROUPS)
+        # worker 0225: no `hidden` (DAT_004e86f0 is the page's camera probe, room_vis.js); the script half starts empty
         ids['hidden_script'] = []
         print('WARNING: no --state given: ids.json has no effect twister (DAT_004e9408) or rand() state, so the page '
               'leaves out the type 137 sparks of the bullet impacts and hits (and does not reseed the effect LCG each '

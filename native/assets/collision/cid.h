@@ -47,6 +47,9 @@ typedef struct {
     uint8_t  subtree;    /* v>=9: sub-tree index 0..3 = payload +0x38/+0x58/+0x78/+0x98
                           * (+0x38 segment query, +0x58 floor ray, +0x98 nearest;
                           * see FORMAT.md 3). 0 for v2.                         */
+    int16_t  vis_index;  /* tag-2: the packet header's 4th S-16 (header[3]), the index into
+                          * the surface table FUN_0026f8a0 copies to DAT_004e8880 on a ray
+                          * hit (room visibility mask, FUN_00264ee0); -1 otherwise    */
 } cid_tri;
 
 /* A coarse axis-aligned box standing in for a tag-2 (VU-packed) collision leaf
@@ -100,6 +103,7 @@ typedef struct {
     int n_tag2_tris;         /* triangles produced from decoded tag-2 packets    */
     int n_tag2_degenerate;   /* zero-area tag-2 tris skipped (source artifacts)  */
     int surf_table_count;    /* surface/material table entries (payload+0x20)    */
+    uint32_t *surf_table;    /* the table (payload+0x24, 16 bytes = 4 words each), or NULL */
 } cid_mesh;
 
 /* Error codes (negative). 0 = ok. */

@@ -71,6 +71,11 @@ def resolve_bases(mem):
         R = u32(mem, L + 0x10) + idx * 0xCC
         it = struct.unpack_from("<h", mem, (R + 0x2C) & 0x1FFFFFF)[0]
         bases.update(PS=PS, WL=L, R=R, INV=u32(mem, u32(mem, PS + 0x80) + 0x34) + it * 0xC)
+    elif FIELDSET == "items":
+        # worker 0224: the inventory entries (*(PS+0x80) +0x34, 12 bytes each; FUN_0031e658), the status, the event flags
+        PS = u32(mem, P + 0x17C)
+        bases.update(PS=PS, INVE=u32(mem, u32(mem, PS + 0x80) + 0x34), EVF=u32(mem, 0x47DBB0),
+                     GSB=u32(mem, u32(mem, u32(mem, G_GSTATE)) + 4))
     elif FIELDSET == "hud":
         # the HUD's top-level groups (worker 0203): root HUD+0x18, slot i HUD+0x38+4i (FUN_003ad618)
         bases["HGR"] = u32(mem, RET + 0x18)
@@ -587,7 +592,27 @@ STAGE_FIELDS = [f for f in FIELDS if f[0] in ("step",)] + [
     ("ev_mask", None, EV + 0x514, "u32", "D", "+0x514 live command slots"),
 ]
 
+# Opt-in set for item pickups and drops (TRACE_FIELDSET=items, worker 0224; notes/items-research.md): the inventory's first
+# 8 entries, Vincent's status (+0x20 HP), the event flags, the HUD refresh mask, the frame counter, and the item objects
+# TRACE_ITEMS="13cec0,..." (type 8, vt 0x590a68: +0x20 id, +0x28 flags, +0x90 place, +0xc0 item, +0xc4 count, +200 flags,
+# +0xca dropper, +0xd0 model, +0xd8 fall speed, +0xdc spin clock) with their model's colour MP+0x41c and matrix MP+0x10.
+ITEMS_FIELDS = [f for f in FIELDS if f[0] in ("step", "pad_held", "matrix")] + [
+    ("inv", "INVE", 0, "bytes:96", "D", "inventory entries 0-7: u32 id, u32 count, u32 (FUN_0031e658)"),
+    ("ps_20", "PS", 0x20, "u32", "D", "status +0x20 HP (FUN_00316cf8)"),
+    ("gstate", "GSB", 0, "bytes:8", "D", "game-state bits 0..63"),
+    ("evt_flags", "EVF", 0x38, "bytes:64", "D", "event flags 0..63, XOR evt_key"),
+    ("evt_key", None, 0x47DBF0, "bytes:64", "D", "DAT_0047dbf0"),
+    ("hud_mask", None, 0x46E54C, "u32", "D", "DAT_0046e54c: HUD refresh mask"),
+    ("hud_text", None, 0x4EFBA8, "bytes:320", "D", "HUD text buffers 0x4efba8 + 0x20 k"),
+    ("gil", None, 0x46E248, "u32", "D", "DAT_0046e248 (gil at +8)"),
+]
+for _k, _a in enumerate(x for x in __import__("os").environ.get("TRACE_ITEMS", "").split(",") if x):
+    _a = int(_a, 16)
+    ITEMS_FIELDS += [("it%d" % _k, None, _a + 0x20, "bytes:208", "D", "item %#x +0x20 .. +0xf0" % _a)]
+
 FIELDSET = __import__("os").environ.get("TRACE_FIELDSET")
+if FIELDSET == "items":
+    FIELDS = ITEMS_FIELDS
 if FIELDSET == "stage":
     FIELDS = STAGE_FIELDS
 if FIELDSET == "stageinfo":

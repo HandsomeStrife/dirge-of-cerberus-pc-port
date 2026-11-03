@@ -27,11 +27,15 @@ import { setupHud } from './hud.js';
 import { setupEnemies } from './enemies.js';
 import { createProps } from './props.js';
 import { setupPropsView } from './props_view.js';
+import { createItems } from './items.js';
+import { setupItemsView } from './items_view.js';
 import { createEnemyAI, GameRandom } from './enemy_ai.js';
 import { createEffects, EffectLayer, wallImpactId, hitImpactId, cameraView } from './effects.js';
 import { boneRows } from './enemy_hit.js';
 import { restoreCheckpoint } from './checkpoint.js';
 import { AreaStream, pickLight, loadedGrids, Light2 } from './area_stream.js';
+import { Areas } from './areas.js';
+import { createRoomVis, createVisMask } from './room_vis.js';
 
 const params = new URLSearchParams(location.search);
 const hud = document.getElementById('hud');
@@ -41,6 +45,7 @@ if (params.get('hud') === '0') hud.style.display = 'none';
 const SPAWN = { x: -1395.63, z: -1110.51 };
 const ENEMIES = params.get('enemies') !== '0';       // enemies.js: z128's e027 soldiers (the AI's, and stage-load ones alive in the save)
 const ENEMY_AI = params.get('enemyai') !== '0';      // enemy_ai.js: wake trigger + awake soldier AI (?enemyai=0 = off)
+const ITEMS = params.get('items') !== '0';           // items.js: pickups and drops in the AI's world (?items=0 = off; worker 0224)
 const PROPS = params.get('props') !== '0';           // props.js: z128's explosive barrels in the AI's world (?props=0 = off; worker 0209)
 // OPTION mouselook: the camera turns by mouse pixels (not in the game). ON by default at Dan's request
 // (review board 2026-10-30); ?mouselook=game gives the game's USB-mouse path (FUN_00254ac8)
@@ -527,7 +532,7 @@ async function loadCol() {
 
 // ------------------------------------------------------------ main
 async function main() {
-  const [{ scene, root, lo, hi, floats }, { col, name: colName, camRays }] = await Promise.all([loadRoomPlay(), loadCol()]);
+  const [{ scene, root, lo, hi, floats, uvAnim }, { col, name: colName, camRays }] = await Promise.all([loadRoomPlay(), loadCol()]);
   const vin = await loadVincent();
   msg.style.display = 'none';
   root.add(vin.body);
@@ -592,7 +597,16 @@ async function main() {
   const light = await setupCharLighting(vin, cape);
   // the room shows only the loaded chunks (room.js showChunks; worker 0213): the stage-load pair now
   // (light.json without area boxes: every chunk stays drawn)
-  if (light?.stream.areas.length) showChunks(root, light.stream.loaded());
+  // the room's visibility mask DAT_004e8710 (room_vis.js, worker 0225): DAT_004e86f0 from FUN_00264ee0's probe at the
+  // camera eye each frame, DAT_004e8700 from the stage scripts (cmds 0x54 / 0x55); room.js hides the chain groups it
+  // sets, the stage effects' cull (fxStage) reads it too
+  const visMask = createVisMask();
+  const roomVis = await fetch('data/z128_vis.json').then(r => r.ok ? r.json() : null).catch(() => null).then(d => d && createRoomVis(d));
+  if (!roomVis) console.warn('room: no data/z128_vis.json (build step room_vis, native/assets/collision/cidvis): the visibility probe is off, every chain group is drawn');
+  // FUN_00264f68 (the room draw, before the chunk stream FUN_0026a0c0): FUN_00264ee0 probes from the eye of the camera
+  // matrix 0x4fcb10 (the last frame's camera) through the slots loaded before this frame's stream
+  const roomProbe = eye => { if (roomVis && eye && light?.stream.areas.length) visMask.setCamera(roomVis.probe(eye, light.stream.loaded()).mask); };
+  if (light?.stream.areas.length) showChunks(root, light.stream.loaded(), roomVis ? visMask : null);
   if (light) {
     const ap = new THREE.Vector3(), Y = new THREE.Vector3(0, 1, 0);
     const actorPoint = () => ap.copy(light.centre).applyAxisAngle(Y, bodyYaw(ctrl.prevHeading)).add(ctrl.prev);
@@ -656,12 +670,19 @@ async function main() {
   // placed sounds (stage section 22) + Vincent's footsteps (ambient.js, worker 0215; notes/audio-research.md "Placed sounds",
   // "Footsteps"); null until data/audio/ambient_z128.json and the SE data have loaded. sndL: this frame's listener.
   const amb = { placed: null, foot: null, slots: null, data: null, sndL: null };
-  // GUESS: the save's +0x28 bit 0 of section-1 records the page has no object state for (see the placed sounds' frame call)
-  const AMB_SAVE_ACTIVE = new Set([105]);
+  // the stage areas (section 11; areas.js, worker 0223): the player's update switches them on / off by his position
+  // (FUN_00573c60 -> FUN_00542920 / FUN_00543f28); a placed sound's +0xa8 names an area (manager +0x2b4, FUN_0053b920)
+  const areaList = aiData ? aiData.areas : (await fetch('data/enemies/ai.json').then(r => r.ok ? r.json() : null).catch(() => null))?.areas;
+  const areas = areaList ? new Areas(areaList) : null;
+  if (!areas) console.warn('stage areas off: data/enemies/ai.json has no areas (re-export data/enemies); area children (barrels, items, placed sounds) stay off');
+  const placedHas = k => (areas ? areas.has(k) : k >= 0);      // FUN_0053b920: the child has a parent area
   let musicRestart = null;                         // checkpoint.js: the zone music / ambience again (set below)
   // GUESS (worker 0210): the zone music / ambience stay silent while the opening event plays; the event's own cue
   // (playMusic2 bgm_274, FUN_003a02b8; ambience asj_036) is not translated (notes/fidelity-audit.md 'event music')
-  const introGate = { on: false };
+  const introGate = { on: false, event: false, handing: false };
+  // worker 0222: with the opening on the page, its own natives (event_sound.js) start the music / ambience: ev0101's
+  // playBgAreaSound("asj_036", 127), playMusic2("bgm_274"), playMusic3("bgm_001", 0, 4000). introGate.event: the
+  // load-time start below stays off. introGate.handing: the hand-off (not a stage reload) keeps them playing.
   let areaSoundHook = null;                        // stage-script manager cmd 6 -> FUN_003e6c88 (AreaSound.play; worker 0212)
   const pauseSound = { audio: null, music: null };   // pause_layer.js: menu sounds + the pause's SE hold / BGM volume
   const snd = (name, pos, range = 400.0) => { if (sfx) sfx.play(name, pos, range); };
@@ -677,6 +698,7 @@ async function main() {
         amb.slots = new AM.SlotStreams(au, { emitterVolPan: AU.emitterVolPan, SeStream: MU.SeStream, hexBytes: AU.hexBytes });
         amb.slots.areaFn = (n, v) => { if (areaSoundHook) areaSoundHook(n, v); };      // FUN_003e6c88 (music.js AreaSound)
         amb.placed = new AM.PlacedSounds(data, amb.slots);
+        amb.placed.stageStart(placedHas, k => !!areas && areas.isOn(k));   // FUN_0053ced8 + the areas already on (worker 0223)
         // FUN_003e9c38 into the MP's slot (FUN_005a8bc8: opened at a zero position -> flag 0x8000, pan 0x40; range 400).
         // T: w215_* 56 / 56 footstep requests pan 0x40, vol from the distance
         amb.foot = new AM.Footsteps(data.foot, data.version, (n, pos) => {
@@ -693,16 +715,24 @@ async function main() {
       pauseSound.music = mu;
       // ev0100 playBgAreaSound("asj_033"); ev0101 playMusic3("bgm_001", 0, 4000) (no stream open: starts at once)
       const go = () => {
-        if (!au.ctx || !au.se || introGate.on) return;
+        if (!au.ctx || !au.se) return;
+        // the opening's requests made before the browser's first gesture (no AudioContext): the last ones start now (L)
+        if (introGate.event) {
+          const r = introRt;
+          if (r && r.lastArea && area.name === null) area.play(r.lastArea[0], r.lastArea[1]);
+          if (r && r.lastMusic && mu.name === null && mu.meta) mu.open(r.lastMusic[0], r.lastMusic[1]).catch((e) => console.warn('music:', e));
+          return;
+        }
+        if (introGate.on) return;
         if (!areaOn) { areaOn = true; area.play('asj_033'); }
         if (!muOn && mu.meta) { muOn = true; mu.playMusic3('bgm_001', 0, 4000).catch((e) => console.warn('music:', e)); }
       };
       mu.load(128).then(go, (e) => console.warn('music: no BGM data (tools/audio/bgm.py)', String(e))); au.ready.then(go, () => {});
       // Restart (checkpoint.js). GUESS: the stage reload stops the BGM / ambience and its ev0100 / ev0101 start them again
       // (the teardown is not decoded)
-      musicRestart = () => { mu.stopMusic(); area.stop(); areaOn = muOn = false; go();
+      musicRestart = () => { if (!introGate.handing) { mu.stopMusic(); area.stop(); areaOn = muOn = false; go(); }
         // the stage reload makes the section-22 objects again (FUN_00548788): their sounds stop, the new ones start from scratch
-        if (amb.slots) { amb.slots.stopAll(); amb.placed = new amb.AM.PlacedSounds(amb.data, amb.slots); }
+        if (amb.slots) { amb.slots.stopAll(); amb.placed = new amb.AM.PlacedSounds(amb.data, amb.slots); amb.placed.stageStart(placedHas); }
         // a new MP for Vincent: no feet up (MP+0x440 bits 16-19), no name yet, no previous position
         if (amb.foot) { amb.foot.test.bits = 0; amb.foot.mat = amb.foot.gait = -1; amb.foot.name = ''; }
         amb.footPrev = null;
@@ -737,13 +767,14 @@ async function main() {
     fxLayer = new EffectLayer(THREE, fx); fxLayer.deferred = true; root.add(fxLayer.group);
     // worker 0208: z128's area FEDs in the level manager DAT_004ee3c0 (its own engine on the same LCG / VU0 R, reseeded
     // once a frame by the impacts' engine, which FUN_002efc78 runs first): FUN_002f15d0's load spawns their auto-start
-    // records (stageLoad); FUN_002ea6a0 culls them by the hidden cells of the save (ids.hidden), the camera and their fade
+    // records (stageLoad); FUN_002ea6a0 culls them by the hidden cells (DAT_004e8710: the shared visMask, worker 0225),
+    // the camera and their fade
     // without rand() (no --state export) the impacts' engine spawns nothing (createEffects); the stage engine, which shares
     // its RNG, is left out the same way rather than run on an unseeded LCG
-    if ((ids.stage || []).length && (ids.rand === undefined || !ids.hidden)) console.warn('effects: ids.json has no rand() state or no hidden-cell mask (re-run export_web_effects.py --state): the z128 fire is left out');
+    if ((ids.stage || []).length && (ids.rand === undefined || !roomVis)) console.warn('effects: no rand() state in ids.json (re-run export_web_effects.py --state) or no room visibility probe (data/z128_vis.json): the z128 fire is left out');
     else if ((ids.stage || []).length) {
       const stage = await Promise.all(ids.stage.map(get));
-      fxStage = createEffects({ fed: stage[0], stage, core, rng: fx.rng, reseed: false, cull: true, hidden: ids.hidden, hiddenScript: ids.hidden_script || [], models0: true, warn: m => console.warn(m) });
+      fxStage = createEffects({ fed: stage[0], stage, core, rng: fx.rng, reseed: false, cull: true, mask: visMask, hiddenScript: ids.hidden_script || [], models0: true, warn: m => console.warn(m) });
       fxStage.stageLoad();
       fxStageLayer = new EffectLayer(THREE, fxStage); fxStageLayer.orderBase = 3000; fxStageLayer.deferred = true; root.add(fxStageLayer.group);
     } else console.warn('effects: data/effects has no stage FEDs (re-run export_web_effects.py): the z128 fire is left out');
@@ -753,9 +784,25 @@ async function main() {
   // worker 0209: the barrels (data/props/props.json, export_web_props.py): their logic joins each AI world (props.attach)
   const propsData = PROPS && ENEMY_AI && aiData ? await fetch('data/props/props.json').then(r => r.ok ? r.json() : null).catch(() => null) : null;
   if (PROPS && ENEMY_AI && aiData && !propsData) console.warn('props: data/props/props.json missing (run export_web_props.py): no barrels');
-  const props = propsData ? createProps({ data: propsData, weapons: aiData.weapons,
+  const props = propsData ? createProps({ data: propsData, weapons: aiData.weapons, areas,
     effect: fx ? { spawn: (id, p, sc) => fx.spawn(id, p, sc), hit: (kind, cls, p) => { const id = hitImpactId(fxIds, kind, cls, fx.warn); if (id >= 0) fx.spawn(id, p); } } : null }) : null;
   let propsView = null;
+  // worker 0224: the item pickups and drops (data/items/items.json, export_web_items.py); they join each AI world (items.attach)
+  const itemsData = ITEMS && ENEMY_AI && aiData ? await fetch('data/items/items.json').then(r => r.ok ? r.json() : null).catch(() => null) : null;
+  if (ITEMS && ENEMY_AI && aiData && !itemsData) console.warn('items: data/items/items.json missing (run export_web_items.py): no pickups');
+  let itemsView = null, itemsWeapon = null;
+  const items = itemsData ? createItems({ data: itemsData, areas,
+    effect: fx ? { spawn: (id, p) => fx.spawn(id, p) } : null,                 // FUN_003365e0(0x4800, ..)
+    // FUN_0057fb38's room ray: the first walk polygon from 5 above to 300 below; flags 0x112 refuse it (L: FUN_0026a668
+    // -> FUN_00270ff8 walks the same polygons as collision.js findPoly)
+    ground: p => { const h = col && col.findPoly ? col.findPoly(p[0], p[2], p[1] - 5, p[1] + 300, true) : null;
+      return h && !(col.polys[h[0]].flags & 0x112) ? h[1] : null; },
+    // FUN_0054c308's camera: the eye (camera +0x30) and +0xd0 = tan of half the horizontal fov (save RAM 0.7467 = 1 / the
+    // projection's x scale 1.3391, effects.js CULL). L: the page camera's vertical fov times the game's 448 / 512 ratio
+    camera: () => { const c = fxCamera(); return { pos: cameraView(c).eye, tanHalf: Math.tan(c.fov * Math.PI / 360) * (1.1718 / 1.3391) }; },
+    hud: m => { if (itemsWeapon) itemsWeapon.hudMask |= m; } }) : null;         // FUN_005740c0: DAT_0046e54c |= 0x6e
+  // FUN_0054ef68 -> vt+0x14c on the area's children (worker 0223): barrels, items, placed sounds
+  if (areas) areas.onSwitch = (k, on) => { if (props) props.areaSwitch(k, on); if (items) items.areaSwitch(k, on); if (amb.placed) amb.placed.areaSwitch(k, on); };
   const bodyRecs = new Set();                        // records the AI activated (onActivate): their bodies go at a Restart
   const startBodies = new Set(enemies ? enemies.actors.map(a => a.rec) : []);   // the bodies drawn at the start   // aiOpts / wakeSave: rebuilt by the Restart (checkpoint.js)
   let gameHud = null;                                // the game's HUD (hud.js), set up below; enemyAI's hudHit reads it
@@ -764,12 +811,13 @@ async function main() {
     aiOpts = ENEMY_AI && aiData && enemies ? { data: aiData, player: php, rand: () => aiRng.rand(), log: m => console.log(m), damage: ENEMY_DMG,
       sound: snd,
       areaSound: (n, v) => { if (areaSoundHook) areaSoundHook(n, v); },   // stage-script cmd 6 (worker 0212)
-      cellMask: (bit, on) => { if (fxStage) fxStage.cellMask(bit, on); },   // stage-script cmds 0x54 / 0x55 (worker 0208)
+      cellMask: (bit, on) => visMask.setScript(bit, on),   // stage-script cmds 0x54 / 0x55 (worker 0208) -> DAT_004e8700 (worker 0225)
       // FUN_00335f40 / FUN_003361b8: the impact and hit effects (effects.js)
       effect: fx ? { wall: (mat, n, p) => { const id = wallImpactId(fxIds, mat, n, fx.warn); if (id >= 0) fx.spawn(id, p); },
         hit: (kind, cls, p) => { const id = hitImpactId(fxIds, kind, cls, fx.warn); if (id >= 0) fx.spawn(id, p); },   // FUN_003361b8
         spawn: (id, p) => fx.spawn(id, p) } : null,           // FUN_003366b8(id) + FUN_00335020(pos): the bullet-end effect
       props,                                                   // worker 0209: the barrels (props.js)
+      items,                                                   // worker 0224: the item pickups and drops (items.js)
       // FUN_00567c08: a bullet's hit on Vincent -> the HUD's hit-direction ring (hud.js; gameHud is set up below)
       hudHit: (p, from) => { if (gameHud) gameHud.hit(p, from); },
       // the walk mesh for soldiers' physics bodies (mover 3, move mode 0xc; body flags 0x36: not a block80 body)
@@ -815,6 +863,8 @@ async function main() {
     enemyAI = aiOpts ? createEnemyAI(aiOpts) : null;
     if (props && enemyAI) propsView = await setupPropsView({ root, props, litPatch, light }).catch(e => { console.warn('props: not drawn:', e.message); return null; });
     if (props) { window.__props = props; window.__propsView = propsView; }   // for the page tests
+    if (items && enemyAI) itemsView = await setupItemsView({ root, items }).catch(e => { console.warn('items: not drawn:', e.message); return null; });
+    if (items) { window.__items = items; window.__itemsView = itemsView; }   // for the page tests
     // The save's soldiers, as stored in sea-of-flames.p2s (object table *(DAT_0046e880+0x1164)[rec + 22]):
     // actor state +0x104 (also T: k_enemy_engage8 f760) and +0x118. Their script vars +0xa0 are all 0
     // there (the page's default), and +0x28 = 0x208403 (bit 0x100000 clear: their activation's script
@@ -842,6 +892,8 @@ async function main() {
   const follow = new FollowCamera(camera, camRays || null);
   if (MOUSE_DIRECT) follow.mouseDirect = { sens: MOUSE_SENS * Math.PI / 180 };   // OPTION mouselook
   follow.reset(ctrl.pos);
+  // the room's mask before the first game frame (worker 0225): the probe from the start camera
+  if (light?.stream.areas.length) { roomProbe(follow.eye); showChunks(root, light.stream.loaded(), roomVis ? visMask : null); }
 
   // ---- actions (player.js header / ACTIONS.md)
   const motions = {};
@@ -871,6 +923,8 @@ async function main() {
   // the draw / holster sounds (weapon.json se_draw / se_holster (aim_core.js): FUN_005766c0 at Vincent's C+0x90)
   if (weapon) weapon.core.sound = (name) => snd(name, [ctrl.pos.x, ctrl.pos.y, ctrl.pos.z]);
   // the lock-on's soldiers (FUN_00328968 in aim.js aimRay; lock_on.js)
+  // the ammo item's count is aim_core's Ammo, read live (its reset makes a new one; worker 0224)
+  if (items && weapon) { itemsWeapon = weapon.core; items.inventory.ammo = () => weapon.core.ammo; }
   if (weapon && enemyAI) weapon.targets = () => props ? enemyAI.lockTargets().concat(props.lockTargets()) : enemyAI.lockTargets();   // + the barrels (worker 0209)
   // the game's HUD in the frame (hud.js, after the reticle in output.hud); follows php.hp each game frame
   // fetched only when scene.json declares it (export_web_hud.py writes "hud"): no 404 without the data
@@ -1020,13 +1074,16 @@ async function main() {
         // GUESS: the placed sounds (ambient.js) and the sound emitters' sends do not run during the opening event (this branch
         // continues before them); the game's frame loop is not traced for them during events (notes/fidelity-audit.md
         // 'Placed sounds during the opening event')
-        if (!intro.done) {
+        if (!intro.done && !intro.paused) {         // the event pause holds it (FUN_00376ee0; worker 0222)
           // FUN_00248110 runs on during events: the chunk stream at Vincent's MP+0x10 (FUN_0026a0c0; the page's player
           // holds still while the event runs) and the effect managers (FUN_002efc78 / FUN_002efe00 / FUN_002efe98), the
           // level fire included (worker 0208's fxStage), drawn with the event camera
-          if (light) { light.stream.frame(ctrl.prev); if (light.stream.areas.length) showChunks(root, light.stream.loaded()); }
+          if (light) { roomProbe(intro.rt.view ? intro.rt.view.eye : follow.eye); light.stream.frame(ctrl.prev); if (light.stream.areas.length) showChunks(root, light.stream.loaded(), roomVis ? visMask : null); }
+          // FUN_00265350 (late in FUN_00248110; reads only the slot table): the chunks' scrolling UVs (room.js RoomUVAnim)
+          if (uvAnim) uvAnim.frame(light && light.stream.areas.length ? light.stream.loaded() : null, STEP);
           if (fx) fx.begin(STEP);
           if (fxStage) fxStage.begin(STEP);
+          if (stage) stage.tick(20);               // main (stage_controller.js): its prelude, then first_event's wait
           intro.tick();
           if (fx) { const c = introFxCamera(); fx.end(); if (fxStage) fxStage.end(cameraView(c)); fxLayer.update(c); if (fxStage) fxStageLayer.update(c); }
           if (intro.done) endIntro();
@@ -1045,7 +1102,9 @@ async function main() {
       // left him, and this frame's stick-to-world uses its new matrix (player.js camera notes)
       // FUN_00248110: FUN_00267970 + FUN_0026a0c0 before the game logic, at MP+0x10's translation: the matrix
       // last frame's draw used, which the page models as ctrl.prev (logicPose; not ctrl.pos, the moved position)
-      if (light) { light.stream.frame(ctrl.prev); if (light.stream.areas.length) showChunks(root, light.stream.loaded()); }
+      if (light) { roomProbe(follow.eye); light.stream.frame(ctrl.prev); if (light.stream.areas.length) showChunks(root, light.stream.loaded(), roomVis ? visMask : null); }
+      // FUN_00265350 (late in FUN_00248110; reads only the slot table): the chunks' scrolling UVs (room.js RoomUVAnim)
+      if (uvAnim) uvAnim.frame(light && light.stream.areas.length ? light.stream.loaded() : null, STEP);
       // the stage controller (stage_controller.js, worker 0219): ev0100 main's frame (FUN_00377c68). GUESS: its place in
       // FUN_00248110's frame (after the chunk stream, before the logic; notes/fidelity-audit.md 'Stage controller')
       // stage_info.js (worker 0220): FUN_003fdf00 runs first in the game's frame (FUN_00247508), the box's update with it
@@ -1085,19 +1144,15 @@ async function main() {
       const g = col.groundY(ctrl.pos.x, ctrl.pos.z, ctrl.pos.y);
       if (g != null) stats.groundErrMax = Math.max(stats.groundErrMax, Math.abs(g - ctrl.pos.y));
       stats.lastGroundErr = g == null ? null : g - ctrl.pos.y;
-      if (enemyAI) { php.pos = [ctrl.pos.x, ctrl.pos.y, ctrl.pos.z]; php.face = [ctrl.C.face.x, ctrl.C.face.y, ctrl.C.face.z]; enemyAI.tick(STEP, pOld, php.pos); if (propsView) propsView.sync(); }
+      // FUN_00573c60 (the player's update, after his move) -> FUN_00542920: the stage areas by his position (areas.js;
+      // L: the matrix row FUN_0054a5e8 reads = the page's post-step position)
+      if (areas) areas.frame([ctrl.pos.x, ctrl.pos.y, ctrl.pos.z]);
+      if (enemyAI) { php.pos = [ctrl.pos.x, ctrl.pos.y, ctrl.pos.z]; php.face = [ctrl.C.face.x, ctrl.C.face.y, ctrl.C.face.z]; enemyAI.tick(STEP, pOld, php.pos); if (propsView) propsView.sync(); if (itemsView) itemsView.sync(); }
       // the section-22 sound objects (FUN_0057d4f8 -> FUN_0057d550): Vincent's frame-start position + (0, -7, 0), T: w215_routeA
-      // start / stop frames; their volume from the listener +0x3850 of this frame (FUN_003e6ec8). A linked actor's state:
-      // the actor's own +0x28 bit 0 (FUN_0054ef68 tests it and passes it on to its +0xc0 children, vt+0x14c): enemy_ai's
-      // object for that record, actor or record kind (a soldier keeps it on his actor). GUESS: records the page does not run
-      // (the n0xx NPCs: no body, no AI, plan P6) take the save's +0x28 bit 0 (AMB_SAVE_ACTIVE; sea-of-flames.p2s, object
-      // table via manager +0x2b4: record 105 n017 = 1, 13 / 27 = 0); what activated 105 is not decoded (tag f_WRO_03 is not
-      // among the GUESS event-actor tags)
-      if (amb.placed && amb.sndL) amb.placed.frame([pOld[0], pOld[1] - 7.0, pOld[2]], amb.sndL.alt, (k) => {
-        if (enemyAI) for (const x of enemyAI.objects.values()) if (x.rec === k && x.kind !== 'trigger' && (x.flags28 & 1)) return true;
-        if (enemyAI) for (const x of enemyAI.actors || []) if (x.rec === k && (x.flags28 & 1)) return true;
-        return AMB_SAVE_ACTIVE.has(k);
-      });
+      // start / stop frames; their volume from the listener +0x3850 of this frame (FUN_003e6ec8). A linked object's state:
+      // its area's +0x28 bit 0 (worker 0223: record +0xa8 indexes manager +0x2b4, the area table, FUN_0053b920 -> FUN_0054c550;
+      // FUN_0054ef68 passes the area's state on to its children, vt+0x14c), from areas.js
+      if (amb.placed && amb.sndL) amb.placed.frame([pOld[0], pOld[1] - 7.0, pOld[2]], amb.sndL.alt);
       // FUN_002efe98, then the effect draw pass (once a game frame) with this frame's camera: follow.tick ran at
       // the start of this game frame, as the game's camera does before the draw (the render camera lags a frame)
       // FUN_002efe98 runs every manager (worker 0208: the level manager's cull FUN_002ea6a0 with this frame's camera), then the draw passes
@@ -1165,8 +1220,10 @@ async function main() {
   };
   // the new enemy_ai world, built as at the start with the checkpoint's flags and frame counter (bodies: swapBodies)
   const rebuildEnemies = (flags, frame, clock) => {
+    if (areas) areas.reset();                       // the stage reload: the areas again, all off (worker 0223)
     if (!aiOpts) return null;
     // the reload rebuilds every status (FUN_0030f3d8 / the stage load): nothing is dead (T w204_reload: 41-43 HP 10 / 28 / 24)
+    if (items) items.restart();                     // the checkpoint's inventory, taken bits cleared (worker 0224; before attach)
     enemyAI = createEnemyAI({ ...aiOpts, eventFlags: flags, deadRecs: [], now: clock.now, acc: clock.acc });
     enemyAI.S.frame = frame;                         // the new world's frame counter at the placement (checkpoint.js)
     // T w204_reload: 44 / 66 are already active in the reload state; 41-43 (the stage-load pass, FUN_005453b0 in slot
@@ -1189,17 +1246,17 @@ async function main() {
     // worker 0208: the stage reload reloads the area FEDs (FUN_002f15d0 spawns their records again; GUESS as fx.reset's)
     const fxAll = fx ? { reset: () => { fx.reset(); if (fxStage) { fxStage.reset(); fxStage.stageLoad(); } } } : null;
     restoreCheckpoint({ ctrl, groundY: (x, z, y) => col.groundY(x, z, y), follow, php, gameOver, weapon, cape, fx: fxAll,
-                        hud: gameHud, sfx, rebuildEnemies, handoff, music: () => { if (musicRestart) musicRestart(); } });
+                        hud: gameHud, sfx, rebuildEnemies, handoff, music: () => { introGate.handing = handing; if (musicRestart) musicRestart(); introGate.handing = false; } });
     detached = null; pressed.clear(); mouse.dx = mouse.dy = 0;
     // the stage reload runs the stage program from its start, so the opening event plays again (T: w210 restart drive,
     // the reload after the game over's Restart plays ev0100 scr001); its end hands off again (uncounted, above)
     if (!handing && introData) startIntro();
-    // the stage reload runs ev0100 main from its start: from the hand-off on (stage_controller.js); a replayed opening
-    // starts it at its own hand-off. The global flags DAT_0050db20 start empty (T: w210 start1704, mid stage load)
+    // the stage reload runs ev0100 main from its start (stage_controller.js), with the replayed opening as first_event; the
+    // hand-off releases the main already waiting there. The global flags DAT_0050db20 start empty (T: w210 start1704)
     // worker 0220: a stage reload starts with no stage-info box and the game-state bits clear (game_state.js reset)
     if (stageSi) stageSi.reset();
     if (stageGs) stageGs.reset();
-    if (handing || !introData) startStage(); else stage = null;
+    if (!handing) startStage(!!introData); else if (!stage) startStage(false, introRt ? introRt.skip : 0);
   };
 
   // ---- pause menu (pause_layer.js / pause.js; Start = Esc or Enter). While it is open the world is frozen
@@ -1218,19 +1275,44 @@ async function main() {
   // game over (gameover_layer.js): Restart (result 6) -> the checkpoint (restart above); Quit warns (no title)
   gameOver = await (await import('./gameover_layer.js')).setupGameOver({ output, blocked: () => frozen, THREE, root, fxRng: fx ? fx.rng : null,
     onRequest(r) { if (r === 'restart') restartPending = true; } });
-  window.__play = { ctrl, anim, follow, aim: weapon, col, stats, amb, camera, renderer, output, root, vin, light, spawnY: gy,
+  window.__play = { ctrl, anim, follow, aim: weapon, col, stats, amb, areas, camera, renderer, output, root, vin, light, spawnY: gy,
                     playerState, camView, report, keys, pressed, motions, packsReady, actionHelp, cape, enemies, enemyAI, php, pause, gameHud, pauseSound, gameOver,
                     restart: { get count() { return restarts; }, get pending() { return restartPending || !!restartHold || restartReady; } },
-                    intro: { get active() { return !!intro; }, get rt() { return introRt; }, get ended() { return introEnded; } },
+                    intro: { get active() { return !!intro; }, get rt() { return introRt; }, get ended() { return introEnded; }, get paused() { return !!intro && intro.paused; } },
                     get stage() { return stage; }, get stageInfo() { return stageSi; }, get gameState() { return stageGs; } };
   // ---- the opening event (intro.js): played before play on a fresh load; at its end the Restart path (checkpoint.js)
   // places Vincent and soldiers 41-43 as the event's end hands them to play. The page's gameplay bodies and HUD are
   // hidden while it runs (the event's own actors are left out, see intro.js)
   let intro = null, introRt = null, introEnded = 0, introHandoff = false, introHidden = [], introHud = null;
+  // worker 0222: Start during the opening = the event pause: the pause object in its event state (+0x44 = 1, set by
+  // FUN_003bf550) and FUN_00376ee0(ev, 1, 1) (intro.js pause). ✕ there = Skip (FUN_003c0520: button 3 with
+  // FUN_003e0d00() == 0 -> +0x48 = 1, the pause closes -> FUN_003c0110 -> FUN_003dfdc8 -> FUN_00372f70 (intro.js skip),
+  // then FUN_00376ee0(ev, 0, 1)); Start again resumes (FUN_003dfd90). The pause's draw in this state (layout widgets
+  // 0x22 / 0x23 pulsing, FUN_003d0a90) is not decoded: nothing is drawn (warned).
+  const { PAUSE_KEYS } = await import('./pause_layer.js');
+  addEventListener('keydown', (e) => {
+    if (!intro || intro.done || e.repeat || restartPending || /^(INPUT|TEXTAREA)$/.test(e.target.tagName)) return;
+    if (PAUSE_KEYS.start.includes(e.code)) {
+      e.preventDefault();
+      if (!intro.paused) console.warn('intro: the event pause\'s Skip prompt (pause widgets 0x22 / 0x23) is not drawn (not decoded); ✕ skips, Start resumes');
+      intro.pause(!intro.paused);
+    } else if (intro.paused && PAUSE_KEYS.cross.includes(e.code)) {
+      e.preventDefault();
+      intro.skip(); intro.pause(false);
+    }
+  });
+  actionHelp.push('During the opening: Enter = the event pause, then Space (✕) = Skip');
   let stage = null, stageData = null, createStage = null, stageGs = null, stageSi = null;
-  function startStage() {
+  // opening: main runs alongside it (first_event waits for the hand-off, then main reads the opening's +0x156c);
+  // else from the save / a hand-off already past (skip: that +0x156c)
+  function startStage(opening = false, skip = 0) {
     if (!createStage) return;
-    stage = createStage({ data: stageData, warn: (m) => console.warn(m),
+    // the hand-off's +0x156c: the opening's (intro.js / event_rt.js skip, worker 0222); 0 from the save
+    stage = createStage({ data: stageData, warn: (m) => console.warn(m), skip,
+      // ?autoskip=0: the page does not choose Skip in the events (the auto-skip is a GUESS stand-in for the player; leave
+      // it on while the events' actors / windows are not on the page)
+      autoSkip: params.get('autoskip') !== '0',
+      openingDone: opening ? () => !intro : undefined, openingSkip: opening ? () => (introRt ? introRt.skip : 0) : undefined,
       flags: () => (enemyAI ? enemyAI.eventFlags : null),             // the current world's (a Restart replaces it)
       stream: () => (light ? light.stream : null),                     // area_stream.js: FUN_002677a0
       music: () => pauseSound.music,                                   // music.js GameMusic (worker 0215)
@@ -1260,12 +1342,22 @@ async function main() {
     fxCam.position.set(v.eye[0], v.eye[1], v.eye[2]); fxCam.up.set(-v.upDir[0], -v.upDir[1], -v.upDir[2]); fxCam.lookAt(v.aim[0], v.aim[1], v.aim[2]);
     return fxCam;
   }
-  let introData = null, createIntro = null, introActors = null;
+  let introData = null, createIntro = null, introActors = null, introVoices = null;
+  // the opening's sound back ends (event_sound.js): music.js GameMusic, the area sound hook, audio.js GameAudio, the voices
+  const introSound = {
+    music: () => pauseSound.music,
+    area: () => ({ play: (n, v) => { if (areaSoundHook) areaSoundHook(n, v); } }),
+    audio: () => pauseSound.audio,
+    voices: () => introVoices,
+    bgmRow: (n) => { const m = pauseSound.music, r = m && m.meta && m.meta[n]; return r ? parseInt(r.flags, 16) : null; },
+  };
   function startIntro() {
     // the event's Zone.load(128, a, b) is the stage load FUN_002673d8 (slots 1 / 2 = a / b; area_stream.js reset)
     intro = createIntro({ data: introData, camera, output, canvas: renderer.domElement,
                           zoneLoad: (z, a, b) => { if (light) light.stream.reset([a, b]); },
-                          actorLib: introActors, root, litPatch, light });       // the event's actors (event_actors.js, worker 0218)
+                          actorLib: introActors, root, litPatch, light,       // the event's actors (event_actors.js, worker 0218)
+                          sound: introSound });                                // its music / SEs / voices (event_sound.js, worker 0222)
+    introGate.event = true;
     introGate.on = true;
     introRt = intro.rt;
     introHud = output.hud; output.hud = null;
@@ -1275,6 +1367,7 @@ async function main() {
     if (!introData) console.warn('intro: data/event/ev0100_scr001.json missing (tools/byo/build_web.sh step event); starting from the save');
     else {
       ({ createIntro } = await import('./intro.js'));
+      if (SOUND) { const { VoicePlayer } = await import('./event_sound.js'); introVoices = new VoicePlayer({ get ctx() { return pauseSound.audio && pauseSound.audio.ctx; } }); }
       // the event's actors, resident before it starts (data/event/actors: build step event_actors)
       introActors = await (await import('./event_actors.js')).loadEventActors()
         .catch(e => { console.warn('intro: the event\'s actors not drawn (data/event/actors: build step event_actors):', e.message); return null; });
@@ -1284,18 +1377,19 @@ async function main() {
   // ---- the stage controller (stage_controller.js, worker 0219): ev0100 scr000 main, the level's story (beats, chunk
   // loads, music, checkpoints), every event in it skipped through the game's own Skip; ?stage=0 leaves it out
   if (params.get('stage') !== '0') {
-    stageData = await fetch('data/event/ev0100_stage.json').then(r => (r.ok ? r.json() : null)).catch(() => null);
-    if (!stageData) console.warn('stage: data/event/ev0100_stage.json missing (tools/byo/build_web.sh step stage): no story beats');
-    else {
-      createStage = (await import('./stage_controller.js')).createStageController;
-      // stageGs / stageSi (worker 0220): the game-state bits (game_state.js, one store: enemy_ai.js reads bit 6 from it)
-      // and the stage-info boxes (stage_info.js: drawn with the pause's layer, sounds to its menu-sound latch; event flag
-      // 55, FUN_0037cea0, from the controller's global flags)
-      stageGs = await import('./game_state.js');
-      stageSi = (await import('./stage_info.js')).createStageInfo({ output, pause,
-        flags: { event: n => (stage && stage.globalFlags ? stage.globalFlags[n] : 0) } });
-      if (!intro) startStage();                    // no opening on the page: main from the save's state
-    }
+    // with the opening: loaded alongside its first frames (an await here changed the start-up order of the HUD and the
+    // opening); from the save (?intro=0): awaited, so main is settled before the first game frame
+    const stageReady = Promise.all([fetch('data/event/ev0100_stage.json').then(r => (r.ok ? r.json() : null)).catch(() => null), import('./stage_controller.js'),
+                 import('./game_state.js'), import('./stage_info.js')])
+      .then(([d, m, GS, SI]) => {
+        if (!d) { console.warn('stage: data/event/ev0100_stage.json missing (tools/byo/build_web.sh step stage): no story beats'); return; }
+        stageData = d; createStage = m.createStageController;
+        // worker 0220: the game-state bits (game_state.js) and the stage-info boxes (stage_info.js: FUN_0039e8e8 / FUN_003fdb48)
+        stageGs = GS;
+        stageSi = SI.createStageInfo({ output, pause, flags: { event: n => (stage && stage.globalFlags ? stage.globalFlags[n] : 0) } });
+        if (!stage) startStage(!!intro, intro ? 0 : (introRt ? introRt.skip : 0));   // with the opening, or from the save / a hand-off
+      }).catch(e => console.warn('stage: controller off:', e && e.message));
+    if (!intro) await stageReady;
   }
   requestAnimationFrame(frame);
 }

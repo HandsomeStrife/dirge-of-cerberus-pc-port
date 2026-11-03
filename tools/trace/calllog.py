@@ -505,3 +505,17 @@ SETS["stage"] = [
     dict(id=201, kind="site", where=(0x39C728, 0x39C7E4, 0x23D690), name="scene_save", copy=[cpr("a1")]),
     dict(id=202, kind="site", where=(0x3DFDC8, 0x3DFE0C, 0x372F70), name="skip", copy=[]),
 ]
+# worker 0222: the opening event's sound and windows (notes/event-vm-research.md "Event sound"): setSoundEffect2_l
+# FUN_0039ff68 -> FUN_003e8e18 (slot open: a1 = the name), loadVoice2 FUN_003a0968 -> FUN_00378c88 (a1 = name),
+# playVoice FUN_003a0900 -> FUN_003eaf10 (a0 = name; f12 = pi / 4), the window command FUN_00383408 -> FUN_003b66c0
+# (a1 = box kind) / FUN_003b6ab8 (a2 = the text), the fades FUN_003736c8 -> FUN_002f21d8 (in) / FUN_002f21f8 (out)
+# (f12 = seconds); + the stage set's music / area / skip hooks.
+SETS["evsound"] = [SETS["stage"][0], SETS["stage"][1], SETS["stage"][2], SETS["stage"][4], SETS["stage"][12],
+    dict(id=240, kind="site", where=(0x39FF68, 0x3A0148, 0x3E8E18), name="ev_se", copy=[cp("a1", 0, 2), cpr("a3")]),
+    dict(id=241, kind="site", where=(0x3A0968, 0x3A09B8, 0x378C88), name="ev_voice_load", copy=[cp("a1", 0, 2)]),
+    dict(id=242, kind="site", where=(0x3A0900, 0x3A0968, 0x3EAF10), name="ev_voice", copy=[cp("a0", 0, 2)]),
+    dict(id=243, kind="site", where=(0x383408, 0x3837D0, 0x3B66C0), name="ev_window", copy=[cpr("a1"), cpr("a2"), cpr("a3")]),
+    dict(id=244, kind="site", where=(0x383408, 0x3837D0, 0x3B6AB8), name="ev_window_text", copy=[cp("a2", 0, 6)]),
+    dict(id=245, kind="site", where=(0x3736C8, 0x3737C0, 0x2F21D8), name="ev_fadein", copy=[]),
+    dict(id=246, kind="site", where=(0x3736C8, 0x3737C0, 0x2F21F8), name="ev_fadeout", copy=[]),
+]

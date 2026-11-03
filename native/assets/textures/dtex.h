@@ -58,6 +58,9 @@ typedef struct {
 /* Decode a whole container file (TXD or RFD) in memory. Unwraps every entry
  * and decodes the TIM / RST payloads. Returns 0 on success. Caller frees with
  * dtex_free_set(). Non-texture entries are skipped. */
+/* 1: keep the PS2 alpha byte (128 == 1.0, up to 255) instead of scaling it to 0..255 (default 0). */
+extern int dtex_raw_alpha;
+
 int dtex_decode_container(const uint8_t *data, size_t size, dtex_set *out);
 
 /* Decode a single raw payload (already unwrapped). `name` may be NULL. */

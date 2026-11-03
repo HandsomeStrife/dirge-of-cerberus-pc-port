@@ -1,0 +1,47 @@
+{
+ "name": "w223_npc95",
+ "frames": 840,
+ "log_from": 770,
+ "doc": "worker 0223: w212_flag95's route (trigger 95 entered ~f784) with trigger 95 poked to run script 23 (trigger 96's: 0x40 / 0x10e locators 4-6, 0x14a, var4 = 1, 0x108 to NPCs 113 / 114 / 111, 0x131 path 96 to 113; soldiers 69-71). Run with TRACE_POKE=9540a4=17,10a2140=17 TRACE_FIELDSET=enemy TRACE_ERECS=113,114 TRACE_ENEMIES=2 TRACE_EPIN=113:91f6e0:9317e0,114:91ff00:9318f0 TRACE_SCRATCH=<pcsx2trace dir>.",
+ "events": [
+  {
+   "from": 10,
+   "to": 230,
+   "lx": 0.6,
+   "ly": -1.0
+  },
+  {
+   "from": 240,
+   "to": 244,
+   "buttons": [
+    "cross"
+   ]
+  },
+  {
+   "from": 280,
+   "to": 284,
+   "buttons": [
+    "cross"
+   ]
+  },
+  {
+   "from": 300,
+   "to": 470,
+   "lx": 0.6,
+   "ly": -1.0
+  },
+  {
+   "from": 490,
+   "to": 494,
+   "buttons": [
+    "cross"
+   ]
+  },
+  {
+   "from": 500,
+   "to": 787,
+   "lx": 0.6,
+   "ly": -1.0
+  }
+ ]
+}

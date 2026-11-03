@@ -102,7 +102,7 @@ try {
     ok(e.length === 0, 'no page errors' + (e.length ? ': ' + e.slice(0, 3).join(' | ') : '')); }
 
   // 4. the ladder (l_ladder_cam's route ends there; the page's ?ladder=0 warp instead of walking it): record 28's asj_039
-  //    (follows record 105 n017, active in the save: play.js AMB_SAVE_ACTIVE GUESS) starts, as in w215_routeA f170
+  //    (+0xa8 = area 105: manager +0x2b4, on while Vincent is in area 105 or a neighbour, areas.js) starts, as in w215_routeA f170
   await pg.goto(`http://127.0.0.1:${port}/${page}?intro=0&ladder=0`, { waitUntil: 'load' });
   await pg.waitForFunction(() => window.__play && window.__play.stats.ticks > 30, null, { timeout: 120000 });
   await pg.mouse.click(480, 270);
@@ -111,6 +111,9 @@ try {
     .then(h => h.jsonValue()).catch(() => null);
   const pos = await pg.evaluate(() => { const c = window.__play.ctrl.pos; return [c.x, c.y, c.z].map(v => Math.round(v)); });
   ok(!!lad, `ladder 0 at ${pos.join(', ')}: asj_039 (section 22 record 28) plays` + (lad ? ` (vol ${lad.vol}, pan ${lad.pan})` : ''));
+  // the areas at the ladder (worker 0223): the save's RAM has current area 105 with 105 / 2 / 15 on; the warp stays in 105
+  const ar = await pg.evaluate(() => { const A = window.__play.areas; return A ? { cur: A.cur, on: [...A.on].sort((a, b) => a - b) } : null; });
+  ok(!!ar && ar.cur === 105 && ar.on.join() === '2,15,105', `stage areas at the ladder: current ${ar && ar.cur}, on ${ar && ar.on.join(' / ')} (save: 105; 2 / 15 / 105)`);
 } catch (e) { ok(false, String(e)); } finally {
   await browser.close();
   srv.kill();

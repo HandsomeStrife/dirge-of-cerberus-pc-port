@@ -183,6 +183,112 @@ ok(camLog === '1:1 376:2 476:3 601:1 946:2 1051:3 1426:1 1626:2 1627:1', `camera
 ok(rt.state.battlemode === 1 && rt.state.usercontrol === 1 && rt.state.battlecontrol === 1, 'main() ends with battle mode 1, controls on');
 ok(warns.some(w => w.includes('KerberosActor.setpos_l')), 'untranslated natives are warned (actors, ...)');
 
+// ---- the opening's sound and Skip (event_sound.js, event_rt.js requestSkip; worker 0222) ----
+// Back ends mocked: what the natives ask of music.js / the area sound / audio.js / the voice player, frame by frame.
+{
+  const { VOICE_GAIN, rowStreamed } = await imp('event_sound.js');
+  ok(VOICE_GAIN === 2896 / 4096, `voice gain (short)(cos(pi/4) x 4096) / 4096 = ${VOICE_GAIN * 4096}/4096 (FUN_003eacb8, FUN_003eb330 >> 12)`);
+  ok(rowStreamed(0x94) && !rowStreamed(0x04) && !rowStreamed(0x80) && !rowStreamed(null), 'FUN_003eb930: row flags & 0x84 == 0x84');
+  const bgmFlags = { bgm_001: 0x94, bgm_274: 0x04 };
+  const SE = { asj_059: 50013, asj_060: 50014, asj_061: 50015, asj_062: 50016, asj_063: 50017 };
+  const run = (skipAt) => {
+    const calls = [], vb = new Set(); let f = 0;
+    const c = (m) => calls.push(f + ' ' + m);
+    const sound = {
+      music: () => ({ open: (n, v) => c('open ' + n + ' ' + v), playMusic3: (n, v, x) => c('pm3 ' + n + ' ' + v + ' ' + x), stopMusic: () => c('stop'), changeMusicVol: () => c('vol') }),
+      area: () => ({ play: (n, v) => c('area ' + n + ' ' + v) }),
+      audio: () => ({ ctx: {}, se: { names: Object.fromEntries(Object.entries(SE).map(([k, id]) => [k, { id, flags: 32 }])) }, playId: (id, v, p) => c('se ' + id + ' ' + v + ' ' + p) }),
+      voices: () => ({ load: (n) => { vb.add(n); c('vload ' + n); }, play: (n) => c('vplay ' + n + (vb.has(n) ? '' : ' none')), stopAll: () => { vb.clear(); c('vstop'); } }),
+      bgmRow: (n) => bgmFlags[n] ?? null,
+    };
+    const r = new EventRuntime(D, { warn: () => {}, sound });
+    r.start();
+    while (!r.done && r.frameNo < 5000) { if (skipAt && r.frameNo === skipAt) r.requestSkip(); f = r.frameNo + 1; r.frame(20); }
+    return { calls, r };
+  };
+  const A = run(0);
+  const want = ['1 vload 10109vn', '1 vload 10109v2', '1 vload 10110sk', '1 area asj_036 127', '2 se 50013 127 64', '126 vplay 10109vn',
+    '226 vplay 10109v2', '377 se 50014 127 64', '946 open bgm_274 0', '947 se 50015 127 64', '966 vplay 10110sk', '1427 se 50016 127 64',
+    '1627 se 50017 127 64', '1627 pm3 bgm_001 0 4000'];
+  ok(A.calls.join('|') === want.join('|'), `scr001's sound calls, unskipped (SEs a frame after the call): ${A.calls.length} calls` + (A.calls.join('|') === want.join('|') ? '' : '\n   got ' + A.calls.join('|')));
+  ok(A.r.frameNo === 1661 && A.r.skip === 0, 'unskipped: same length (1661 frames), +0x156c stays 0');
+  const B = run(300);
+  const bl = B.r.log.map(x => x[0] + ':' + x[1]);
+  ok(B.r.done && B.r.frameNo < 330, `skipped at frame 300: the event ends at frame ${B.r.frameNo} (sleeps / timers end, moves jump)`);
+  ok(B.calls.includes('300 vstop') || B.calls.some(x => / vstop$/.test(x)), 'Skip stops and frees the voice channels (FUN_003ea5f0)');
+  ok(B.calls.some(x => /vplay 10110sk none$/.test(x)), 'a playVoice after Skip finds no channel (FUN_003ea2c0 freed it)');
+  ok(!B.calls.some(x => / se 5001[4-7] /.test(x)), 'no SE after Skip (FUN_0039ff68: +0x156c != 0)');
+  ok(!B.calls.some(x => /bgm_274/.test(x)), 'playMusic2(bgm_274) under Skip: FUN_003eb930 false (flags 0x04) -> no music');
+  ok(B.calls.slice(-2).join('|').replace(/^\d+ /, '').replace(/\|\d+ /, '|') === 'stop|open bgm_001 0', 'playMusic3(bgm_001) under Skip: stopMusic, then FUN_003ec500 (flags 0x94)');
+  ok(bl.filter(x => /fade/.test(x) && !/300|^1:/.test(x)).every(x => / \(skip\)$/.test(x)), 'fades after Skip do nothing (FUN_003736c8)');
+  ok(B.r.skip === 2 && bl.includes('300:skip'), '+0x156c 1 -> 2 at the frame tail');
+  const cams = B.r.log.filter(x => x[1].startsWith('camera')).length;
+  ok(cams === 9, `skipped: all 9 camera blocks still set up (${cams}), each move at its end`);
+  ok(B.r.state.battlemode === 1 && B.r.state.usercontrol === 1, 'skipped: main still ends with battle mode 1, controls on (the hand-off runs)');
+  // T w222_snd (TRACE_CALLLOG=evsound from 0210's start1704 state, no input): the game's sound calls = the page's, in
+  // order, each at the page's call frame + its camera block's start offset (the page's loads take no time)
+  {
+    const cp = path.join(OUT, 'w222_snd.calls.jsonl');
+    if (!existsSync(cp)) console.log('SKIP w222_snd: no tools/trace/out/w222_snd.calls.jsonl');
+    else {
+      const nm = (u) => Buffer.concat(u.map(h => { const b = Buffer.alloc(4); b.writeUInt32LE(parseInt(h, 16)); return b; })).toString('latin1').split('\0')[0];
+      const G = readFileSync(cp, 'utf8').split('\n').filter(l => l && !l.includes('ev_window')).map(l => JSON.parse(l.replace(/\bNaN\b/g, 'null'))).filter(r => r.hook && r.frame >= 300)
+        .filter(r => ['area', 'ev_se', 'ev_voice', 'music2', 'music3_fade', 'music3'].includes(r.hook))
+        .map(r => ({ f: r.frame, k: { area: 'area', ev_se: 'se', ev_voice: 'voice', music2: 'music2', music3_fade: 'music', music3: 'music' }[r.hook],
+                     n: nm((r['a0+0x0'] || r['a1+0x0']).u), v: r.hook === 'area' ? r.a1 : r.hook === 'music3_fade' ? r.a1 : null }));
+      const P = A.r.log.filter(x => /^(area|se|voice|music2|music) /.test(x[1])).map(x => ({ f: x[0], k: x[1].split(' ')[0], n: x[1].split(' ')[1] }));
+      const starts = [1, 376, 476, 601, 946, 1051, 1426, 1626, 1627], offs = [353, 373, 376, 385, 419, 428, 524, 539, 559];
+      const off = (f) => { let i = 0; while (i + 1 < starts.length && starts[i + 1] <= f) i++; return offs[i]; };
+      const same = G.length === P.length && G.every((g, i) => g.k === P[i].k && g.n === P[i].n);
+      const d = same ? G.map((g, i) => g.f - (P[i].f + off(P[i].f))) : [];
+      ok(same, `w222_snd: ${G.length} game sound calls = the page's ${P.length}, same kinds / names / order`);
+      // the area call comes before the event's disc loads (voices / effects, game frames 276-328), which the first
+      // block's offset includes: it is 26 frames earlier; the others within 5 frames (the game's clock: dropped frames)
+      ok(same && d[0] === -26 && d.slice(1).every(x => Math.abs(x) <= 5), `  each at the page frame + its block's offset (${d.join(' ')})`);
+      ok(G.filter(g => g.k === 'area').every(g => g.v === 127) && G.filter(g => g.k === 'music').every(g => g.v === 4000), '  area volume 127, bgm_001 crossfade 4000 ms');
+    }
+  }
+  // T w222_skip (as w222_snd, Start f700 = the event pause, ✕ f740 = Skip): the event's clock is held from f701 (+0x9854
+  // marks it, +0x9858 grows 20 ms a frame), +0x156c 1 at f741 and 2 at f742; after it no SE, no playMusic2 (bgm_274's
+  // row lacks 0x84), no fade; bgm_001 through FUN_003ec500 (the skip branch), not the crossfade; the page's skipped run
+  // makes the same calls in the same order
+  {
+    const cp = path.join(OUT, 'w222_skip.calls.jsonl'), tp = path.join(OUT, 'w222_skip.jsonl');
+    if (!existsSync(cp) || !existsSync(tp)) console.log('SKIP w222_skip: no tools/trace/out/w222_skip.*');
+    else {
+      const nm = (u) => Buffer.concat(u.map(h => { const b = Buffer.alloc(4); b.writeUInt32LE(parseInt(h, 16)); return b; })).toString('latin1').split('\0')[0];
+      const C = readFileSync(cp, 'utf8').split('\n').filter(l => l && !l.includes('ev_window')).map(l => JSON.parse(l.replace(/\bNaN\b/g, 'null'))).filter(r => r.hook);
+      const sk = C.find(r => r.hook === 'skip');
+      const after = C.filter(r => sk && r.frame > sk.frame).map(r => r.hook + ' ' + nm(((r['a0+0x0'] || r['a1+0x0']) || { u: [] }).u));
+      ok(sk && sk.frame === 741 && after.join('|') === 'ev_voice 10110sk|music3 bgm_001', `game after Skip (f${sk && sk.frame}): ${after.join(', ')}`);
+      const pg = B.r.log.filter(x => x[0] > 300 && /^(voice|se|music2|music|fadein|fadeout) /.test(x[1]) && !/\(skip\)$/.test(x[1])).map(x => x[1]);
+      ok(pg.join('|') === 'voice 10110sk', `page after Skip: the same voice call (no channel) and no unskipped SE / fade / music2: ${pg.join(', ')}`);
+      const R = new Map(readFileSync(tp, 'utf8').split('\n').filter(Boolean).map(l => JSON.parse(l)).filter(r => r.ev_clock).map(r => [r.frame, r]));
+      const w = (f, i) => Buffer.from(R.get(f).ev_clock, 'hex').readUInt32LE(i * 4);
+      const held = w(700, 4) === 0 && [702, 720, 740].every(f => w(f, 4) === (f - 701) * 20) && w(742, 4) === 800 && w(744, 4) === 800;
+      ok(held, `event pause: +0x9858 (paused time) grows 20 ms a frame from f701 to ${w(742, 4)} ms at the Skip, then stays (the event is held, as intro.js pause)`);
+      ok(R.get(740).ev_skip === 0 && R.get(741).ev_skip === 1 && R.get(742).ev_skip === 2, '+0x156c 0 / 1 / 2 at f740 / 741 / 742');
+    }
+  }
+  // hand cases on the natives (paths scr001 does not reach after a Skip)
+  {
+    const calls = [];
+    const sound = { music: () => ({ open: (n) => calls.push('open ' + n), stopMusic: () => calls.push('stop'), playMusic3: () => calls.push('pm3') }),
+      voices: () => ({ load: (n) => calls.push('vload ' + n) }), bgmRow: (n) => bgmFlags[n] ?? null };
+    const r = new EventRuntime(D, { warn: () => {}, sound });
+    const N = r.vm.natives;
+    r.skip = 2;
+    N['fake/KerberosSound.playMusic3(Ljava/lang/String;II)V'](r.vm, ['bgm_274', 0, 4000]);
+    ok(calls.join('|') === 'stop', 'playMusic3 under Skip of a row without 0x84: stop only (FUN_003a0198)');
+    calls.length = 0;
+    const h = N['fake/KerberosSound.loadVoice2(Ljava/lang/String;)I'](r.vm, ['10109vn']);
+    ok(h === 0x7fffffff && calls.length === 0, 'loadVoice2 under Skip: 0x7fffffff, nothing loaded (FUN_00378c88)');
+    r.skip = 0;
+    const h2 = N['fake/KerberosSound.loadVoice2(Ljava/lang/String;)I'](r.vm, ['10109vn']);
+    ok(h2 > 0 && h2 < 0x7fffffff && !r.busy(h2) && calls.join('|') === 'vload 10109vn', 'loadVoice2: a command handle, done at once (resident load)');
+  }
+}
+
 // ---- against the game (traces) ----
 // T w210_intro_a / b / c (TRACE_FIELDSET=event, from the state at the stage start, f1704 of the w210 restart drive).
 // Camera ids differ: KerberosCamera's id counter (a static, camera_id_idx % 6) runs on from earlier events in the game,

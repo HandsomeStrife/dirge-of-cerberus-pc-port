@@ -56,7 +56,7 @@ export function insideCylinder(r, q, a, b) {
   return len3(sub3(sub3(q, a), mul3(u, t))) < r;
 }
 
-export function createProps({ data, weapons = [], effect = null, warn = console.warn } = {}) {
+export function createProps({ data, weapons = [], effect = null, areas = null, warn = console.warn } = {}) {
   const warned = new Set();
   const warnOnce = m => { if (!warned.has(m)) { warned.add(m); warn(m); } };
   const types = data.types || {};
@@ -83,7 +83,7 @@ export function createProps({ data, weapons = [], effect = null, warn = console.
       flags28: 0x8000,                                              // FUN_00583708: +0x28 |= 0x8000 (save RAM: 0x8003 / 0x8000)
       f38: 0, f40: 0x170, f48: rec.flags48,                         // +0x40 (save RAM 0x170: bits 4-6, 8)
       r: f(ty.size[0]), h: f(ty.size[1]),                           // cylinder radius +0x18, height +0x1c
-      startActive: !!rec.start_active, drawn: false, gone: false,
+      area: rec.f4c, drawn: false, gone: false,                    // +0x4c: the parent area (FUN_00548348 -> FUN_0053b920)
     };
   }
   // FUN_00583d70 (vt+0x2f8): the type flags -> +0x38 / +0x40 / +0x28 bits (only those read on the page)
@@ -125,10 +125,16 @@ export function createProps({ data, weapons = [], effect = null, warn = console.
       barrels.push(o); byRec.set(rec.rec, o);
       world.objects.set(o.id, o);
     }
-    // FUN_00584220 (vt+0x14c): +0x144(1, 1) unless +0x48 bit 2, for gimmicks of an active area (props.json start_active;
-    // the area rule is the save's, GUESS: export_web_props.py SAVE_ACTIVE_AREAS)
-    for (const o of barrels) if (o.startActive) activate(o, 1, 1);
+    // the stage-start pass FUN_0053ced8 (class 0xf is in its lists, DAT_0058b090): vt+0x14c(1) for every gimmick without a
+    // parent area (+0x40 bit 0x100 clear: +0x4c -1 or an empty manager +0x2b4 slot, e.g. 69 / 10). The others follow their
+    // area (areaSwitch, worker 0223; areas.js)
+    for (const o of barrels) if (!parented(o.area)) vt14c(o, 1);
   }
+  const parented = k => (areas ? areas.has(k) : k >= 0);
+  // vt+0x14c = FUN_00584220: +0x144(on, 1) unless record +0x48 bit 2
+  function vt14c(o, on) { if (!(o.f48 & 4)) activate(o, on, 1); }
+  // FUN_0054ef68 (area k switched on / off) -> vt+0x14c on its children
+  function areaSwitch(k, on) { for (const o of barrels) if (!o.gone && o.area === k) vt14c(o, on); }
 
   // ---- manager commands (FUN_00545b20) the barrels' scripts send
   function mgr(o, cmd, r) {
@@ -405,7 +411,7 @@ export function createProps({ data, weapons = [], effect = null, warn = console.
   }
 
   return {
-    barrels, explosions, attach, update, mgr, cmd, bulletTest, bulletHit, lockTargets, deleted,
+    barrels, explosions, attach, areaSwitch, update, mgr, cmd, bulletTest, bulletHit, lockTargets, deleted,
     id: k => (byRec.has(k) ? byRec.get(k).id : -1),
     get world() { return W; }, get mgr260() { return W ? W.mgr260 : null; },
     t: { nearestOnCylinder, insideCylinder, gather, perTarget, explode, damage, bulletFilter, filter },

@@ -37,6 +37,20 @@ KNOWN = {
 # (2026-10-26). Add new inputs here when an exporter starts reading another file.
 INPUTS = {
     '06800001.bin': 'a16d8406cfa107c3517c24642c2c156ffcb378a3d7153f21e70912333cc10eba',
+    # chunk animation files (UV scroll; export_z128_room.py via bmd_uvanim.py, worker 0226)
+    '06800010.bin': '35048909fcd0cbaf8033e5d1b9fa88beb63c07ddc6e5ba0921b8905ac5eecd18',
+    '06800110.bin': '4b10a37484a0fb10c461e52245767bf15860b2f5932bf66f1527422f12f5c545',
+    '06800210.bin': '843668fb34ff9198d8ff870722120e9fb29442c9ee3d26c4492ccbf053e75d2a',
+    '06800310.bin': '27c441ab950132274f71ec23630a1b901aeb8eea5f34fcbabee5147c4d557e68',
+    '06800410.bin': '61220bd7a3bee3181350434aa1724c7f354a8c348cf53f74703ca7d930fa181d',
+    '06800510.bin': 'dff3141be791e304481ebe1dea715c6e4de1887fc0bed388e47e71834fdc4472',
+    '06800610.bin': '0706ce70a14a427fbbfebbfee7862d3002709d643a3b35ef1cb62d91508ef1dc',
+    '06800710.bin': '2bf3a0b70873c02595f99243143d74afc084c0ab0046dbc2473b67be6172d13f',
+    '06800810.bin': 'cfea49b1283194563fc0e0e955c025d7366f5319b3b179d2745569c9c17e7840',
+    '06800910.bin': '0a2653f93327955bac8922862cceea919691b325f347b686e1ffc8c2c6c72aa8',
+    '06800a10.bin': 'df3f619804a92fdb4057192dc43dd748ea778adc52bc498ce80524c014b81119',
+    '06800b10.bin': '820170e9c045ceca9de4f70bb6aa8ac51e0e4ff73bf97f1812f6b6f37bb16243',
+    '06800c10.bin': 'df3f619804a92fdb4057192dc43dd748ea778adc52bc498ce80524c014b81119',
     '06800011.bin': 'dff66ff1ddcacaef9c64095b55b2602b7d90f7aa1495394f11dd9bcfd789893e',
     '06800012.bin': '08e3894c65fc2097725c98d6979f7e659172e3a569cc5f1cf341a94efcf1d50f',
     '06800111.bin': '58e30dc823fdea1a81f825850dc787074d5cb333a4a5ac56f34d74d19e74b482',
@@ -208,6 +222,18 @@ INPUTS = {
     '076506cb.bin': '95430e94db04ee4cd74dd28b991ce8d30540423a827e162b24bdc1f470bac500',   # e027 rifle clips (r_gst)
     '07650e41.bin': '46566553c97b678893e7553b809cfe8a298853752e891944157beb8b81bac65e',   # e057 barrel model (export_web_enemy, props_view.js)
     '07650e42.bin': '9d3f285ec76e66595b0eb125e913f1e8aa8067d698a2a88783d0b3d0c0d2d313',   # e057 barrel texture
+    '07670981.bin': '29488b3854b64387414f742e9e79a13e455e7f65378727b658918a62911975e6',   # g038 item model (export_web_enemy, items_view.js)
+    '07670982.bin': 'a61a83b5d70a5a4b75b5ef098e1de2e1036bb22f9b7fd63da607f6ea0717b51a',   # g038 texture
+    '076709c1.bin': '543fb3436e543a7cb8c131460fc39e231e2647b3ecff4a62c347537fa5df7e1b',   # g039 item model
+    '076709c2.bin': '7b2d8cf9eb049bdae5d677f40d91ebc7c627a1e5099010878951683eb7a8e8eb',   # g039 texture
+    '07670a01.bin': 'd6e6c47f73687becd730ec97641fb635f91f1365efc2dc9adc5b5f5a224d7de6',   # g040 item model
+    '07670a02.bin': '315ee731f8bb997f21aecabe3ac7ec23d1713ddae2e2184e67be370b5d5cd34a',   # g040 texture
+    '07670a41.bin': 'fd5d50d60642083e9e8be42b47d14feda5ba2988c4b7c6d8346f8a49c1f8e64e',   # g041 item model
+    '07670a42.bin': '9a28ac19059a18147270f4fc6f20b999eaccb99f307c0c2bc6f072348929f096',   # g041 texture
+    '076710c1.bin': '5c87f180c54586a7b606988400997b9eef0b341690440267f71c616869cda0f8',   # g067 item model
+    '076710c2.bin': 'a8c2402ce4aec90311207c1bb0c53cd48d98f6b986932e8901aceff5ff89bb5d',   # g067 texture
+    '07671101.bin': '4c3c20b6a0560b26e733b03d71f6e6b2f42d96b2c31417066d0cc4d55131200a',   # g068 item model
+    '07671102.bin': 'a46510be8df1db9e4ce2bd9d43697894235ba5adb39fd92a26857552220c0574',   # g068 texture
     '077700c1.bin': '3651ff2ee1a90b9ff2c40de1078d9a1d4d829c31c8edb178a100792c082fed4e',   # w003 rifle model (soldiers)
     '077700c2.bin': 'b3872f96ba1ca583b327c0edcd0279638928356d0acc734f4e2d88fecbac11a5',   # w003 textures
     '07770101.bin': 'abddbc0ed50cdcf956cf807ffde04258e9a21fb0916f1168376384e7e6a3aab9',   # w004 model
@@ -269,6 +295,12 @@ INPUTS = {
     '../data/zone/z128/sound/bgm_013.at3': 'fe67537de52fe53dcda98a0ef8f6d8daded4a994e2e7110430a13dc45eac3ddb',
     '../data/zone/z128/sound/bgm_014.at3': 'fe0008071682681535119d01f5aaed86af551abc32bd729f6792100f4d81448f',
     '../data/zone/z128/sound/bgm_018.at3': 'c296a5ca8738724528846643a43218699065631346c8411c6121f88298b3aed6',
+    # worker 0222: the opening event's music (ev0101 playMusic2("bgm_274"))
+    '../data/zone/z128/sound/bgm_274.at3': 'dfb0336a5346903928902064f58acaf141a87b87f44dfcefb1ec322012ff061f',
+    # worker 0222: the opening event's voices (ev0101 loadVoice2 / playVoice; tools/audio/voice.py)
+    '../data/event/scene/ev0100/sound/10109vn.at2': '6d8162da5980962a3e7ba90fa1705c397424690e2b6ae6092b9cb740146c46e8',
+    '../data/event/scene/ev0100/sound/10109v2.at2': '89fa0ae88bc91bffbbe21feefebd56fdc19283e20efdfadac8fa7d8404d02162',
+    '../data/event/scene/ev0100/sound/10110sk.at2': '88009ba5db19b0c8c82519aba386b0382047eef078f7b5fe6169daa84dbe67bb',
     # outside noPath: resident effect file + effect texture pack (export_web_effects.py)
     '../data/effect/resident/r0000/r0001/fer/r0001.fed': '5faf7fdfd9f3a8c8f07de02cd4551711c544e531c8f9c602acf05e005fc0726b',
     '../data/effect/resident/r0000/r0000/fer/r0000.fed': 'b10188567af8d5f5d23be74b1e411672f1a259a9e5ee6672ee95ebff0fc60675',
@@ -368,6 +400,50 @@ INPUTS = {
     '07670002.bin': '7078772714c60e7fe78f33e2f8e121cadbb74883746aa8c02edef383dba1b051',
     '07700381.bin': '46ea22d2c243b639a4fc36fb5a0f3d9e5803fd0f1821c5203edc402b9c1a4f0e',
     '07700382.bin': '45bc8fcebcd52b02a5ec625134e0367b5549afc9b1b5453615237e325361ce9b',
+    # z128 townspeople / WRO men (worker 0223): model, textures, the stance row-0 idle + the scripts' cmd 0x141 clips (export_web_enemy.py)
+    '076e0441.bin': '2c977c779591055cfdbcc0ba9f101987092a6afffe2594140c52281fd9bc6d23',   # n017 model
+    '076e0442.bin': '1cc4117f8e07874d4f38a8c978a231974579299fe66978d361b7db9fccd7d343',   # n017 textures
+    '076e044b.bin': 'f41bf7ffadb6c57bc1a0c288744207355ffaf46fe55fb2f61c02baa5607702f8',   # n017 clips k=0xb (r_gst, r_gst_lk, r_look)
+    '076e0481.bin': '5ae1e3fbed5ed0e59e11085214f1d13e737c70f409c1bccf8e452414ffb6f728',   # n018 model
+    '076e0482.bin': 'f1f882466eb62271928589efc4d223202f57b1275e63b8c7cb4f8a8c65605c62',   # n018 textures
+    '076e048b.bin': 'e0d94acb79ab560ddc0aba450530d2f3fe76039c9f7e8e643278521a9ee45bcb',   # n018 clips k=0xb (r_gst, r_gst_lk)
+    '076e0580.bin': 'd2ec95352dd9fba039d1620a626fe4c317b20d459cf84afe3794fe68203c59f1',   # n022 clips k=0x0 (m_look)
+    '076e0581.bin': 'cd0833becadefa262a9d4ec08b881b91292c03294540acfbf28343021e8bdcd3',   # n022 model
+    '076e0582.bin': '78c8b6e70b1122ba4578848a49ce2ee23675c6d15cbbed9c5dfdb42c1a42cff6',   # n022 textures
+    '076e058b.bin': 'f41bf7ffadb6c57bc1a0c288744207355ffaf46fe55fb2f61c02baa5607702f8',   # n022 clips k=0xb (r_gst)
+    '076e05c0.bin': 'fab8f326c4262a6b8cf99ddd5097837f3d055595e091dd7f5d4fa736b7d9f490',   # n023 clips k=0x0 (st, breath1, fear)
+    '076e05c1.bin': 'a3bdb2874870b31d7b382c59226013670169714a0f4391b1cbca57ec6c24d0f2',   # n023 model
+    '076e05c2.bin': '38d8e0402bae4369b68ad767a90ef4d3e0ebabc0715e4c8a8f3a5bcaa3153634',   # n023 textures
+    '076e0600.bin': 'd80d90d417a0464d7cdc31ff5fcf4aa193fced053e0eafc33f00834dcc44eda6',   # n024 clips k=0x0 (st, fear, fear2, fear3)
+    '076e0601.bin': '4a3160a8fc295f1dba4192caca88615a3a453a3df9c5c0a2e52fe6ba668e62dc',   # n024 model
+    '076e0602.bin': '703ece722e880a8d68c10cf7bfd5a00f0d6abee1d6e7c2a063fe9f18665a1ceb',   # n024 textures
+    '076e0640.bin': 'fab8f326c4262a6b8cf99ddd5097837f3d055595e091dd7f5d4fa736b7d9f490',   # n025 clips k=0x0 (st, fear)
+    '076e0641.bin': 'e2863e88816b3e3c4ff2bc80f7eb10a3008c06d5dad6f8188a2860c3202be66e',   # n025 model
+    '076e0642.bin': '3e1f39c6317a5564affcc816b787551feed220de82145621359b41420a0e863e',   # n025 textures
+    '076e0680.bin': 'd80d90d417a0464d7cdc31ff5fcf4aa193fced053e0eafc33f00834dcc44eda6',   # n026 clips k=0x0 (st, fear, fear3)
+    '076e0681.bin': 'bb91f4fc54ff6c77dc5d5d06c014396d390b77c4e7d4cd426feb8d350b3f7854',   # n026 model
+    '076e0682.bin': '4208e1e68dcbf313f9669a05f049c8aa1c7de21cf2233e3b920c29ede82e32f0',   # n026 textures
+    '076e0740.bin': 'fab8f326c4262a6b8cf99ddd5097837f3d055595e091dd7f5d4fa736b7d9f490',   # n029 clips k=0x0 (st, fear)
+    '076e0700.bin': '35f291a8b10e54f0915e186d6e5415ccd368cc722695ca2874b98c0399195f91',   # n028 clips k=0x0 (st)
+    '076e0701.bin': 'e1adb1647c701e839e6f250f3959029692a4fcf34bf04a6d8091a510edf32e33',   # n028 model
+    '076e0702.bin': '44d8714bb7e381b89075271cdc0b9b5a68ffbdec1dbcf9d9070541e20f2f40b3',   # n028 textures
+    '076e0741.bin': '95baa304279401b4dccb5efeaa9b9fc9c064a11429dee8b33be7762fdfbf75b6',   # n029 model
+    '076e0742.bin': '1256f134826a5cce73c1b845b3cdf472c221b4a0630e5c1adc12a9626fb45782',   # n029 textures
+    '076e0780.bin': 'd80d90d417a0464d7cdc31ff5fcf4aa193fced053e0eafc33f00834dcc44eda6',   # n030 clips k=0x0 (st, fear)
+    '076e0781.bin': '02e127b8190ea2b345d0f86f678272f6f8102bb74d93255096546de71a68c4ab',   # n030 model
+    '076e0782.bin': 'eb88a792d644e5d781af8c498b8dffa3954fb13ea3ceca3aa99e37edf55a3abb',   # n030 textures
+    '076e07c0.bin': 'fab8f326c4262a6b8cf99ddd5097837f3d055595e091dd7f5d4fa736b7d9f490',   # n031 clips k=0x0 (st, breath2)
+    '076e07c1.bin': '90823f35c34b021e8889ee4ec69b06f34988c92de14989b16efc7dc5b79736ef',   # n031 model
+    '076e07c2.bin': 'b79c12c288577e3a802e65c53fc9455218f75ff4160d63fc86f48ba1a23c080d',   # n031 textures
+    '076e0800.bin': 'd80d90d417a0464d7cdc31ff5fcf4aa193fced053e0eafc33f00834dcc44eda6',   # n032 clips k=0x0 (st, fear)
+    '076e0801.bin': '0793ee1a478f28c4b0e2d6901783d0ad3ff344708f3a16d267a234aeb3bdfc89',   # n032 model
+    '076e0802.bin': '50c934972bad22a122d2e5c19ce62d00d11258cff8718377bc6f9230158e6a91',   # n032 textures
+    '076e0840.bin': '4722531961c7cc219a3c06669770bc1efdcf74f949dcee82792bd592fb93067e',   # n033 clips k=0x0 (st, fear)
+    '076e0841.bin': 'd7fe5736fc8474a373740b2ca828f66b2716d63a1b65975ad52702ae1169b825',   # n033 model
+    '076e0842.bin': '3380db8775e497b41c45b979837da9ce84ba5e1ab5004d09ea4471bc9c6b453d',   # n033 textures
+    '076e0880.bin': '35f291a8b10e54f0915e186d6e5415ccd368cc722695ca2874b98c0399195f91',   # n034 clips k=0x0 (st, fear)
+    '076e0881.bin': '91b5ae3ed7336ed2a5393c6d9aa7403cb858547fca562fab51edd55c88cd86bd',   # n034 model
+    '076e0882.bin': 'f1c9af6ce3384f615be7c2db6e2f71bd863347485cfe5cf767397717525ab638',   # n034 textures
 }
 
 

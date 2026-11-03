@@ -131,7 +131,7 @@ def decode_packets(buf, pay):
         if not (cmd == 0x01 and imm == 0x0404):
             p += 4; continue
         pp = p + 4
-        sel = 0; prim = 0; abe = False; is_list = False
+        sel = 0; prim = 0; abe = False; is_list = False; hdr_w = 0
         pos = col = uv = None
         row = [0, 0, 0, 0]; mode = 0
         # Per-submesh header: UNPACK V4-32 num=2 @0 -> two control qwords.
@@ -158,6 +158,9 @@ def decode_packets(buf, pay):
                 abe = bool(prim & 0x40)
                 sel = u32(gt + 16) & 0xff          # (low byte of the vertex count)
                 is_list = bool(u32(gt + 20) & 0x8000)
+                # qw0.w: VU1 program A's back-face mask is 0x20 - (this & 0xffff) (ILW.w vi07 +
+                # ISUB, instr 29 / 36-37): 0 culls (sign of the screen cross z), 0x20 = two-sided
+                hdr_w = u32(gt + 12) & 0xffff
             pp = u[4] + u[5]
         guard = 0
         while pp + 4 <= N and guard < 48:
@@ -199,7 +202,7 @@ def decode_packets(buf, pay):
                 pp = (pp + 3) & ~3
         if pos and col and uv and len(pos) == len(col) == len(uv) and len(pos) >= 3:
             packets.append(dict(verts=pos, uv=uv, col=col, sel=sel, prim=prim,
-                                abe=abe, is_list=is_list, off=p))   # off: STCYCL offset (bmd_chains.py)
+                                abe=abe, is_list=is_list, hdr_w=hdr_w, off=p))   # off: STCYCL offset (bmd_chains.py)
         p = pp
     return packets
 

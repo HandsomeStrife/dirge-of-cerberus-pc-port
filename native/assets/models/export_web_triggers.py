@@ -120,6 +120,23 @@ def paths(d):
     return out
 
 
+def areas(d):
+    """Section 11 areas (worker 0223, notes/npc-research.md "Areas"): FUN_00547bc8 makes one object per record
+    (class 4, vt 0x58c308, FUN_0054ee88: obj +0xe4 = record k, +0xe8 = the record) and fills manager +0x2b4[+0xa0]
+    (cmd 0x3b, FUN_0053b920 = the lookup gimmicks / placed sounds / ... parent to). Box FUN_0054f0d8: [+0x30 + lo,
+    +0x30 + hi] (+0x80 / +0x90, no rotation); +0xa4..+0xa7 = up to four neighbour area indices (s8, -1 = none)."""
+    o, n, s = SE.sections(d)[11]
+    out = []
+    for k in range(n):
+        r = o + k * s
+        p = struct.unpack_from('<3f', d, r + 0x30)
+        lo = struct.unpack_from('<3f', d, r + 0x80)
+        hi = struct.unpack_from('<3f', d, r + 0x90)
+        out.append(dict(k=k, idx=struct.unpack_from('<i', d, r + 0xa0)[0], pos=list(p), lo=list(lo), hi=list(hi),
+                        nb=list(struct.unpack_from('<4b', d, r + 0xa4))))
+    return out
+
+
 def locators(d):
     """Section 16 locators (worker 0212): manager cmd 0x40 (FUN_00545b20) -> FUN_0053c088(mgr, out, r0) -> FUN_003113f8(r0):
     record r0 of section 0x10 (stride +8), 4x4 matrix at +0; +0x41 = parent object (-1 = none: the matrix is the world
@@ -305,7 +322,7 @@ def hit_volume(d, o):
 def stance_of(model, armed, wcls, params=True):
     """FUN_00564228 (called by FUN_00559748 at activation): the body's stance C+0x664 by model name
     (FUN_00340ac0(C, n) also sets C+0x808 = stance flags and C+0x7fc = its motion rows). Only the
-    names z128 places are translated; None for the rest (NPCs, p000, ...):
+    names z128 places are translated; None for the rest (n112, p000, g001, ...):
       e027 / e048 / e036: no case of their own -> LAB_005649f0: weapon W = status +0xac; class
         W+0x14 >> 2 & 7: 2 -> 0x1e, 0 / 1 / 3 or no weapon -> 0x1f, other classes keep the stance.
       e030 -> 0x23 (and C+0x568 |= 0x200); e023 -> 0x19, e024 -> 0x1a (actor +0x118 |= 0x80801c);
@@ -314,13 +331,18 @@ def stance_of(model, armed, wcls, params=True):
     for a stage record (every section-1 record names a parameter set, which the model name comes from);
     kept as `params` for the translation. Weapon classes 4-7 return with the stance unchanged (None
     here: enemy_ai.js builds no actor for a record without a stance; no z128 record has one)."""
-    if model in ('e027', 'e048', 'e036'):
+    # NPCs (worker 0223, FUN_00564228's 'n0xx' cases): n017 / n018 / n020-n022 (the WRO men) take the weapon rule
+    # (LAB_005649f0 / LAB_005649f4) like e027; the townspeople have fixed stances: 0xd (LAB_005649a4) n023 n025 n029
+    # n031, 0xc (LAB_005649b8) n024 n026 n030 n032, 0xe (LAB_005649cc) n027 n028 n033 n034 n058.
+    if model in ('e027', 'e048', 'e036', 'n017', 'n018', 'n020', 'n021', 'n022'):
         if not params:
             return 0x1f
         if not armed:
             return 0x1f
         return {0: 0x1f, 1: 0x1f, 2: 0x1e, 3: 0x1f}.get(wcls)
-    return {'e030': 0x23, 'e023': 0x19, 'e024': 0x1a, 'e001': 0x10}.get(model)
+    npc = {'n023': 0xd, 'n025': 0xd, 'n029': 0xd, 'n031': 0xd, 'n024': 0xc, 'n026': 0xc, 'n030': 0xc, 'n032': 0xc,
+           'n027': 0xe, 'n028': 0xe, 'n033': 0xe, 'n034': 0xe, 'n058': 0xe}
+    return {'e030': 0x23, 'e023': 0x19, 'e024': 0x1a, 'e001': 0x10, **npc}.get(model)
 
 
 def stances(path, used):
@@ -402,7 +424,8 @@ def hitboxes(model='e027', cont=None):
     for o in EC.entries(buf):
         if buf[o + 8:o + 11] == b'mkd':
             p = o + 0x10
-            if buf[p:p + 4] != b'mk2\0':
+            # FUN_0030baa0 reads +6 / +0xc with no tag test; the townspeople's chunks are tagged 'mkd\0' (worker 0228)
+            if buf[p:p + 4] not in (b'mk2\0', b'mkd\0'):
                 raise ValueError('%s marker.mkd: no mk2 header' % model)
             n = struct.unpack_from('<H', buf, p + 6)[0]
             b0 = p + struct.unpack_from('<I', buf, p + 0xc)[0]
@@ -422,7 +445,7 @@ def markers(model='e027'):
     for o in EC.entries(buf):
         if buf[o + 8:o + 11] == b'mkd':
             p = o + 0x10
-            if buf[p:p + 4] != b'mk2\0':
+            if buf[p:p + 4] not in (b'mk2\0', b'mkd\0'):          # no tag test in the game (see hitboxes)
                 raise ValueError('%s marker.mkd: no mk2 header' % model)
             n = struct.unpack_from('<H', buf, p + 4)[0]
             m0 = p + struct.unpack_from('<I', buf, p + 8)[0]
@@ -549,6 +572,8 @@ def death_cues(elf):
 # exported for every z128 enemy type
 AI_TYPES = ('e027', 'e048', 'e030')
 BOX_TYPES = ('e027', 'e048', 'e030', 'e036', 'e023', 'e024', 'e001')
+# worker 0228: the townspeople (same actor class 0x58e1f8; their part boxes for Vincent's bullets, notes/npc-research.md §8)
+BOX_TYPES += ('n023', 'n024', 'n025', 'n026', 'n027', 'n028', 'n029', 'n030', 'n031', 'n032', 'n033', 'n034')
 PLAYER_MODEL = '07703201.bin'   # Vincent's model container in z128 (part boxes for the enemy bullets)
 
 
@@ -587,7 +612,7 @@ def main():
                zones=zone_sets(d, recs, boxes), stances=st, model_clips=model_clips(recs, st, atk), attacks=atk,
                sizes={str(r['zones']): zone_size(d, r['zones']) for r in recs if r['zones'] >= 0},
                lock_bones={str(r['zones']): lock_bone(d, r['zones']) for r in recs if r['zones'] >= 0},
-               paths=paths(d), locators=locators(d), nav=nav_graph(d), markers={m: markers(m) for m in boxes}, se=se_tables(elf),
+               paths=paths(d), locators=locators(d), areas=areas(d), nav=nav_graph(d), markers={m: markers(m) for m in boxes}, se=se_tables(elf),
                pset_script=pset_script, player=dict(script=PLAYER_SCRIPT, pset=PLAYER_PSET, cues=PLAYER_CUES, death=death_cues(elf)), cues=cue_tables(d))
     res['hitboxes']['p000'] = pbox
     path = os.path.join(out, 'ai.json')

@@ -1028,7 +1028,7 @@ START = {
     'weapon': (1, 1, 1),        # FUN_003ae030(a, b, sel): W+0x14 bits 2-4 / 5-6, FUN_00317c48 (Cerberus, mark 1)
     'ammo': (18, 18, 180),      # FUN_003ae138: FUN_00317240, W+0x48, FUN_00317328
     'hp': (780, 780),           # FUN_003adda8: P+0x20, P+4
-    'item': (0x69300000, 2),    # FUN_003ae308: the selected item (kelstr id: "Potion") and its count
+    'item': (0x69300000, 2),    # FUN_003ae308: the selected item (item id 0x69300000) and its count
     'limit': (0, 0),            # FUN_003ae418: FUN_00317bc8, FUN_00317c08 - 1 (clamped 0-2)
     'mp': (0, 100, 10, 100),    # FUN_003addf8: P+0x24, P+8, FUN_00317878, FUN_00317908
     'ae028': 0,                 # FUN_003ae028 (FUN_00318c98 / FUN_003179a0)

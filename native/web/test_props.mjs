@@ -21,6 +21,8 @@ const OUT = process.env.TRACE_OUT ?? path.join(root, 'tools/trace/out');
 const imp = (env, rel) => import(process.env[env] ? pathToFileURL(path.resolve(process.env[env])).href : './' + rel);
 const { createProps, nearestOnCylinder, insideCylinder } = await imp('MUTATE_PROPS', 'props.js');
 const { createEnemyAI, defence, ENEMY_STATUS } = await imp('MUTATE_AI', 'enemy_ai.js');
+const { Areas } = await imp('MUTATE_AREAS', 'areas.js');
+const SAVE_POS = [-1395.151611328125, -98.64443969726562, -1111.014892578125];   // Vincent C+0x30 in the save
 let fail = 0;
 const ok = (c, m) => { console.log((c ? 'ok   ' : 'FAIL ') + m); if (!c) fail++; };
 const done = () => { console.log(fail ? `${fail} FAILED` : 'all ok'); process.exit(fail ? 1 : 0); };
@@ -50,27 +52,42 @@ function world({ recs = {}, on = [], php = null, roomRay = null } = {}) {
   const pj = json(D('props/props.json'));
   for (const r of pj.records) {
     if (recs[r.rec]) r.m[3] = [...recs[r.rec], 1];
-    if (on.includes(r.rec)) r.start_active = true;
+    if (on.includes(r.rec)) r.f4c = -1;                     // extra active records: no parent area (FUN_0053ced8 switches them on)
   }
   const fx = [], snd = [], warns = [];
-  const props = createProps({ data: pj, weapons: aiData.weapons, warn: m => warns.push(m),
+  const areas = new Areas(aiData.areas);
+  const props = createProps({ data: pj, weapons: aiData.weapons, areas, warn: m => warns.push(m),
     effect: { spawn: (id, p, s) => fx.push({ id, p, s }), hit: (k, c, p) => fx.push({ hit: k, p }) } });
   const P = php || { pos: [0, 0, 0], face: [1, 0, 0], hp: 780, id: 0x16, f118: 0x20209, s64: 0 };
   const reacts = [];
   const ai = createEnemyAI({ data: aiData, player: P, quiet: true, log: () => {}, props, roomRay,
     sound: (n, p) => snd.push({ n, p: p && p.slice() }), react: h => { reacts.push(h); return 'none'; } });
-  return { ai, props, P, fx, snd, warns, reacts, b: k => props.barrels.find(o => o.rec === k) };
+  // the first frame's area switch at the save position (play.js: areas.frame -> onSwitch -> props.areaSwitch)
+  areas.onSwitch = props.areaSwitch; areas.frame(SAVE_POS);
+  return { ai, props, areas, P, fx, snd, warns, reacts, b: k => props.barrels.find(o => o.rec === k) };
 }
 
 // ---------------------------------------------------------------- stage start (no trace)
 {
   const { props, b } = world();
   const on = props.barrels.filter(o => o.flags28 & 1).map(o => o.rec);
-  ok(on.length === 1 && on[0] === 17, `stage start: active barrels [${on}] ([17]: FUN_00584220 + the save's areas)`);
+  ok(on.length === 1 && on[0] === 17, `stage start: active barrels [${on}] ([17]: FUN_00584220 + areas.js at the save position)`);
   const o = b(17);
   ok(o.hp === 1 && o.script === 196 && o.model === 'e057', `record 17: HP ${o.hp} (1), script ${o.script} (196), model ${o.model}`);
   ok(!!(o.f38 & 4) && !!(o.f38 & 1) && !!(o.f40 & 0x20), `record 17: +0x38 0x${o.f38.toString(16)} (bit 0 bullets, bit 2 lockable), +0x40 0x${o.f40.toString(16)} (bit 5 explosion target)`);
   ok(props.lockTargets().length === 1 && props.lockTargets()[0].lockable, 'the lock-on lists record 17 as lockable (FUN_0054b910)');
+}
+// the barrels follow their parent area (worker 0223; areas.js -> props.areaSwitch = FUN_0054ef68 -> FUN_00584220)
+{
+  const { props, areas, b } = world();
+  const a1 = areas.byIdx.get(1), c = [0, 1, 2].map(i => (a1.bmin[i] + a1.bmax[i]) / 2);
+  areas.frame(c);
+  const want = props.barrels.filter(o => o.area === 1 && !(o.f48 & 4)).map(o => o.rec);
+  const on = props.barrels.filter(o => o.flags28 & 1).map(o => o.rec);
+  ok(areas.cur === 1 && !(b(17).flags28 & 1) && want.length > 0 && want.every(k => on.includes(k)) && on.every(k => [...areas.on].includes(b(k).area) || !areas.has(b(k).area)),
+     `Vincent in area 1: record 17 (area 2) off, area 1's barrels [${want}] on (active now [${on}])`);
+  const held = props.barrels.filter(o => o.area === 1 && (o.f48 & 4)).map(o => o.rec);
+  ok(held.every(k => !(b(k).flags28 & 1)), `+0x48 bit 2 barrels of area 1 [${held}] stay off (FUN_00584220)`);
 }
 
 // ---------------------------------------------------------------- the trace

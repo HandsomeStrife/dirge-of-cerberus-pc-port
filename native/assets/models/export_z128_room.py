@@ -17,14 +17,15 @@ null for an unbound packet). Sources, in order of trust:
 Output: <OUTPREFIX>_gNN.mesh, <OUTPREFIX>.list, <OUTPREFIX>_manifest.json.
 Trusted repo data + bounds-checked raw BMD read (via export_bmd_textured); run -I.
 """
-import os, sys, json, glob, argparse
+import os, sys, json, glob, argparse, array
 from collections import defaultdict
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from export_bmd_textured import find_bmd_payload, decode_packets, EXTRACT
 from export_bmd_bound import emit_group, tex_png_for, packet_tris, _norm
 from bmd_env import read_env, fog_directive
-from bmd_chains import packet_chains, chain_headers
+from bmd_chains import packet_chains, chain_headers, raw_chain_ids
+from bmd_uvanim import chunk_uv_tracks
 from room_overlap import PlaneIndex
 
 # z128's 13 room geometry chunks (FileCodes 06800012..06800c12; the collision build uses the
@@ -219,14 +220,16 @@ LEVEL_TEX = '0680ff'
 # decoded. Weaker swaps seen once or twice (0680ff23 -> 24, 54 -> 46, 7a -> 05) are left.
 HERO_FRAME = {'0680ff04': '0680ff05', '0680ff06': '0680ff07'}
 
-# Visibility groups the game hides in the sea-of-flames state. FUN_0026ccc8 skips a chain
-# whose header byte +0xaa has its bit set in the 128-bit mask at EE 0x004e8710 (=
-# 0x004e86f0 | 0x004e8700; set/cleared by FUN_00269368 / FUN_002693a8 from scripts, saved
-# by FUN_00269178). Read from save-states/sea-of-flames.p2s eeMemory.bin: 0x004e86f0 =
-# 0x0300000002080001 -> bits 0, 19, 25, 56, 57 (0x004e8700 = 0). Check: 0 of 1043 packets
-# in groups 0/19/56/57 and 1 of 124 in group 25 match any dump triangle. Game state, not
-# level data: another point in the story can have another mask. --show-hidden-groups.
-HIDDEN_GROUPS = {0, 19, 25, 56, 57}
+# Visibility groups (worker 0225). FUN_0026ccc8 skips a chain when FUN_00269450(header byte +0xaa,
+# loaded with lbu at 0x26cd94) is true: bit (+0xaa) of the 128-bit mask DAT_004e8710 (= DAT_004e86f0 |
+# DAT_004e8700, FUN_00269410); a byte > 0x7f is never hidden. DAT_004e86f0 follows the camera every
+# frame (FUN_00264ee0's probe, room_vis.js) and DAT_004e8700 is the stage scripts' half (cmds 0x54 /
+# 0x55), so the export keeps every chain and tags each vertex range with its group: the page hides
+# them (room.js showChunks). (Until worker 0225 the export dropped the save's mask, groups 0 / 19 / 25 /
+# 56 / 57: right only at the start.)
+def vis_group(h):
+    """The chain's visibility group (+0xaa), or -1 when FUN_00269450 can never hide it."""
+    return h['group'] if h is not None and h['group'] <= 0x7f else -1
 
 
 # Area streaming (worker 0213, 2026-11-02). The game never draws all 13 chunks: the chunk table
@@ -296,21 +299,68 @@ def group_fc(key):
     return key.split('@')[0]
 
 
-def build_flat_kept(packets, idxs, kept):
-    """export_bmd_bound.build_flat restricted to the kept triangles of each packet."""
+def _cross(a, b, c):
+    e1 = (b[0]-a[0], b[1]-a[1], b[2]-a[2]); e2 = (c[0]-a[0], c[1]-a[1], c[2]-a[2])
+    return (e1[1]*e2[2]-e1[2]*e2[1], e1[2]*e2[0]-e1[0]*e2[2], e1[0]*e2[1]-e1[1]*e2[0])
+
+
+# Back-face culling (worker 0227; notes/room-blend-streaming.md 'Back faces'). The room draws with VU1
+# program A (FUN_00265560: 9 qw to VU address 0 + MSCAL 0 / 4 / 6; the save state holds program B, so A
+# is uploaded for the room). Per packet the mask is vi07 = 0x20 - header qw0.w (instr 29 / 36-37):
+# 0x20 culls on the sign of z of the screen-space cross (v0 - v1) x (v1 - v2) (OPMULA / OPMSUB, FMAND,
+# instr 100-106 lists, 249-260 strips; same at 473 / 673 / 915 / 1078 and in the clipper 1370-1374);
+# 0 never culls (z128: header w 0x20 = exactly the chains with +0x94 bit 0). Kept = cross z >= 0 = screen
+# clockwise in GS y-down = the triangle's emitted order seen as a WebGL BACK face. A strip quad
+# (v0, v1, v2) + (v2, v1, v3) is skipped only when BOTH are back-facing (instr 255-260: IAND of the two
+# flags), so each triangle carries its partner's game-front normal; room.js keeps a back-facing triangle
+# when the partner faces the eye. A zero-area partner never sets the flag: such a quad is never culled.
+# Tag per vertex (int16 x 4): (partner normal * 32767, mode) mode 0 never cull, 1 cull (no partner),
+# 2 cull unless the partner faces the eye. room.js reads the partner test from the provoking (last)
+# vertex, which must lie on the partner's plane: the quad's second triangle is emitted as (v3, v2, v1)
+# (same winding). Not reproduced: the clipper path (quads with a vertex outside the clip volume, instr
+# 236 -> 285) culls each triangle on its own.
+def cull_tag(pk, t):
+    w = pk.get('hdr_w', 0)
+    if w not in (0, 0x20):
+        raise ValueError('packet header w 0x%x: back-face mask 0x%x not decoded' % (w, (0x20 - w) & 0xffff))
+    if w == 0x20:
+        return (0, 0, 0, 0)
+    if pk.get('is_list'):
+        return (0, 0, 0, 1)
+    V = pk['verts']; b = t[0] - t[0] % 4
+    if b + 3 >= len(V):                          # a 3-vertex tail (not seen): no partner
+        return (0, 0, 0, 1)
+    p = (b + 2, b + 1, b + 3) if t[0] == b else (b, b + 1, b + 2)
+    n = _cross(V[p[0]], V[p[1]], V[p[2]])
+    if n == (0.0, 0.0, 0.0):
+        return (0, 0, 0, 0)
+    # game-front = WebGL back: the partner faces the eye when dot(-n, eye - q) >= 0
+    n = _norm((-n[0], -n[1], -n[2]))
+    return (int(round(n[0] * 32767)), int(round(n[1] * 32767)), int(round(n[2] * 32767)), 2)
+
+
+def build_flat_kept(packets, idxs, kept, tags=None, tag_of=None, culls=None):
+    """export_bmd_bound.build_flat restricted to the kept triangles of each packet.
+    tags (list) gets tag_of(packet index) once per emitted vertex (the UV track, bmd_uvanim.py).
+    culls (list) gets the cull_tag 4 int16 once per emitted vertex."""
     flat = []; ntri = 0
     for pi in idxs:
         pk = packets[pi]; V = pk['verts']; UV = pk['uv']; C = pk['col']
         for (i0, i1, i2) in kept[pi]:
-            a, b, c = V[i0], V[i1], V[i2]
-            e1 = (b[0]-a[0], b[1]-a[1], b[2]-a[2]); e2 = (c[0]-a[0], c[1]-a[1], c[2]-a[2])
-            n = _norm((e1[1]*e2[2]-e1[2]*e2[1], e1[2]*e2[0]-e1[0]*e2[2], e1[0]*e2[1]-e1[1]*e2[0]))
+            n = _norm(_cross(V[i0], V[i1], V[i2]))
             if n == (0.0, 0.0, 0.0):
                 continue
+            ct = cull_tag(pk, (i0, i1, i2))
+            if not pk.get('is_list') and i0 % 4 == 2:
+                i0, i1, i2 = i2, i0, i1          # (v2, v1, v3) -> (v3, v2, v1): last vertex on the partner
+            if culls is not None:
+                culls.extend(ct * 3)
             for idx in (i0, i1, i2):
                 p3 = V[idx]; uv = UV[idx]; rgba = C[idx]
                 flat.extend((p3[0], p3[1], p3[2], n[0], n[1], n[2], uv[0], uv[1],
                              rgba[0]/255.0, rgba[1]/255.0, rgba[2]/255.0, rgba[3]/255.0))
+            if tags is not None:
+                tags.extend((tag_of(pi),) * 3)
             ntri += 1
     return flat, ntri
 
@@ -331,11 +381,9 @@ def main():
     ap.add_argument('--bind', choices=('file', 'pf'), default='file', help='file (default): '
                     'texture slot from each chain header (see LEVEL_TEX); pf: the old per-packet '
                     'binding from --pf + BIND_OVERRIDE + chain fill. The pre-0051 output is '
-                    '--bind pf --show-hidden-groups --keep-duplicates --keep-covered --no-underlay')
+                    '--bind pf --keep-duplicates --keep-covered --no-underlay')
     ap.add_argument('--no-hero-frame', action='store_true', help='draw flipbook textures at the '
                     'frame the table names, not the hero-dump frame (HERO_FRAME)')
-    ap.add_argument('--show-hidden-groups', action='store_true', help='keep chains whose '
-                    'visibility group the game hides in this state (HIDDEN_GROUPS)')
     ap.add_argument('--keep-duplicates', action='store_true', help='keep every exact copy of a '
                     'triangle that several chunks/packets store at the same position, UVs and ABE flag')
     ap.add_argument('--keep-covered', action='store_true', help='keep opaque triangles that lie '
@@ -354,11 +402,14 @@ def main():
     os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
 
     flat_by = defaultdict(list); ntri_by = defaultdict(int)
+    cul_by = defaultdict(list)          # per-vertex back-face tag (cull_tag)
+    uvt_by = defaultdict(list); uv_anims = []; uv_tracks = []         # per-vertex UV track (-1 none); bmd_uvanim.py
     abe_by = defaultdict(bool);  npk_by = defaultdict(int)
     ntri_chunk = defaultdict(int)
     overrides_applied = set()
     seen_by = defaultdict(set); seen_tris_fc = {}                       # dedupe keys per chunk (chunk order, packet order)
     cover_by = defaultdict(PlaneIndex)                                  # per chunk: kept opaque tris
+    cover_vis_by = defaultdict(PlaneIndex)                              # per (chunk, visibility group): the drop test
     cover_abe_by = defaultdict(PlaneIndex)                              # per chunk: kept ABE tris (underlay test only)
     pairs = area_pairs()
     always, can = co_loaded(pairs, max([len(cids)] + [max(p) + 1 for p in pairs]))
@@ -385,6 +436,20 @@ def main():
         cwarn = []
         chain = packet_chains(buf, pay, packets, cwarn)
         hdrs, _table = chain_headers(buf, pay, cwarn)
+        # scrolling UVs (worker 0226; bmd_uvanim.py): the chunk's animation file <level><chunk>10
+        chain_gtrack = {}
+        anp = os.path.join(EXTRACT, cid[:6] + '10.bin')
+        if os.path.exists(anp):
+            rid = raw_chain_ids(buf, pay); uwarn = []
+            an_, tr_, ct_ = chunk_uv_tracks(open(anp, 'rb').read(), buf, pay, lambda o: rid.get(o + 0xb0), uwarn)
+            for w in uwarn:
+                print('warning: uv anim %s: %s' % (cid, w), file=sys.stderr)
+            a0 = len(uv_anims); t0 = len(uv_tracks)
+            uv_anims.extend(dict(x, chunk=int(cid[4:6], 16)) for x in an_)
+            uv_tracks.extend(dict(x, anim=x['anim'] + a0) for x in tr_)
+            chain_gtrack = {c: t + t0 for c, t in ct_.items()}
+        else:
+            print('warning: %s missing: chunk %s has no UV animation' % (anp, cid), file=sys.stderr)
         for w in cwarn:
             print('warning: chains %s: %s' % (cid, w), file=sys.stderr)
         groups = defaultdict(list); final = {}; not_applied = set()
@@ -392,9 +457,8 @@ def main():
             if (cid, i) in EXCLUDE_PACKETS:
                 continue
             h = hdrs.get(chain[i])
-            if h is not None and h['group'] in HIDDEN_GROUPS and not a.show_hidden_groups:
-                hidden_by[h['group']] += len(packet_tris(packets[i])); stats['hidden_packets'] += 1
-                continue
+            if vis_group(h) >= 0:
+                hidden_by[vis_group(h)] += len(packet_tris(packets[i]))
             if a.bind == 'file':
                 fc = None
                 if h is None:
@@ -460,16 +524,20 @@ def main():
         tie_with = earlier if a.all_chunks else [c for c in earlier if c in can[ci]]
         for i in sorted(final):
             ks = []; us = []
+            vg = vis_group(hdrs.get(chain[i]))
             for t in packet_tris(packets[i]):
-                key = tri_key(packets[i], t)
-                if not a.keep_duplicates and any(key in seen_by[c] for c in drop_from):
+                # a copy only stands in for one shown whenever it is: the same visibility group, or a
+                # group never hidden (-1)
+                tk = tri_key(packets[i], t); key = (vg,) + tk
+                if not a.keep_duplicates and any(key in seen_by[c] or (-1,) + tk in seen_by[c] for c in drop_from):
                     stats['dup_tris_dropped'] += 1
                     if seen_tris_fc.get(key) != final[i]:
                         dup_xtex[(seen_tris_fc.get(key), final[i])] += 1
                     continue
                 V = packets[i]['verts']
                 if (not a.keep_covered and not packets[i]['abe']
-                        and any(cover_by[c].covered(V[t[0]], V[t[1]], V[t[2]]) for c in drop_from)):
+                        and any(cover_vis_by[(c, g)].covered(V[t[0]], V[t[1]], V[t[2]])
+                                for c in drop_from for g in {vg, -1})):
                     stats['covered_tris_dropped'] += 1; continue
                 if final[i]:         # an unbound copy never blocks a later bound one
                     seen_by[ci].add(key); seen_tris_fc.setdefault(key, final[i])
@@ -488,6 +556,8 @@ def main():
             V = packets[i]['verts']
             for t in kept[i] + under[i]:
                 idx.add(V[t[0]], V[t[1]], V[t[2]])
+                if not packets[i]['abe']:
+                    cover_vis_by[(ci, vis_group(hdrs.get(chain[i])))].add(V[t[0]], V[t[1]], V[t[2]])
         for i in sorted(final):
             fc = final[i]
             suf, ref, border = chain_blend(hdrs.get(chain[i]))
@@ -509,14 +579,33 @@ def main():
                       file=sys.stderr)
             groups[fc if fc else 'unbound'].append(i)
         for key, idxs in list(groups.items()) + [(k + UNDER_SUFFIX, v) for k, v in groups.items()]:
-            flat, ntri = build_flat_kept(packets, idxs, under if key.endswith(UNDER_SUFFIX) else kept)
-            if ntri == 0:
-                continue
-            ranges_by[key].append([ci, len(flat_by[key]) // 12, len(flat) // 12])
-            flat_by[key].extend(flat); ntri_by[key] += ntri; npk_by[key] += len(idxs)
-            ntri_chunk[cid] += ntri
-            if any(packets[i]['abe'] for i in idxs):
-                abe_by[key] = True
+            # one range per run of packets of one visibility group (packet order kept):
+            # [chunk, first vertex, vertex count, group] (group -1 = never hidden)
+            runs = []
+            for i in idxs:
+                vg = vis_group(hdrs.get(chain[i]))
+                if runs and runs[-1][0] == vg:
+                    runs[-1][1].append(i)
+                else:
+                    runs.append((vg, [i]))
+            for vg, ridx in runs:
+                tg = []; cg = []
+                flat, ntri = build_flat_kept(packets, ridx, under if key.endswith(UNDER_SUFFIX) else kept,
+                                             tg, lambda i: chain_gtrack.get(chain[i], -1), cg)
+                if ntri == 0:
+                    continue
+                r = ranges_by[key]
+                first = len(flat_by[key]) // 12
+                if r and r[-1][0] == ci and r[-1][3] == vg and r[-1][1] + r[-1][2] == first:
+                    r[-1][2] += len(flat) // 12
+                else:
+                    r.append([ci, first, len(flat) // 12, vg])
+                flat_by[key].extend(flat); ntri_by[key] += ntri; npk_by[key] += len(ridx)
+                uvt_by[key].extend(tg)
+                cul_by[key].extend(cg)
+                ntri_chunk[cid] += ntri
+                if any(packets[i]['abe'] for i in ridx):
+                    abe_by[key] = True
 
     def base_key(k):
         return k[:-len(UNDER_SUFFIX)] if k.endswith(UNDER_SUFFIX) else k
@@ -554,8 +643,9 @@ def main():
                 'bind': a.bind, 'pf_dir': a.pf, 'chunks': cids, 'groups': []}
     manifest['file_binding'] = {'stats': dict(stats), 'hero_frame': None if a.no_hero_frame else HERO_FRAME,
                                 'bind_override_check': ovr_check}
-    manifest['hidden_groups'] = {'groups': sorted(HIDDEN_GROUPS), 'applied': not a.show_hidden_groups,
-                                 'tris_by_group': {str(k): v for k, v in sorted(hidden_by.items())}}
+    manifest['visibility_groups'] = {'rule': 'chains kept; ranges carry the chain group (+0xaa, -1 = '
+                                             '> 0x7f, never hidden); the page hides by DAT_004e8710',
+                                     'tris_by_group': {str(k): v for k, v in sorted(hidden_by.items())}}
     manifest['duplicates'] = {'dropped_tris': stats['dup_tris_dropped'], 'applied': not a.keep_duplicates,
                               'rule': 'exact position (1/16) + UV (1/4096) + ABE flag repeat; first '
                                       'bound copy in chunk then packet order kept',
@@ -581,7 +671,15 @@ def main():
              'texture_container': cont, 'abe': abe_by[key]}
         if key.endswith(UNDER_SUFFIX):
             g['underlay'] = True
-        g['chunks'] = ranges_by[key]       # [chunk, first vertex, vertex count]: area streaming
+        g['chunks'] = ranges_by[key]       # [chunk, first vertex, vertex count, visibility group]
+        if any(t >= 0 for t in uvt_by[key]):   # scrolling UVs: int16 track per vertex (bmd_uvanim.py)
+            uvt = os.path.splitext(os.path.join(os.path.dirname(a.out) or '.', mesh_name))[0] + '.uvt'
+            array.array('h', uvt_by[key]).tofile(open(uvt, 'wb'))
+            g['uvt'] = os.path.basename(uvt)
+        cul = os.path.splitext(os.path.join(os.path.dirname(a.out) or '.', mesh_name))[0] + '.cul'
+        assert len(cul_by[key]) == 4 * 3 * ntri_by[key], key
+        array.array('h', cul_by[key]).tofile(open(cul, 'wb'))   # back faces: int16 x 4 per vertex (cull_tag)
+        g['cul'] = os.path.basename(cul)
         if base in blend_ref:
             g['bucket'] = border(key)
         if ATEST_SUFFIX in base:
@@ -594,6 +692,7 @@ def main():
         total += ntri_by[key]
     for gi, key in enumerate(order):
         add_group(gi, key)
+    manifest['uv_anims'] = {'anims': uv_anims, 'tracks': uv_tracks}   # bmd_uvanim.py; room.js RoomUVAnim
     manifest['streaming'] = {'pairs': [list(p) for p in pairs], 'all_chunks': a.all_chunks,
                              'always': {'%02x' % c: sorted(always[c]) for c in range(len(cids))},
                              'can': {'%02x' % c: sorted(can[c]) for c in range(len(cids))}}
@@ -674,9 +773,9 @@ def main():
                                           ('\t%d\tadd' % (1 if g.get('underlay') else 0)) if g.get('blend') == 'add'
                                           else ('\t1' if g.get('underlay') else '')))
     nb = len({g['filecode'] for g in manifest['groups'] if g['filecode'] and not g.get('sky')})
-    print('binding %s: %s; hidden groups %s: %d packets; duplicates dropped: %d tris (%d with '
+    print('binding %s: %s; visibility groups kept (page masks them); duplicates dropped: %d tris (%d with '
           'another texture), %d covered by earlier chunks; %d marked underlay' % (a.bind, dict(stats),
-          'off' if a.show_hidden_groups else 'on', stats['hidden_packets'], stats['dup_tris_dropped'],
+          stats['dup_tris_dropped'],
           sum(dup_xtex.values()), stats['covered_tris_dropped'], stats['underlay_tris']))
     print('chain fill: %s, %d packets filled (%d on a single anchor); %d mixed chains with '
           'unbound packets left alone; %d chains skipped (override not applied)'

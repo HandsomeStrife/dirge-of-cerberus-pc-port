@@ -1,0 +1,1 @@
+{"name": "w224_item22", "frames": 470, "log_from": 180, "doc": "worker 0224: w220_box's inputs (run east into the placed item 0x69300000, section-15 record 22, object 0x13cec0; X at 400 closes the box). TRACE_FIELDSET=items TRACE_ITEMS=13cec0.", "events": [{"from": 10, "to": 230, "lx": 0.6, "ly": -1.0}, {"from": 400, "to": 404, "buttons": ["cross"]}]}

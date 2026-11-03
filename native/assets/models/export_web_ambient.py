@@ -9,8 +9,8 @@ Writes OUT.json (gitignored game data). Decoded (notes/audio-research.md "Placed
 Section 22 (FUN_00311530: record i at base + i x 0xc0), read at stage load by FUN_00548788 (manager +0xfac): a record
 with +0xaa == 7 makes a class-0xe object (FUN_0053db98, ctor FUN_0057d430, vt 0x5903b8) via FUN_005503e8(obj, i, 0, 1):
   +0x00 matrix, +0x40 its inverse, +0x80 / +0x90 box lo / hi (local), +0xa0 s16 script, +0xa4 flags,
-  +0xa8 s16 section-1 record it follows (FUN_0053b920 -> FUN_0054c550: the actor's +0xc0 child list, so it is
-  activated with that actor, FUN_0054ef68), +0xaa type, +0xab, +0xb0 name, +0xb8 shape (0 box, 1 ellipsoid,
+  +0xa8 s16 parent AREA index (json `actor`; manager +0x2b4, FUN_0053b920 -> FUN_0054c550: the area's +0xc0 child
+  list, switched with that area, FUN_0054ef68; worker 0223), +0xaa type, +0xab, +0xb0 name, +0xb8 shape (0 box, 1 ellipsoid,
   2 cylinder: FUN_0057dab8 / FUN_0057e310), +0xbb volume (area sounds), +0xbc request-0x15 value (FUN_003e8708),
   +0xbd 1 = area sound (playBgAreaSound path FUN_003e6c88), else a positioned one (FUN_003e6d70).
 

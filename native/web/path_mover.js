@@ -248,7 +248,9 @@ function moverTick(a, paths, warn) {
     const p = pathOf(paths, C.path);
     C.node++;
     C.p320 = f(C.p320 + C.p31c);
-    // the body listener C+0x540 gets event 3 (node index): the motion side, nothing on the page reads it
+    // the body listener C+0x540 gets event 3 (the new node index): an actor's FUN_005690c8 case 3 -> FUN_00588550 case 3
+    // (manager event 0x10 -> script event 0x14, r0 = the node) and FUN_00563970(a, -1) (worker 0228: enemy_ai a.listen)
+    if (a.listen) a.listen(3, C.node);
     if (C.node === C.last) done = 1;
     else if ((p.flags & 1) && p.n <= C.node) C.node = 0;
     if (!done) segStart(a, p, C.node, warn);

@@ -13,6 +13,7 @@
 // output FUN_00379148. `frame(dtMs)` does the same, in that order.
 
 import { EventVM, block } from './event_vm.js';
+import { soundNatives, sendEventSe, skipSound } from './event_sound.js';
 
 const f32 = Math.fround;
 
@@ -59,6 +60,10 @@ export class EventRuntime {
     this.warn = opts.warn || ((m) => console.warn(m));
     this.zoneLoad = opts.zoneLoad || null;
     this.actors = opts.actors || null;          // event_actor_rt.js EventActors (worker 0218): the KerberosActor natives
+    this.sound = opts.sound || null;            // event_sound.js back ends (worker 0222): music, area, audio, voices
+    this.windows = opts.windows || null;        // event_window.js (worker 0222): KerberosWindow open_l / close_l
+    this.skip = 0;                              // +0x156c: 1 at FUN_00372f70 (the Skip choice), 2 from the next frame
+    this.skipMode = 0;                          // +0x9860 (setSkipMode bits; read by the load / window commands)
     this.lang = opts.lang ?? 2;                 // FUN_00242450 = PTR_0046b2dc: 2 in the z128 save (the page's language)
     this.eps = data.splineEps ?? SPLINE_EPS_DEFAULT;
     if (this.eps == null) throw new Error('event data: no splineEps (re-run export_web_event.py)');
@@ -96,14 +101,18 @@ export class EventRuntime {
 
   frame(dtMs = 20) {
     this.frameNo++;
+    // FUN_003e9ed0: last frame's event SEs go out (event_sound.js)
+    if (this.sePending && this.sePending.length) this.seSent = sendEventSe(this, this.sound && this.sound.audio ? this.sound.audio() : null);
     if (!this.vm.done) this.vm.run();                                   // the VM thread's window
     this.clock = (this.clock + dtMs) >>> 0;                              // FUN_003798a0
     for (const c of this.slots.slice()) {                                // FUN_00377c68's slot loop
       let fin = false;
-      if (c.type === 0x1c) fin = this.clock >= c.until;                  // case 0x1c: timer
+      if (c.type === 0x1c) fin = this.skip !== 0 || this.clock >= c.until;   // case 0x1c: timer (Skip ends it)
       else if (c.type === 7) fin = this.camMove(c);                      // case 7: FUN_003779d0
       if (fin) this.slots.splice(this.slots.indexOf(c), 1);
     }
+    if (this.windows) this.windows.frame(this);                          // the event windows' state (event_window.js)
+    if (this.skip === 1) this.skip = 2;                                  // FUN_00377c68's tail
     this.camOutput();                                                    // FUN_00379148
     if (this.fade) {                                                     // the fade particle (see fadeTo)
       // GUESS: the level moves by the rate once per tick, 1.2 ticks per PAL frame (FUN_00322f88's step);
@@ -116,6 +125,12 @@ export class EventRuntime {
   // case 7 / FUN_003779d0: key time t = from + rate x (clock - start), clamped to the keys, FUN_00374a08(t, 1)
   camMove(c) {
     const cam = this.cams[c.cam];
+    if (this.skip === 2) {                                               // +0x156c == 2: the key time is the move's end
+      let tc = cam.tmin <= c.to ? c.to : cam.tmin;
+      if (cam.tmax < tc) tc = cam.tmax;
+      if (cam.spl) this.camEval(cam, tc);
+      return true;
+    }
     const t = f32(c.from + f32(c.rate * (this.clock - c.start)));
     let tc = cam.tmin <= t ? t : cam.tmin;
     if (cam.tmax < tc) tc = cam.tmax;
@@ -152,10 +167,25 @@ export class EventRuntime {
   // by 256 / (s x 60) per tick (s <= 0: level 0 at once); FUN_002f4578 (out): level 0 rising (s <= 0: 256 at once).
   // The particle is emitter (2 | 4) + b of the system FED (tables 0x46d520 / 0x46d528); its draw is not decoded.
   fadeTo(isIn, ms, a, b) {
+    // FUN_003736c8: with +0x156c != 0 a fade (not the _noskip one) does nothing
+    if (this.skip !== 0) { this.log.push([this.frameNo, (isIn ? 'fadein ' : 'fadeout ') + ms + ' (skip)']); return; }
     const s = f32(ms * 0.001);
     if (isIn) this.fade = s > 0 ? { level: 256, rate: f32(-(256 / f32(s * 60))), b, a } : { level: 0, rate: -256, a, b };
     else this.fade = s > 0 ? { level: 0, rate: f32(256 / f32(s * 60)), a, b } : { level: 256, rate: 256, a, b };
     this.log.push([this.frameNo, (isIn ? 'fadein ' : 'fadeout ') + ms]);
+  }
+
+  // FUN_00372f70 (the Skip choice; offered by FUN_003c0520 while an event runs out of battle mode, stage-controller.md):
+  // +0x156c = 1, +0x1558 bit 36, then FUN_003e9950 / FUN_003ea5f0 (stream SEs and the voice channels stop) and
+  // FUN_003b7118(DAT_00472a80, id, 1) for each open event window (+0x9804 / +0x9808, 5 of 0xc).
+  requestSkip() {
+    if (this.skip !== 0) return false;
+    this.skip = 1;
+    this.log.push([this.frameNo, 'skip']);
+    if (this.sound) skipSound(this.sound);
+    if (this.windows) this.windows.skip(this);
+    this.vm.warnOnce('skip-rest', 'event: FUN_00372f70\'s FUN_00380ca0(0xb4), FUN_002420e0, FUN_002f47e0, FUN_002574a0, FUN_003e6fc8 and the event effects\' stop (FUN_002ebdb8) left out');
+    return true;
   }
 
   natives() {
@@ -167,10 +197,11 @@ export class EventRuntime {
       'fake/KerberosEvent.wait(I)V': (vm, [h]) => (R.busy(h) ? block(() => !R.busy(h)) : undefined),
       // sleep (FUN_003a0e48): poll until clock - start >= n (n = 0: returns at once? no: the loop runs while
       // n == 0 too, until the abort bit; the scripts never pass 0)
+      // (worker 0219, stage-controller.md "Skip"): the loop also ends when +0x156c != 0
       'fake/KerberosEvent.sleep(I)V': (vm, [n]) => {
         const t0 = R.clock, u = n >>> 0;
         if (u === 0) R.warn('event: sleep(0) blocks forever in the game (FUN_003a0e48); not reached by scr001');
-        return block(() => (R.clock - t0) >>> 0 >= u && u !== 0);
+        return block(() => R.skip !== 0 || ((R.clock - t0) >>> 0 >= u && u !== 0));
       },
       // setTimer (FUN_003a4698 -> FUN_0037db48): command 0x1c, done when clock >= now + max(n, 0)
       'fake/KerberosEvent.setTimer(I)I': (vm, [n]) => R.cmd(0x1c, { until: (R.clock + Math.max(n, 0)) >>> 0 }),
@@ -182,8 +213,9 @@ export class EventRuntime {
       'fake/KerberosEvent.set_battlemode(I)V': (vm, [v]) => { R.state.battlemode = v; R.log.push([R.frameNo, 'battlemode ' + v]); },
       // setSkipMode (FUN_0039ea68): +0x9860 |= 1 << n after the load commands (types 2, 9, 0x12, 0x1a, 0x1b) are
       // under way; the page has no load commands. unsetSkipMode (FUN_0039ea18) clears it.
-      'fake/KerberosEvent.setSkipMode(I)V': (vm, [n]) => { R.state.skip |= 1 << (n & 31); },
-      'fake/KerberosEvent.unsetSkipMode()V': () => { R.state.skip = 0; },
+      'fake/KerberosEvent.setSkipMode(I)V': (vm, [n]) => { R.skipMode |= 1 << (n & 31); R.state.skip = R.skipMode; },
+      'fake/KerberosEvent.unsetSkipMode()V': () => { R.skipMode = 0; R.state.skip = 0; },
+      'fake/KerberosEvent.isSkip()Z': () => (R.skip !== 0 ? 1 : 0),        // FUN_003a0d88: +0x156c != 0
       'fake/KerberosEvent.useZone(I)V': (vm, [z]) => { R.state.zone = z; },
       // the stage title card (FUN_0039e8e8 / FUN_003fdb48; FUN_003fdd30): not on the page -> never showing
       'fake/KerberosEvent.displayStageInfo_l(ILjava/lang/String;)V': () => { R.warn('event: displayStageInfo (the stage title card) left out'); },
@@ -257,6 +289,8 @@ export class EventRuntime {
       'fake/KerberosEffect.fadeout(FII)V': (vm, [ms, a, b]) => R.fadeTo(false, ms, a, b),
     };
     if (R.actors) Object.assign(N, R.actors.natives(R));
+    if (R.sound) Object.assign(N, soundNatives(R, R.sound));
+    if (R.windows) Object.assign(N, R.windows.natives(R));
     return N;
   }
 }
