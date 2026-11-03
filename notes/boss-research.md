@@ -172,7 +172,7 @@ state; heri_lastst and Zone.boss(true) should then follow.
   no scene_save), then heri_lastst, Zone.boss, battle. State at f1800 (route.py --prefix w231_boss4.json:1800; needs
   --frames >= the prefix; trace.py needs TRACE_LOG_AT for scripts over 1024 frames): actor +0x180 set, brain 0x8da900
   (vtable 0xaa3508 = the decode), AI mode 0x100, DAT_0046e590 = DAT_00aa3204, HP 17000 (difficulty 1), body
-  C+0x1e0 / 0x1e4 / 0x1e8 = 600 / 120 / 60 (cmd 0x156 as decoded). HUD gauge "Dragonfly GL" on screen.
+  C+0x1e0 / 0x1e4 / 0x1e8 = 600 / 120 / 60 (cmd 0x156 as decoded). HUD gauge (the boss gauge's name) on screen.
 - **w231_fight2** (from r0b_boss2, 660 frames, TRACE_FIELDSET=enemy TRACE_ENEMIES=1 TRACE_ERECS=32 TRACE_BOSS_BRAIN=8da900,
   the new fields.py option): state 3 (rest) -> 2 at f84 (aiTime 240 = W+0x46), 2 -> 5 at f135 (timer 0 > 59), volley of 4
   (slots 0, 1, 4, 5: prev != 8), 5 -> 2 at f236 (120 ticks), then 2 to the end: slots 0 / 1 stay alive, so ready()
