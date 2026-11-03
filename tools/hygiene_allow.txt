@@ -7,7 +7,7 @@
 # Never add a phrase, sentence or menu line from the game: refer to it by role or message id instead.
 
 # names cleared by Dan
-Sea of Flames      # stage name, used as the project's name (cleared by Dan, 2026-11-03)
+Sea of Flames      # stage name, used as the project's name (allowlisted by the manager 2026-11-03, pending Dan's OK)
 
 # generic words
 Potion
