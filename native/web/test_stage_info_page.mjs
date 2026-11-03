@@ -1,5 +1,5 @@
 // The stage-info box on the real play.html (worker 0220), in a headless browser:
-//   zone flag 2 = 7 (as Vincent's script 246, event 0x3a, sets it on the Potion pickup, record 22; pickups are not on the
+//   zone flag 2 = 7 (as Vincent's script 246, event 0x3a, sets it on the item pickup of record 22; pickups are not on the
 //   page yet: the test sets it) -> the stage controller's deb_jump: peace (bit 6), free_usercontrol(1) (bit 11),
 //   displayStageInfo(6, 'MES_ITEM_07') -> the box opens; the AI clock stops (FUN_00365008), Vincent takes no input
 //   (FUN_00331f08); ✕ (Space) -> the box closes 1000 ms of game time later; chaos clears bit 6, the AI clock runs again.
@@ -45,7 +45,7 @@ try {
              ticks: P.stats.ticks, pos: [P.ctrl.pos.x, P.ctrl.pos.z], f46: P.enemyAI.eventFlags[46], g55: P.stage.globalFlags[55] };
   });
   ok(await pg.evaluate(() => window.__play.stageInfo.kind === -1 && !!window.__play.stageInfo.D), 'stage info loaded, no box at the start');
-  // the potion pickup's flag (script 246 event 0x3a: flag 2 = 7), 46 not yet set (the w220_box trace: both 0 before)
+  // the record-22 pickup's flag (script 246 event 0x3a: flag 2 = 7), 46 not yet set (the w220_box trace: both 0 before)
   await pg.evaluate(() => { const f = window.__play.enemyAI.eventFlags; f[46] = 0; f[2] = 7; });
   await until(() => window.__play.stageInfo.kind === 6);
   const a = await st();
@@ -84,6 +84,26 @@ try {
   ok(h.b11 === 0, 'free_usercontrol(0): bit 11 clear');
   ok(errs.length === 0, 'no console / page errors' + (errs.length ? ': ' + errs.slice(0, 3).join(' | ') : ''));
   await pg.close();
+  { // 2. the default load: the opening parks output.hud and puts it back at the hand-off; the box still draws after it
+    const pg2 = await browser.newPage({ viewport: { width: 960, height: 540 } });
+    const errs2 = [];
+    pg2.on('pageerror', e => errs2.push(e.message));
+    await pg2.goto(`http://127.0.0.1:${port}/play.html?enemydmg=0`, { waitUntil: 'load' });
+    await pg2.waitForFunction(() => window.__play && window.__play.intro.ended > 0 && !window.__play.intro.active
+      && window.__play.stageInfo && window.__play.stage, null, { timeout: 400000 });
+    await pg2.evaluate(() => window.__play.stageInfo.ready);
+    await pg2.evaluate(() => {
+      const si = window.__play.stageInfo, d = si.draw.bind(si); window.__draws = 0;
+      si.draw = () => { const p = d(); if (p && p.length) window.__draws++; return p; };
+      const f = window.__play.enemyAI.eventFlags; f[46] = 0; f[2] = 7;
+    });
+    await pg2.waitForFunction(() => !!(window.__play.stageInfo.box && window.__play.stageInfo.box.screen), null, { timeout: 60000 });
+    await pg2.waitForTimeout(1500);
+    const n = await pg2.evaluate(() => window.__draws);
+    ok(n > 0, `after the opening's hand-off the open box is drawn through output.hud (${n} renders)`);
+    ok(errs2.length === 0, 'no page errors (opening run)' + (errs2.length ? ': ' + errs2.slice(0, 2).join(' | ') : ''));
+    await pg2.close();
+  }
 } catch (e) { ok(false, 'exception: ' + e.message); }
 finally { await browser.close(); srv.kill(); }
 done();

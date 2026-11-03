@@ -29,8 +29,13 @@ const D = loadStageInfoData(JSON.parse(fs.readFileSync(sjPath)), loadPauseData(J
 // ---- data
 eq(D.si.kinds[6], 0x2b, 'DAT_004a8250[6] = box kind 0x2b');
 eq(D.si.kinds[1], 0x1f, 'DAT_004a8250[1] = box kind 0x1f');
-ok(D.si.messages.MES_ITEM_07 && Buffer.from(D.si.messages.MES_ITEM_07).toString('latin1').startsWith('$c3Potion$c7 Obtained!'),
-  'MES_ITEM_07 = the string the box held in RAM (box +0xdf0, open330.p2s)');
+// MES_ITEM_07's control-code layout (no game text in the repo): '$c3', 6 glyphs, '$c7', ... and its '$' codes in order
+{
+  const t = D.si.messages.MES_ITEM_07 ? Buffer.from(D.si.messages.MES_ITEM_07).toString('latin1') : '';
+  const codes = (t.match(/\$(c\d|r|i..)/g) || []).join(' ');
+  ok(/^\$c3[^$]{6}\$c7/.test(t), 'MES_ITEM_07 starts $c3 + 6 glyphs + $c7 (the box\'s RAM string at +0xdf0, open330.p2s)');
+  eq(codes, '$c3 $c7 $r $r $r $r $r $ipl $r $ipr $r $r $r $r $r $r $c1 $r $c7', 'MES_ITEM_07 code sequence');
+}
 eq(D.si.itemFx[7] >>> 0, 0x834c2000, 'item picture id for flag 55 = 7 (box slot 1 +0x70 in RAM)');
 eq(D.si.scripts['43'].length, 9, 'kind 0x2b table: two sections (one mode-1 command)');
 
@@ -64,6 +69,23 @@ const L2 = run({ crossAt: 240, until: 700 });
 eq(L2.step7, -1, 'a ✕ before the screen has the focus (frame 240) does nothing (FUN_003d5480)');
 eq(L2.closed, -1, '... and the box stays open (no time-out)');
 
+// ---- FUN_003d5480's focus gate on the ✕ (FUN_003c6050). With the game's tables mode 1 starts in the same pass that
+// builds the screen, so a synthetic table (mode 1 at t 0, the layout at t 500) tests the gate: a ✕ at +100 ms, before
+// the screen holds the focus, is ignored; the layout still comes at t 500.
+{
+  const T = D.si.scripts['43'];
+  const syn = [T[0], [0, 0, -19, -1, 0, 0], T[3], [0, 0, -1, -1, 0, 0], T[6], T[7], T[8]];
+  const D2 = { ...D, si: { ...D.si, scripts: { ...D.si.scripts, 43: syn } } };
+  const si = new StageInfo(D2, { flags: { event: n => (n === 55 ? 7 : 0) }, warn: () => {} });
+  let at251 = null;
+  for (let f = 0; f <= 251; f++) {
+    si.frame(f === 231);                                           // the box opens at 226: +100 ms
+    if (f === 216) si.display(6, 'MES_ITEM_07');
+    if (f === 251) at251 = { screen: !!(si.box && si.box.screen), step: si.box && si.box.step, mode: si.box && si.box.mode };
+  }
+  ok(at251.screen && at251.step === 3 && at251.mode === 1, `synthetic table: a ✕ before the focus is ignored (screen ${at251.screen}, step ${at251.step}, mode ${at251.mode})`);
+}
+
 // ---- the text widget's fade (FUN_003c5db0: 100 ms in from frame 251; after the ✕ 100 ms out)
 const alpha = {};
 run({ onFrame: (f, si) => { const w = si.box && si.box.screen && si.box.screen.byId && si.box.screen.byId(0x35); if (w) alpha[f] = w.c58[3]; } });
@@ -82,7 +104,7 @@ eq(hidden[405], 1, 'hidden at the end of the 100 ms fade out (FUN_003cb360(w, 1)
   let prims = null;
   run({ until: 253, onFrame: (f, si) => { if (f === 253) prims = si.draw(); } });
   const yellow = prims.filter(p => p.tex === 'font' && p.v[0].c[0] === 255 && p.v[0].c[1] === 255 && p.v[0].c[2] === 0);
-  ok(yellow.length === 6 && yellow.every(p => p.v[0].c[3] === 0x34), `'Potion' after $c3: 6 yellow glyphs at alpha 0x34 (${yellow.length}, ${yellow.map(p => p.v[0].c[3])})`);
+  ok(yellow.length === 6 && yellow.every(p => p.v[0].c[3] === 0x34), `the 6 glyphs after $c3: yellow at alpha 0x34 (${yellow.length}, ${yellow.map(p => p.v[0].c[3])})`);
 }
 // ---- an unknown '$' code: FUN_003d1d98 returns 1 with *param_4 = 1: the '$' is skipped, the next byte is text
 {

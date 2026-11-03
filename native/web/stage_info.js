@@ -1,5 +1,5 @@
-// Stage-info boxes: displayStageInfo / isDisplayStageInfo (worker 0220; notes/message-research.md). The x -1186 "Potion
-// Obtained!" help box is kind 6 'MES_ITEM_07', opened by ev0100's deb_jump (the stage's help routine) through the stage
+// Stage-info boxes: displayStageInfo / isDisplayStageInfo (worker 0220; notes/message-research.md). The x -1186 help
+// box is kind 6 'MES_ITEM_07', opened by ev0100's deb_jump (the stage's help routine) through the stage
 // controller (stage_controller.js, worker 0219), which binds the natives to display() / isDisplay().
 //
 // Translated:
@@ -32,7 +32,7 @@ export const BOX_KIND_ITEM = 0x2b, BOX_KIND_OBJECTIVE = 0x1f;
 // opens in frame 226 (state 5 at record 227): FUN_003fdf00 state 3 waits for the effect file on PCSX2's disc. GUESS: the
 // page loads it with the page and keeps the measured 8 frames in state 3 (as gameover_title.js TITLE_DELAY). notes/fidelity-audit.md 'Stage-info file read'.
 export const READ_FRAMES = 8;                   // frames waiting in state 3 after the frame that ran states 0 -> 3
-export const FRAME_MS = 20;
+export const FRAME_MS = 20;                       // GUESS: FUN_0023c1f0 is real time (ms); 20 ms a game frame (notes/fidelity-audit.md 'stage-info clock')
 
 const warned = new Set();
 function warnOnce(k, m, warn = console.warn) { if (!warned.has(k)) { warned.add(k); warn(m); } }
@@ -418,18 +418,31 @@ export function createStageInfo({ output = null, pause = null, flags = null, url
       si.D = loadStageInfoData(sj, loadPauseData(pj));
     } catch (e) { console.warn('stage info: bad data, boxes run without a screen', String(e)); }
   })();
-  if (output) {
+  // The draw hook wraps output.hud. The opening (play.js startIntro / finishIntro) parks output.hud (null) and puts the
+  // parked chain back afterwards, which drops a wrapper made in between; so the hook is (re)installed at each game
+  // frame when output.hud is set and is not the wrapper already, and never while it is parked (null).
+  // If a later wrapper wraps an earlier one of these, the inner one runs inside the outer one's prev: only the
+  // outermost draws (once a render).
+  let wrapper = null, inside = false;
+  const hook = () => {
+    if (!output || !output.hud || output.hud === wrapper) return;
     let layer = null;
     const prev = output.hud;
-    output.hud = o => {
-      if (prev) prev(o);
+    wrapper = o => {
+      if (inside) { prev(o); return; }
+      inside = true;
+      try { prev(o); } finally { inside = false; }
       const prims = si.draw();
       if (!prims || !si.D) return;
       if (!layer) layer = pause && pause.layer ? pause.layer : null;
       if (!layer) { warnOnce('layer', 'stage info: no pause layer to draw with'); return; }
       layer.draw(o.renderer, o, prims);
     };
-  }
+    output.hud = wrapper;
+  };
+  hook();
+  const frame = si.frame.bind(si);
+  si.frame = cross => { hook(); return frame(cross); };
   si.sounds = () => {                              // the box's FUN_003e1d10 ids of this frame -> the pause's latch
     for (const e of si.events) if (e.se !== undefined && pause && pause.menuSound) pause.menuSound.set(e.se);
   };

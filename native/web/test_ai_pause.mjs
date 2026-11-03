@@ -46,6 +46,16 @@ for (const paused of [true, false]) {
   const hp0 = a.hp;
   W.blast.actor(a, { dmg: 10, kind: 0, owner: -1 }, a.pos.slice(), [1, 0, 0]);
   ok(paused ? a.hp === hp0 : a.hp < hp0, `${tag}: soldier HP ${hp0} -> ${a.hp}`);
+  // FUN_0055c7f8 on Vincent: a bullet (FUN_0055db50 -> FUN_0055d2c0), a melee volume (FUN_0055eac8), an explosion (FUN_0055e498)
+  let h = player.hp;
+  W.t.damagePlayer({ damage: 10, kind: 0, dir: [1, 0, 0], pos: player.pos.slice(), hit: 0, f148: 0, from: a });
+  ok(paused ? player.hp === h : player.hp < h, `${tag}: bullet: Vincent HP ${h} -> ${player.hp}`);
+  h = player.hp;
+  W.t.attackDamagePlayer({ owner: a, dmg: 10, kind: 0, type: 0, ec: 0 }, player.pos.slice(), null, null);
+  ok(paused ? player.hp === h : player.hp < h, `${tag}: melee: Vincent HP ${h} -> ${player.hp}`);
+  h = player.hp;
+  W.blast.player({ dmg: 10, kind: 0, owner: -1, flags: 8 }, player.pos.slice(), [1, 0, 0]);
+  ok(paused ? player.hp === h : player.hp < h, `${tag}: explosion: Vincent HP ${h} -> ${player.hp}`);
 }
 GS.reset();
 done();
