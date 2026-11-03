@@ -817,7 +817,8 @@ async function main() {
     stats: (k, n) => { if (stageRes) stageRes.stats.add(k, n); },              // FUN_0031d668 (worker 0243: the item use's stat 4)
     hud: m => { if (itemsWeapon) itemsWeapon.hudMask |= m; } }) : null;         // FUN_005740c0: DAT_0046e54c |= 0x6e
   // FUN_0054ef68 -> vt+0x14c on the area's children (worker 0223): barrels, items, placed sounds
-  if (areas) areas.onSwitch = (k, on) => { if (props) props.areaSwitch(k, on); if (items) items.areaSwitch(k, on); if (amb.placed) amb.placed.areaSwitch(k, on); };
+  // worker 0251: and the actors (enemy_ai areaSwitch, FUN_0055a0d8); the current world, as a Restart replaces it
+  if (areas) areas.onSwitch = (k, on) => { if (props) props.areaSwitch(k, on); if (items) items.areaSwitch(k, on); if (amb.placed) amb.placed.areaSwitch(k, on); if (enemyAI && enemyAI.areaSwitch) enemyAI.areaSwitch(k, on); };
   const bodyRecs = new Set();                        // records the AI activated (onActivate): their bodies go at a Restart
   const startBodies = new Set(enemies ? enemies.actors.map(a => a.rec) : []);   // the bodies drawn at the start   // aiOpts / wakeSave: rebuilt by the Restart (checkpoint.js)
   let gameHud = null;                                // the game's HUD (hud.js), set up below; enemyAI's hudHit reads it
@@ -1197,7 +1198,7 @@ async function main() {
       stats.lastGroundErr = g == null ? null : g - ctrl.pos.y;
       // FUN_00573c60 (the player's update, after his move) -> FUN_00542920: the stage areas by his position (areas.js;
       // L: the matrix row FUN_0054a5e8 reads = the page's post-step position)
-      if (areas) areas.frame([ctrl.pos.x, ctrl.pos.y, ctrl.pos.z]);
+      if (areas && !areaHold) areas.frame([ctrl.pos.x, ctrl.pos.y, ctrl.pos.z]);
       if (enemyAI) { php.pos = [ctrl.pos.x, ctrl.pos.y, ctrl.pos.z]; php.face = [ctrl.C.face.x, ctrl.C.face.y, ctrl.C.face.z]; enemyAI.tick(STEP, pOld, php.pos); if (propsView) propsView.sync(); if (itemsView) itemsView.sync(); }
       // the section-22 sound objects (FUN_0057d4f8 -> FUN_0057d550): Vincent's frame-start position + (0, -7, 0), T: w215_routeA
       // start / stop frames; their volume from the listener +0x3850 of this frame (FUN_003e6ec8). A linked object's state:
@@ -1316,6 +1317,11 @@ async function main() {
     // worker 0220: a stage reload starts with no stage-info box and the game-state bits clear (game_state.js reset)
     if (stageSi) stageSi.reset();
     if (stageGs) stageGs.reset();
+    // worker 0251: GUESS (part of checkpoint.js restoreRecord's 'Vincent at the page spawn until main hands him back'): the
+    // game's Vincent is at the reloaded status's own matrix, not at the deck, so the area pass (FUN_00542920, which now
+    // also switches actors) waits for the hand-back (vinBattle.place); else the placeholder spawn would switch areas 105 / 2
+    // on and wake 41-49 (T w242: not active after the record reload)
+    if (rec) areaHold = true;
     if (rec) startStage(false, 0, rec.gflags);           // main from its top with the record's global flags (FUN_00400778 case 0xb)
     else if (!handing) startStage(!!introData); else if (!stage) startStage(false, introRt ? introRt.skip : 0);
   };
@@ -1436,6 +1442,7 @@ async function main() {
   // (0, -1, 0). Worker 0230: so no teleport path (no camera reset: that is battle()'s FUN_003285d0, stageCameraReset; no
   // cloth restart, no stream aid, velocity kept). The walk-mesh search stays (the body lands on the ground: T w229_rescue_pos
   // y 0 -> -0.0623). L: ctrl.prev / prevHeading (the page's record of the last frame, its trigger segment) follow the place.
+  let areaHold = false;                              // worker 0251: see restart() (record reload GUESS)
   const vinBattle = {
     tag: 'p_Vin',
     matrix: () => { const f = ctrl.C.face; return [-f.z, 0, f.x, 0, 0, -1, 0, 0, -f.x, 0, -f.z, 0, ctrl.pos.x, ctrl.pos.y, ctrl.pos.z, 1]; },
@@ -1446,6 +1453,7 @@ async function main() {
       ctrl.C.face = { x: Math.sin(ctrl.heading), y: 0, z: Math.cos(ctrl.heading) };
       ctrl.locate();
       ctrl.prev = { ...ctrl.pos }; ctrl.prevHeading = ctrl.heading;
+      areaHold = false;
     },
   };
   // battle()'s camera reset (FUN_00324e70 -> FUN_00329f68 -> FUN_003285d0): the angles of render view 1's forward

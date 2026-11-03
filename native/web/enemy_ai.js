@@ -4530,6 +4530,26 @@ export function createEnemyAI(opts) {
   //     reload0), so nothing; mgr +0x2b0 bit 6 cleared (no reader on the page).
   //  4. FUN_005459d8: event 0x23 to every object (event23).
   // L: props / items (types 0xa / 0xf / 0x10 / 0x13) get neither event here (as event23); the player (type 2) has no script.
+  // worker 0251: the area switch for actors. FUN_00547ce0 builds each section-1 record's actor and parents it to area
+  // record +0x3e (FUN_0053b920 -> FUN_0054c550; Vincent and -1 get none: ai.json records[].area). An area that changes
+  // state (FUN_0054ef68, areas.js onSwitch) calls vt+0x14c = FUN_0055a0d8(actor, on) on its children: unless status
+  // +0x0c bit 5 is set (FUN_00315738(st, 5); records[].ov5) -> vt+0x144(on, 1) = FUN_00559748 (setActive with event 3);
+  // with bit 5 only when actor +0x28 bit 1 is set. In z128 bit 5 clear = 10-14 (area 13), 41-43 / 45 (105), 46-49 (2),
+  // 52-54 (0, the alley stairs), 62 / 63 (53; deleted at normal difficulty). T: route RAM r02_deckend / r02_climb (52-54
+  // active, area 0 on) and r03_spot2 (46-49 off with area 2). A deleted record (no object) is skipped (FUN_0053e1e0
+  // unlinked it). MISSING: the bit-5 actors' +0x28 bit 1 test (its writer is not decoded; the page's flags28 is not the
+  // game's +0x28): they are left alone, as before (warned once).
+  function areaSwitch(k, on) {
+    for (const rec of data.records) {
+      if (rec.area !== k || rec.rec === 0) continue;
+      const t = objects.get(rec.rec + ID_BASE);
+      if (!t || (t.kind !== 'record' && t.kind !== 'actor')) continue;
+      if (rec.ov5) { warnOnce('enemy_ai: area switch on a status-bit-5 actor (FUN_0055a0d8: actor +0x28 bit 1 not modelled): left alone'); continue; }
+      setActive(t, on ? 1 : 0, 1);
+    }
+  }
+  if (data.records.length && data.records.every(r => r.area === undefined)) warnOnce('enemy_ai: ai.json records have no area (re-export data/enemies): the actors\' area switch is off');
+
   function stageInit() {
     if (STAGE_OBJ) runEvent(STAGE_OBJ, 0x22);
     for (const o of [...objects.values()]) if (o.kind === 'record' || o.kind === 'actor') runEvent(o, 0x22);
@@ -4664,7 +4684,7 @@ export function createEnemyAI(opts) {
   // postManager: worker 0243 (FUN_0053fbe8: items.js posts the item use's request 0x1c)
   const world = { S, actors, triggers, bullets, attackObjs, objects, addActor, tick, runEvent, postManager, recById, events, activated, setActive, stageLoad, scheduleHandOff, handOffs, delayed,
                   event23,                                // worker 0235: FUN_005459d8 (script event 0x23 to every object)
-                  stageInit, loadPass,                    // worker 0240: FUN_0053ca50(mgr, 1) (0x22 then 0x23); FUN_005453b0's loop alone
+                  stageInit, loadPass, areaSwitch,                    // worker 0240: FUN_0053ca50(mgr, 1) (0x22 then 0x23); FUN_005453b0's loop alone
                   stageObj: STAGE_OBJ,                    // worker 0237: the stage object (type 0xc, script 0 on z128)
                   timerList,                              // script-timer list (FUN_0053e6e8; tests)
                   playerShot, queueShot, lockTargets, pushOut, boneWorld: opts.boneWorld || null,

@@ -250,6 +250,10 @@ def records(d):
                         # +0x4c / +0x4d -> AI +0x98 / +0x99 (signed bytes, FUN_00559748): the odds FUN_0035f7c0 /
                         # FUN_0035f8b0 draw against
                         b98=struct.unpack_from('b', d, o + 0x4c)[0], b99=struct.unpack_from('b', d, o + 0x4d)[0],
+                        # worker 0251: +0x3e (short) = the parent area index (FUN_00547ce0: status +0xa0 +0x3e ->
+                        # FUN_0053b920 -> FUN_0054c550; -1 none), and status +0x0c bit 5 (FUN_00315738(st, 5)): set ->
+                        # the area switch FUN_0055a0d8 (actor vt+0x14c) leaves the actor alone unless its +0x28 bit 1
+                        area=struct.unpack_from('<h', d, o + 0x3e)[0], ov5=over >> 5 & 1,
                         # status +0x70 = parameter set +0x38 x 10 (FUN_003153d0; parameter set +0x6c == 5 takes
                         # FUN_00315278 instead: none of the AI types): the move speed FUN_00565bd0 hands to
                         # FUN_0034b978 (C+0x1d4; x 0.4 walking, x 0.2 stance 2)

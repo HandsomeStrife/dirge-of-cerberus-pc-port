@@ -55,6 +55,24 @@ export function initReport(ctx) {
   const { renderer, camera, root, scene } = ctx;
   const canvas = renderer.domElement;
 
+  // ---- page errors (worker 0251; a page tool, not the game): uncaught exceptions, rejected promises and a lost WebGL
+  // context are kept (first 10 + last 10, with stacks and repeat counts) and go into meta.json `errors`, so a report sent
+  // after a crash or freeze names what threw. The first one shows a toast.
+  const errors = [], errSeen = new Map();
+  function noteError(kind, message, stack) {
+    const key = kind + '|' + message + '|' + (stack || '').split('\n')[1];
+    const seen = errSeen.get(key);
+    if (seen) { seen.count++; seen.last = new Date().toISOString(); return; }
+    const e = { kind, message: String(message).slice(0, 500), stack: String(stack || '').slice(0, 3000), time: new Date().toISOString(), count: 1 };
+    errSeen.set(key, e);
+    errors.push(e);
+    if (errors.length > 20) errors.splice(10, 1);
+    if (errors.length === 1 && ctx.toast) ctx.toast(`page error: ${e.message} (press R to send a report)`);
+  }
+  addEventListener('error', ev => noteError('error', ev.message, ev.error && ev.error.stack));
+  addEventListener('unhandledrejection', ev => noteError('rejection', ev.reason && ev.reason.message || String(ev.reason), ev.reason && ev.reason.stack));
+  canvas.addEventListener('webglcontextlost', () => noteError('webglcontextlost', 'the WebGL context was lost', ''));
+
   // ---- pick scene: one ID mesh per draw (alpha-tested draws use the depth-writing pass test)
   let pickRoot = null;
   function buildPickRoot() {
@@ -333,6 +351,7 @@ export function initReport(ctx) {
         url: location.href,
         note: note.value.slice(0, 4000),
         ua: navigator.userAgent,
+        errors: errors.slice(),
         camera: ctx.view(),
         rect: { px, norm },
         canvas: { w: W, h: H, css_w: canvas.clientWidth, css_h: canvas.clientHeight,
@@ -398,5 +417,5 @@ export function initReport(ctx) {
     const fb = [Math.floor(q.x), Math.floor(q.y)];
     return { fb, gpu: gpuPick([fb])[0], ray: rayCast(...Object.values(rayFor(fb[0] + .5, fb[1] + .5))) };
   };
-  return { open, close, isActive: () => active };
+  return { open, close, isActive: () => active, errors: () => errors.slice() };
 }

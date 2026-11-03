@@ -161,3 +161,23 @@ trace of recs 67 / 68 (trigger 57) or 20 / 21. Not needed for the ladder-top pai
 - Stage-load placements (bit 3 + event-actor tag), not script 0: FUN_00558f68 activates them with event 3 inline; their
   scripts start cmd 0x106 timers (FUN_0053e868 -> manager event 0xd -> script event 1). Ported as enemy_ai `stageLoad` /
   `timerTick`, run by the Restart; notes/checkpoint-research.md "41-43 at the checkpoint".
+
+## Area switch, stage-start deletes, the dogs (worker 0251, 2026-11-03; Dan's play-test report)
+
+- **Stage-start deletes.** Stage script 0 event 0x22 (run by the stage init's pass, FUN_0053ca50) deletes by difficulty
+  and stage flag 0 (`tools/stage_events.py ... --actions 0 | grep "^ev 0x22" | grep 0x10a`): with flag 0 < 2 and
+  difficulty not 2 / 3 it deletes records **57, 61, 62, 63, 64** (and gimmicks 60 / 45); with flag 0 == 2: 61, 64,
+  164-172 and a list of triggers. T: route RAM r02_deckend / r02_climb / r03_spot2: object slots of 57 / 61-64 empty.
+  So the dog **64** does not exist in a normal game; trigger 63 wakes 59, 60, 65 only (the page agrees).
+- **Area switch on actors** (FUN_00547ce0: parent area = record +0x3e; FUN_0055a0d8 = actor vt+0x14c): area on/off ->
+  vt+0x144(on, 1) for actors with status +0x0c bit 5 clear: 10-14 (area 13), 41-43 / 45 (105), 46-49 (2), **52-54 (0, the
+  alley stairs: Dan's missing stairs enemies)**, 62 / 63 (53). Bit 5 set: only with actor +0x28 bit 1 (not modelled). T:
+  route RAM (above): 52-54 active at the stairs; 46-49 off at r03_spot2 (area 2 off). enemy_ai `areaSwitch`.
+- **Dogs (e030, script 222).** Event 3 (activation): brain mode 3 only when var 7 == 1 (cmd 0x105); event 2 with r0 == 1:
+  var 7 = 1 and timer 0 = 250 (-> event 1); events 1 and 8 (hit): range 75 (0x155), 0x193, mode 3. So an unprovoked dog
+  idles in mode 0 in the game too; the page's dog does switch to mode 3 when shot (seen: 65 m3 after a hit). Mode 3 =
+  FUN_00361690 is not translated (empty update): the dogs do nothing after the hit. Open (fidelity-audit MISSING row).
+- **Market crash: not reproduced** (two more runs with the intro on, the real gun + lock-on, trigger 63 walked, 65 killed,
+  its corpse removed (400 ticks), walked to the corpse: no page error). Dan's nginx log: e030 loaded 09:24:02, g041 (gold,
+  soldier 60's drop) 09:24:05, his R report 09:24:18 (the page was running then). report.js now logs page errors into the
+  report (meta.json `errors`), so the next crash report carries the stack.

@@ -773,3 +773,20 @@ exercised in a browser.
   Camera.set (set_l cam 0) runs in the VM window and then the command loop evaluates the skipped move at its end key over it
   (FUN_00377c68 order: VM window, then commands; the page follows it). Passes with ?autoskip=1. The T values are from an
   unskipped roji02_01; decide whether the test runs ?autoskip=1 / 0 or the auto-skip GUESS changes when it presses Skip.
+- Dan's market crash / stairs enemies / bottom AI (worker 0251, 2026-11-03; **notes/enemy-activation.md 'Area switch,
+  stage-start deletes, the dogs'**; fidelity-audit rows by worker 0251). **(2) Stairs enemies, FIXED:** soldiers 52-54
+  (alley stairs) are activated by their parent area (record +0x3e = area 0; FUN_00547ce0 / FUN_0055a0d8 -> vt+0x144(on, 1)
+  for status bit 5 clear), which the page never did for actors. enemy_ai `areaSwitch`, play.js areas.onSwitch, ai.json
+  records[].area / ov5 (export_web_triggers.py; **data/enemies/ai.json re-exported**, only the records changed). T: route
+  RAM r02_deckend / r02_climb (46-54 active), r03_spot2 (46-49 off). Areas leaving now also switch those actors off (41-49
+  when he leaves 105 / 2), as the game. GUESS `areaHold` (play.js): after a scene_save reload the area pass waits for
+  main's hand-back (the placeholder deck spawn would wake 41-49; T w242). Bit-5 actors on the switch: MISSING (warned).
+  **(1) Market crash: NOT reproduced** (intro on, real gun + lock-on, trigger 63 walked, dog 65 killed, corpse removed,
+  walked to it; no page error). Dog **64 does not exist at normal difficulty** (script 0 ev 0x22 deletes 57 / 61-64; T
+  route RAM), so Dan's first dog was 65 (or 93). His log shows the page alive at 09:24:18 after the kill. report.js now
+  records page errors (+ stacks, WebGL context loss) in meta.json `errors` and toasts the first: ask Dan to press R
+  when it next happens. **(3) Dog AI: decoded, NOT translated:** script 222 keeps a dog in mode 0 until hit (event 8),
+  a timer (event 2 n = 1) or var 7; then brain mode 3 = FUN_00361690 (~750 lines), an empty update on the page. Needs a
+  chunk-03 trace with a dog awake (none exists) and the jump attack ops. Soldiers 50 / 51 at the stairs' foot wake in
+  mode 1 (translated). Tests: new test_area_actors (14), test_stairs_enemies_page (8), test_checkpoint_page + the areas
+  after the hand-back. Mutants 8 / 8 killed (1 equivalent: the kind guard). Suite green, known gaps unchanged. No commit.

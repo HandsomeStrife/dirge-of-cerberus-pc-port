@@ -226,6 +226,11 @@ try {
                mat: P.stage.rt.vm.calls.includes('ev0101.rv_matiawase'), battle: P.stage.battle }; });
     ok(Math.abs(r2.pos[0] + 889.2) < 0.01 && Math.abs(r2.pos[2] + 599) < 0.01 && Math.abs(r2.pos[1] + 0.0636) < 0.05 && r2.face[0] < -0.999,
        `record Restart: main's flag-18 branch places Vincent at ${r2.pos.map(v => v.toFixed(3))} facing ${r2.face.map(v => v.toFixed(3))} (T (-889.2, -0.0636, -599) facing -x)`);
+    // worker 0251: the area pass waits for this hand-back (play.js areaHold), then runs from his place: current area 87
+    // (on 87 / 0 / 53 / 6), so 52-54 (area 0) come on and 41-49 (105 / 2) stay off
+    await until(pg, () => window.__play.areas.cur === 87, null, 10000).catch(() => {});
+    const r3 = await pg.evaluate(() => { const P = window.__play, W = P.enemyAI; return { cur: P.areas.cur, recs: W.actors.map(a => a.rec).sort((p, q) => p - q).join() }; });
+    ok(r3.cur === 87 && /\b52,53,54\b/.test(r3.recs) && !/\b4[1-9]\b/.test(r3.recs), `record Restart: areas after the hand-back (current ${r3.cur}; actors ${r3.recs})`);
     ok(r2.g18 === 0 && r2.f9 === 1 && r2.f0 === 2 && !r2.mat && r2.battle, `record Restart: global 18 -> ${r2.g18}, stage flag 9 -> ${r2.f9}, flag 0 ${r2.f0}, rv_matiawase not replayed (${!r2.mat}), battle ${r2.battle}`);
   }
   ok(errs.length === 0, 'no page errors' + (errs.length ? ': ' + errs.slice(0, 2).join(' | ') : ''));
