@@ -3,11 +3,10 @@
 
   python3 -I native/assets/models/test_cull_tag.py      (ROOM_PY=<path>: test another copy, for mutation runs)
 
-1. Hand cases: two-sided header (w 0x20) -> mode 0; list triangle -> mode 1; strip quad -> mode 2 with the
-   partner's game-front normal (minus its emitted-order cross); zero-area partner -> mode 0; an undecoded header
-   w raises. build_flat_kept emits a quad's second triangle as (v3, v2, v1) (same winding), so its last vertex
-   (WebGL's provoking vertex, which room.js reads the partner test from) lies on the partner's plane, and the
-   tags line up with the vertices.
+1. Hand cases: two-sided header (w 0x20) -> never; list triangle -> no partner; strip quad -> the
+   partner's game-front plane; a 3-vertex strip tail -> no partner; zero-area partner -> never; an undecoded
+   header w raises. build_flat_kept keeps the packet order and writes 5 floats per vertex (partner plane, own
+   game-front plane distance), the same on a triangle's three vertices (room.js decides once per triangle).
 2. z128's packets (needs extract/): header w is 0 or 0x20, and 0x20 exactly on the chains with header +0x94
    bit 0.
 3. The game's GS dumps (needs tools/trace/out/room_grade/src): the room's triangles (TEST 0x5000e, the room's
@@ -42,15 +41,22 @@ def unit(n):
 V = [(0, 0, 0), (4, 0, 0), (0, 4, 0), (4, 4, 3)]
 quad = dict(verts=V, uv=[(0, 0)] * 4, col=[(128, 128, 128, 128)] * 4, is_list=False, hdr_w=0)
 t1, t2 = (0, 1, 2), (2, 1, 3)
-want1 = unit(tuple(-x for x in cross(V[2], V[1], V[3]))); want2 = unit(tuple(-x for x in cross(V[0], V[1], V[2])))
+def plane(a, b, c):          # game-front plane of (a, b, c) in emitted order: n = -(b - a) x (c - a), d = n . a
+    n = unit(tuple(-x for x in cross(a, b, c))); return n + (sum(n[k] * a[k] for k in range(3)),)
+close = lambda x, y: len(x) == len(y) and all(abs(p - q) < 1e-9 for p, q in zip(x, y))
 g1, g2 = R.cull_tag(quad, t1), R.cull_tag(quad, t2)
-ok(g1[3] == 2 and all(abs(g1[k] / 32767 - want1[k]) < 1e-4 for k in range(3)), f'quad tri 1: mode 2, partner normal {g1}')
-ok(g2[3] == 2 and all(abs(g2[k] / 32767 - want2[k]) < 1e-4 for k in range(3)), f'quad tri 2: mode 2, partner normal {g2}')
-ok(R.cull_tag(dict(quad, hdr_w=0x20), t1) == (0, 0, 0, 0), 'two-sided header (w 0x20): mode 0')
-ok(R.cull_tag(dict(quad, is_list=True, verts=V + V[:2]), t1) == (0, 0, 0, 1), 'list triangle: mode 1 (no partner)')
-ok(R.cull_tag(dict(quad, verts=[(0, 0, 0), (4, 0, 0), (2, 2, 1), (4, 4, 2)]), t1)[3] == 2 and
-   R.cull_tag(dict(quad, verts=[(0, 0, 0), (2, 0, 0), (1, 0, 0), (4, 4, 4)]), t2) == (0, 0, 0, 0),
-   'zero-area partner: mode 0 (the VU flag is never set for it)')
+ok(close(g1, plane(V[2], V[1], V[3])), f'quad tri 1: the partner (v2, v1, v3) game-front plane {g1}')
+ok(close(g2, plane(V[0], V[1], V[2])), f'quad tri 2: the partner (v0, v1, v2) game-front plane {g2}')
+ok(R.cull_tag(dict(quad, hdr_w=0x20), t1) == R.CULL_NEVER == (0, 0, 0, -1), 'two-sided header (w 0x20): never (0, 0, 0, -1)')
+ok(R.cull_tag(dict(quad, is_list=True, verts=V + V[:2]), t1) == R.CULL_NO_PARTNER == (0, 0, 0, 1), 'list triangle: no partner (0, 0, 0, 1)')
+tail = dict(quad, verts=V + [(8, 0, 0), (12, 0, 0), (8, 4, 1)])           # one quad + a 3-vertex tail
+try:
+    ok(R.cull_tag(tail, (4, 5, 6)) == R.CULL_NO_PARTNER, 'strip 3-vertex tail: no partner')
+except IndexError as x:
+    ok(False, f'strip 3-vertex tail: no partner ({x!r})')
+ok(R.cull_tag(dict(quad, verts=[(0, 0, 0), (4, 0, 0), (2, 2, 1), (4, 4, 2)]), t1)[3] != -1 and
+   R.cull_tag(dict(quad, verts=[(0, 0, 0), (2, 0, 0), (1, 0, 0), (4, 4, 4)]), t2) == R.CULL_NEVER,
+   'zero-area partner: never (the VU flag is never set for it)')
 try:
     R.cull_tag(dict(quad, hdr_w=0x10), t1); ok(False, 'header w 0x10 raises')
 except ValueError:
@@ -58,12 +64,14 @@ except ValueError:
 tags = []
 fl, n = R.build_flat_kept([quad], [0], {0: [t1, t2]}, culls=tags)
 P = [tuple(fl[12 * i:12 * i + 3]) for i in range(len(fl) // 12)]
-ok(n == 2 and P[3:] == [V[3], V[2], V[1]], f'second triangle emitted as (v3, v2, v1): {P[3:]}')
-ok(unit(cross(*P[3:])) == unit(cross(V[2], V[1], V[3])), 'the rotation keeps the winding')
-on = lambda p, a, b, c: abs(sum(x * y for x, y in zip(unit(cross(a, b, c)), [p[k] - a[k] for k in range(3)]))) < 1e-9
-ok(on(P[2], V[2], V[1], V[3]) and on(P[5], V[0], V[1], V[2]), "each triangle's last vertex lies on its partner's plane")
-ok(len(tags) == 4 * 6 and tags[:4] == list(g1) and tags[12:16] == list(g2), 'one tag per vertex, in emitted order')
-
+ok(n == 2 and P == [V[0], V[1], V[2], V[2], V[1], V[3]], 'triangles emitted in packet order')
+ok(len(tags) == 5 * 6 and all(tags[5 * v:5 * v + 5] == tags[5 * (v - v % 3):5 * (v - v % 3) + 5] for v in range(6)),
+   'five floats per vertex, the same on a triangle\'s three vertices')
+ok(close(tags[:4], g1) and close(tags[15:19], g2), 'each triangle carries its partner plane')
+# own plane: game-front normal = -(the vertex normal); faces the eye when dot(-normal, eye) - dg >= 0, dg = -(normal . v0)
+for k, t in ((0, t1), (1, t2)):
+    nrm = fl[36 * k + 3:36 * k + 6]; dg = tags[15 * k + 4]
+    ok(all(abs(sum(-nrm[j] * V[i][j] for j in range(3)) - dg) < 1e-9 for i in t), f'tri {k + 1}: own plane distance on all three vertices')
 # 2. z128 packets
 from export_bmd_textured import find_bmd_payload, decode_packets, EXTRACT
 from bmd_chains import packet_chains, chain_headers

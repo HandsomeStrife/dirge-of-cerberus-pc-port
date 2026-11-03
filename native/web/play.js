@@ -605,8 +605,11 @@ async function main() {
   if (!roomVis) console.warn('room: no data/z128_vis.json (build step room_vis, native/assets/collision/cidvis): the visibility probe is off, every chain group is drawn');
   // FUN_00264f68 (the room draw, before the chunk stream FUN_0026a0c0): FUN_00264ee0 probes from the eye of the camera
   // matrix 0x4fcb10 (the last frame's camera) through the slots loaded before this frame's stream
-  const roomProbe = eye => { if (roomVis && eye && light?.stream.areas.length) visMask.setCamera(roomVis.probe(eye, light.stream.loaded()).mask); };
-  if (light?.stream.areas.length) showChunks(root, light.stream.loaded(), roomVis ? visMask : null);
+  // (light.json without area boxes: every chunk is drawn, so the probe looks through every chunk's cid)
+  const streamed = () => !!light?.stream.areas.length;
+  const roomProbe = eye => { if (roomVis && eye) visMask.setCamera(roomVis.probe(eye, streamed() ? light.stream.loaded() : roomVis.chunks).mask); };
+  const roomShow = () => { if (streamed()) showChunks(root, light.stream.loaded(), roomVis ? visMask : null); else if (roomVis) showChunks(root, null, visMask); };
+  roomShow();
   if (light) {
     const ap = new THREE.Vector3(), Y = new THREE.Vector3(0, 1, 0);
     const actorPoint = () => ap.copy(light.centre).applyAxisAngle(Y, bodyYaw(ctrl.prevHeading)).add(ctrl.prev);
@@ -893,7 +896,7 @@ async function main() {
   if (MOUSE_DIRECT) follow.mouseDirect = { sens: MOUSE_SENS * Math.PI / 180 };   // OPTION mouselook
   follow.reset(ctrl.pos);
   // the room's mask before the first game frame (worker 0225): the probe from the start camera
-  if (light?.stream.areas.length) { roomProbe(follow.eye); showChunks(root, light.stream.loaded(), roomVis ? visMask : null); }
+  roomProbe(follow.eye); roomShow();
 
   // ---- actions (player.js header / ACTIONS.md)
   const motions = {};
@@ -1078,7 +1081,7 @@ async function main() {
           // FUN_00248110 runs on during events: the chunk stream at Vincent's MP+0x10 (FUN_0026a0c0; the page's player
           // holds still while the event runs) and the effect managers (FUN_002efc78 / FUN_002efe00 / FUN_002efe98), the
           // level fire included (worker 0208's fxStage), drawn with the event camera
-          if (light) { roomProbe(intro.rt.view ? intro.rt.view.eye : follow.eye); light.stream.frame(ctrl.prev); if (light.stream.areas.length) showChunks(root, light.stream.loaded(), roomVis ? visMask : null); }
+          roomProbe(intro.rt.view ? intro.rt.view.eye : follow.eye); if (light) light.stream.frame(ctrl.prev); roomShow();
           // FUN_00265350 (late in FUN_00248110; reads only the slot table): the chunks' scrolling UVs (room.js RoomUVAnim)
           if (uvAnim) uvAnim.frame(light && light.stream.areas.length ? light.stream.loaded() : null, STEP);
           if (fx) fx.begin(STEP);
@@ -1102,7 +1105,7 @@ async function main() {
       // left him, and this frame's stick-to-world uses its new matrix (player.js camera notes)
       // FUN_00248110: FUN_00267970 + FUN_0026a0c0 before the game logic, at MP+0x10's translation: the matrix
       // last frame's draw used, which the page models as ctrl.prev (logicPose; not ctrl.pos, the moved position)
-      if (light) { roomProbe(follow.eye); light.stream.frame(ctrl.prev); if (light.stream.areas.length) showChunks(root, light.stream.loaded(), roomVis ? visMask : null); }
+      roomProbe(follow.eye); if (light) light.stream.frame(ctrl.prev); roomShow();
       // FUN_00265350 (late in FUN_00248110; reads only the slot table): the chunks' scrolling UVs (room.js RoomUVAnim)
       if (uvAnim) uvAnim.frame(light && light.stream.areas.length ? light.stream.loaded() : null, STEP);
       // the stage controller (stage_controller.js, worker 0219): ev0100 main's frame (FUN_00377c68). GUESS: its place in
@@ -1242,6 +1245,9 @@ async function main() {
     if (handing) finishIntro();                    // the event's hiding / view end in the hand-off's own frame
     else if (introData) introGate.on = true;       // a replay follows: restoreCheckpoint's music restart stays silent
     if (light) light.stream.reset(light.startPair);      // the stage reload: FUN_003ff7a8(0x80, 1, 2) again
+    // the script half DAT_004e8700 starts empty again (GUESS, notes/fidelity-audit.md 'the hidden-cell mask's script half
+    // at start'; worker 0225), with or without the stage fire; the camera half is the next frame's probe
+    visMask.clearScript(); for (const b of (fxIds && fxIds.hidden_script) || []) visMask.setScript(b, true);
     if (introHandoff) introHandoff = false; else restarts++;
     // worker 0208: the stage reload reloads the area FEDs (FUN_002f15d0 spawns their records again; GUESS as fx.reset's)
     const fxAll = fx ? { reset: () => { fx.reset(); if (fxStage) { fxStage.reset(); fxStage.stageLoad(); } } } : null;
@@ -1279,7 +1285,7 @@ async function main() {
                     playerState, camView, report, keys, pressed, motions, packsReady, actionHelp, cape, enemies, enemyAI, php, pause, gameHud, pauseSound, gameOver,
                     restart: { get count() { return restarts; }, get pending() { return restartPending || !!restartHold || restartReady; } },
                     intro: { get active() { return !!intro; }, get rt() { return introRt; }, get ended() { return introEnded; }, get paused() { return !!intro && intro.paused; } },
-                    get stage() { return stage; }, get stageInfo() { return stageSi; }, get gameState() { return stageGs; } };
+                    get stage() { return stage; }, get stageInfo() { return stageSi; }, get gameState() { return stageGs; }, visMask };
   // ---- the opening event (intro.js): played before play on a fresh load; at its end the Restart path (checkpoint.js)
   // places Vincent and soldiers 41-43 as the event's end hands them to play. The page's gameplay bodies and HUD are
   // hidden while it runs (the event's own actors are left out, see intro.js)

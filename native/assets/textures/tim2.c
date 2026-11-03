@@ -85,7 +85,7 @@ int dtex__decode_tim(const uint8_t *data, size_t size, const char *name,
                 pal[i*4+0] = (uint8_t)((v & 0x1f) << 3);
                 pal[i*4+1] = (uint8_t)(((v >> 5) & 0x1f) << 3);
                 pal[i*4+2] = (uint8_t)(((v >> 10) & 0x1f) << 3);
-                pal[i*4+3] = (v & 0x8000) ? 255 : 0;
+                pal[i*4+3] = dtex_raw_alpha ? DTEX_RAW_TEXA : (v & 0x8000) ? 255 : 0;
             }
         } else {
             for (int i = 0; i < 256; i++) { pal[i*4]=pal[i*4+1]=pal[i*4+2]=(uint8_t)i; pal[i*4+3]=255; }

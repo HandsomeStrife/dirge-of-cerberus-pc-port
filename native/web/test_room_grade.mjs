@@ -82,6 +82,20 @@ try {
       const px = read();
       return cases.map((_, i) => { const x = 2 + (i % 50) * 8 + 3, y = 2 + Math.floor(i / 50) * 8 + 3; return [...px.slice((y * 432 + x) * 3, (y * 432 + x) * 3 + 3)]; });
     };
+    // GS ATE with AFAIL RGB_ONLY: a fragment failing the test (As < ref) writes colour but not depth, so an opaque
+    // quad drawn later BEHIND it still shows; a passing one (As >= ref) hides it. Returns the two pixels.
+    window.ateDepth = () => {
+      const scene = new THREE.Scene(), sc = { fog: null };
+      const cam = new THREE.OrthographicCamera(0, 432, 0, 512, -100, 100); cam.position.z = 10; cam.lookAt(0, 0, 0); cam.updateMatrixWorld();
+      const d = { kind: 'x', aref: 96 / 128 - 0.5 / 128, fog: false };
+      [[2, 16], [12, 128]].forEach(([x, a]) => {
+        for (const mode of [1, 2]) scene.add(new THREE.Mesh(quad(x, 2, 7, 7, [60, 60, 60, a], 1), room.makeMaterial(sc, null, d, mode)));
+        scene.add(new THREE.Mesh(quad(x, 2, 7, 7, [250, 0, 0, 128], 0), room.makeMaterial(sc, null, { kind: 'x', aref: -1, fog: false }, 0)));
+      });
+      renderer.setClearColor(0x000000, 1); renderer.clear(); renderer.render(scene, cam);
+      const px = read(), at = x => [...px.slice((5 * 432 + x) * 3, (5 * 432 + x) * 3 + 3)];
+      return [at(5), at(15)];
+    };
     let R = null;
     window.roomShot = async (meta, opts = {}) => {
       if (!R) { R = await room.loadRoom({ skip: d => d.kind === 'char' }); renderer.setClearColor(new THREE.Color().setRGB(...R.scene.clear, THREE.LinearSRGBColorSpace), 1); }
@@ -130,13 +144,19 @@ try {
       return [...read()];
     };
     // back faces (worker 0227): one triangle with a cull tag, drawn alone; is the pixel at image (px, py) covered?
-    window.cullCase = (tri, tag, px, py) => {
+    window.cullCase = (tri, tag, px, py) => {      // tag: the partner plane (4 floats); the own plane from tri
       const scene = new THREE.Scene(), sc = { fog: null, meshes: { m: { cul: 'x' } } };
       const g = new THREE.BufferGeometry();
       g.setAttribute('position', new THREE.Float32BufferAttribute(tri.flat(), 3));
       g.setAttribute('uv', new THREE.Float32BufferAttribute(new Array(6).fill(0), 2));
       g.setAttribute('color', new THREE.Float32BufferAttribute(new Array(12).fill(1), 4));
-      g.setAttribute('cullN', new THREE.BufferAttribute(new Int16Array([...tag, ...tag, ...tag]), 4));
+      const [a, b, c] = tri, u = b.map((v, k) => v - a[k]), w = c.map((v, k) => v - a[k]);
+      const n = [u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2], u[0] * w[1] - u[1] * w[0]], l = Math.hypot(...n);
+      for (let k = 0; k < 3; k++) n[k] /= l;
+      const dg = -(n[0] * a[0] + n[1] * a[1] + n[2] * a[2]);
+      g.setAttribute('normal', new THREE.Float32BufferAttribute([...n, ...n, ...n], 3));
+      g.setAttribute('cullP', new THREE.Float32BufferAttribute([...tag, ...tag, ...tag], 4));
+      g.setAttribute('cullD', new THREE.Float32BufferAttribute([dg, dg, dg], 1));
       scene.add(new THREE.Mesh(g, room.makeMaterial(sc, null, { kind: 'room', mesh: 'm', aref: -1, fog: false }, 0)));
       renderer.setClearColor(0x000000, 1); renderer.clear(); renderer.render(scene, window.cullCam);
       const gl = renderer.getContext(), out = new Uint8Array(4);
@@ -175,19 +195,21 @@ try {
     });
     ok(worst <= 3, `room.js blends = the GS formulas on ${cases.length} cases (worst ${worst}${wcase ? ': ' + JSON.stringify(wcase) : ''})`);
     ok(worstA <= 3, `additive with As > 1 (vertex alpha 160 / 192 / 255) is not capped (worst ${worstA})`);
+    const [fails, passes] = await pg.evaluate(() => window.ateDepth());
+    ok(fails[0] > 240 && fails[1] < 5 && passes[0] < 70, `ATE: a failing fragment writes no depth (an opaque quad behind shows: ${fails}), a passing one does (${passes})`);
   }
 
   // 1b. back faces (worker 0227; export_z128_room.py cull_tag, VU1 program A instr 100-106 / 249-260): random
   // non-planar strip quads (v0, v1, v2) + (v2, v1, v3) seen by a game-convention camera. The game's rule on the
-  // projected (GS, y down) vertices: a triangle is front when (v0 - v1) x (v1 - v2) z >= 0; mode 1 draws it only
-  // then, mode 2 also when the quad's other triangle is front, mode 0 always. room.js gets the exporter's tags
-  // (partner game-front normal, mode; the second triangle emitted as (v3, v2, v1)) and must agree pixel by pixel.
+  // projected (GS, y down) vertices: a triangle is front when (v0 - v1) x (v1 - v2) z >= 0; without a partner it is drawn only
+  // then, with a partner also when the quad's other triangle is front, 'never' always. room.js gets the exporter's
+  // planes (partner game-front plane, own plane distance) and must agree pixel by pixel.
   {
     const res = await pg.evaluate(() => {
       let seed = 12345; const rnd = () => ((seed = (seed * 1103515245 + 12345) >>> 0) / 4294967296);
       const sub = (a, b) => a.map((v, k) => v - b[k]);
       const cross = (a, b, c) => { const u = sub(b, a), v = sub(c, a); return [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]]; };
-      const tagOf = (a, b, c, mode) => { const n = cross(a, b, c), l = Math.hypot(...n); return [...n.map(x => Math.round(-x / l * 32767)), mode]; };
+      const tagOf = (a, b, c) => { const n = cross(a, b, c).map(x => -x), l = Math.hypot(...n); n.forEach((x, k) => n[k] = x / l); return [...n, n[0] * a[0] + n[1] * a[1] + n[2] * a[2]]; };
       const area = (a, b, c) => { const [p, q, r] = [a, b, c].map(window.project); return (p[0] - q[0]) * (q[1] - r[1]) - (p[1] - q[1]) * (q[0] - r[0]); };
       const out = { n: 0, bad: [], mixed: 0, back: 0, front: 0 };
       for (let k = 0; k < 1500 && out.n < 300; k++) {
@@ -203,8 +225,8 @@ try {
         if (Math.abs(A1) < 400 || Math.abs(A2) < 400) continue;
         const f1 = A1 >= 0, f2 = A2 >= 0;
         out.mixed += f1 !== f2; out.back += !f1 && !f2; out.front += f1 && f2;
-        const tris = [[[v0, v1, v2], tagOf(v2, v1, v3, 2), f1 || f2, 'tri1 mode 2'], [[v3, v2, v1], tagOf(v0, v1, v2, 2), f1 || f2, 'tri2 mode 2'],
-                      [[v0, v1, v2], [0, 0, 0, 1], f1, 'tri1 mode 1'], [[v0, v1, v2], [0, 0, 0, 0], true, 'tri1 mode 0']];
+        const tris = [[[v0, v1, v2], tagOf(v2, v1, v3), f1 || f2, 'tri1 + partner'], [[v2, v1, v3], tagOf(v0, v1, v2), f1 || f2, 'tri2 + partner'],
+                      [[v0, v1, v2], [0, 0, 0, 1], f1, 'tri1 no partner'], [[v0, v1, v2], [0, 0, 0, -1], true, 'tri1 never']];
         for (const [tri, tag, want, what] of tris) {
           const pr = tri.map(window.project), px = Math.round((pr[0][0] + pr[1][0] + pr[2][0]) / 3 - 0.5), py = Math.round((pr[0][1] + pr[1][1] + pr[2][1]) / 3 - 0.5);
           if (px < 2 || py < 2 || px > 429 || py > 509) continue;

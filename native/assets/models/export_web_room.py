@@ -7,7 +7,9 @@ upload to the GPU, already resolved, so the web client needs no decoder:
   ROOM   out/z128_room_v2/room.list  (@fog, @nofog, mesh, TXD container, ABE, aref)
          each mesh's DMSH vertices copied verbatim; each container decoded with the
          trusted `dtex` CLI, LARGEST image kept (first one on a tie, like
-         tex_load_largest), RGBA as dtex gives it (alpha = A*255/128).
+         tex_load_largest), RGBA from `dtex --raw-alpha`: the PS2 alpha byte as is (128 = 1.0, up
+         to 255; CT24 / CT16 / 16-bit CLUT texels get the room's TEXA, 0x80), scene.json textures[].alpha
+         'ps2'; room.js multiplies by 255 / 128 (uTexA), so the shader's As = At * Av / 128 as on the GS.
   CHAR   out/p000_gpu3/vincent_p000.mesh + vincent_p000_tex.rgba, placed in world
          space with placement.json render_args (place_character math, feet = max-Y
          because the room is -Y up), split into the -charruns draws, every run drawn
@@ -103,6 +105,8 @@ def parse_list(path):
             fog = dict(color=[r / 255, g / 255, b / 255], near=n, far=f, min=mn)
         elif s.startswith("@nofog"):
             nofog.add(s.split()[1])
+        elif s.startswith("@group"):
+            pass                # chain-group ranges for the native renderer; scene.json takes them from the manifest
         elif s.startswith("@"):
             raise SystemExit(f"unknown directive {s}")
         else:
@@ -204,10 +208,10 @@ def main():
                 raise SystemExit(f"{uvt_of[g['mesh']]}: {len(ut)} tracks for {len(v)} vertices")
             ut.tofile(os.path.join(out, mid + ".uvt.bin"))
             meshes[mid]["uvt"] = mid + ".uvt.bin"
-        if g["mesh"] in cul_of:            # int16 x 4 per vertex (partner normal, mode): room.js back faces
-            ct = np.fromfile(os.path.join(ldir, cul_of[g["mesh"]]), "<i2")
-            if len(ct) != 4 * len(v):
-                raise SystemExit(f"{cul_of[g['mesh']]}: {len(ct) // 4} cull tags for {len(v)} vertices")
+        if g["mesh"] in cul_of:            # float32 x 5 per vertex (partner plane, own dg): room.js back faces
+            ct = np.fromfile(os.path.join(ldir, cul_of[g["mesh"]]), "<f4")
+            if len(ct) != 5 * len(v):
+                raise SystemExit(f"{cul_of[g['mesh']]}: {len(ct) // 5} cull tags for {len(v)} vertices")
             ct.tofile(os.path.join(out, mid + ".cul.bin"))
             meshes[mid]["cul"] = mid + ".cul.bin"
         lo, hi = np.minimum(lo, v[:, :3].min(0)), np.maximum(hi, v[:, :3].max(0))

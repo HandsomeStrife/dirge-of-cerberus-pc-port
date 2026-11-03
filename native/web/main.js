@@ -2,6 +2,9 @@
 // native/gpu/render_scene_textured does: prelit vertex colour, PS2 MODULATE
 // (texel*vcol*2), per-vertex GS fog, GS alpha test (two passes), no culling,
 // draw order = scene.json order. WASD + mouse free-fly.
+// NOT the game's room drawing (a debug viewer with its own shaders): it lacks what room.js does for the
+// play page: additive chains (draws[].blend 'add'), the raw PS2 texture alpha (textures[].alpha 'ps2'),
+// the VU1 back-face test (meshes[].cul) and the scrolling UVs (scene.uvanim). Use play.html to judge the room.
 //
 // URL params: hud=0 hides the overlay, aa=1 turns on MSAA, dpr=N pins pixel ratio,
 // cam=ex,ey,ez,yaw,pitch starts at that view ("copy view" writes it). yaw/pitch are
@@ -12,6 +15,8 @@
 // default renders at canvas resolution and fills the canvas (Dan's choice, 2026-10-28).
 import * as THREE from 'three';
 import { initReport } from './report.js';
+import { showChunks } from './room.js';
+import { createRoomVis, startMask } from './room_vis.js';
 import { createOutputStage } from './output.js';
 
 const params = new URLSearchParams(location.search);
@@ -148,6 +153,7 @@ async function load() {
     const g = new THREE.BufferGeometry();
     for (const k of ['position', 'uv', 'color']) g.setAttribute(k, a[k]);
     g.setDrawRange(d.first, d.count);
+    if (d.chunks) g.userData.visIndex = new THREE.BufferAttribute(new Uint32Array(d.count), 1);   // room.js showChunks
     g.boundingSphere = new THREE.Sphere(lo.clone().add(hi).multiplyScalar(.5), lo.distanceTo(hi));
     const tex = d.tex ? textures[d.tex] : null;
     const modes = d.aref >= 0 && tex ? [1, 2] : [0];
@@ -155,10 +161,15 @@ async function load() {
       const mesh = new THREE.Mesh(g, makeMaterial(scene, tex, d, mode));
       mesh.frustumCulled = false; mesh.matrixAutoUpdate = false;
       mesh.name = d.name + (mode ? `#ate${mode}` : '');
-      mesh.userData = { draw: di, mode };
+      mesh.userData = d.chunks ? { draw: di, mode, chunks: d.chunks } : { draw: di, mode };
       root.add(mesh);
     }
   });
+  // every chunk, but the chain groups hidden at the stage start (worker 0225): the probe FUN_00264ee0 from the start
+  // camera's eye (scene.json camera = the save's) over the stage load's slots (room_vis.js startMask)
+  const visData = await fetch('data/z128_vis.json').then(r => r.ok ? r.json() : null).catch(() => null);
+  if (!visData) console.warn('room: no data/z128_vis.json (build step room_vis): every chain group is drawn');
+  else showChunks(root, null, startMask(createRoomVis(visData), scene.camera.eye));
   return { scene, root, lo, hi, floats };
 }
 

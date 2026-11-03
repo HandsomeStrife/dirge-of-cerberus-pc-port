@@ -36,6 +36,11 @@
  *                         [-charruns S:C,S:C,...]  (draw the character's triangle ranges
  *                          [S, S+C) as separate draws in this order; must cover every
  *                          triangle once. Game draw order, export_p000_gpu2.py)
+ *                         [-vis z128_vis.json] [-vis-eye x,y,z] [-hide G,G,...]
+ *                          (room chain groups, worker 0225: room.list '@group MESH FIRST COUNT GROUP'
+ *                          ranges are dropped when their group is in the mask; the mask is -hide, or
+ *                          the probe FUN_00264ee0 from -vis-eye (default: -eye) over the stage load's
+ *                          slots 0 / 1 / 2 through -vis (default ../web/data/z128_vis.json; cidvis))
  *
  * Additive: links renderer_gl/gl_api/gfx_context/libdtex READ-ONLY, modifies none.
  */
@@ -200,6 +205,79 @@ static RVertex *place_character(const RVertex *src, size_t n,
     return d;
 }
 
+/* ---- room visibility mask (worker 0225; native/web/room_vis.js is the same translation) ----
+ * FUN_00264ee0: DAT_004e86f0 = the surface-table entry of the nearest hit (t <= 1) of the ray eye -> eye + (0, 100, 0)
+ * against the cid +0x58 tag-2 packets whose mask has a bit outside 0x10f | 0x100 (FUN_0026f8a0), the entry copied only
+ * when the packet's header[3] is in range; FUN_00269450: chain group b hidden when bit b is set (b <= 0x7f).
+ * GUESS: the VU0 ray test (vcallms 0xa90) is not translated: two-sided Moller-Trumbore in doubles. */
+typedef struct { int chunk, ntab, ntri; uint32_t (*tab)[4]; double (*tri)[11]; } VisChunk;
+static const char *vis_after(const char *p, const char *key) { p = strstr(p, key); return p ? p + strlen(key) : NULL; }
+static int vis_load(const char *path, VisChunk **out, int *nout) {
+    FILE *f = fopen(path, "rb"); if (!f) return -1;
+    fseek(f, 0, SEEK_END); long n = ftell(f); fseek(f, 0, SEEK_SET);
+    char *b = (char *)malloc((size_t)n + 1); if (!b) { fclose(f); return -1; }
+    if (fread(b, 1, (size_t)n, f) != (size_t)n) { fclose(f); free(b); return -1; }
+    fclose(f); b[n] = 0;
+    VisChunk *cs = NULL; int nc = 0; const char *p = b;
+    while ((p = vis_after(p, "\"chunk\":"))) {
+        VisChunk c = { (int)strtol(p, (char **)&p, 10), 0, 0, NULL, NULL };
+        for (int part = 0; part < 2; part++) {               /* "table": [[w0..w3], ...], "tris": [[11 numbers], ...] */
+            p = vis_after(p, part ? "\"tris\":" : "\"table\":"); if (!p) { free(b); return -1; }
+            while (*p && *p != '[') p++;
+            p++;
+            for (;;) {
+                while (*p == ' ' || *p == ',' || *p == '\n' || *p == '\r') p++;
+                if (*p != '[') break;
+                p++;
+                double v[11]; int k = 0;
+                while (k < 11) { char *e; double x = strtod(p, &e); if (e == p) break; v[k++] = x; p = e; while (*p == ' ' || *p == ',') p++; }
+                while (*p && *p != ']') p++;
+                if (*p) p++;
+                if (part == 0 && k == 4) {
+                    c.tab = realloc(c.tab, sizeof *c.tab * (size_t)(c.ntab + 1));
+                    for (int j = 0; j < 4; j++) c.tab[c.ntab][j] = (uint32_t)v[j];
+                    c.ntab++;
+                } else if (part == 1 && k == 11) {
+                    c.tri = realloc(c.tri, sizeof *c.tri * (size_t)(c.ntri + 1));
+                    memcpy(c.tri[c.ntri++], v, sizeof v);
+                } else { free(b); return -1; }
+            }
+        }
+        cs = realloc(cs, sizeof *cs * (size_t)(nc + 1)); cs[nc++] = c;
+    }
+    free(b); *out = cs; *nout = nc; return 0;
+}
+static double vis_raytri(const float e[3], double dy, const double *T) {
+    double ax = T[2], ay = T[3], az = T[4];
+    double e1x = T[5] - ax, e1y = T[6] - ay, e1z = T[7] - az, e2x = T[8] - ax, e2y = T[9] - ay, e2z = T[10] - az;
+    double hx = dy * e2z, hz = -dy * e2x, det = e1x * hx + e1z * hz;
+    if (fabs(det) < 1e-9) return -1;
+    double f = 1 / det, sx = e[0] - ax, sy = e[1] - ay, sz = e[2] - az;
+    double u = f * (sx * hx + sz * hz); if (u < 0 || u > 1) return -1;
+    double qx = sy * e1z - sz * e1y, qy = sz * e1x - sx * e1z, qz = sx * e1y - sy * e1x;
+    double v = f * (qy * dy); if (v < 0 || u + v > 1) return -1;
+    double t = f * (e2x * qx + e2y * qy + e2z * qz);
+    return t >= 0 && t <= 1 ? t : -1;
+}
+/* mask (4 words) of FUN_00264ee0 from eye over the slots' chunks, in slot order */
+static void vis_probe(const VisChunk *cs, int nc, const float eye[3], const int *slots, int nslots, uint32_t mask[4]) {
+    double best = 10.0; const uint32_t *entry = NULL;           /* FUN_00271408: DAT_004e88a4 = 10.0, DAT_004e8880 = 0 */
+    for (int s = 0; s < nslots; s++)
+        for (int c = 0; c < nc; c++) {
+            if (cs[c].chunk != slots[s]) continue;
+            for (int i = 0; i < cs[c].ntri; i++) {
+                const double *T = cs[c].tri[i];
+                if (((uint32_t)T[0] & ~(0x10fu | 0x100u)) == 0) continue;
+                double t = vis_raytri(eye, 100.0, T);
+                if (t < 0 || !(t < best)) continue;
+                best = t;
+                int idx = (int)T[1];
+                if (idx >= 0 && idx < cs[c].ntab) entry = cs[c].tab[idx];
+            }
+        }
+    for (int k = 0; k < 4; k++) mask[k] = entry ? entry[k] : 0;
+}
+
 int main(int argc, char **argv) {
     const char *listpath = "../assets/models/out/bmd_06960212_tex.list";
     const char *charpath = "../assets/models/out/char_e000.mesh";
@@ -227,6 +305,8 @@ int main(int argc, char **argv) {
     float char_aref = -1.0f;   /* -charatest: GS ATE pass for the character (cape) */
     float cam_eye[3], cam_at[3], cam_up[3] = {0,1,0}, cam_fov = 50.f;  /* -eye/-at free camera */
     int have_eye = 0, have_at = 0;
+    const char *vispath = "../web/data/z128_vis.json"; const char *hidelist = NULL;   /* room chain groups */
+    float vis_eye[3]; int have_vis_eye = 0;
     int opt_W = 1280, opt_H = 960;   /* -W/-H override output size (anamorphic match) */
     /* -light0/-light1/-light2 dx,dy,dz,r,g,b and -ambient r,g,b: the character's VU1
      * program-D rig (world-space direction TOWARD the light; colours in program-D units,
@@ -275,6 +355,9 @@ int main(int argc, char **argv) {
             have_crig = 1;
         }
         else if (!strcmp(argv[i], "-notex")) notex = 1;
+        else if (!strcmp(argv[i],"-vis")&&i+1<argc) vispath = argv[++i];
+        else if (!strcmp(argv[i],"-hide")&&i+1<argc) hidelist = argv[++i];
+        else if (!strcmp(argv[i],"-vis-eye")&&i+1<argc) have_vis_eye=(sscanf(argv[++i],"%f,%f,%f",&vis_eye[0],&vis_eye[1],&vis_eye[2])==3);
         else if (!strcmp(argv[i],"-eye")&&i+1<argc) have_eye=(sscanf(argv[++i],"%f,%f,%f",&cam_eye[0],&cam_eye[1],&cam_eye[2])==3);
         else if (!strcmp(argv[i],"-at") &&i+1<argc) have_at =(sscanf(argv[++i],"%f,%f,%f",&cam_at[0],&cam_at[1],&cam_at[2])==3);
         else if (!strcmp(argv[i],"-up") &&i+1<argc) sscanf(argv[++i],"%f,%f,%f",&cam_up[0],&cam_up[1],&cam_up[2]);
@@ -308,6 +391,8 @@ int main(int argc, char **argv) {
      * rendering on without it would silently drop the fog. */
     int have_fog = 0; float fogc[3] = {0,0,0}, fog_near = 0, fog_far = 0, fog_min = 0;
     char nofog[MAXG][256]; int nnofog = 0; int lineno = 0, bad_directive = 0;
+    typedef struct { char mesh[256]; long first, count; int grp; } GroupRange;   /* @group MESH FIRST COUNT GROUP */
+    GroupRange *granges = NULL; int ngr = 0;
     float rmin[3] = { 1e30f, 1e30f, 1e30f }, rmax[3] = { -1e30f, -1e30f, -1e30f };
     char line[2048];
     while (fgets(line, sizeof line, lf)) {
@@ -348,6 +433,15 @@ int main(int argc, char **argv) {
                     bad_directive = 1; continue;
                 }
                 snprintf(nofog[nnofog++], sizeof nofog[0], "%s", mname);
+            } else if (!strcmp(kw, "group")) {
+                GroupRange r; memset(&r, 0, sizeof r);
+                if (sscanf(ln, "@group %255s %ld %ld %d %7s", r.mesh, &r.first, &r.count, &r.grp, extra) != 4
+                    || r.first < 0 || r.count <= 0 || r.grp < 0) {
+                    fprintf(stderr, "error: %s:%d: bad @group (want '@group <mesh> first count group'): %s",
+                            listpath, lineno, line);
+                    bad_directive = 1; continue;
+                }
+                granges = realloc(granges, sizeof *granges * (size_t)(ngr + 1)); granges[ngr++] = r;
             } else {
                 fprintf(stderr, "error: %s:%d: unknown directive: %s", listpath, lineno, line);
                 bad_directive = 1;
@@ -404,6 +498,59 @@ int main(int argc, char **argv) {
         return 2;
     }
     if (ng == 0) { fprintf(stderr, "no env groups loaded\n"); return 2; }
+    /* room chain groups (worker 0225): drop the @group ranges whose group the mask hides (FUN_0026ccc8 /
+     * FUN_00269450). The mask: -hide, else the probe from -vis-eye / -eye over the stage load's slots 0 / 1 / 2
+     * (FUN_003ff7a8(0x80, 1, 2)); without either, every group is drawn (warned). */
+    if (ngr) {
+        uint32_t mask[4] = {0, 0, 0, 0}; int have_mask = 0;
+        if (hidelist) {
+            for (const char *q = hidelist; *q; ) {
+                char *e; long b = strtol(q, &e, 10);
+                if (e == q || b < 0 || b > 0x7f) { fprintf(stderr, "bad -hide (want G,G,... with 0 <= G <= 127): %s\n", hidelist); return 2; }
+                mask[b >> 5] |= 1u << (b & 31); q = *e == ',' ? e + 1 : e;
+            }
+            have_mask = 1;
+        } else if (have_vis_eye || have_eye) {
+            VisChunk *cs = NULL; int nc = 0; const int slots[3] = {0, 1, 2};
+            if (vis_load(vispath, &cs, &nc)) fprintf(stderr, "warning: cannot read %s (cidvis): every chain group drawn\n", vispath);
+            else {
+                vis_probe(cs, nc, have_vis_eye ? vis_eye : cam_eye, slots, 3, mask); have_mask = 1;
+                for (int c = 0; c < nc; c++) { free(cs[c].tab); free(cs[c].tri); }
+                free(cs);
+            }
+        } else fprintf(stderr, "warning: no -eye / -vis-eye / -hide: the room's chain-group mask is not applied (every group drawn)\n");
+        if (have_mask) {
+            size_t dropped = 0; int nhid = 0; char hb[512] = {0};
+            for (int b = 0; b < 128; b++) if (mask[b >> 5] >> (b & 31) & 1) {
+                size_t L = strlen(hb); if (L < sizeof hb - 8) snprintf(hb + L, sizeof hb - L, "%s%d", nhid ? "," : "", b);
+                nhid++;
+            }
+            int matched = 0;
+            for (int i = 0; i < ng; i++) {
+                size_t n = g[i].n; unsigned char *keep = NULL;
+                for (int k = 0; k < ngr; k++) {
+                    const GroupRange *r = &granges[k];
+                    if (strcmp(r->mesh, g[i].meshf)) continue;
+                    matched++;
+                    if (r->grp > 0x7f || !(mask[r->grp >> 5] >> (r->grp & 31) & 1)) continue;
+                    if ((size_t)(r->first + r->count) > n || r->count % 3) {
+                        fprintf(stderr, "error: @group %s %ld %ld: outside the mesh's %zu vertices\n", r->mesh, r->first, r->count, n);
+                        return 2;
+                    }
+                    if (!keep) { keep = (unsigned char *)malloc(n ? n : 1); if (!keep) return 2; memset(keep, 1, n); }
+                    memset(keep + r->first, 0, (size_t)r->count);
+                }
+                if (!keep) continue;
+                size_t w = 0;
+                for (size_t v = 0; v < n; v++) if (keep[v]) g[i].v[w++] = g[i].v[v];
+                dropped += n - w; g[i].n = w; free(keep);
+            }
+            if (matched != ngr) fprintf(stderr, "warning: %d @group lines name no loaded mesh\n", ngr - matched);
+            printf("vis   : chain groups {%s} hidden (%s): %zu room triangles not drawn\n", hb,
+                   hidelist ? "-hide" : "probe FUN_00264ee0 over slots 0 / 1 / 2", dropped / 3);
+        }
+    }
+    free(granges);
     if (nnofog && !have_fog)
         fprintf(stderr, "warning: %s: @nofog without @fog does nothing\n", listpath);
     for (int k = 0; k < nnofog; k++) {

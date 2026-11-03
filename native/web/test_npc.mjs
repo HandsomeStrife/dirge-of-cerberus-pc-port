@@ -168,8 +168,26 @@ else {
   const q = W.objects.get(113 + 22);
   ok(ev.some(e => /event 135 script 73 ev 2 r 1,0,136/.test(e)) && q.C.path === 33 && q.C.mover === 1 && q.vars[6] === 1,
      `113 gets message 1 from 114: event 2 -> var6 = 1, 0x142(2), path ${q.C.path}`);
-  for (let i = 0; i < 40; i++) W.tick(1.2, b, b);
-  ok(q.astate === 2 && q.C.clip === 'rn', `113 runs (actor state ${q.astate}, motion 3: ${q.C.clip})`);
+  // FUN_005690c8 case 3's FUN_00563970(a, -1) after each node event (enemy_ai a.listen -> trackMoved): the actor's nav node
+  // +0x108 follows the run. With a node, FUN_0033dda8(40, G, node, p, 0) from it (nav_graph trackNode); its spawn node
+  // (FUN_00559748's tail, 50 u) is otherwise kept, as the mode-0 brain runs no action layer.
+  const n0 = q.node108, seen = [];
+  for (let i = 0; i < 300; i++) {
+    W.tick(1.2, b, b);
+    if (W.events.some(e => /event 135 script 73 ev 20 /.test(e))) seen.push({ n: q.node108, p: q.pos.slice() });
+    if (i === 39) ok(q.astate === 2 && q.C.clip === 'rn', `113 runs (actor state ${q.astate}, motion 3: ${q.C.clip})`);
+  }
+  const G = data.nav, d = (k, p) => Math.hypot(G.nodes[k][0] - p[0], G.nodes[k][1] - p[1], G.nodes[k][2] - p[2]);
+  const nodes = [...new Set(seen.map(x => x.n))];
+  ok(seen.length >= 5 && nodes.length >= 3 && nodes[nodes.length - 1] !== n0 && seen.every(x => x.n === -1 || d(x.n, x.p) < 40),
+     `node events re-pick 113's nav node (FUN_00563970): spawn ${n0}, then ${nodes.join(' ')} over ${seen.length} node events, each within 40 u`);
+  // the listener's own FUN_00563970, apart from the page's per-frame trackMoved (enemy_ai tick, a GUESS on 'when'): moved 0.5 u
+  // short of another node with no tick in between, the node event alone re-picks the node (from the old one: FUN_0033dda8)
+  const pick = G.nodes.findIndex((v, k) => k !== q.node108 && d(k, q.pos) > 60);
+  q.pos = [G.nodes[pick][0] + 0.5, G.nodes[pick][1], G.nodes[pick][2]];
+  const before = q.node108; q.listen(3, 99);
+  ok(q.node108 !== before && (q.node108 === -1 || d(q.node108, q.pos) < 40),
+     `node event -> FUN_00563970(a, -1) at once: node ${before} -> ${q.node108} after a move to node ${pick}`);
 }
 
 // The rescue at trigger 24 (box +-52 u around (-1090.7, 0, -1273.2), script 138): soldiers 69-71 (scripts 24-26) count their

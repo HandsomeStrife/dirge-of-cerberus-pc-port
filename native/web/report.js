@@ -165,11 +165,17 @@ export function initReport(ctx) {
     const hits = [];
     const e1 = new THREE.Vector3(), e2 = new THREE.Vector3(), pv = new THREE.Vector3(),
           tv = new THREE.Vector3(), qv = new THREE.Vector3(), a = new THREE.Vector3();
+    // the triangles each draw's geometry draws now: its draw range, through its index when it has one (room.js
+    // showChunks: the loaded chunks minus the hidden chain groups, worker 0225); a draw with no mesh on the page: all
+    const geomOf = new Map();
+    for (const m of root.children) if (Number.isInteger(m.userData.draw) && !geomOf.has(m.userData.draw)) geomOf.set(m.userData.draw, m.geometry);
     scene.draws.forEach((dr, di) => {
       const f = ctx.attrs[dr.mesh];
       if (!f) return;                           // draw not loaded on this page
-      const t0 = dr.first / 3, t1 = (dr.first + dr.count) / 3;
-      for (let t = t0; t < t1; t++) {
+      const g = geomOf.get(di), ix = g && g.index ? g.index.array : null;
+      const r0 = g ? g.drawRange.start : dr.first, rn = g ? Math.min(g.drawRange.count, ix ? ix.length : dr.count) : dr.count;
+      for (let k = r0; k + 2 < r0 + rn; k += 3) {
+        const t = (ix ? ix[k] : k) / 3;
         const b = t * 36;
         a.set(f[b], f[b + 1], f[b + 2]);
         e1.set(f[b + 12] - a.x, f[b + 13] - a.y, f[b + 14] - a.z);
@@ -355,6 +361,8 @@ export function initReport(ctx) {
     }
   };
 
+  // exposed for headless checks: __rayCast(origin, dir, maxHits) = the report's CPU ray cast (test_room_vis_page)
+  window.__rayCast = (o, d, n = 8) => rayCast(new THREE.Vector3(...o), new THREE.Vector3(...d).normalize(), n);
   // exposed for headless checks. __idBuffer: draw+1 in bits 24-31, triangle in 0-23,
   // with an optional near-plane scale and reversed draw order (z-fight detector).
   window.__idBuffer = ({ nearScale = 1, reverse = false } = {}) => {

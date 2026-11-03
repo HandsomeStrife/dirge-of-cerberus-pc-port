@@ -22,7 +22,9 @@ in vec3 position;
 in vec2 uv;
 in vec4 color;
 in float uvTrack;          // scrolling UVs: the chain's track (-1 none; bmd_uvanim.py)
-in vec4 cullN;             // back faces: partner game-front normal (x 32767), mode (export_z128_room.py cull_tag)
+in vec3 normal;            // the triangle's WebGL-front normal (export: (v1 - v0) x (v2 - v0))
+in vec4 cullP;             // back faces: the strip partner's game-front plane (export_z128_room.py cull_tag)
+in float cullD;            // back faces: the triangle's own game-front plane distance
 uniform mat4 modelViewMatrix, projectionMatrix;
 uniform mat3 normalMatrix;
 uniform bool uFog, uUVAnim, uCull;
@@ -31,16 +33,16 @@ uniform float uFogA, uFogB, uFogMin;
 out vec2 vUV;
 out vec4 vCol;
 out float vFogW, vW;   // fog*w and w: their ratio interpolates screen-linearly (= native noperspective)
-flat out float vCull;  // 1: drop the triangle where it is a WebGL front face (= the game's back face)
+// a plane (n, d) of the mesh's space at the eye: dot(n, eye) - d, from the uniforms and the plane only, so a
+// triangle's three vertices (which carry the same planes) agree bit for bit (rigid model-view: R n . -T - d)
+float atEye(vec3 n, float d) { return -dot(normalMatrix * n, modelViewMatrix[3].xyz) - d; }
 void main() {
-  vec4 eyeP = modelViewMatrix * vec4(position, 1.0);
-  vec4 clip = projectionMatrix * eyeP;
-  // VU1 program A back faces (export_z128_room.py cull_tag): mode 0 never culled, 1 culled when back-facing,
-  // 2 culled only when the strip quad's partner is back-facing too (instr 255-260). The flat value comes from
-  // the provoking (last) vertex, which lies on the partner's plane. Facing kept on a zero cross (>= 0).
-  vCull = 0.0;
-  if (uCull && cullN.w > 0.5)
-    vCull = (cullN.w > 1.5 && dot(normalMatrix * cullN.xyz, -eyeP.xyz) >= 0.0) ? 0.0 : 1.0;
+  // VU1 program A back faces (export_z128_room.py cull_tag): a triangle is skipped when it faces away (the
+  // screen cross z < 0: its game-front plane has the eye behind it) and so does its strip partner (instr
+  // 255-260: IAND); the partner plane is 'always facing' for two-sided chains, 'never' for lists. Skipped
+  // triangles collapse to one point outside the clip volume (no fragments). A zero cross is kept (>= 0).
+  if (uCull && atEye(-normal, cullD) < 0.0 && atEye(cullP.xyz, cullP.w) < 0.0) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
+  vec4 clip = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
   float f = uFog ? clamp(uFogA * clip.w + uFogB, uFogMin, 1.0) : 1.0;
   vUV = uv; vCol = color;
   if (uUVAnim && uvTrack >= 0.0) vUV += texelFetch(uUVOff, ivec2(int(uvTrack), 0), 0).xy; vFogW = f * clip.w; vW = clip.w;
@@ -52,7 +54,6 @@ precision highp float;
 in vec2 vUV;
 in vec4 vCol;
 in float vFogW, vW;
-flat in float vCull;
 uniform sampler2D uTex;
 uniform bool uTexOn, uFog, uOutAlpha, uAdd;
 uniform vec3 uFogColor;
@@ -61,7 +62,6 @@ uniform float uTexA;     // texel alpha scale: 255 / 128 for raw PS2 alpha (scen
 uniform int uAMode;      // 0 none, 1 keep a>=ref, 2 keep a<ref
 out vec4 fragColor;
 void main() {
-  if (vCull > 0.5 && gl_FrontFacing) discard;   // the game's screen cross z < 0 (GS y down) = WebGL CCW
   vec4 c = vCol;
   float aS = vCol.a * 2.0;                      // GS As (128 == 1.0), not capped: up to 0xff / 0x80
   if (uTexOn) {
@@ -70,8 +70,10 @@ void main() {
     aS = t.a * uTexA * vCol.a * 2.0;              // At / 128 (raw PS2 byte: up to 0xff / 0x80, not capped)
   }
   c.a = min(aS, 1.0);                           // GS As = A / 128 (textured: At * Av / 128)
+#ifdef ATEST                                    // only the alpha-test passes discard (keeps early z elsewhere)
   if (uAMode == 1 && c.a <  uARef) discard;
   if (uAMode == 2 && c.a >= uARef) discard;
+#endif
   if (uFog) c.rgb = mix(uFogColor, c.rgb, vFogW / vW);
   // additive (ALPHA 0x48, Cs * As + Cd): the shader applies As itself (blend factors One, One),
   // because a blend factor would clamp As to 1 and ff88's vertex alpha reaches 192 (As 1.5)
@@ -88,7 +90,7 @@ export function roomOptions(params = new URLSearchParams(location.search)) {
 export function makeMaterial(scene, tex, draw, mode, opts = roomOptions()) {
   const fog = scene.fog;
   const m = new THREE.RawShaderMaterial({
-    glslVersion: THREE.GLSL3, vertexShader: VS, fragmentShader: FS,
+    glslVersion: THREE.GLSL3, vertexShader: VS, fragmentShader: FS, defines: mode ? { ATEST: 1 } : {},
     side: THREE.DoubleSide, depthFunc: THREE.LessDepth,
     uniforms: {
       uTex: { value: tex }, uTexOn: { value: !!tex },
@@ -140,8 +142,8 @@ async function fetchBuf(url) {
 // Load scene.json and build the room.
 //   skip(draw)      - leave a draw out (play.js drops the static posed Vincent)
 //   onProgress(done, total)
-//   normals         - also bind the normal attribute (no shader reads it; main.js binds only
-//                     position, uv and color)
+//   normals         - also bind the normal attribute on meshes without back-face data (the back-face
+//                     test binds it anyway; main.js binds only position, uv and color)
 //   opts            - roomOptions() unless given
 // Returns { scene, root, lo, hi, floats, uvAnim }: uvAnim = RoomUVAnim (null without scene.uvanim); floats[mesh id] = the raw 12-float vertex
 // buffer (report.js ray casts read it); each mesh's userData.draw indexes scene.draws.
@@ -184,7 +186,11 @@ export async function loadRoom({ skip = null, onProgress = null, normals = false
       color: new THREE.InterleavedBufferAttribute(ib, 4, 8),
     };
     if (m.uvt) attrs[id].uvTrack = new THREE.BufferAttribute(new Int16Array(bufs[m.uvt]), 1);
-    if (m.cul) attrs[id].cullN = new THREE.BufferAttribute(new Int16Array(bufs[m.cul]), 4);   // back faces
+    if (m.cul) {                                  // back faces: float32 x 5 per vertex (partner plane, own d)
+      const cb = new THREE.InterleavedBuffer(new Float32Array(bufs[m.cul]), 5);
+      attrs[id].cullP = new THREE.InterleavedBufferAttribute(cb, 4, 0);
+      attrs[id].cullD = new THREE.InterleavedBufferAttribute(cb, 1, 4);
+    }
   }
   // scrolling UVs (worker 0226): one offset texture for every room material
   const uvAnim = scene.uvanim ? new RoomUVAnim(scene.uvanim) : null;
@@ -201,7 +207,7 @@ export async function loadRoom({ skip = null, onProgress = null, normals = false
     // it draws everything
     {
       const g = new THREE.BufferGeometry();
-      for (const n of normals ? ['position', 'normal', 'uv', 'color'] : ['position', 'uv', 'color']) g.setAttribute(n, a[n]);
+      for (const n of normals || a.cullP ? ['position', 'normal', 'uv', 'color'] : ['position', 'uv', 'color']) g.setAttribute(n, a[n]);   // the back-face test reads the normal
       if (a.uvTrack) g.setAttribute('uvTrack', a.uvTrack);
       for (const n of Object.keys(a)) if (!['position', 'normal', 'uv', 'color'].includes(n)) g.setAttribute(n, a[n]);
       g.setDrawRange(d.first, d.count);
@@ -238,31 +244,49 @@ export function visibleRanges(chunks, want, hidden) {
   return runs;
 }
 export function showChunks(root, loaded, hidden = null) {
-  const want = loaded == null ? null : new Set(loaded);
-  const key = want == null ? '*' : [...want].sort((x, y) => x - y).join(',');
-  const vkey = hidden ? hidden.words().join(',') : '-';       // the mask the ranges were cut with (visShown)
-  if (root.userData.chunksShown === key && root.userData.visShown === vkey) return;
-  root.userData.chunksShown = key; root.userData.visShown = vkey;
-  const done = new Set();
+  // called every game frame: no allocation unless the loaded set or the mask changed. Chunks as a bit set
+  // (z128: 00..0c), the mask as its 4 words (DAT_004e8710).
+  const ru = root.userData;
+  let bits = 0;
+  if (loaded == null) bits = -1;
+  else for (const c of loaded) bits |= c >= 0 && c < 31 ? 1 << c : 0;
+  let same = ru.chunkBits === bits && ru.visOn === !!hidden;
+  if (hidden) {
+    const w = ru.visWords || (ru.visWords = new Uint32Array(4));
+    for (let k = 0; k < 4; k++) { const x = hidden.word(k); if (w[k] !== x) { w[k] = x; same = false; } }
+  }
+  if (same) return;
+  if (ru.chunkBits !== bits) ru.chunksShown = loaded == null ? '*' : [...new Set(loaded)].sort((x, y) => x - y).join(',');
+  ru.chunkBits = bits; ru.visOn = !!hidden;
+  ru.visShown = hidden ? Array.from(ru.visWords).join(',') : '-';      // the mask the ranges were cut with
+  const stamp = ru.visStamp = (ru.visStamp | 0) + 1;
   for (const m of root.children) {
-    const u = m.userData;
-    if (!u.chunks || done.has(m.geometry)) continue;
-    done.add(m.geometry);
-    // one indexed draw over the visible runs (the same triangles in the same order)
-    const g = m.geometry, runs = visibleRanges(u.chunks, want, hidden);
-    let n = 0;
-    for (const [, c] of runs) n += c;
+    const u = m.userData, g = m.geometry;
+    if (!u.chunks || g.userData.visStamp === stamp) continue;          // shared by the ATE passes: once
+    g.userData.visStamp = stamp;
+    // which ranges are drawn: their chunk loaded and their group (-1 = never) not hidden (FUN_00269450)
+    const ch = u.chunks;
+    let fl = g.userData.visFlags, changed = false;
+    if (!fl) { fl = g.userData.visFlags = new Uint8Array(ch.length).fill(2); }
+    for (let i = 0; i < ch.length; i++) {
+      const r = ch[i], c = r[0], grp = r.length > 3 ? r[3] : -1;
+      const on = (bits === -1 || (c >= 0 && c < 31 && (bits >>> c & 1))) && !(hidden && grp >= 0 && hidden.has(grp)) ? 1 : 0;
+      if (fl[i] !== on) { fl[i] = on; changed = true; }
+    }
+    if (!changed) continue;                       // this geometry draws the same triangles: no re-upload
+    // one indexed draw over the drawn ranges (the same triangles in the same order)
     let ix = g.userData.visIndex;
     if (!ix) {                                    // a geometry not built by loadRoom (tests): a bare index
       let total = 0;
-      for (const [, , c] of u.chunks) total += c;
+      for (const r of ch) total += r[2];
       ix = g.userData.visIndex = { array: new Uint32Array(total), needsUpdate: false };
     }
     let k = 0;
-    for (const [first, count] of runs) for (let v = 0; v < count; v++) ix.array[k++] = first + v;
+    for (let i = 0; i < ch.length; i++) if (fl[i]) { const first = ch[i][1], count = ch[i][2]; for (let v = 0; v < count; v++) ix.array[k++] = first + v; }
+    if (ix.addUpdateRange) { ix.clearUpdateRanges(); ix.addUpdateRange(0, k); }   // upload the used part only
     ix.needsUpdate = true;
     if (g.index !== ix) g.setIndex(ix);
-    g.setDrawRange(0, n);
+    g.setDrawRange(0, k);
   }
 }
 
@@ -314,24 +338,28 @@ export class RoomUVAnim {
     anims.forEach((a, i) => { if (!this.byChunk.has(a.chunk)) this.byChunk.set(a.chunk, []); this.byChunk.get(a.chunk).push(i); });
     this.time = new Map();               // loaded chunk -> Float32Array (one time per anim position)
     this.node = new Int16Array(2 * Math.max(1, this.n));   // the nodes' +0xdc / +0xde
+    // per track: its animation's chunk and slot in that chunk's time array (precomputed: frame() allocates nothing)
+    this.trChunk = tracks.map(t => anims[t.anim].chunk);
+    this.trPos = tracks.map(t => this.byChunk.get(anims[t.anim].chunk).indexOf(t.anim));
+    this.trLoop = tracks.map(t => anims[t.anim].loop);
+    this.allChunks = [...this.byChunk.keys()];
   }
-  // One game frame (FUN_00265350, late in FUN_00248110). loaded: the loaded chunks (AreaStream.loaded()),
-  // or null = every chunk. advance: DAT_004fc7e8 (1.2; 0 while DAT_004fc7e4 == 1).
+  // One game frame (FUN_00265350, late in FUN_00248110). loaded: the loaded chunks (AreaStream.loaded(): an
+  // array), or null = every chunk. advance: DAT_004fc7e8 (1.2; 0 while DAT_004fc7e4 == 1).
   frame(loaded, advance = 1.2) {
-    const want = loaded == null ? new Set(this.byChunk.keys()) : new Set(loaded);
-    for (const c of [...this.time.keys()]) if (!want.has(c)) this.time.delete(c);   // FUN_002681b0
+    const want = loaded == null ? this.allChunks : loaded;
+    for (const c of this.time.keys()) if (!want.includes(c)) this.time.delete(c);   // FUN_002681b0
     for (const c of want) {
       const list = this.byChunk.get(c);
-      if (!list) continue;
-      if (!this.time.has(c)) this.time.set(c, new Float32Array(list.length));      // FUN_002680e0
+      if (list && !this.time.has(c)) this.time.set(c, new Float32Array(list.length));   // FUN_002680e0 (on load only)
     }
     const step = fr(fr(advance) * 0.5);
     for (let ti = 0; ti < this.n; ti++) {
-      const tr = this.tracks[ti], an = this.anims[tr.anim], T = this.time.get(an.chunk);
+      const T = this.time.get(this.trChunk[ti]);
       if (!T) continue;                  // chunk not loaded: its chains are not drawn
-      const t = T[this.byChunk.get(an.chunk).indexOf(tr.anim)];
-      if (tr.u) this.node[2 * ti] = toS16(evalCurve(tr.u, t, an.loop));
-      if (tr.v) this.node[2 * ti + 1] = toS16(-evalCurve(tr.v, t, an.loop));
+      const tr = this.tracks[ti], t = T[this.trPos[ti]], loop = this.trLoop[ti];
+      if (tr.u) this.node[2 * ti] = toS16(evalCurve(tr.u, t, loop));
+      if (tr.v) this.node[2 * ti + 1] = toS16(-evalCurve(tr.v, t, loop));
       this.off[2 * ti] = this.node[2 * ti] * 0.00024414062;
       this.off[2 * ti + 1] = this.node[2 * ti + 1] * 0.00024414062;
     }

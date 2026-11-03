@@ -6,13 +6,18 @@
 //      of every loaded chunk. Chunks whose time is not a whole number of steps from 0 (chunk 00: the stage load /
 //      opening event) are checked with the RAM time put into the page's slot directly.
 //   3. hand cases: Hermite basis, the (short) wrap, the loop, the time reset on reload (section 3 below).
+//   4. the key layout against the decomp (needs elf/SLES_541.85): every track's curves evaluated the way
+//      FUN_00262328 addresses a key (byte offsets in the curve: value +8 + 16 i, key i's tangent +16 + 16 i, key i+1's
+//      +12 + 16 (i + 1); bmd_uvanim.read_curve keeps a key's 4 floats in file order) with the Hermite rows read
+//      from the ELF at DAT_0046be50, at the middle of every segment, = room.js evalCurve; z128's tangents have
+//      in = out within 4e-9, so a synthetic curve with in != out checks the order.
 //   2. GS dump (c0b, frames 0..3): dump UV - file UV of each matched ff88 node = the page's offset (frame 0 = the
 //      RAM state's offsets; frame k = the k-th page frame after it).
 // Run: node --import ./native/web/test_hooks.mjs native/web/test_uvanim.mjs (needs data/scene.json with uvanim)
 import { readFileSync, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { RoomUVAnim } from './room.js';
+import { RoomUVAnim, evalCurve } from './room.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const FIX = process.env.ROOM_GRADE || join(here, '../../tools/trace/out/room_grade');
@@ -107,6 +112,47 @@ for (const name of ['c0b', 'c09']) {
   ok(ua.node[1] === 2048, `loop: t 310 = fmodf(310, 300) = 10 -> v -0.5 -> 2048 (page ${ua.node[1]})`);
   ua.frame([], 1.2); ua.frame([5], 1.2);
   ok(ua.node[1] === 0 && T()[0] === Math.fround(0.6), `reload: an unloaded chunk's time is freed (FUN_002681b0) and zeroed on load (FUN_002680e0): v ${ua.node[1]}, t ${T()[0]}`);
+}
+// 4. key layout vs the decomp
+{
+  const ELF = process.env.DIRGE_ELF || join(here, '../../elf/SLES_541.85');   // DIRGE_ELF: for a copy of this test (mutation runs)
+  if (!existsSync(ELF)) console.log('SKIP key layout: no elf/SLES_541.85');
+  else {
+    const e = readFileSync(ELF), dv = new DataView(e.buffer, e.byteOffset, e.byteLength);
+    const phoff = dv.getUint32(0x1c, true), phsz = dv.getUint16(0x2a, true), phn = dv.getUint16(0x2c, true);
+    const at = va => { for (let k = 0; k < phn; k++) { const h = phoff + k * phsz, off = dv.getUint32(h + 4, true), v = dv.getUint32(h + 8, true), sz = dv.getUint32(h + 16, true);
+      if (va >= v && va < v + sz) return off + va - v; } throw new Error('vaddr 0x' + va.toString(16) + ' not in the ELF'); };
+    const M = [0, 1, 2, 3].map(r => [0, 1, 2, 3].map(c => dv.getFloat32(at(0x46be50 + 16 * r + 4 * c), true)));
+    ok(M.flat().join() === '2,-2,1,1,-3,3,-2,-1,0,0,1,0,1,0,0,0', `DAT_0046be50 from the ELF: ${M.map(r => r.join(' ')).join(' / ')}`);
+    // FUN_00262328: (curve +8 + 16 i, curve +8 + 16 (i + 1), (curve +16 + 16 i) x dt, (curve +12 + 16 (i + 1)) x dt)
+    // . (M0 s^3 + M1 s^2 + M2 s + M3); keys start at curve +4, 16 bytes each -> float index (byte - 4 - 16 k) / 4
+    const F = (K, byte) => { const k = Math.floor((byte - 4) / 16); return K[k][(byte - 4 - 16 * k) / 4]; };
+    const decomp = (K, i, t) => {
+      const dt = Math.fround(F(K, 4 + 16 * (i + 1)) - F(K, 4 + 16 * i)), s = Math.fround(Math.fround(t - F(K, 4 + 16 * i)) / dt);
+      const b = [0, 1, 2, 3].map(c => M[0][c] * s * s * s + M[1][c] * s * s + M[2][c] * s + M[3][c]);
+      const x = [F(K, 8 + 16 * i), F(K, 8 + 16 * (i + 1)), Math.fround(F(K, 16 + 16 * i) * dt), Math.fround(F(K, 12 + 16 * (i + 1)) * dt)];
+      return b[0] * x[0] + b[1] * x[1] + b[2] * x[2] + b[3] * x[3];
+    };
+    let n = 0, worst = 0, differ = 0;
+    for (const tr of tracks) for (const K of [tr.u, tr.v]) {
+      if (!K) continue;
+      for (let i = 0; i + 1 < K.length; i++) {
+        if (!(K[i + 1][0] > K[i][0])) continue;
+        differ += K[i][2] !== K[i][3];
+        for (const f of [0.3, 0.5, 0.7]) {
+          const t = Math.fround(K[i][0] + f * (K[i + 1][0] - K[i][0]));
+          worst = Math.max(worst, Math.abs(evalCurve(K, t, false) - decomp(K, i, t))); n++;
+        }
+      }
+    }
+    ok(n > 1000 && differ > 100 && worst < 1e-4, `key layout: evalCurve = the decomp's key addressing at ${n} mid-segment times (${differ} keys with in != out; worst ${worst.toExponential(2)})`);
+    // z128's in / out tangents differ by float noise only (<= 4e-9), so a swap is invisible on its data: a synthetic
+    // curve with in != out, through the same decomp addressing
+    const H = [[0, 0, 7, -3], [10, 1, -5, 4], [16, -2, 2, 9]];
+    let hw = 0, hn = 0;
+    for (let i = 0; i < 2; i++) for (const f of [0.25, 0.5, 0.75]) { const t = Math.fround(H[i][0] + f * (H[i + 1][0] - H[i][0])); hw = Math.max(hw, Math.abs(evalCurve(H, t, false) - decomp(H, i, t))); hn++; }
+    ok(hw < 1e-5, `key layout: a curve with in != out tangents (key [time, value, in, out]) = the decomp at ${hn} times (worst ${hw.toExponential(2)})`);
+  }
 }
 console.log(fail ? `${fail} FAILED` : 'all ok');
 process.exit(fail ? 1 : 0);

@@ -245,12 +245,16 @@ DECODED, on the page (room.js `RoomUVAnim`; exporter `native/assets/models/bmd_u
 - **GS evidence.** The room's opaque quads (TEST 0x5000e) as sent to the GS, strip parity undone: tp09 721 / 727,
   tp0b 972 / 986, npc_g100 346 / 353 have both triangles clockwise; the few mixed ones are the IAND rule
   (a back-facing triangle drawn because its partner faces).
-- **Page.** export_z128_room.py `cull_tag` / `build_flat_kept`: per vertex int16 x 4 (`room_gNN.cul`,
-  scene.json meshes[].cul): partner game-front normal x 32767, mode 0 never culled / 1 culled / 2 culled
-  unless the partner faces the eye; the quad's second triangle is emitted (v3, v2, v1) so WebGL's provoking
-  (last) vertex is on the partner's plane. room.js VS: flat `vCull` from dot(normalMatrix n, -eye pos) >= 0
-  (the plane-side test = the screen winding for w > 0); FS discards `gl_FrontFacing` fragments when vCull.
-  `?cull=0` draws both sides (page aid). Material side stays DoubleSide (the partner rule needs both).
+- **Page.** export_z128_room.py `cull_tag` / `build_flat_kept`: per vertex float32 x 5 (`room_gNN.cul`,
+  scene.json meshes[].cul), the same on a triangle's three vertices: the strip partner's game-front plane
+  (n, d) (NEVER (0, 0, 0, -1) for two-sided chains / zero-area partners, NO_PARTNER (0, 0, 0, 1) for lists),
+  then the triangle's own game-front plane distance (its normal is vertex floats 3-5). room.js VS (review
+  fix, 2026-11-03): both planes evaluated at the eye from uniforms + per-triangle constants only
+  (-dot(normalMatrix n, modelViewMatrix[3].xyz) - d), so the three vertices agree bit for bit; a skipped
+  triangle collapses to one point outside the clip volume (the plane-side test = the screen winding for w > 0).
+  No fragment discard for the cull; the alpha-test discards compile only into the ATE passes (`#define ATEST`),
+  so opaque room materials keep early z. `?cull=0` draws both sides (page aid). (First version: int16 partner
+  normal + flat provoking-vertex varying + FS discard; replaced after the manager's review.)
 - **Checks.** `python3 -I native/assets/models/test_cull_tag.py` (hand cases, z128 header vs +0x94 bit 0,
   the three dumps; mutants 6 / 6: no rotation, partner sign, wrong partner, two-sided ignored, zero-area
   partner culled, list as quad). test_room_grade: room.js vs the VU rule on 300 triangles of random non-planar
@@ -258,6 +262,14 @@ DECODED, on the page (room.js `RoomUVAnim`; exporter `native/assets/models/bmd_u
   |page - game| 10.2 -> 5.7; c0b 2245 px, 21.6 -> 18.9; c09 6 px). Mutants 6 / 6 (no discard, side flip,
   no partner rule, partner sign, mode 0 culled, uniform off). New fixture `npc` (worker 0223's grabview
   g100 dump + s100 state: room_grade_fixture.py ... npc).
+- **Perf** (headless SwiftShader, the reviewer's perf.mjs + a fixed-view bench at 432 x 512 and 1920 x 1080): the
+  differences (VS cull vs no cull vs discards forced on every material) stay inside run-to-run noise (the same
+  variant moves 2x between repeats on this shared machine); not measurable here.
+- **Raw alpha / TEXA (review fix).** `dtex --raw-alpha` gave CT24 / CT16 / 16-bit-CLUT texels 255 (As 1.99 in
+  room.js's additive path). The GS expands them with TEXA; the room's draws in tp09 / tp0b / npc_g100 run with
+  TEXA 0x8000000080 (TA0 = TA1 = 0x80, AEM 0; 0x8000008080 is only on non-room draws), so raw mode now gives
+  0x80 (dtex `DTEX_RAW_TEXA`). No z128 room texture uses those formats (re-export: 0 textures changed).
+  Test: `python3 -I native/assets/textures/test_raw_alpha.py` (hand-made TIM2s; 4 / 4 mutants killed).
 - **Open.** The clipper path's per-triangle rule is not reproduced (a quad at the clip-volume edge with one
   back-facing triangle: the game drops that triangle, the page keeps it): fidelity-audit row. The sky
   (export_z128_sky.py) and main.js's own room copy draw both sides; the sky's packets were not checked.
@@ -290,3 +302,19 @@ probe from the c09 / c0b eyes = their DAT_004e8710; grades unchanged: c09 street
 test_room_stream. No dumped view (start, r02_climb, r06_tp, c09, c0b) has a group whose visibility changed on
 screen: 0 pixels differ.
 Still open: occluders (3b; group 69 on the deck), the VU0 ray test (GUESS row), the script half's start value.
+
+### Review fixes (worker 0225, 2026-11-03, manager review)
+1. The mask everywhere the room is drawn: `room_vis.js startMask(vis, eye)` = the probe from the start camera eye
+   (scene.json camera = the save's DAT_004e4800) over the stage load's slots 0 / 1 / 2 (START_SLOTS; FUN_003ff7a8(0x80,
+   1, 2)) = {0, 19, 25, 56, 57}. main.js applies it (room.js showChunks on its draws); play.js without area boxes probes
+   every frame through every chunk's cid (it draws every chunk); report.js's CPU ray cast walks each geometry's index /
+   draw range (hook `window.__rayCast`). Native: export_z128_room.py writes `@group MESH FIRST COUNT GROUP` lines in
+   room.list (export_web_room.py skips them), render_scene_textured drops the ranges its mask hides: `-hide G,..`, or the
+   same probe from `-vis-eye` / `-eye` through `-vis` (default ../web/data/z128_vis.json); at the hero camera it hides
+   0 / 19 / 25 / 56 / 57 = 10361 triangles (the old baked mask: 10362), 65 px of the hero view.
+2. Restart clears the script half in play.js restart() itself (fire or no fire).
+3. test_room_vis: near-to-far and far-slot-first nearest-hit cases (removing `t < best` now fails).
+4. showChunks: no allocation when the loaded set and the mask are unchanged (chunk bit set, 4 mask words); a geometry's
+   index is rebuilt and uploaded (addUpdateRange: the used part) only when its drawn ranges changed (per-range flags).
+New test: test_room_vis_page (the hidden-group triangle is neither drawn nor hit on play.html / play.html without area
+boxes / index.html; Restart without the stage fire clears the script half).

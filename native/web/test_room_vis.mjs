@@ -57,6 +57,13 @@ else {
   // moves but DAT_004e8880 keeps entry 1 (only an in-range index copies)
   const r = v.probe(e, [1]);
   ok(r.mask.join() === B.join() && Math.abs(r.hit.t - 0.05) < 1e-9, `nearest hit wins, class-0x10f packet skipped, out-of-range index keeps the entry (${r.mask} t ${r.hit && r.hit.t})`);
+  // near to far, in one chunk and across slots: the later, farther hits must not replace the nearer one
+  const nf = mk([{ chunk: 1, table: [A, B, C], tris: [tri(0x180, 0, 10), tri(0x180, 1, 40)] },
+                 { chunk: 2, table: [A, B, C], tris: [tri(0x180, 2, 60)] }]);
+  const r2 = nf.probe(e, [1, 2]);
+  ok(r2.mask.join() === A.join() && Math.abs(r2.hit.t - 0.1) < 1e-9, `near to far: the nearest (t 0.1, entry 0) wins over later farther hits (${r2.mask} t ${r2.hit && r2.hit.t})`);
+  const r3 = nf.probe(e, [2, 1]);
+  ok(r3.mask.join() === A.join(), `slot order far chunk first: still the nearest (${r3.mask})`);
   ok(v.probe(e, [2]).mask.join() === '0,0,0,0', 'a hit past t = 1 (150 below, ray 100): no hit, mask 0');
   ok(v.probe(e, []).mask.join() === '0,0,0,0', 'no loaded slot: mask 0 (FUN_00269400(0))');
   ok(v.probe([0, 60, 0], [1]).mask.join() === '0,0,0,0', 'the ray goes down (+y): a surface above the eye is not hit');

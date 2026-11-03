@@ -74,10 +74,28 @@ function fakeRoot() {
   showChunks(r, null, m);
   ok(runs(g) === '[[0,21]]', `group 255 never hidden (${runs(g)})`);
 }
+// 2b. showChunks re-cuts only the geometries whose drawn set changed, and nothing when nothing changed
+{
+  const counted = (first, count) => { const g = fakeGeom(first, count); g.n = 0; const sd = g.setDrawRange; g.setDrawRange = function (a, b) { this.n++; sd.call(this, a, b); }; return g; };
+  const ga = counted(0, 6), gb = counted(0, 6);
+  const r = { userData: {}, children: [
+    { name: 'a', geometry: ga, userData: { chunks: [[0, 0, 3, -1], [1, 3, 3, 7]] } },
+    { name: 'a#ate2', geometry: ga, userData: { chunks: [[0, 0, 3, -1], [1, 3, 3, 7]] } },     // shared geometry
+    { name: 'b', geometry: gb, userData: { chunks: [[0, 0, 3, -1], [1, 3, 3, 9]] } }] };
+  const m = createVisMask();
+  showChunks(r, [0, 1], m);
+  ok(ga.n === 1 && gb.n === 1, `first call: each geometry cut once, the shared one too (${ga.n} ${gb.n})`);
+  showChunks(r, [1, 0], m); showChunks(r, [0, 1], m);
+  ok(ga.n === 1 && gb.n === 1, `same chunks (any order) and mask: nothing re-cut (${ga.n} ${gb.n})`);
+  m.setCamera([1 << 7, 0, 0, 0]); showChunks(r, [0, 1], m);
+  ok(ga.n === 2 && gb.n === 1 && drawn(ga).length === 3 && drawn(gb).length === 6, `group 7 hidden: only geometry a re-cut (${ga.n} ${gb.n}; ${drawn(ga).length} / ${drawn(gb).length} vertices)`);
+  showChunks(r, [0], m);
+  ok(ga.n === 2 && gb.n === 2 && drawn(gb).length === 3, `chunk 1 unloaded: a already drew no chunk-1 vertex, only b re-cut (${ga.n} ${gb.n})`);
+}
 
 // mesh buffers (12 floats a vertex: pos, normal, uv, rgba)
 const buf = {};
-for (const [d] of room) if (!buf[d.mesh]) buf[d.mesh] = new Float32Array(readFileSync(join(D, scene.meshes[d.mesh].file)).buffer.slice(0));
+for (const [d] of room) if (!buf[d.mesh]) buf[d.mesh] = (q => new Float32Array(q.buffer.slice(q.byteOffset, q.byteOffset + q.byteLength)))(readFileSync(join(D, scene.meshes[d.mesh].file)));
 function cast(root, eye, dir) {
   const n = Math.hypot(...dir), v = dir.map(x => x / n);
   let best = null;

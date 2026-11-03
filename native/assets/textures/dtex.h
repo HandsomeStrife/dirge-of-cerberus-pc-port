@@ -60,6 +60,7 @@ typedef struct {
  * dtex_free_set(). Non-texture entries are skipped. */
 /* 1: keep the PS2 alpha byte (128 == 1.0, up to 255) instead of scaling it to 0..255 (default 0). */
 extern int dtex_raw_alpha;
+extern const uint8_t DTEX_RAW_TEXA;    /* raw mode: the alpha of CT24 / CT16 / 16-bit CLUT texels (TEXA) */
 
 int dtex_decode_container(const uint8_t *data, size_t size, dtex_set *out);
 

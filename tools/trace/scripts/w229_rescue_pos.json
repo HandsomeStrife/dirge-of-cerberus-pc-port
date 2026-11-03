@@ -1,0 +1,50 @@
+{
+ "name": "w229_rescue_pos",
+ "frames": 2400,
+ "log_from": 1850,
+ "doc": "worker 0229: from worker 0223's s826 state (w223_npc95 f826: townspeople 111 / 113 / 114 awake; stage flags {2: 7, 46: 1}), stage flags 0 = 2 and 1 = 5 poked (TRACE_POKE on zone +0x38, XOR DAT_0047dbf0): ev0100 main's battle-loop poll takes the rescue beat (pc 0x849: getbattleactor p_Vin / n_CupM / n_CupW, roji02_01 unskipped, setpos / setdir, Camera.set, battle()). No input.  After rv_matiawase's scene_save(1) the game asks to create save data: right f1000 + cross f1020 (CANCEL; the trace card is not written), then 'continue without saving?': left f1080 + cross f1100 (OK). Then the map screen ('Defend the city'): cross f1200 / f1300. Runs: (a) TRACE_FIELDSET=stage TRACE_CALLLOG=stage TRACE_LOG_AT=a9000 with frames 3000 / log_from 2010 (timing: event2 f1320, battle2 f2128); (b) TRACE_FIELDSET=enemy TRACE_ERECS=113,114 TRACE_ENEMIES=2 TRACE_LOG_AT=a5800 (this file's frames / log_from) -> out/w229_rescue_pos.jsonl.",
+ "events": [
+  {
+   "from": 1000,
+   "to": 1004,
+   "buttons": [
+    "right"
+   ]
+  },
+  {
+   "from": 1020,
+   "to": 1024,
+   "buttons": [
+    "cross"
+   ]
+  },
+  {
+   "from": 1080,
+   "to": 1084,
+   "buttons": [
+    "left"
+   ]
+  },
+  {
+   "from": 1100,
+   "to": 1104,
+   "buttons": [
+    "cross"
+   ]
+  },
+  {
+   "from": 1200,
+   "to": 1204,
+   "buttons": [
+    "cross"
+   ]
+  },
+  {
+   "from": 1300,
+   "to": 1304,
+   "buttons": [
+    "cross"
+   ]
+  }
+ ]
+}

@@ -139,8 +139,8 @@ BIND_OVERRIDE = {('06800212', 370): ('0680ff85', None, False),
 # draws cover none, and the BMD packet ABE flag splits them the same way. So ABE
 # packets of these FileCodes go to a separate group, listed after the sky, with this
 # threshold in .list column 4. Gap texels then write no depth and the sky shows through.
-# Threshold = (AREF - 0.5)/128: the decoder stores alpha as a*255/128, and the shader
-# computes As = texel * vertex alpha * 2, which is 1.0 at GS 128.
+# Threshold = (AREF - 0.5)/128: export_web_room.py stores the raw PS2 alpha byte (dtex --raw-alpha) and
+# room.js computes As = texel * 255/128 * vertex alpha * 2 = At * Av / 128, which is 1.0 at GS 128.
 # Not listed, on purpose: 0680ff36 (16% cut-out texels, but the game draws it opaque with
 # no test), the sky 0680ff35 (ATST NEVER + FB_ONLY, not a cut-out), and the GREATER-100
 # ATE passes at TBP 11440/11476/11748/11880/12156, whose textures match nothing bound
@@ -312,37 +312,41 @@ def _cross(a, b, c):
 # 0 never culls (z128: header w 0x20 = exactly the chains with +0x94 bit 0). Kept = cross z >= 0 = screen
 # clockwise in GS y-down = the triangle's emitted order seen as a WebGL BACK face. A strip quad
 # (v0, v1, v2) + (v2, v1, v3) is skipped only when BOTH are back-facing (instr 255-260: IAND of the two
-# flags), so each triangle carries its partner's game-front normal; room.js keeps a back-facing triangle
-# when the partner faces the eye. A zero-area partner never sets the flag: such a quad is never culled.
-# Tag per vertex (int16 x 4): (partner normal * 32767, mode) mode 0 never cull, 1 cull (no partner),
-# 2 cull unless the partner faces the eye. room.js reads the partner test from the provoking (last)
-# vertex, which must lie on the partner's plane: the quad's second triangle is emitted as (v3, v2, v1)
-# (same winding). Not reproduced: the clipper path (quads with a vertex outside the clip volume, instr
-# 236 -> 285) culls each triangle on its own.
+# flags), so each triangle carries its partner's plane; room.js keeps a back-facing triangle when the
+# partner faces the eye. A zero-area partner never sets the flag: such a quad is never culled.
+# Tag per vertex (float32 x 5, the same on a triangle's three vertices so room.js decides once per
+# triangle): the partner's game-front plane (n, d), the partner facing the eye when dot(n, eye) - d >= 0;
+# NEVER (0, 0, 0, -1) is always 'facing' (two-sided chains, zero-area partner), NO_PARTNER (0, 0, 0, 1)
+# never (list triangles); then the triangle's own game-front plane distance dg = -(normal . v0), with the
+# normal of vertex floats 3-5 ((v1 - v0) x (v2 - v0), WebGL-front): game-front faces the eye when
+# dot(-normal, eye) - dg >= 0.
+# Not reproduced: the clipper path (quads with a vertex outside the clip volume, instr 236 -> 285) culls
+# each triangle on its own.
+CULL_NEVER, CULL_NO_PARTNER = (0.0, 0.0, 0.0, -1.0), (0.0, 0.0, 0.0, 1.0)
 def cull_tag(pk, t):
     w = pk.get('hdr_w', 0)
     if w not in (0, 0x20):
         raise ValueError('packet header w 0x%x: back-face mask 0x%x not decoded' % (w, (0x20 - w) & 0xffff))
     if w == 0x20:
-        return (0, 0, 0, 0)
+        return CULL_NEVER
     if pk.get('is_list'):
-        return (0, 0, 0, 1)
+        return CULL_NO_PARTNER
     V = pk['verts']; b = t[0] - t[0] % 4
     if b + 3 >= len(V):                          # a 3-vertex tail (not seen): no partner
-        return (0, 0, 0, 1)
+        return CULL_NO_PARTNER
     p = (b + 2, b + 1, b + 3) if t[0] == b else (b, b + 1, b + 2)
     n = _cross(V[p[0]], V[p[1]], V[p[2]])
     if n == (0.0, 0.0, 0.0):
-        return (0, 0, 0, 0)
+        return CULL_NEVER
     # game-front = WebGL back: the partner faces the eye when dot(-n, eye - q) >= 0
-    n = _norm((-n[0], -n[1], -n[2]))
-    return (int(round(n[0] * 32767)), int(round(n[1] * 32767)), int(round(n[2] * 32767)), 2)
+    n = _norm((-n[0], -n[1], -n[2])); q = V[p[0]]
+    return (n[0], n[1], n[2], n[0] * q[0] + n[1] * q[1] + n[2] * q[2])
 
 
 def build_flat_kept(packets, idxs, kept, tags=None, tag_of=None, culls=None):
     """export_bmd_bound.build_flat restricted to the kept triangles of each packet.
     tags (list) gets tag_of(packet index) once per emitted vertex (the UV track, bmd_uvanim.py).
-    culls (list) gets the cull_tag 4 int16 once per emitted vertex."""
+    culls (list) gets 5 floats once per emitted vertex: cull_tag + the own game-front plane distance."""
     flat = []; ntri = 0
     for pi in idxs:
         pk = packets[pi]; V = pk['verts']; UV = pk['uv']; C = pk['col']
@@ -350,11 +354,9 @@ def build_flat_kept(packets, idxs, kept, tags=None, tag_of=None, culls=None):
             n = _norm(_cross(V[i0], V[i1], V[i2]))
             if n == (0.0, 0.0, 0.0):
                 continue
-            ct = cull_tag(pk, (i0, i1, i2))
-            if not pk.get('is_list') and i0 % 4 == 2:
-                i0, i1, i2 = i2, i0, i1          # (v2, v1, v3) -> (v3, v2, v1): last vertex on the partner
             if culls is not None:
-                culls.extend(ct * 3)
+                a0 = V[i0]
+                culls.extend((cull_tag(pk, (i0, i1, i2)) + (-(n[0] * a0[0] + n[1] * a0[1] + n[2] * a0[2]),)) * 3)
             for idx in (i0, i1, i2):
                 p3 = V[idx]; uv = UV[idx]; rgba = C[idx]
                 flat.extend((p3[0], p3[1], p3[2], n[0], n[1], n[2], uv[0], uv[1],
@@ -677,8 +679,8 @@ def main():
             array.array('h', uvt_by[key]).tofile(open(uvt, 'wb'))
             g['uvt'] = os.path.basename(uvt)
         cul = os.path.splitext(os.path.join(os.path.dirname(a.out) or '.', mesh_name))[0] + '.cul'
-        assert len(cul_by[key]) == 4 * 3 * ntri_by[key], key
-        array.array('h', cul_by[key]).tofile(open(cul, 'wb'))   # back faces: int16 x 4 per vertex (cull_tag)
+        assert len(cul_by[key]) == 5 * 3 * ntri_by[key], key
+        array.array('f', cul_by[key]).tofile(open(cul, 'wb'))   # back faces: float32 x 5 per vertex (cull_tag, own dg)
         g['cul'] = os.path.basename(cul)
         if base in blend_ref:
             g['bucket'] = border(key)
@@ -772,6 +774,13 @@ def main():
                                           1 if g['abe'] else 0, g.get('alpha_ref', -1),
                                           ('\t%d\tadd' % (1 if g.get('underlay') else 0)) if g.get('blend') == 'add'
                                           else ('\t1' if g.get('underlay') else '')))
+        # chain-group vertex ranges (worker 0225): '@group MESH FIRST COUNT GROUP' for each range whose group the
+        # mask can hide; the native renderer drops those its mask hides (render_scene_textured -vis / -hide). The web
+        # export takes the same ranges from the manifest's 'chunks'.
+        for g in manifest['groups']:
+            for c, first, count, vg in g.get('chunks', []):
+                if vg >= 0:
+                    f.write('@group %s %d %d %d\n' % (g['mesh'], first, count, vg))
     nb = len({g['filecode'] for g in manifest['groups'] if g['filecode'] and not g.get('sky')})
     print('binding %s: %s; visibility groups kept (page masks them); duplicates dropped: %d tris (%d with '
           'another texture), %d covered by earlier chunks; %d marked underlay' % (a.bind, dict(stats),

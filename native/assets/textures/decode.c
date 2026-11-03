@@ -30,13 +30,13 @@ void dtex__emit_direct(dtex_image *out, const uint8_t *src, int psm)
             r = src[i * 4 + 0]; g = src[i * 4 + 1]; b = src[i * 4 + 2];
             int av = dtex_raw_alpha ? src[i * 4 + 3] : (src[i * 4 + 3] * 255) / 128; a = (uint8_t)(av > 255 ? 255 : av);
         } else if (psm == PSM_CT24) {
-            r = src[i * 3 + 0]; g = src[i * 3 + 1]; b = src[i * 3 + 2]; a = 255;
+            r = src[i * 3 + 0]; g = src[i * 3 + 1]; b = src[i * 3 + 2]; a = dtex_raw_alpha ? DTEX_RAW_TEXA : 255;
         } else { /* PSM_CT16 / CT16S : RGBA5551 */
             uint16_t v = rd16(src, (size_t)i * 2);
             r = (uint8_t)((v & 0x1f) << 3);
             g = (uint8_t)(((v >> 5) & 0x1f) << 3);
             b = (uint8_t)(((v >> 10) & 0x1f) << 3);
-            a = (v & 0x8000) ? 255 : 0;
+            a = dtex_raw_alpha ? DTEX_RAW_TEXA : (v & 0x8000) ? 255 : 0;
         }
         out->rgba[i * 4 + 0] = r; out->rgba[i * 4 + 1] = g;
         out->rgba[i * 4 + 2] = b; out->rgba[i * 4 + 3] = a;

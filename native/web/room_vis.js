@@ -19,7 +19,7 @@
 
 // Ray (eye, eye + d) against triangle (a, b, c); returns t in [0, 1] or -1. Two-sided.
 // GUESS: the VU0 micro routine at 0xa90 (FUN_0026f8a0's vcallms) is not translated; this test reproduces
-// DAT_004e86f0 in the 8 save states (test_room_vis.mjs), its float rounding is not the VU's.
+// DAT_004e86f0 in the 9 save states (test_room_vis.mjs), its float rounding is not the VU's.
 function rayTri(e, dy, T, o) {
   const ax = T[o + 2], ay = T[o + 3], az = T[o + 4];
   const e1x = T[o + 5] - ax, e1y = T[o + 6] - ay, e1z = T[o + 7] - az;
@@ -38,6 +38,10 @@ function rayTri(e, dy, T, o) {
   const t = f * (e2x * qx + e2y * qy + e2z * qz);
   return t >= 0 && t <= 1 ? t : -1;
 }
+
+// The stage load's slots: chunk 00 + the pair (1, 2) (FUN_003ff7a8(0x80, 1, 2) -> FUN_002673d8; worker 0213,
+// area_stream.js start_pair). The start mask = the probe from the start camera's eye over these (startMask).
+export const START_SLOTS = [0, 1, 2];
 
 export function createRoomVis(data) {
   const byChunk = new Map();
@@ -68,7 +72,15 @@ export function createRoomVis(data) {
     }
     return { mask: entry ? entry.slice() : [0, 0, 0, 0], hit };
   }
-  return { probe };
+  return { probe, chunks: [...byChunk.keys()] };
+}
+
+// The mask at the stage start, for views that do not run the per-frame probe (main.js, play.js without area
+// boxes, the native renderer's room.list): FUN_00264ee0 from `eye` over the stage load's slots.
+export function startMask(vis, eye, slots = START_SLOTS) {
+  const m = createVisMask();
+  if (vis && eye) m.setCamera(vis.probe(eye, slots).mask);
+  return m;
 }
 
 // The global mask DAT_004e8710 = DAT_004e86f0 (the probe) | DAT_004e8700 (stage scripts, cmds 0x54 / 0x55:
@@ -85,6 +97,7 @@ export function createVisMask() {
       if (on) script[word(b)] = (script[word(b)] | bit(b)) >>> 0; else script[word(b)] = (script[word(b)] & ~bit(b)) >>> 0;
     },
     clearScript() { script.fill(0); },
+    word(k) { return (cam[k] | script[k]) >>> 0; },                                 // DAT_004e8710 word k
     // FUN_00269450: a byte > 0x7f is never hidden
     has(b) { return b >= 0 && b <= 0x7f && ((cam[word(b)] | script[word(b)]) & bit(b)) !== 0; },
     words() { return [0, 1, 2, 3].map(k => (cam[k] | script[k]) >>> 0); },
