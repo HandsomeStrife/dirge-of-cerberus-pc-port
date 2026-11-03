@@ -91,7 +91,7 @@ try {
     W.playerShot([c[0] - 80, c[1], c[2]], [c[0] + 80, c[1], c[2]], Wv);
     return { hp0, c };
   });
-  const dmg = await pg.waitForFunction(h0 => { const W = window.__play.enemyAI, a = W.objects.get(54); return a.hp < h0 && W.hudGauge().v === a.hp - 10000 ? { hp: a.hp, g: W.hudGauge().v } : false;   // the brain's next update sets the gauge },
+  const dmg = await pg.waitForFunction(h0 => { const W = window.__play.enemyAI, a = W.objects.get(54); return a.hp < h0 && W.hudGauge().v === a.hp - 10000 ? { hp: a.hp, g: W.hudGauge().v } : false; },   // the brain's next update sets the gauge
     hit.hp0, { timeout: 20000 }).then(h => h.jsonValue()).catch(() => null);
   ok(!!dmg && dmg.g === dmg.hp - 10000, `a shot through its body takes HP (${hit.hp0} -> ${dmg ? dmg.hp : '-'}) and the gauge follows (FUN_00aa11b8: ${dmg ? dmg.g : '-'})`);
 
