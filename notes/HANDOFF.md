@@ -759,3 +759,17 @@ exercised in a browser.
   7), test_reload_motion (new), test_items_page (+8), test_props_page (+1), test_aim_ammo stub onGround. Mutants: unit 4/4
   (noControl) + 3/4 camera (1 equivalent) + 7/8 reload (1 equivalent) + 2/2 audio; page 3/3 (fire gate, camera gate, lookup).
   Image: worker 0246 scratchpad w0246_reload_game_vs_page.png (timeline). Not committed.
+- Two red tests on HEAD (worker 0250, 2026-11-03; tests only, no game code changed). **test_shot_volumes**: first bad
+  d221c63 (0212's cmd 0x10a). Script 99 event 0x12 ends with `push -2; cmd 0x10a`: trigger 76 deletes itself after #51's
+  first bullet (FUN_0054cd70 case 0x10a -> FUN_0053fa08 -> manager event 0 -> FUN_0053e1e0), so later bullets wake nobody.
+  The test's "runs again" predated 0x10a; now checks the delete (mutant: no postManager -> 2 fail). **test_npc_page**:
+  first bad 569916d (0240's stage pass in battle()). Stage script 0 event 0x23: flag 1 == 5 -> cmd 0x109 to 113 / 114;
+  rv_matiawase's battle(1500) runs it, so they are off by the rescue and getbattleactor gets no model (FUN_00558bb8 zeroes
+  +0x180, FUN_0056a5e0 returns it). T: +0x28 0x20c40b at w223_npc95 f783-840 -> 0x20c44a (bit 0 off) at w229_rescue_pos f1850.
+  The flake: the test poked flag 1 after the first hand-back, racing battle(1500). Now pokes flags 0 = 2 and 1 = 5 together
+  (as w229's TRACE_POKE), shoots 114 before the beats, and checks 113 / 114 off with nothing lent (mutant: no stagePass ->
+  fails). **Still red (not fixed, separate cause):** the two battle() camera checks fail since 037e740 (0248's auto-skip
+  'unplayed'): Skip is requested inside roji02_01 after its cam-0 move is queued with skip 1, so at the next frame main's
+  Camera.set (set_l cam 0) runs in the VM window and then the command loop evaluates the skipped move at its end key over it
+  (FUN_00377c68 order: VM window, then commands; the page follows it). Passes with ?autoskip=1. The T values are from an
+  unskipped roji02_01; decide whether the test runs ?autoskip=1 / 0 or the auto-skip GUESS changes when it presses Skip.

@@ -4,11 +4,15 @@
 //      0x141 'fear' over the stance's row-0 idle 'st'). T: w223_npc95 (wake f783 in 'st', 'fear' from f784).
 //   2. the stage areas follow Vincent (areas.js): at the start 105 (on 2 / 15 / 105, the save's RAM).
 //   3. (worker 0228) they are actors: 113 slides along path 96 and is drawn at its end; shots at 114 hit and kill it (dead clip).
+//   4. (worker 0229) main's rv_matiawase and rescue beats; rv_matiawase's battle() switches 113 / 114 off (worker 0250).
 //   NPC_SHOT=<png>: a screenshot with Vincent where w223_npcview put him (-1125, -1, -1255), facing the game's (0.912, 0, -0.409).
 //   node native/web/test_npc_page.mjs     (needs data/enemies with the n0xx exports + playwright; else SKIP). Sandbox off (CDN).
 import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
+// autoskip=1: roji02_01 is skipped at once (the page cannot play it yet). The stand-in's default (Skip at the event's
+// first wait, a GUESS) lands Skip mid camera-0 move, which then overwrites main's rescue Camera.set (worker 0250);
+// the battle() camera checks compare main's own camera, which follows the event either way.
 import { spawn, execSync } from 'node:child_process';
 import net from 'node:net';
 import path from 'node:path';
@@ -39,7 +43,7 @@ try {
   for (let i = 0; ; i++) {
     // NPC_SHOT: the game's camera of w223_npcview f100 (CAM+0x90 eye, +0x80 forward -> yaw 96.92, pitch 8.13) as ?cam=
     const cam = process.env.NPC_SHOT ? '&cam=' + (process.env.NPC_CAM || '-1162.73,-11.40,-1250.42,96.92,8.13') : '';
-    try { await pg.goto(`http://127.0.0.1:${port}/${page}?intro=0&sound=0${cam}`, { waitUntil: 'load' }); break; }
+    try { await pg.goto(`http://127.0.0.1:${port}/${page}?intro=0&sound=0&autoskip=1${cam}`, { waitUntil: 'load' }); break; }
     catch (e) { if (i > 20) throw e; await new Promise(r => setTimeout(r, 250)); }
   }
   await pg.waitForFunction(() => window.__play && window.__play.stats.ticks > 30 && window.__play.enemyAI && window.__play.enemies, null, { timeout: 120000 });
@@ -75,51 +79,7 @@ try {
   }, null, { timeout: 30000 }).then(h => h.jsonValue()).catch(() => null);
   ok(!!slid && [-1081.11, -0.01, -1280.13].every((v, i) => Math.abs(v - slid.body[i]) < 0.05),
      `113 slid along path 96 and is drawn at its end: ${slid ? slid.body.map(v => v.toFixed(2)) : 'no'}`);
-  // worker 0229: ev0100 main's rescue beat on the page. Stage flag 0 = 2 (rv_matiawase; main then puts its p000 slot named
-  // p_Vin at (-889.2, 0, -599) and battle(1500) hands it to Vincent), then flag 1 = 5 (pc 0x849: getbattleactor p_Vin / n_CupM /
-  // n_CupW, roji02_01 auto-skipped, setpos / setdir, Camera.set, setbattlename p_Vin, battle()). T w229_rescue_pos (PCSX2, the
-  // same flags poked from w223's s826): f1850 Vincent (-889.2, -0.064, -599) facing (-1, 0, 0); record 2126 (-1120.2, -0.0623,
-  // -1277.3) facing (0.98894, 0, -0.14831), the camera's forward (0.75641, 0.64547, -0.10588) = main's event camera, eye
-  // (-1136.096, -31.009, -1275.074). The townspeople's lent models are freed at battle() (they are drawn again).
-  if (!process.env.NPC_SHOT) {
-    const beat = async (k, v, want) => pg.evaluate(async ([k, v, want]) => {
-      const P = window.__play, rt = P.stage && P.stage.rt;
-      if (!rt) return { err: 'no stage controller' };
-      // battle()'s camera (worker 0244: follow.battleReset, then battleHandBack and the message 0x7d5)
-      const cams = [], f = P.follow, reset = f.battleReset;
-      f.battleReset = function (...a) { const r = reset.apply(this, a); cams.push({ eye: this.eye.slice(), fwd: this.M[2].slice(), dist: this.dist }); return r; };
-      P.enemyAI.eventFlags[k] = v;
-      const t0 = Date.now();
-      while (!rt.log.some(([, m]) => m.startsWith('handback p_Vin ' + want)) && Date.now() - t0 < 30000) await new Promise(r => setTimeout(r, 50));
-      const t1 = P.stats.ticks; while (P.stats.ticks < t1 + 3) await new Promise(r => setTimeout(r, 50));
-      f.battleReset = reset;
-      const slots = P.light ? P.light.stream.slots.filter(x => x.loaded).map(x => x.chunk) : null;
-      const E = P.enemies.actors, vis = k => { const a = E.find(x => x.rec === k); return a ? a.body.visible : null; };
-      return { pos: [P.ctrl.pos.x, P.ctrl.pos.y, P.ctrl.pos.z], face: [P.ctrl.C.face.x, P.ctrl.C.face.z], cams, slots, dist: f.dist, fwd: f.M[2].slice(), vis: [vis(113), vis(114)], vin: P.vin.body.visible,
-               log: rt.log.filter(([, m]) => /getbattleactor|battlename|handback|freed|^battle /.test(m)).map(x => x.join(' ')).slice(-8) };
-    }, [k, v, want]);
-    const near = (a, b, e) => a.every((x, i) => Math.abs(x - b[i]) <= e);
-    const b1 = await beat(0, 2, '-889.20');
-    ok(b1 && !b1.err && near(b1.pos, [-889.2, -0.064, -599], 0.02) && near(b1.face, [-1, 0], 1e-5),
-       `rv_matiawase: main's p000 slot named p_Vin hands Vincent its place (T f1850 (-889.2, -0.064, -599) facing -x): ${b1 && b1.pos ? b1.pos.map(v => v.toFixed(3)) + ' face ' + b1.face.map(v => v.toFixed(4)) : JSON.stringify(b1)}`);
-    const b2 = await beat(1, 5, '-1120.20');
-    ok(b2 && !b2.err && near(b2.pos, [-1120.2, -0.0623, -1277.3], 0.02) && near(b2.face, [0.98894, -0.14831], 1e-4),
-       `the rescue (getbattleactor p_Vin, setpos, setdir, setbattlename): Vincent at T record 2126 (-1120.2, -0.0623, -1277.3) facing (0.98894, -0.14831): ${b2 && b2.pos ? b2.pos.map(v => v.toFixed(4)) + ' face ' + b2.face.map(v => v.toFixed(5)) : JSON.stringify(b2)}`);
-    // the forward after battle()'s frame (its in-place update blends from the old view by the page's ramp: see below)
-    ok(!!b2 && !!b2.fwd && near(b2.fwd, [0.75641, 0.64547, -0.10588], 2e-4),
-       `battle()'s camera reset (FUN_00329f68 -> FUN_003285d0): forward from main's event camera ${b2 && b2.fwd ? b2.fwd.map(v => v.toFixed(5)) : '-'} (T 0.75641 0.64547 -0.10588)`);
-    // worker 0244: the eye's distance after battle(). T w244_rescue_cam: CAM+0x1c0 21.29 after battle()'s frame, easing out
-    // toward ~21.66 (the collision distance: the rays test the loaded slots, the game's 0 / 3 / 2 there; chunk 3 holds what
-    // pulls the eye in). Was 36.1 (rays on chunks 1 / 2). The game's 21.29 comes from blending from the old eye with
-    // the ramp at 0.9495 (re-entered ~110 frames before, inside the unskipped roji02_01); the page auto-skips that event,
-    // so its ramp at battle() differs and its distance is the collision one (21.65). test_battle_camera checks the frame
-    // from the game's own state.
-    ok(b2 && b2.slots && b2.slots.includes(3) && b2.dist > 21.2 && b2.dist < 21.7,
-       `battle()'s camera distance 3 frames on: ${b2 && b2.dist ? b2.dist.toFixed(4) : '-'} (T 21.29 -> 21.66, was 36.1); slots ${b2 && b2.slots} (T 0 / 3 / 2)`);
-    ok(b2 && b2.vin === true && b2.vis && b2.vis.every(v => v !== false) && b2.log.some(m => /battle actor \d+ freed/.test(m)),
-       `after battle(): Vincent drawn, 113 / 114 lent models freed and drawn again (${b2 && b2.vis}); log: ${b2 && b2.log && b2.log.join(' | ')}`);
-  }
-  // (skipped with NPC_SHOT: the image wants 114 alive)
+  // (skipped with NPC_SHOT: the image wants 114 alive). Before the beats: the rescue's battle() switches 114 off (below).
   if (!process.env.NPC_SHOT) {
   const kill = await pg.evaluate(async () => {
     const P = window.__play, W = P.enemyAI, wj = await fetch('data/aim/weapon.json').then(x => x.json());
@@ -147,6 +107,60 @@ try {
   });
   ok(kill && !kill.err && kill.hp[0] < 58 && kill.hp.at(-1) === 0 && kill.state === 7 && /^dead/.test(kill.drawn) && kill.f38 === 0x181,
      `shots at 114 on the page: HP ${kill && kill.hp && kill.hp.join(' -> ')}, actor state ${kill && kill.state}, drawn ${kill && kill.drawn}${kill && kill.err ? ' ' + kill.err : ''}${kill && kill.hp && kill.hp.at(-1) ? ' ' + JSON.stringify(kill.ev) : ''}`);
+  }
+  // worker 0229: ev0100 main's rescue beat on the page. Stage flag 0 = 2 (rv_matiawase; main then puts its p000 slot named
+  // p_Vin at (-889.2, 0, -599) and battle(1500) hands it to Vincent), then flag 1 = 5 (pc 0x849: getbattleactor p_Vin / n_CupM /
+  // n_CupW, roji02_01 auto-skipped, setpos / setdir, Camera.set, setbattlename p_Vin, battle()). T w229_rescue_pos (PCSX2, the
+  // same flags poked from w223's s826): f1850 Vincent (-889.2, -0.064, -599) facing (-1, 0, 0); record 2126 (-1120.2, -0.0623,
+  // -1277.3) facing (0.98894, 0, -0.14831), the camera's forward (0.75641, 0.64547, -0.10588) = main's event camera, eye
+  // (-1136.096, -31.009, -1275.074). The townspeople are off by the rescue (see the last check), so nothing of theirs is lent.
+  if (!process.env.NPC_SHOT) {
+    const beat = async (pokes, want) => pg.evaluate(async ([pokes, want]) => {
+      const P = window.__play, rt = P.stage && P.stage.rt;
+      if (!rt) return { err: 'no stage controller' };
+      // battle()'s camera (worker 0244: follow.battleReset, then battleHandBack and the message 0x7d5)
+      const cams = [], f = P.follow, reset = f.battleReset;
+      f.battleReset = function (...a) { const r = reset.apply(this, a); cams.push({ eye: this.eye.slice(), fwd: this.M[2].slice(), dist: this.dist }); return r; };
+      for (const [k, v] of pokes) P.enemyAI.eventFlags[k] = v;
+      const t0 = Date.now();
+      while (!rt.log.some(([, m]) => m.startsWith('handback p_Vin ' + want)) && Date.now() - t0 < 30000) await new Promise(r => setTimeout(r, 50));
+      const t1 = P.stats.ticks; while (P.stats.ticks < t1 + 3) await new Promise(r => setTimeout(r, 50));
+      f.battleReset = reset;
+      const slots = P.light ? P.light.stream.slots.filter(x => x.loaded).map(x => x.chunk) : null;
+      const E = P.enemies.actors, vis = k => { const a = E.find(x => x.rec === k); return a ? a.body.visible : null; };
+      const recs = [113, 114].map(k => { const o = P.enemyAI.objects.get(k + 22); return o ? o.kind + ' ' + (o.flags28 & 1) : null; });
+      return { pos: [P.ctrl.pos.x, P.ctrl.pos.y, P.ctrl.pos.z], face: [P.ctrl.C.face.x, P.ctrl.C.face.z], cams, slots, dist: f.dist, fwd: f.M[2].slice(), vis: [vis(113), vis(114)], vin: P.vin.body.visible, recs,
+               log: rt.log.filter(([, m]) => /getbattleactor|battlename|handback|freed|^battle /.test(m)).map(x => x.join(' ')).slice(-8) };
+    }, [pokes, want]);
+    const near = (a, b, e) => a.every((x, i) => Math.abs(x - b[i]) <= e);
+    // both flags at once, as the trace's poke (a06338 = flags 0 = 2, 1 = 5 from s826): flag 1 is 5 before rv_matiawase's
+    // battle(1500), so its stage-load pass switches 113 / 114 off (worker 0250; poking flag 1 after the first hand-back raced
+    // that battle(): 113 / 114 were off or lent depending on the frame)
+    const b1 = await beat([[0, 2], [1, 5]], '-889.20');
+    ok(b1 && !b1.err && near(b1.pos, [-889.2, -0.064, -599], 0.02) && near(b1.face, [-1, 0], 1e-5),
+       `rv_matiawase: main's p000 slot named p_Vin hands Vincent its place (T f1850 (-889.2, -0.064, -599) facing -x): ${b1 && b1.pos ? b1.pos.map(v => v.toFixed(3)) + ' face ' + b1.face.map(v => v.toFixed(4)) : JSON.stringify(b1)}`);
+    const b2 = await beat([], '-1120.20');
+    ok(b2 && !b2.err && near(b2.pos, [-1120.2, -0.0623, -1277.3], 0.02) && near(b2.face, [0.98894, -0.14831], 1e-4),
+       `the rescue (getbattleactor p_Vin, setpos, setdir, setbattlename): Vincent at T record 2126 (-1120.2, -0.0623, -1277.3) facing (0.98894, -0.14831): ${b2 && b2.pos ? b2.pos.map(v => v.toFixed(4)) + ' face ' + b2.face.map(v => v.toFixed(5)) : JSON.stringify(b2)}`);
+    // the forward after battle()'s frame (its in-place update blends from the old view by the page's ramp: see below)
+    ok(!!b2 && !!b2.fwd && near(b2.fwd, [0.75641, 0.64547, -0.10588], 2e-4),
+       `battle()'s camera reset (FUN_00329f68 -> FUN_003285d0): forward from main's event camera ${b2 && b2.fwd ? b2.fwd.map(v => v.toFixed(5)) : '-'} (T 0.75641 0.64547 -0.10588)`);
+    // worker 0244: the eye's distance after battle(). T w244_rescue_cam: CAM+0x1c0 21.29 after battle()'s frame, easing out
+    // toward ~21.66 (the collision distance: the rays test the loaded slots, the game's 0 / 3 / 2 there; chunk 3 holds what
+    // pulls the eye in). Was 36.1 (rays on chunks 1 / 2). The game's 21.29 comes from blending from the old eye with
+    // the ramp at 0.9495 (re-entered ~110 frames before, inside the unskipped roji02_01); the page auto-skips that event,
+    // so its ramp at battle() differs and its distance is the collision one (21.65). test_battle_camera checks the frame
+    // from the game's own state.
+    ok(b2 && b2.slots && b2.slots.includes(3) && b2.dist > 21.2 && b2.dist < 21.7,
+       `battle()'s camera distance 3 frames on: ${b2 && b2.dist ? b2.dist.toFixed(4) : '-'} (T 21.29 -> 21.66, was 36.1); slots ${b2 && b2.slots} (T 0 / 3 / 2)`);
+    // worker 0250: rv_matiawase sets stage flag 1 = 5 and its battle(1500) runs the stage-load pass (FUN_00324e70 ->
+    // FUN_005453b0 -> FUN_005459d8): the stage object's script 0 event 0x23 sends cmd 0x109 to 113 / 114 when flag 1 == 5,
+    // so they are off before the rescue. Off, FUN_00558bb8 zeroes +0x180, so getbattleactor's FUN_0056a5e0 returns no
+    // model and FUN_00376b00 makes no slot (nothing lent, nothing freed at battle()). T: +0x28 0x20c40b (bit 0 on) at
+    // w223_npc95 f783-840, 0x20c44a (bit 0 off, FUN_0056a5e0's bit 0x40 on) at w229_rescue_pos f1850.
+    ok(b2 && b2.vin === true && b2.recs && b2.recs.every(r => r === 'record 0') && !b2.log.some(m => /battle actor \d+ freed/.test(m)) &&
+       b2.log.some(m => /getbattleactor 7 n_CupM/.test(m)) && b2.log.some(m => /getbattleactor 8 n_CupW/.test(m)),
+       `after battle(): Vincent drawn, 113 / 114 off since rv_matiawase's battle() (T w229 f1850 +0x28 bit 0 clear), no slot lent (${b2 && b2.recs}); log: ${b2 && b2.log && b2.log.join(' | ')}`);
   }
   ok(!warns.some(w => /not drawn|not exported/.test(w)), 'no "not drawn" / "not exported" warnings' + (warns.length ? ': ' + warns.slice(0, 2).join(' | ') : ''));
 

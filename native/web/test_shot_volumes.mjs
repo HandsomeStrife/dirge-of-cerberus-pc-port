@@ -98,12 +98,12 @@ const woke = ev => [68, 69, 70, 71].filter(id => ev.some(e => e.startsWith(`even
     ok(hit && t77(ev).length === want, `soldier bullet, Vincent ${px < T77[0] ? 'before' : 'behind'} the box: hit ${hit}, trigger 77 events ${t77(ev).length} (want ${want})`);
   }
 }
-{ // 7. #51 (record 51) inside trigger 76 (script 99, event 0x12, no run-once var): every one of his own
-  // bullets that leaves the box re-runs the event, which sends the wake (event 2) to 50 / 51 (n 2) and
-  // 46-49 (n 1) every time. But each soldier's event-2 script (126 / 127 / 128 / 141 / 142) is run-once on
-  // its own: it starts with cmd 0x105 (its var 0) == 0 and sets it with cmd 0x104, so only the first wake
-  // reaches cmd 0x143 (setMode); later shots rebuild no brain. Combined, as decoded (not traced: no PCSX2
-  // run has #51 firing from inside 76).
+{ // 7. #51 (record 51) inside trigger 76 (script 99, event 0x12, no run-once var): his bullet that leaves
+  // the box runs the event, which sends the wake (event 2) to 50 / 51 (n 2) and 46-49 (n 1), then ends with
+  // cmd 0x10a on itself (push -2; FUN_0054cd70 case 0x10a -> FUN_0053fa08 -> manager event 0 -> FUN_0053e1e0):
+  // trigger 76 is deleted, so his later bullets cross no volume and wake nobody. Each soldier's event-2 script
+  // (126 / 127 / 128 / 141 / 142) is also run-once on its own: it starts with cmd 0x105 (its var 0) == 0 and
+  // sets it with cmd 0x104. Combined, as decoded (not traced: no PCSX2 run has #51 firing from inside 76).
   const { W } = world();
   const s50 = W.addActor({ rec: 50, astate: 1 }), s51 = W.addActor({ rec: 51, astate: 1 });
   const T76 = data.triggers[76].m[3];
@@ -119,9 +119,11 @@ const woke = ev => [68, 69, 70, 71].filter(id => ev.some(e => e.startsWith(`even
   const brains = all.map(a => a.ai && a.ai.brain);                 // setMode makes a new brain object
   const ev2 = shot();
   const kept = all.filter((a, i) => a.ai && a.ai.brain === brains[i]).length;
-  ok(t76(ev2).length === 1 && W.triggers[76].vars.every(v => !v) && wakes(ev2).length === 6,
-     `his second bullet: trigger 76 runs again (no once-var), wakes sent again to ${wakes(ev2)}`);
+  ok(ev1.includes('delete t76') && W.triggers[76].deleted && W.triggers[76].vars.every(v => !v),
+     `... and the event deletes trigger 76 (cmd 0x10a on itself; no once-var): deleted ${!!W.triggers[76].deleted}`);
+  ok(t76(ev2).length === 0 && wakes(ev2).length === 0,
+     `his second bullet: trigger 76 is gone, no event, no wakes (${t76(ev2).length} / ${wakes(ev2).length})`);
   ok(modes(ev2).length === 0 && kept === all.length && all.every(a => a.vars && a.vars[0] === 1),
-     `... but each soldier's wake script is run-once (its var 0): no setMode, ${kept}/${all.length} brains untouched`);
+     `... and each soldier's wake script set its run-once var 0: no setMode, ${kept}/${all.length} brains untouched`);
 }
 done();
