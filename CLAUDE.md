@@ -35,5 +35,7 @@ animation, camera, rendering, audio and UI.
 The repo is PUBLIC, with a default-deny `.gitignore`. Never commit game data or
 anything derived from it (dumps, traces, exports, tables copied from game files).
 Small hand-written constants and addresses in research notes are fine.
+Quoting the game's text (names, messages, menu lines) in code, tests and notes is
+also fine (Dan, 2026-11-03); it's bulk data (dumps, exports, tables) that stays out.
 
 Start each task by reading `notes/HANDOFF.md`.
