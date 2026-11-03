@@ -389,7 +389,10 @@ def zone_size(d, i):
     fl = SE.u32(d, h + 0x10)
     w, ht, dp = struct.unpack_from('<3f', d, h + 0x20)
     r = max(w, dp) * 0.5 if fl & 1 else w * 0.5
-    return dict(r=round(r, 6), h=round(ht, 6), f28_10000=bool(fl & 6))
+    # worker 0252: C+0x7e4 = this header (FUN_00340760); FUN_003600c0(ai, n) = signed byte header +0x60 + n
+    # (the mode-3 brain's special attack picks, -1 = none; e030's set: 2, 5, 4, -1)
+    p60 = list(struct.unpack_from('4b', d, h + 0x60))
+    return dict(r=round(r, 6), h=round(ht, 6), f28_10000=bool(fl & 6), p60=p60)
 
 
 def weapons(d):

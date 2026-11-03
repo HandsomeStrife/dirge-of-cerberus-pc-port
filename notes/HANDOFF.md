@@ -790,3 +790,13 @@ exercised in a browser.
   chunk-03 trace with a dog awake (none exists) and the jump attack ops. Soldiers 50 / 51 at the stairs' foot wake in
   mode 1 (translated). Tests: new test_area_actors (14), test_stairs_enemies_page (8), test_checkpoint_page + the areas
   after the hand-back. Mutants 8 / 8 killed (1 equivalent: the kind guard). Suite green, known gaps unchanged. No commit.
+- Dog AI, brain mode 3 (worker 0252, 2026-11-03; **notes/enemy-ai-hook.md 'Mode 3: the dogs'**, fidelity-audit rows 'e030
+  brain mode 3' and after). **Translated FUN_00361690** (enemy_ai `brain3`; FUN_003600c0 `specialAttack` from new ai.json
+  sizes[].p60 = zone header +0x60..+0x63, FUN_00353418 `stopTurn`, FUN_00562d90 `nodeOffTarget`): a shot / timed / var-7 dog
+  now chases Vincent (nav path, approach mover) and attacks. **Re-export data/enemies** (export_web_triggers.py, only `sizes`
+  changed). New `?warp=dogs` (r03_spot2's spot, chunk 03). **No PCSX2 trace** (3 tries; a frozen Vincent never runs his
+  trigger test, see the notes for the addresses). Not translated (warned): the dog's walk / run motion state 4 (it glides in
+  st_a), the jump ops 3 / 6-9, shape-2 volumes (atk_2 does no damage; atk_3's sphere bites do: 88 / 44), the attack pitch
+  convention FUN_00260f54 (VU; recomp COP2 is stubbed): a dog stalled at 12.4 u in state 10 may never bite. Tests: new
+  test_dog_ai (node, 18), test_dog_page (page; KNOWN line for the stall). Mutants: node 6 / 6 (dispatch, damage, approach,
+  p60, odds, state-7 distance), page 1 / 1 (dispatch). No commit.

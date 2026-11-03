@@ -26,6 +26,9 @@ export const WARPS = {
   // route state's frame r02_climb.png; its facing is not in the state's metadata); trigger 15 at the top (script 88) sets
   // stage flag 0 = 2 -> rv_matiawase
   stairs: { pos: [-860.1, -142.1, -607.1], face: [1, 1], pair: [1, 2], stage: { 2: 8, 46: 1, 47: 1 }, note: 'chunk 02, foot of the alley stairs' },
+  // worker 0252: chunk 03 at route state r03_spot2's spot (Dan's 2026-11-03 report position; stage flags from its RAM),
+  // pair (2, 3), facing -z (the report's view, toward dog 65 at z -884); trigger 63 (-1347.9, 2.7, -599.6) is not crossed
+  dogs: { pos: [-1507.3, -0.06, -573.5], face: [0, -1], pair: [2, 3], stage: { 2: 8, 46: 1, 47: 1 }, note: 'chunk 03 market, Dan\'s report spot (dog 65 south)' },
   // chunk 06 at route state r06_tp's spot (-1328.1, *, 1205.5) (area box (6, 8)). Story: after rv_toujou (main sets global
   // flag 1 = 25 at pc 7187 with stage flag 0 = 24, then scene_save(4)); the next block (pc 8296: global 1 < 29, stage 0
   // < 36) is the market's townspeople beats on stage flag 1 (28 / 29 / 30 / 32 from triggers 33 / 64 / 65 / 26)

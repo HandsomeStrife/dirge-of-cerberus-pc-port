@@ -53,7 +53,8 @@ export const R_PLAYER = 5.0;
 // The types whose actor this module builds at activation (the per-type dispatch; FUN_00559748 builds
 // one for every type). e027 / e048 (stance 0x1f / 0x1e, flags 0x872b: brain 2 shooter branch) run the
 // whole translated AI; e030 (stance 0x23, flags 0x8c44: bit 0 clear) takes brain 2's states 7 / 8
-// (melee attacks, not translated: it stands) but is hit, flinches and dies like the others. Other types
+// (melee attacks, not translated: it stands) but is hit, flinches and dies like the others; its own script (222) puts it in
+// brain mode 3 (FUN_00361690, brain3: chase and attacks; worker 0252). Other types
 // (e036, e023, e024, e001) are drawn by enemies.js without an AI actor.
 export const AI_TYPES = new Set(['e027', 'e048', 'e030']);
 // worker 0230: e036 (record 80). FUN_00564228 has no case for 'e036' (0x65303336 falls through to the weapon-class rule, as
@@ -1534,7 +1535,7 @@ export function createEnemyAI(opts) {
       return;
     }
     ai.brain = { mode };
-    if (![0, 1, 2, 5, 6].includes(mode)) warnOnce(`enemy_ai: brain mode ${mode} not translated (empty update)`);
+    if (![0, 1, 2, 3, 5, 6].includes(mode)) warnOnce(`enemy_ai: brain mode ${mode} not translated (empty update)`);
     ai.mode = mode;
     ai.flags &= ~0x100;
     if (ai.owner) {
@@ -2216,6 +2217,221 @@ export function createEnemyAI(opts) {
       default: return;
     }
     ai.btime = short(S.now); ai.bstate = 0; C.f1c0 &= ~0x10;                 // LAB_00364acc
+  }
+
+  // ---- Mode 3 brain FUN_00361690 (class vt 0x4a2510, start 0x361648; worker 0252). Script 222 (the dogs, e030) sets it
+  // when the dog is hit (event 8), on its timer (event 1) or at activation with var 7 == 1 (event 3). Brain object:
+  // [0] AI, [1] actor, [3] body C; state AI +0x24, AI +0x20 = the scheduler interval, AI +0x9a = the node kept in state 3.
+  // FUN_003600c0(ai, n): signed byte C+0x7e4 (the zone header, FUN_00340760) +0x60 + n, -1 without a header
+  // (ai.json sizes[zone set].p60; e030: n 1 -> attack 5 st_btl, n 2 -> attack 4 b_stp).
+  function specialAttack(ai, n) {
+    const rec = data.records[ai.owner.rec], z = data.sizes && rec && rec.zones >= 0 ? data.sizes[rec.zones] : null;
+    if (!z) return -1;
+    if (!z.p60) { warnOnce('enemy_ai: ai.json sizes have no p60 (re-export data/enemies): FUN_003600c0 gives -1'); return -1; }
+    return z.p60[n];
+  }
+  // FUN_00353418(C): FUN_0034e880(C, 1), C+0x214 (turn mode) = 0, C+0x1c4 bit 1 clear. FUN_0034e880 with turn mode 1 / 3 / 6
+  // sends the body listener C+0x540 event 7 (FUN_005690c8 -> FUN_00588550 jump table 0x591ef0 [7]: not translated).
+  function stopTurn(a) {
+    const C = a.C;
+    if (C.s214 === 1 || C.s214 === 3 || C.s214 === 6) warnOnce('enemy_ai: FUN_0034e880 listener event 7 (FUN_00588550 case 7) not translated');
+    C.s214 = 0;
+    C.f1c4 = (C.f1c4 & ~2) >>> 0;
+  }
+  // FUN_00562d90(t, a, n): node n set and |t - node n| > 30 (FUN_00563bc0); u = unit(node n - a), v = unit(t - a);
+  // FUN_00259d58 = the angles of u minus those of v (FUN_00260f54, each wrapped by FUN_00260bc8 to +-pi); true when
+  // |a - t| < 300 (FUN_0054a888) and |angle [1]| > pi / 4. GUESS: FUN_00260f54 as coneAngles (angle [1] = the yaw
+  // atan2(x, z), the same stand-in as 'Attack pick angles' in notes/fidelity-audit.md).
+  function nodeOffTarget(t, a, n) {
+    if (n === -1) return false;
+    if (!(30.0 < nodeDist(t, n))) return false;
+    const q = G ? NG.node(G, n) : null;
+    if (!q) return false;
+    const u = sub3([q[0], q[1], q[2]], a.pos), v = sub3(t.pos, a.pos);
+    const wrap = x => { while (x > Math.PI) x -= 2 * Math.PI; while (x < -Math.PI) x += 2 * Math.PI; return x; };
+    const d1 = wrap(Math.atan2(u[0], u[2]) - Math.atan2(v[0], v[2]));
+    return len3(v) < 300.0 && 0.7853982 < Math.abs(d1);
+  }
+  const FLAG13 = true;                                                        // FUN_00326298(0xd): script flag 13, set in z128 (path_mover.js)
+  function brain3(ai) {
+    const a = ai.owner, C = a.C;
+    const near = 50.0;                                                        // fVar13
+    let reach = 20.0;                                                         // fVar14
+    if (ai.bstate !== 1 && busy(a)) { setCombatLayer(ai, 0); ai.bstate = 1; }
+    if (attacking(a)) return;
+    if (target(ai)) reach = f(f(R_PLAYER + a.size.r) + 5.0);                  // target +0x2c + actor +0x2c + 5
+    const vis = () => !!(ai.flags & 2);                                       // FUN_00360bb8(ai, 1)
+    const tAlive = () => { const t = target(ai); return !!t && !deadFinal(t); };   // FUN_0035edc0 -> FUN_0055a370 -> FUN_00316d08
+    let st = ai.bstate;
+    for (let guard = 0; guard < 8; guard++) {
+      switch (st) {
+        case 0: {
+          setCombatLayer(ai, 0);
+          // a target seen (AI +0x14 bits 1 and 2: FUN_003601d8) goes straight on
+          if (!(target(ai) && (ai.flags & 2) && (ai.flags & 4))) {
+            setActorState(a, (ai.flags & 0x200) ? 3 : 2);
+            // AI bit 0x40: FUN_0035fe08 (the candidate search). No target: actor +0x188 in 1..2 (FUN_00563340 ->
+            // FUN_00563288; the dogs' is 1, T: route RAM r03_spot2 object 87) -> FUN_0035fd20 = the player
+            // (FUN_0053bb08), else FUN_0035fe08. GUESS: actor +0x188 is not exported, taken as 1 (every e030).
+            if (ai.flags & 0x40) pickTarget(ai);
+            else if (!target(ai)) setTarget(ai, P);
+            if (!target(ai)) return;
+            if (deadFinal(target(ai))) return;
+          }
+          ai.btime = short(S.now); ai.bstate = st = 2;
+          continue;
+        }
+        case 2: {
+          ai.interval = 5;
+          let lab = 'L1990';
+          if (!(ai.d34 < f(reach + 10.0))) {
+            if (!(ai.d3c < 5.0 && ai.d40 < 2.0 && -27.0 < ai.d40)) {
+              if (!(C.f1c0 & 0x100000)) lab = 'L19ac';
+              else if (!(C.f808 & 1) && attackPick(ai) === -1) lab = 'L19ac';
+            }
+          }
+          if (lab === 'L1990') { PM.setTurn(a, 6); ai.btime = short(S.now); ai.bstate = 6; return; }
+          // LAB_003619ac
+          let turn;
+          if (ai.d38 < 250.0 && (C.f808 & 1)) { setCombatLayer(ai, 2); setActorState(a, 3); turn = 6; }
+          else if (!(ai.flags & 0x200)) {                                     // LAB_00361a04
+            setCombatLayer(ai, 0);
+            // the target's +0x15a (FUN_00542ab8 / FUN_0056a8c8: other-side actors pressing on it) >= 2 and a lost
+            // FUN_0035f7c0(ai, -50) draw -> state 0xb. GUESS: +0x15a = 0 (the side table FUN_005632c0 is not
+            // decoded); one dog never takes this branch.
+            if (specialAttack(ai, 1) >= 0 && target(ai) && ai.d38 < 80.0 && 10.0 < ai.d38) {
+              const b15a = 0;
+              if (b15a >= 2 && !odds98(ai, -50)) { ai.bstate = st = 0xb; continue; }
+            }
+            C.f1c0 = (C.f1c0 | 0x8000) >>> 0;
+            setActorState(a, (ai.flags & 0x200) ? 3 : 2);
+            turn = 5;
+          } else { setActorState(a, 3); turn = 6; }
+          PM.setTurn(a, turn);
+          ai.bstate = st = 3;
+          continue;
+        }
+        case 3: {
+          if (!target(ai)) { ai.bstate = 0; return; }
+          if (ai.d38 < near && vis() && !(C.f1c0 & 0x40000) && !(C.f1c0 & 0x100000)) {
+            if (reach <= ai.d34) {
+              C.f1c0 = (C.f1c0 & ~0x10) >>> 0;
+              PM.approachStart(a, target(ai), f(reach * 0.8), 1000.0, placeBody, warnOnce);   // FUN_00353110 + FUN_0034edf0(C, 3)
+              ai.bstate = 5; ai.btime = short(S.now); return;
+            }
+            PM.setTurn(a, 6); ai.btime = short(S.now); ai.bstate = 6; return;
+          }
+          // a nav-graph path toward a free node next to the target (as action layer 3's 0x366908)
+          NG.trackNode(G, a);                                                 // FUN_00563970(a, -1)
+          const sn = G ? a.node108 : -1;
+          if (!target(ai)) { ai.bstate = 0; return; }
+          const goal = G ? NG.freeNeighbour(G, target(ai), rng) : -1;         // FUN_00563d20(t, 1, 1)
+          if (!sameArea(sn, goal)) {
+            C.f1c0 = (C.f1c0 | 0x10) >>> 0;
+            navPath(a, { goal, s4: 6, max: 10, mode: 1, flags: 0x87 | searchFlags(ai), c: 100.0 });
+          } else {
+            // DAT_0046f4e8 != 0 also takes the synchronous request (0 in the save RAM)
+            if (!NG.queueFree(svc)) navPath(a, { goal, s4: 4, max: 7, mode: 6, flags: 0x87 | searchFlags(ai), c: 100.0 });
+            else { ai.btime = short(S.now); navPathTo(a, goal); }
+            C.f1c0 = (C.f1c0 & ~0x10) >>> 0;
+          }
+          ai.interval = 0x1e;
+          ai.btime = short(S.now);
+          ai.n9a = a.node108;
+          ai.bstate = 4; return;
+        }
+        case 4: {
+          const t = target(ai);
+          const out = t ? coneAngles(a, t) : [0, 0];                          // FUN_0035e9b0: [0] uStack_b0, [1] fStack_ac
+          if ((ai.flags & 0x40) && retarget(ai, candidate())) { ai.bstate = 2; return; }   // FUN_0035fe80 / FUN_0035fec0
+          if (C.f1c0 & 0x100000) { PM.setTurn(a, 6); ai.btime = short(S.now); PM.stopAll(a, warnOnce); ai.bstate = 6; return; }
+          let go;
+          if (Math.abs(out[1]) < 0.5235988 && !(0.69813174 <= Math.abs(out[0])) && !(150.0 <= ai.d38) && !(ai.d40 <= -25.0)) go = true;
+          else go = ai.d34 < reach && !(C.f1c0 & 0x40000);                    // LAB_00361f1c / LAB_00361f20
+          if (go && ai.d38 < near && vis() && !(C.f1c0 & 0x40000) && FLAG13) {
+            C.f1c0 = (C.f1c0 & ~0x10) >>> 0;
+            const spd = C.want ? (C.wk ?? 0) : 0;                             // FUN_0034b070: C+0xc0 .. +0xcc (speed)
+            PM.approachStart(a, t, f(reach * 0.8), 1000.0, placeBody, warnOnce);
+            // FUN_003577c8(body): body state +0xa8 in 2..3 / 6..7 -> FUN_0034b110(min(speed, 1), C). GUESS: the first
+            // call's float argument is dropped by the decompiler (taken as the speed itself)
+            if (a.B && [2, 3, 6, 7].includes(a.B.state)) warnOnce(`enemy_ai: mode 3 approach with body state ${a.B.state} (FUN_0034b110 speed ${spd <= 1 ? spd : 1}) not translated`);
+            if (C.f808 & 1) { setCombatLayer(ai, 2); setActorState(a, 3); PM.setTurn(a, 6); }
+            ai.bstate = 5; ai.btime = short(S.now); return;
+          }
+          if (!(bTime(ai) < 0x709) && PM.navGoal(C) === -1) {
+            ai.interval = 0x3c; ai.btime = short(S.now); PM.setTurn(a, 6); PM.stopAll(a, warnOnce); ai.bstate = 6; return;
+          }
+          if (C.mover === 0) {
+            if (a.node108 !== ai.n9a) { ai.interval = 6; ai.bstate = 2; return; }
+            ai.interval = 0x3c; PM.setTurn(a, 6); ai.btime = short(S.now); PM.stopAll(a, warnOnce); ai.bstate = 6; return;
+          }
+          if (target(ai)) {                                                   // FUN_0035edc0 (no death test here)
+            if (nodeOffTarget(target(ai), a, PM.navGoal(C)) && !(bTime(ai) < 0x78) && ai.d38 < 60.0) { ai.interval = 6; ai.bstate = 2; return; }
+          }
+          if ((ai.flags & 0x200) && target(ai) && !(G64 < 0x18) && !(bTime(ai) < 0x79) && odds98(ai, 0)) {
+            const i = attackPick(ai);
+            if (i >= 0) { PM.stopAll(a, warnOnce); stopTurn(a); setCombatLayer(ai, 0); startAttack(a, i); ai.bstate = 7; return; }
+          }
+          if (!(C.f1c0 & 0x100000)) return;
+          ai.btime = short(S.now); PM.stopAll(a, warnOnce); PM.setTurn(a, 6); ai.bstate = 6; return;
+        }
+        case 5: {
+          if (C.mover !== 0 && 1.0 <= ai.d38) {
+            if (C.f1c0 & 0x100000) { PM.setTurn(a, 6); PM.stopAll(a, warnOnce); ai.bstate = 6; ai.btime = short(S.now); return; }
+            if ((ai.d38 <= near + near || vis()) && (!(C.f1c0 & 0x40000) || ai.d34 <= f(reach * 1.2))) {
+              if (!tAlive()) { ai.bstate = 9; return; }
+              if (G64 < 0x18) return;
+              if (bTime(ai) < 0x3d) return;
+              if (Math.trunc(f(f(rng()) * 11.0)) !== 0) return;
+              const i = attackPick(ai);
+              if (i < 0) return;
+              PM.stopAll(a, warnOnce); stopTurn(a); setCombatLayer(ai, 0); startAttack(a, i); ai.bstate = 7; return;
+            }
+            ai.interval = 6; ai.bstate = 3; return;
+          }
+          PM.stopAll(a, warnOnce); PM.setTurn(a, 6); ai.interval = 6; ai.bstate = 2; return;
+        }
+        case 6: {
+          if (!tAlive()) { ai.bstate = 9; return; }
+          const i = attackPick(ai);
+          if (i >= 0) { setCombatLayer(ai, 0); PM.stopAll(a, warnOnce); stopTurn(a); startAttack(a, i); ai.bstate = 7; return; }
+          if ((C.f1c0 & 0x100000) && (C.f808 & 1)) { setCombatLayer(ai, 2); setActorState(a, 3); PM.setTurn(a, 6); ai.bstate = 8; return; }
+          if (15.0 <= ai.d38) { if (bTime(ai) < 0x79) return; ai.interval = 6; ai.bstate = 2; return; }
+          PM.setTurn(a, 6); ai.bstate = 10; return;
+        }
+        case 7: {
+          ai.interval = 6;
+          if (ai.d38 < 20.0) {
+            const i = specialAttack(ai, 2);
+            if (i >= 0 && odds99(ai, 0x32)) { startAttack(a, i); ai.bstate = 7; return; }
+          }
+          ai.bstate = 2; return;
+        }
+        case 8: PM.setTurn(a, 6); ai.bstate = 6; return;
+        case 9:
+          pickTarget(ai);                                                     // FUN_0035fe08
+          if (target(ai) && ai.d38 < 200.0) { PM.setTurn(a, 6); ai.btime = short(S.now); ai.bstate = 6; return; }
+          ai.bstate = 8; return;
+        case 10: {
+          if (!tAlive()) { ai.bstate = 9; return; }
+          if (15.0 < ai.d38) { PM.setTurn(a, (ai.flags & 0x200) ? 6 : 5); ai.interval = 6; ai.bstate = 2; return; }
+          const i = attackPick(ai);
+          if (i < 0) return;
+          PM.setTurn(a, (ai.flags & 0x200) ? 6 : 5);
+          setCombatLayer(ai, 0); PM.stopAll(a, warnOnce); stopTurn(a); startAttack(a, i); ai.bstate = 7; return;
+        }
+        case 0xb: {
+          const i = specialAttack(ai, 1);
+          if (i < 0) { ai.bstate = 2; return; }
+          startAttack(a, i); ai.bstate = 7; return;
+        }
+        case 1:
+          if (busy(a)) return;
+          if (ai.flags & 0x40) pickTarget(ai);                                // FUN_0035fe08
+          ai.bstate = 0; return;
+        default: return;
+      }
+    }
   }
   // ------------------------------------------------ melee: attack pick and attack state
   // The attack table C+0x7e8 = zone header +0x34 (FUN_00340760 at activation; ai.json attacks[zone set],
@@ -4301,6 +4517,7 @@ export function createEnemyAI(opts) {
       else if (ai.brain.mode === 1) brain1(ai);
       else if (ai.brain.mode === 5) brain5(ai);
       else if (ai.brain.mode === 6) brain6(ai);
+      else if (ai.brain.mode === 3) brain3(ai);                               // FUN_00361690 (worker 0252)
       else if (ai.brain.mode === 0x100 && ai.brain.boss) ai.brain.boss.update();   // worker 0235: FUN_00aa16f8
       if (ai.amode === 3) action3(ai);                                        // action layer (+0xe4, FUN_00365110)
       else if (ai.amode === 2) action2(ai);
@@ -4698,7 +4915,7 @@ export function createEnemyAI(opts) {
                   playerBoneWorld: opts.playerBoneWorld || null,
                   attackPick: a => attackPick(a.ai),     // FUN_0035ff98 on an actor's AI (tests)
                   // single translated functions, for the tests' direct state checks
-                  stageRec, t: { brain5, brain6, stateMotion, setActorState, bulletEnd, target, send, setMode, setTarget, setActionLayer, action2, action3, action56, flinch, die, navOf,
+                  stageRec, t: { brain3, specialAttack, brain5, brain6, stateMotion, setActorState, bulletEnd, target, send, setMode, setTarget, setActionLayer, action2, action3, action56, flinch, die, navOf,
                        makeAttack, attackObjUpdate, attackCentre, sphereCapsule, offence,
                        spreadAim, roomProbe, enemyBulletHit, playerPartTest, targetPoint, damagePlayer, attackDamagePlayer,
                        endEffect, bulletUpdate, hitEnemy, playerHandler, attackApply, spawnShot,

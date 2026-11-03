@@ -1067,3 +1067,32 @@ Review fixes (worker 0187):
 - FUN_00560fc8's distance: DAT_0046edac (5.0, static) with P+0x28 bits 4 and 0x20, else 12; translated.
 - State 7 off the ground: FUN_00538780 -> 0xf / 0x10 (FUN_0036b008 on the FUN_00353458 angle); not on the page, warned.
 - Mover 0xb's FUN_00356278(C+0x370, body): left out (no reader of body+0xa0 on the page).
+
+## Mode 3: the dogs (worker 0252, 2026-11-03; Dan's "enemy AI at the bottom section seems to not work")
+- **Translated** FUN_00361690 (brain mode 3, script 222's dogs, e030) as enemy_ai.js `brain3`, a state-by-state
+  translation (states 0-0xb, fall-throughs kept). Reused: setCombatLayer (FUN_0035f9a0), setActorState (FUN_0055b8e0),
+  PM.setTurn (FUN_0034e960), PM.approachStart (FUN_00353110 + FUN_0034edf0(C, 3)), navPath / navPathTo (FUN_0055a628 /
+  FUN_0055a590; requests mode 1 +4 6 cap 10 / mode 6 +4 4 cap 7, flags 0x87 | FUN_0035ef18, c 100), attackPick
+  (FUN_0035ff98), startAttack (FUN_0055baa8), odds98 / odds99 (FUN_0035f7c0 / FUN_0035f8b0), coneAngles (FUN_0035e9b0).
+  New: `specialAttack` = FUN_003600c0 (signed byte C+0x7e4 +0x60 + n; C+0x7e4 = the zone header, FUN_00340760; ai.json
+  sizes[set].p60, e030 set 8 = [2, 5, 4, -1]: n 1 -> attack 5 st_btl, n 2 -> attack 4 b_stp), `stopTurn` = FUN_00353418
+  (C+0x214 = 0, C+0x1c4 bit 1 clear; FUN_0034e880's listener event 7 warned), `nodeOffTarget` = FUN_00562d90.
+  reach (fVar14) = target +0x2c + actor +0x2c + 5 (16 for a dog on Vincent), near (fVar13) = 50.
+- **What the dog does now (page):** idle in mode 0 until shot / timer / var 7 (script 222, as the game); then a nav path
+  (state 4, AI +0x20 = 0x1e), the approach mover inside 50 u in view (state 5), attack picks in states 5 / 6 / 10 (and 4
+  with AI bit 0x200), after an attack state 7 (b_stp at d38 < 20 on a FUN_0035f8b0(50) draw). test_dog_page: 310 u -> 12-22 u,
+  atk_2 at 22 u in one run.
+- **No trace.** Tried to wake dog 65 in PCSX2 from r03_spot2 (scratch runner = trace.py + mid-run PINE writes): (1) trigger 63
+  moved onto Vincent by poking its record matrices: no event (the trigger list is a spatial grid, FUN_00589a78 /
+  FUN_0036d400); (2) Vincent stepped into trigger 63's real box for 10 frames: no event; (3) the same with his "old" position
+  C+0x50 hammered outside: no event. Cause: the trigger test is FUN_00573c60 -> FUN_005442a0 (old C+0x50, new = his matrix,
+  y - 7), Vincent's vt+0x234, run from his position set (FUN_0054b1d8 etc.); r03_spot2's Vincent has no walk polygon and
+  never moves, so it is never called. Needs a state where Vincent walks in chunk 03 (route.py from r02_climb up the stairs).
+  Useful for that run: trigger 63 object 0x952470 (record 0x10a08a0), dog 65 object 0x93ce20 (vars +0xa0: poke
+  0x93cecc = 0x10000 for var 7 = 1), Vincent's copies P+0x90 0x133a70, C+0x30 / 0x40 / 0x50 / 0x60 0x919590.., body
+  0x919910 / 0x919920, MP+0x40 0x14d81c0.
+- **Open:** the attack pitch convention (FUN_00260f54, VU; the decomp drops the registers and port/recomp's COP2 ops are
+  stubs): at the dog's stop distance Vincent's aim point sits on entry 2's +4 limit, so a dog that arrives in state 10
+  may never bite (test_dog_page prints KNOWN). Motion state 4 (the dog's walk / run clips) and the idle table: it glides
+  in st_a. Attack ops 3 / 6 / 7 / 8 / 9 (jumps) and shape-2 volumes (atk_2's bite: no damage). The target's +0x15a
+  (GUESS 0) and actor +0x188 (GUESS 1). Fidelity-audit rows 'e030 brain mode 3' and after.
