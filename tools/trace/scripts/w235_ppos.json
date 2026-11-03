@@ -1,0 +1,22 @@
+{
+ "name": "w235_ppos",
+ "frames": 400,
+ "log_from": 0,
+ "doc": "worker 0235: as w235_move to frame 400 with TRACE_PPOS=1 ; position poked into btbox4 (700, -84.7, 1460): P+0x90 and C+0x30",
+ "events": [
+  {
+   "from": 60,
+   "to": 260,
+   "buttons": [],
+   "lx": 0,
+   "ly": -1
+  },
+  {
+   "from": 260,
+   "to": 420,
+   "buttons": [],
+   "lx": -1,
+   "ly": 0
+  }
+ ]
+}

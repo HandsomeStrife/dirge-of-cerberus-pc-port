@@ -1,0 +1,57 @@
+{
+ "name": "w235_move",
+ "frames": 1190,
+ "log_from": 531,
+ "doc": "worker 0235: from tools/trace/out/route/r0b_boss2.p2s (the boss fight), Vincent runs a square on the left stick (no shots), HP poked to 9999 (TRACE_POKE=960660=270f). TRACE_FIELDSET=enemy TRACE_ENEMIES=1 TRACE_ERECS=32 TRACE_BOSS_BRAIN=8da900 TRACE_LOG_AT=9e100 (records 531-1189).",
+ "events": [
+  {
+   "from": 60,
+   "to": 260,
+   "buttons": [],
+   "lx": 0,
+   "ly": -1
+  },
+  {
+   "from": 260,
+   "to": 420,
+   "buttons": [],
+   "lx": -1,
+   "ly": 0
+  },
+  {
+   "from": 420,
+   "to": 620,
+   "buttons": [],
+   "lx": 0,
+   "ly": 1
+  },
+  {
+   "from": 620,
+   "to": 820,
+   "buttons": [],
+   "lx": 1,
+   "ly": 0
+  },
+  {
+   "from": 820,
+   "to": 1000,
+   "buttons": [],
+   "lx": 0,
+   "ly": -1
+  },
+  {
+   "from": 1000,
+   "to": 1150,
+   "buttons": [],
+   "lx": 1,
+   "ly": 0
+  },
+  {
+   "from": 1150,
+   "to": 1350,
+   "buttons": [],
+   "lx": 0,
+   "ly": 1
+  }
+ ]
+}

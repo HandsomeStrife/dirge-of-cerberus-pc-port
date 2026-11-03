@@ -87,5 +87,50 @@ function mk(o = {}) { return createEnemyAI({ data: aiData, player: P, quiet: tru
   ok(/bossOverlay: on => \{ if \(enemyAI && enemyAI\.setBossPlugin\) enemyAI\.setBossPlugin\(on\); \}/.test(play), 'play.js passes Zone.boss to the enemy_ai world');
 }
 
+// ---------------------------------------------------------------- the hookup (worker 0235): e024 runs boss_z128.js through boss_io.js
+{
+  const P2 = { pos: [700, -100, 1460], face: [1, 0, 0], hp: 780, id: 0x16, f118: 0x20209, s64: 0 };
+  const gs = [];
+  const bones = a => k => [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [a.pos[0], a.pos[1], a.pos[2], 1]];
+  const W = createEnemyAI({ data: aiData, player: P2, quiet: true, log: () => {}, rand: () => 0.5, eventFlags: { 0: 36 }, boneWorld: bones,
+                            hudGauge: (c, g) => gs.push([c, g.v, g.max]) });
+  W.setBossPlugin(true);
+  W.event23();                                                              // FUN_005459d8: script 242 event 0x23 (flag 0 == 36)
+  const a = W.objects.get(32 + 22);
+  ok(a.kind === 'actor' && a.hp === 17000 && W.hudGauge().id === 13 && W.hudGauge().v === 7000, `event 0x23: record 32 active, HP 17000, gauge 13 at 7000 (${a.kind} ${a.hp})`);
+  const seen = { st: new Set(), clip: new Set(), mis: 0, gun: 0, vol: null, flew: false, turned: false, posAt: null };
+  let marker15 = null;
+  for (let fr = 0; fr < 4000; fr++) {
+    if (fr >= 1500 && fr < 1700 && !(fr % 4)) a.hp -= 10;                   // hits: the stagger needs one with acc >= 400 (state 2 / 3)
+    if (fr === 2600) a.hp = 10000;                                          // beaten
+    const ev = W.tick(1.2, P2.pos, P2.pos);
+    if (!seen.io && a.ai && a.ai.brain && a.ai.brain.boss) seen.io = a.ai.brain.boss.io;
+    const bs = a.ai && a.ai.boss ? a.ai.boss : null;
+    if (bs) seen.st.add(bs.st);
+    if (a.C.clip) seen.clip.add(a.C.clip);
+    for (const b of W.bullets) if (b.shooter === a.id && !b.seen) { b.seen = 1; if (b.hm === 1) { seen.mis++; if (!marker15) marker15 = b.start.slice(); } else seen.gun++; }
+    for (const o of W.attackObjs) if (o.owner === a) seen.vol = { marker: o.marker, r: o.r, life: o.life, dmg: o.dmg, c1: o.c1, fixed: o.fixed };
+    if (Math.hypot(a.pos[0] - 850, a.pos[2] - 1450) > 50) seen.flew = true;
+    if (a.C.s214 === 1) seen.turned = true;
+    if (W.eventFlags[0] === 40 && !seen.dead) seen.dead = fr;
+  }
+  ok(a.ai.mode === 0 || seen.st.has(9), `brain states seen: ${[...seen.st].sort((x, y) => x - y).join(' ')}`);
+  ok([2, 3, 6, 8, 9].every(k => seen.st.has(k)) && (seen.st.has(4) || seen.st.has(5)), 'the brain runs: decide (2), gun (3), atk_sp3 (6), stagger (8), beaten (9), and atk_sp1 (4) or a volley (5)');
+  ok(seen.flew, 'move mode 1 (fly_mover.js): it flies from btbox0 to another box');
+  ok(seen.gun > 0 && seen.mis > 0, `it fires from its markers: ${seen.gun} gun bullets, ${seen.mis} homing missiles (W+4 0x2000: +0x150 mode 1)`);
+  // missiles start at a pod marker: marker 16 (27.4, -1.2, -65.4) / 15 on bone 2 (here at the body's position)
+  ok(!!marker15 && Math.abs(Math.abs(marker15[2] - 1450) - 65.2) < 1, `missiles start at the pods (markers 15 / 16, z +-65): ${marker15 && marker15.map(v => v.toFixed(1))}`);
+  ok(seen.clip.has('lean') || seen.clip.has('idl_lean'), `motion class 1 / 2 clips play (FUN_00593b60 / FUN_00593c90): ${[...seen.clip].join(' ')}`);
+  ok(seen.turned, 'turn mode 1 (turn_mover.js) after the stagger');
+  ok(gs.some(g => g[1] === 6500) && gs.some(g => g[1] === 0), `the gauge follows the HP (FUN_00aa11b8): ${gs.length} updates, ${gs.at(-3)[1]} .. ${gs.at(-1)[1]}`);
+  ok(seen.dead > 0, `beaten: 180 ticks later vt+0x334 -> script event 0x17 -> stage flag 0 = 40 (frame ${seen.dead})`);
+  // atk_sp1's volume (state 4 needs Vincent in btbox4 and the alternation): the brain's call, made directly through its io
+  const o = seen.io.attackVolume({ by: a, a: 2, b: 1, c0: 0xc, f54: 195, e0: 200, d0: 40, fx: 0x40603400, se: 'bsj_293' });
+  ok(o && o.marker === 1 && o.fixed === null && o.r === 40 && o.life === 200 && o.c1 === 1 && o.ec === 8, 'bossVolume: class 0xd sphere r 40, life 200, every target (+0xc1 1), type 2 (+0xec 8), on marker 1, followed (FUN_0054bf48)');
+  const c0 = W.t.attackCentre(o).slice(); a.pos = [a.pos[0] + 30, a.pos[1], a.pos[2]];
+  const c1 = W.t.attackCentre(o);
+  ok(Math.abs(c1[0] - c0[0] - 30) < 1e-3 && Math.abs(c0[0] - (a.pos[0] - 30) - 71.93) < 1e-2, `the volume follows marker 1 (71.9, -8.5, 0 on bone 2): ${c0.map(v => v.toFixed(1))} -> ${c1.map(v => v.toFixed(1))}`);
+}
+
 finish();
 function finish() { console.log(fail ? `${fail} FAILED` : 'all ok'); process.exit(fail ? 1 : 0); }

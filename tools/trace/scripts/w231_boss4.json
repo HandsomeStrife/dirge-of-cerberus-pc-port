@@ -1,0 +1,3 @@
+{"name": "w231_boss4", "frames": 1800, "log_from": 1000,
+ "doc": "worker 0231: the save with stage flag 0 = 36 (TRACE_POKE a06338=91309a24) and global flag 19 = 1 (50db30=98cc32cf: DAT_0050db20 XOR DAT_0046f608): main's boss block takes its restart path (fadeout, kalm_ld(3) = the e024 model, no scene_save / save box), then heri_lastst -> Zone.boss(true) -> battle. No input. Used as route.py's prefix for out/route/r0b_boss2.",
+ "events": []}

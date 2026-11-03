@@ -158,6 +158,14 @@ SETS = {
              copy=[]),
     ],
 }
+# worker 0235: the homing missiles (FUN_00556218): every bullet at FUN_00556870's object test, after its move. a3 = bullet:
+# +0xe0 seg start, +0x90 pos, +0x80 direction, +0xd0 target point, +0x120 flags, +0x124 age / +0x128 owner / +0x12c speed,
+# +0x150 mode bits / +0x154 turn rate / +0x158 distance / +0x15c range.
+SETS["missile"] = [
+    dict(id=1, kind="site", where=(0x556870, 0x557400, 0x5442D8), name="hit_test",
+         copy=[cp("a3", 0xE0, 4), cp("a3", 0x90, 4), cp("a3", 0x80, 4), cp("a3", 0xD0, 4), cp("a3", 0x120, 1),
+               cp("a3", 0x124, 3), cp("a3", 0x150, 4)]),
+]
 # worker 0127: the fire-time spread (FUN_005405b0 -> FUN_0025a058, rand FUN_0040b5c0).
 SETS["spread"] = [SETS["bullet"][0],
     dict(id=20, kind="site", where=(0x5694F8, 0x569870, 0x5409A8), name="spawn",

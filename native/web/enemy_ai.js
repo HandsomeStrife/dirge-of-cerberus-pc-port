@@ -30,6 +30,7 @@ import * as PM from './path_mover.js';
 import * as NG from './nav_graph.js';
 import { floorHit } from './effects.js';
 import { aiPaused } from './game_state.js';
+import { createBoss } from './boss_io.js';
 // PS2 FPU rounding toward zero for a stored f32 (player.js chop; not imported: player.js needs three.js)
 const _cb = new DataView(new ArrayBuffer(4));
 export function chop(x) {
@@ -63,6 +64,8 @@ AI_TYPES.add('e036');
 // what they do comes from their scripts (cmds 0x113 / 0x19e / 0x131 / 0x141 ...) and the shared body / hit / death code.
 // Not traced (no route state reaches their fights): notes/other-types.md.
 AI_TYPES.add('e001'); AI_TYPES.add('e023');
+// worker 0235: e024 (the z128 boss, record 32) gets the same actor; its brain is the overlay's (AI mode 0x100, boss_io.js)
+AI_TYPES.add('e024');
 // worker 0228 (notes/npc-research.md §8): the townspeople. The same actor class 0x58e1f8, so an activation builds the same
 // actor + AI (FUN_00559748 -> FUN_00365c50; T: w223_npc95 AI mode 0 after the wake). Brain mode 0 (their section-1 +8) is
 // class 0x4a2430, update FUN_003614b0 = `jr ra` (empty): what they do comes from their scripts (cmds 0x141 / 0x131 / 0x16a /
@@ -456,6 +459,7 @@ export function createEnemyAI(opts) {
   const objects = new Map();    // object id -> actor or trigger object
   const actors = [];
   const bullets = [];
+  let bulletIds = 0;                                                          // worker 0235: bullet object ids (the boss brain's shot slots)
   // Manager event queue (manager +0x1268 head / +0x126c tail, FUN_0053fbe8 appends {type, object id}),
   // drained in order by FUN_0053fde8 at the end of the manager frame FUN_0053b500 (switch on type + 1).
   const mgrQueue = [];
@@ -1435,6 +1439,7 @@ export function createEnemyAI(opts) {
     if (old.cls === 0x1e) { C.f564 &= ~FLINCH_BITS; C.f1c0 &= ~0x20; }        // 0x5988f0
     if (old.cls === 0x36) C.f564 &= ~0xc000;                                  // death leave FUN_0059ce98
     if (old.cls === 2) C.f564 &= ~(0x4000 | 0x200000);                         // class 2 leave 0x593c60 (worker 0228)
+    if (old.cls === 1) C.f564 &= ~(0x4000 | 0x200000);                         // class 1 leave 0x593b30 (worker 0235)
     // motion 8 leave FUN_00594f38 (vtable 0x5a6790 +0x1c) and motion 3 leave FUN_00593e08: FUN_00345b58(C, 0, 0, 0)
     // uninstalls the locomotion table (C+0x658 = 0, C+0x659 = -1, rows / root speeds 0, FUN_00345678) and
     // 8's leave clears C+0x564 bits 8 / 0x10 (3's clears C+0x568 bits 0x10000 / 0x20000: not modelled).
@@ -1459,6 +1464,7 @@ export function createEnemyAI(opts) {
     // is clear. Not modelled: the page has no C+0x590 posture field (the flinch reads a.stance) and no C+0x568
     // 0x200 / 0x400; the walking soldiers stay level (FUN_0034a5a8).
     if (cls === 3) C.f564 &= ~0x4000;
+    if (cls === 1) C.f564 |= 0x4000 | 0x200000;                              // worker 0235: class 1 enter 0x593b08
     C.motion = { cls, phase: 0, timer: 0, done: 0, t: 0, next74: NEXT74[cls] || 0 };
     if (cls >= 0x1000) {
       // FUN_0059e830 (attack enter): +0x10 entry, C+0x568 bit 15 clear, FUN_0034b110(0, C), FUN_00356278(0, body),
@@ -1494,7 +1500,12 @@ export function createEnemyAI(opts) {
     // boss overlay's FUN_00aa3090, mode 0x100 only). No plug-in -> AI +0xe0 = 0 and +0xd0 (the mode) = 0.
     if (mode >= 0x100 && mode < 0x200) {
       if (!bossPlugin || mode !== 0x100) { ai.brain = null; ai.mode = 0; events.push(`mode ${ai.owner ? ai.owner.id : -1} ${mode}: no brain`); return; }
-      warnOnce('enemy_ai: the boss brain (mode 0x100, boss_z128.js) is not wired on the page (notes/boss-research.md)');
+      // worker 0235: FUN_00aa3090 -> FUN_00aa1220 (boss_z128.js through boss_io.js), then the start vt+0x14 FUN_00aa1690
+      ai.brain = { mode, boss: ai.owner ? createBoss(bossEnv, ai.owner) : null };
+      ai.mode = mode;
+      ai.flags &= ~0x100;
+      if (ai.brain.boss) { ai.owner.boss = ai.brain.boss; ai.brain.boss.enter(); events.push(`boss brain ${ai.owner.id}`); }
+      return;
     }
     ai.brain = { mode };
     if (![0, 1, 2, 5, 6].includes(mode)) warnOnce(`enemy_ai: brain mode ${mode} not translated (empty update)`);
@@ -2490,6 +2501,22 @@ export function createEnemyAI(opts) {
     }
     if (m.n80) warnOnce(`enemy_ai: cmd 0x141 loop count ${m.n80} (FUN_00593c90 phase 1, FUN_005a9860) not translated`);
   }
+  // worker 0235: motion class 1 (FUN_00592918 case 1, vt 0x5a6ba8: enter 0x593b08 C+0x564 |= 0x4000 | 0x200000, leave
+  // 0x593b30 clears them), update FUN_00593b60: phase 0 FUN_00340bb8(C, 1, -1) and FUN_003448c0(C, 0, 0) = the slot-0 clip
+  // C+0x640 once (else the done bit); phases 1 / 2: when the motion is done (FUN_003460d8) the slot-n clip (C+0x648 /
+  // +0x650), phase + 1, done at 3 or when the slot is empty. The z128 boss sets slot 0 only (FUN_00344840(C, name, 0, 0)).
+  // L: FUN_003448c0's last argument 0 = flags 2 (not looped), as its 1 = flags 3 (cmd141Motion).
+  function motion1(a, m) {
+    const C = a.C, slot = [C.n640, C.n648, C.n650];
+    if (m.phase === 0) {
+      blendSet(a, 1, -1);
+      if (slot[0]) { playClip(a, slot[0], 2); m.phase = 1; } else m.done |= 1;
+      return;
+    }
+    if (m.phase < 0 || m.phase > 2 || !motionDone(a)) return;
+    if (slot[m.phase]) { playClip(a, slot[m.phase], 2); m.phase++; if (m.phase !== 3) return; }
+    m.done |= 1;
+  }
   function bodyUpdate(a, step) {
     const C = a.C, m = C.motion;
     C.nextMotion = 0;
@@ -2502,6 +2529,7 @@ export function createEnemyAI(opts) {
   function motionUpdate(a, m, step) {
     if (m.cls === 3 || m.cls === 8) { (m.cls === 3 ? loco3 : loco8)(a, m); return; }
     if (m.cls === 2) { cmd141Motion(a, m); return; }
+    if (m.cls === 1) { motion1(a, m); return; }
     if (m.cls >= 0x1000) { attackUpdate(a, m, step); return; }
     if (m.cls === 0x1e || m.cls === 0x36) {
       // the clip clock as enemies.js plays it (MP+0x40c 0.5 x step, FUN_005aa2a8). Death (0x36): at the
@@ -2570,8 +2598,8 @@ export function createEnemyAI(opts) {
       // not on the page), motion 0x78-0x7a / 0x40-0x42 (flags 0x83) -> 1, then at once:
       // 1: off the ground: done bit (stays). Else timer > 20, or timer >= 10 and the motion is done
       // (FUN_003460d8) -> done bit, returns 0x16 / 6; moving (C+0x1d8 > 0) -> 0x17 / 9 (not on the page).
-      // GUESS (kept): FUN_003460d8 after this three-clip request is not decoded (worker 0231: motionDone covers one-clip
-      // requests only, see the shot's phase 2); taken as false here, so they end at timer > 20.
+      // FUN_003460d8 reads the head layer's clip A (FUN_005aa200), which the three-clip request's layer (FUN_005a9398 /
+      // FUN_005a91c8) stores as a one-clip one does: motionDone (worker 0236).
       if (m.phase === 0) {
         m.timer = 0;
         blendSet(a, 1, 10);
@@ -2579,7 +2607,7 @@ export function createEnemyAI(opts) {
         m.phase = 1;
       }
       if (!(a.C.f1c0 & 0x200)) { m.done |= 1; m.timer = f(m.timer + step); return; }
-      if (m.timer > 20.0) { m.done |= 1; setMotion(a, m.cls === 0x18 ? 0x16 : 6); return; }
+      if (m.timer > 20.0 || (m.timer >= 10.0 && motionDone(a))) { m.done |= 1; setMotion(a, m.cls === 0x18 ? 0x16 : 6); return; }
       m.timer = f(m.timer + step);
       return;
     }
@@ -2588,12 +2616,12 @@ export function createEnemyAI(opts) {
     // (motions 0x7b-0x7d, returns 0x16): the same phases.
     const crouch = m.cls === 0xf;
     if (m.phase === 2) {
-      // The game: when the motion ends (FUN_003460d8, motionDone: worker 0231) or timer > 30, request motions 0x40-0x42 /
-      // 0x78-0x7a (flags 0x83), set the done bit, return 6 / 0x16.
-      // GUESS (kept): after the three-clip request FUN_00345818(C, 0x57, 0x58, 0x59, 0x82) the game sees the motion done
-      // on phase 2's first update (T k_fire_emp15 #66: r_st_f pushed f786, r_st_a f788), which motionDone (one layer,
-      // frame < count - 1) does not explain; not decoded after two attempts (worker 0231). So phase 2 ends on its first
-      // update without the request (a request here would put r_st_a at f787, one frame early).
+      // FUN_00596460 / FUN_00597c60 phase 2 (asm 0x596550-0x5965b0, worker 0236): the motion done (FUN_003460d8,
+      // motionDone) or timer > 30 -> request motions 0x40-0x42 / 0x78-0x7a (flags 0x83); either way (not done and
+      // timer <= 30 branches past the request, bc1fl at 0x596578) the done bit is set and it returns 6 / 0x16, so phase 2
+      // always ends on its first update. T k_fire_emp15 #66: r_st_f pushed f786, not done at f787 (no request), r_st_a f788
+      // from state 6's first update.
+      if (motionDone(a) || m.timer > 30.0) request(a, crouch ? 0x78 : 0x40, 0x83, true);
       m.done |= 1;
       setMotion(a, crouch ? 0x16 : 6);                                       // returns 6 / 0x16 (GUESS: return value = next motion state)
       return;
@@ -2719,8 +2747,9 @@ export function createEnemyAI(opts) {
   // that does not loop (+0x1e bit 0 clear) with frame (+0x18) >= its count (+0x1c) - 1 -> 0 (frame clamped there). The page
   // keeps the head layer only (C.mp, replaced by every request, as flags bit 2 does in FUN_005a9398: z128's requests carry
   // it); L: a request without bit 2 queues a second layer in the game (done = 0 until the head ends), not modelled.
-  // Not covered: three-clip (aim) requests FUN_00345818 (C.mp.partner): the game reads them done at once (T k_fire_emp15
-  // f787); not decoded after two attempts, those callers keep their GUESS.
+  // Three-clip (aim) requests FUN_00345818 (C.mp.partner): FUN_003456f0 -> FUN_00344608 -> FUN_00344bd0 -> FUN_005a9398
+  // writes one layer with clip A at +0x200 (clip B +0x208, ratio +0x210); its frame advances and ends on clip A's count
+  // (FUN_005aa2a8), so the same test holds (worker 0236; the shot's early end is its own control flow, FUN_00596460).
   function motionDone(a) {
     const h = a.C && a.C.mp;
     if (!h) return true;
@@ -2874,6 +2903,22 @@ export function createEnemyAI(opts) {
     events.push(`attack object ${a.id} vol ${idx} dmg ${o.dmg}`);
     // owner +0x28 bit 2 (FUN_00573360 + HUD) : the soldiers have it clear (0x208403)
   }
+  // worker 0235: the z128 boss's dive volume (boss overlay FUN_00aa16f8 state 4; notes/boss-research.md): FUN_00541278 =
+  // FUN_0053db98(mgr, 0xd) (constructor FUN_00579d00: +0xc1 = 1, every target) + activate; FUN_00579ef0(2) (type 2: +0xec 8),
+  // FUN_00579f70(1) (sphere), +0xc0 bits 4-7 = 0xc, FUN_00579ff8(bshv0) (cap 9999), FUN_0057a018(owner id) (the offence
+  // FUN_00317ef0, as makeAttack), +0xe0 = 200 (life), +0xd0 = 40 (radius), FUN_0054bf48(o, owner, 1) = parented to the
+  // owner's marker 1 (+0x3a = 1, +0x3b = -1: followed every frame, attackCentre), +0x130 = the hit effect, FUN_0057a090 =
+  // the hit sound +0x134 (both played by FUN_0057a830 at the hit). +0xc0's nibble has no reader on the page.
+  function bossVolume(a, x) {
+    if (aiPaused()) return null;
+    const o = { owner: a, v: { c0: x.c0 }, type: x.a > 3 ? 0 : x.a, shape: x.b, ec: REACT_EC[x.a > 3 ? 0 : x.a], c1: 1, life: f(x.e0),
+                every: 0, r: f(x.d0), grow: 0, dmg: Math.min(x.f54, 9999), kind: 1, cand: [], local: [0, 0, 0], fixed: null,
+                marker: x.marker, fx: x.fx, se: x.se };
+    o.dmg = Math.min(offence(ENEMY_OFFENCE, o.dmg, o.kind), 9999);
+    attackObjs.push(o);
+    events.push(`attack object ${a.id} boss dmg ${o.dmg}`);
+    return o;
+  }
   // FUN_00317ef0(status, raw, kind): the attacker's level bonus, as defence's (FUN_00318120) mirror.
   // Armour (+0xc0 with +0x61 bit 0): G+0x14 tables +0x40c / +0x43c / +0x45c: not translated (soldiers have none).
   function offence(st, raw, kind, G = GAME) {
@@ -2999,6 +3044,10 @@ export function createEnemyAI(opts) {
       attackDamagePlayer(o, c, A, B);
       if (opts.effect && opts.effect.spawn) opts.effect.spawn(0x1000, [0, 0, 0]);
     }
+    // worker 0235: FUN_0057a830: +0x130 effect (FUN_003365e0) and +0x134 sound (FUN_0033cc48) at the hit (bossVolume sets them).
+    // L: the hit point is taken as the volume's centre (FUN_00541b08's point is not read).
+    if (o.fx && opts.effect && opts.effect.spawn) opts.effect.spawn(o.fx, c.slice());
+    if (o.se) sound(o.se, c.slice());
     o.c1 |= 0x20;
     const ai = o.owner.ai;
     if (ai) { ai.f7a = short((ai.f7a | 0) + 1); ai.f60 = S.now; }
@@ -3151,14 +3200,13 @@ export function createEnemyAI(opts) {
     let fl = 0;
     if (W.flags & 0x200) fl |= 0x200;
     if (!(W.flags & 0x100)) fl |= 0x8000;
-    if (!(W.flags & 0x2000)) fl |= 0x2000;
-    else warnOnce('enemy_ai: homing bullet (W+4 bit 0x2000, FUN_00552dd8 +0x150 / +0x154) not translated');
+    if (!(W.flags & 0x2000)) fl |= 0x2000;                                    // else homing: +0x150 mode 1 (spawnShot, worker 0235)
     return fl;
   }
   // FUN_00569340 -> FUN_005694f8 -> FUN_005409a8(mgr, muzzle, aim, W, status, 0, 0) -> FUN_00554568
   // -> FUN_00552dd8(bullet, 0, ...): one bullet from the muzzle along (aim - muzzle).
-  function spawnShot(a, aim0, muzzle) {
-    const W = a.ai.W;
+  function spawnShot(a, aim0, muzzle, Wx = null) {
+    const W = Wx || a.ai.W;                                                   // worker 0235: FUN_00569870 passes its own W
     const start = (muzzle || eye(a)).slice();                                 // +0xc0, +0xe0
     // FUN_005409a8 -> FUN_005405b0: the cone (s = 24.39 deg for e027; T: k_bullet1 / k_bullet2 / w168 call logs)
     if (!W.spread) warnOnce('enemy_ai: ai.json weapons have no spread (W+0x1c..0x24): rebuild data/enemies; enemy shots fly straight');
@@ -3180,7 +3228,14 @@ export function createEnemyAI(opts) {
       kind: (W.flags & 0x80000) && JITTER_ON ? 2 : 0,                        // FUN_00554738 (flag 2 clear; FUN_00326500)
       target: target(a.ai),
       shooter: a.id,                                                          // +0x128 owner id
+      id: ++bulletIds,                                                        // the object id (the boss brain keeps them)
     };
+    // worker 0235: FUN_00552dd8, W+4 bit 0x2000: +0x150 bits 20-23 = 1 (FUN_005549f0 -> the homing move FUN_00556218)
+    // and +0x154 = W+0x3c x pi / 180 (the turn rate, rad / s); +0x158 = the distance flown
+    if (W.flags & 0x2000) {
+      if (W.turn == null) warnOnce('enemy_ai: weapons have no turn (W+0x3c; old ai.json): homing turn rate 0');
+      b.hm = 1; b.home = f(f(W.turn ?? 0) * f(0.017453294)); b.d158 = 0;
+    }
     bullets.push(b);
     // FUN_00554568 -> FUN_00554850 (bullet init with W = +0x194): FUN_0033d788 plays W+0x94 at the sound camera
     // (FUN_0033cbd8) and keeps the slot in bullet +0x18c (moved by FUN_00557c68, stopped by FUN_005529a8 /
@@ -3193,6 +3248,81 @@ export function createEnemyAI(opts) {
       sound(W.se_fire, start, 400.0);
     } else if (W.se_fire == null) warnOnce('enemy_ai: ai.json weapons have no se_fire (W+0x8c): rebuild data/enemies; no shot sound');
     events.push(`shot ${a.id}`);
+    return b;
+  }
+  // worker 0235: FUN_00569870(k, actor, W, aim, n, marker, -1), the marker shot the z128 boss fires (gun: markers 0x11 /
+  // 0x12, missiles 0xf / 0x10; notes/boss-research.md). FUN_00325b40 (AI paused) -> none. n = 4: the start is
+  // FUN_003461a0(model, out, marker); W+4 bit 0x400000: aim = start + unit(aim - start) x (k < 0: W+0x2c / 6, else k).
+  // Then FUN_005409a8(mgr, start, aim, W, status, 0, 0) (spawnShot's path) and, actor +0x28 bit 0x20 clear or 0x20000 set,
+  // FUN_00552ac0(b, FUN_005630c0(actor)) = the actor's target (spawnShot's +0x12a). The player branch (actor +0x28 bit 4:
+  // FUN_00317a58 auto-aim, FUN_00543ad0 lock) is not for enemies. Not translated: n != 4 (FUN_00346578), no model
+  // (FUN_0054a720), and the muzzle effects FUN_00335a68 / FUN_00335b60 (warned). FUN_0033d6d8 = spawnShot's shot sound.
+  function shootMarker(a, W, aim0, n, marker, k = -1) {
+    if (aiPaused()) return null;
+    if (n !== 4) { warnOnce(`enemy_ai: FUN_00569870 with n ${n} (FUN_00346578) not translated: no shot`); return null; }
+    const start = markerWorld(a, marker);
+    if (!start) return null;
+    let aim = aim0.slice();
+    if (W.flags & 0x400000) {
+      const u = unit3(sub3(aim, start)), r = k < 0 ? f(W.speed * f(0.16666667)) : f(k);
+      aim = start.map((x, i) => f(x + f(u[i] * r)));
+    }
+    warnOnce('enemy_ai: FUN_00569870 muzzle effects (FUN_00335a68 / FUN_00335b60) not translated');
+    return spawnShot(a, aim, start, W);
+  }
+  // FUN_003461a0(model, out, marker): the marker's point (its xyz in its bone's frame) in the world, as attackCentre
+  // (FUN_0054a768's chain). L: the same bone-palette path is taken for both callers.
+  function markerWorld(a, i) {
+    const mk = data.markers && data.markers[recModel(a)], m = mk && mk[i];
+    if (!m || m[3] < 0) { warnOnce(`enemy_ai: no marker ${i} for ${recModel(a)} (old ai.json: rebuild data/enemies)`); return null; }
+    const bw = world.boneWorld ? world.boneWorld(a) : null;
+    if (!bw) { warnOnce('enemy_ai: no pose for marker shots (' + noPose(a) + ')'); return null; }
+    const B = bw(m[3]);
+    return [0, 1, 2].map(k => f(f(f(f(m[0] * B[0][k]) + f(m[1] * B[1][k])) + f(m[2] * B[2][k])) + B[3][k]));
+  }
+  // worker 0235: FUN_00556218, the homing move (+0x150 mode 1). +0xe0 = +0x90; target point FUN_00557f38 (+0x12a set: the
+  // object's vt+0x5c, else +0xd0 = b.end); d = unit(target - pos); axis = +0x80 x d (not normalised); angle FUN_00260fe8 =
+  // FUN_00261038 (0 at cos >= 1, pi at cos <= -1, else acos) with the sign of (dir x d) . axis (never negative), clamped
+  // to +0x154 / 60; above 0.001 the direction turns by FUN_00259f60(angle, axis) (FUN_0026135c) and is renormalised (the
+  // +0x60 / +0x70 rows, rebuilt from it, are not kept on the page). Then +0x90 += dir x (+0x12c x step), +0x158 += the
+  // same; past +0x15c (range) it ends (+0xf0 = +0x90, bit 0x800000); else without +0x120 bit 0x2000000 it ends when
+  // speed <= 0, age > 1800 or +0x158 > 3000.
+  function homingStep(b, step) {
+    b.prev = b.pos.slice();
+    const tp = b.target ? targetPoint(b.target) : b.end;
+    const d = unit3(sub3(tp, b.pos)), u = b.dir;
+    const ax = [f(f(u[1] * d[2]) - f(u[2] * d[1])), f(f(u[2] * d[0]) - f(u[0] * d[2])), f(f(u[0] * d[1]) - f(u[1] * d[0]))];
+    const dot = f(f(f(d[0] * u[0]) + f(d[1] * u[1])) + f(d[2] * u[2]));
+    const c = f(dot / f(Math.sqrt(f(f(f(f(d[0] * d[0]) + f(d[1] * d[1])) + f(d[2] * d[2])) * f(f(f(u[0] * u[0]) + f(u[1] * u[1])) + f(u[2] * u[2]))))));
+    let ang = !(c < 1) ? 0 : !(-1 < c) ? f(Math.PI) : f(Math.acos(c));
+    const lim = f(b.home * f(0.016666668));
+    if (lim < Math.abs(ang)) ang = ang < 0 ? -lim : lim;
+    if (0.001 < Math.abs(ang)) {
+      const sn = f(Math.sin(ang)), cs = f(Math.cos(ang)), t = f(1.0 - cs), [x, y, z] = ax;
+      const R = [[f(f(t * x) * x + cs), f(f(f(t * x) * y) + f(z * sn)), f(f(f(t * z) * x) - f(y * sn))],
+                 [f(f(f(t * x) * y) - f(z * sn)), f(f(f(t * y) * y) + cs), f(f(f(t * y) * z) + f(x * sn))],
+                 [f(f(f(t * z) * x) + f(y * sn)), f(f(f(t * y) * z) - f(x * sn)), f(f(f(t * z) * z) + cs)]];
+      b.dir = unit3([0, 1, 2].map(k => f(f(f(u[0] * R[0][k]) + f(u[1] * R[1][k])) + f(u[2] * R[2][k]))));
+    }
+    const k = f(b.speed * step);
+    b.pos = b.pos.map((v, i) => f(v + f(b.dir[i] * k)));
+    b.d158 = f(b.d158 + k);
+    if (b.range < b.d158) { b.f120 |= 0x800000; b.end = b.pos.slice(); return 1; }
+    if (!(b.f120 & 0x2000000) && !(0 < b.speed && b.age <= 1800.0 && b.d158 <= 3000.0)) { b.f120 |= 0x800000; b.end = b.pos.slice(); return 1; }
+    return 0;
+  }
+  // FUN_00556870's room test for a bullet without +0x120 bit 0x2000 (the homing ones): after the object test, unless bit
+  // 0x20 / 0x40000000, the stage's vt+0x17c on +0xe0 -> +0x90; a hit ends it there as roomProbe's (+0x120 bit 1, the
+  // surface). L: the thick branch (bit 0x800) and the hit polygon's pass-through bits are not translated.
+  function homingRoom(b) {
+    if (b.f120 & 0x40000020) return false;
+    if (!opts.roomRay) { warnOnce('enemy_ai: no roomRay (FUN_0026a320): bullets pass walls'); return false; }
+    const h = opts.roomRay(b.prev, b.pos);
+    if (!h) return false;
+    b.pos = h.map(f); b.end = b.pos.slice();
+    b.f120 |= 1; b.mat = ((h.surface | 0) >> 16) & 0xf; b.normal = h.normal ?? null;
+    events.push('bullet wall');
+    return true;
   }
   // FUN_005549f0: one frame of a bullet. Returns 1 when it ends this frame (hit or out of range).
   function bulletUpdate(b, step) {
@@ -3206,6 +3336,12 @@ export function createEnemyAI(opts) {
       return 0;
     }
     b.age = f(b.age + step);                                                  // +0x124 += DAT_004eeb24 (the frame step)
+    if (b.hm === 1) {                                                         // worker 0235: +0x150 mode 1 (FUN_00556218)
+      const done = homingStep(b, step);
+      if (b.from !== P && enemyBulletHit(b)) { endEffect(b, b.hitPoint); bulletEnd(b, 1); return 1; }
+      if (homingRoom(b) || done) { wallSound(b); endEffect(b, b.end); bulletEnd(b, 0); return 1; }
+      return 0;
+    }
     // FUN_00556068 (motion type 0): prev = pos; pos = start + dir x (age x speed)
     b.prev = b.pos.slice();
     const t = f(b.age * b.speed);
@@ -4087,6 +4223,7 @@ export function createEnemyAI(opts) {
   // FUN_003516a0's matrix part) is left out; no enemy collision or ground (the slide is horizontal).
   function moverUpdate(a, step) {
     const C = a.C, s = C.slide;
+    if (a.boss) { a.boss.body(); return; }                                   // worker 0235: move mode 1 / turn mode 1 (boss_io.js)
     // path walking (mover 1, move mode 9, turn mode 5): FUN_0034ea18's order, path_mover.js. The end of the
     // path (FUN_0034f8c0) sends the body listener event 2: FUN_005690c8 -> FUN_00588550 case 2 (0x588678)
     // posts manager event 0xf (FUN_0053fbe8), which FUN_0053fde8 turns into script event 0x13 (drainManager).
@@ -4135,6 +4272,7 @@ export function createEnemyAI(opts) {
       else if (ai.brain.mode === 1) brain1(ai);
       else if (ai.brain.mode === 5) brain5(ai);
       else if (ai.brain.mode === 6) brain6(ai);
+      else if (ai.brain.mode === 0x100 && ai.brain.boss) ai.brain.boss.update();   // worker 0235: FUN_00aa16f8
       if (ai.amode === 3) action3(ai);                                        // action layer (+0xe4, FUN_00365110)
       else if (ai.amode === 2) action2(ai);
       else if (ai.amode === 5 || ai.amode === 6) action56(ai, ai.amode);
@@ -4327,6 +4465,15 @@ export function createEnemyAI(opts) {
       if (a.C.mover !== 0) warnOnce(`enemy_ai: stage-load pass on record ${k} with a moving body (FUN_0034edf0(C, 0) -> FUN_00352a60) not translated`);
       a.f118 = (a.f118 & ~0x40000) >>> 0;
     }
+    event23();                                                                // worker 0235: FUN_005453b0's end
+  }
+  // worker 0235: FUN_005459d8 (the end of FUN_005453b0 and of FUN_0053ca50): script event 0x23 to every object of the
+  // manager's type lists (mgr +0x1108, types 0xc, 1, 2, 3, 8, 0xa, 0xf, 0x10, 0xb, 0xe, ... from DAT_0058b5c8). The z128
+  // boss's script 242 sets its HP, the gauge and activates itself there. L: the page sends it to its triggers, then its
+  // records / actors in id order (the page's kinds are not mapped to the type numbers).
+  function event23() {
+    for (const o of triggers) runEvent(o, 0x23);
+    for (const o of [...objects.values()]) if (o.kind === 'record' || o.kind === 'actor') runEvent(o, 0x23);
   }
 
   // the opening event's hand-off (checkpoint.js): [{ rec, frame (S.frame of the tick it happens in), pos, face }]
@@ -4436,10 +4583,20 @@ export function createEnemyAI(opts) {
     }
   }
 
+  // worker 0235: what boss_io.js needs of this world (the boss brain's engine calls)
+  function bossGauge(id, v, max, fl) {                                       // FUN_003b58e0, as manager 0x6e
+    if ((id >>> 0) < 0x12) Object.assign(hudGauge, { id: id | 0, v: v | 0, max: max | 0, f: fl | 0 });
+    if (opts.hudGauge) opts.hudGauge(0x6e, hudGauge);
+  }
+  const bossEnv = { S, P, data, warn: m => warnOnce(m), rng: () => rng(), DIFF, mshort, MOVE_DT: PM.MOVE_DT,
+    sound: (n, p, r) => sound(n, p, r), effect: (id, p) => { if (opts.effect && opts.effect.spawn) opts.effect.spawn(id, p); },
+    setMotion, motionDone, motionPast, setMode, setTarget, setTurn: (a, m) => PM.setTurn(a, m), stopAll: a => PM.stopAll(a, warnOnce),
+    busy, dead, enemyDeath, shootMarker, spawnShot, markerWorld, bossVolume, bullets, gauge: bossGauge };
   // boneWorld: (actor) => (bone) => world rows of that bone (the MP's last posed skeleton), set by the
   // page (enemies.js partPose) or a test; the part test needs it. playerShot(muzzle, aim, W): Vincent
   // fired, now; queueShot: the same at this frame's player slot inside the next tick (the page).
   const world = { S, actors, triggers, bullets, attackObjs, objects, addActor, tick, runEvent, recById, events, activated, setActive, stageLoad, scheduleHandOff, handOffs, delayed,
+                  event23,                                // worker 0235: FUN_005459d8 (script event 0x23 to every object)
                   timerList,                              // script-timer list (FUN_0053e6e8; tests)
                   playerShot, queueShot, lockTargets, pushOut, boneWorld: opts.boneWorld || null,
                   eventFlags: EVFLAGS,
@@ -4455,7 +4612,8 @@ export function createEnemyAI(opts) {
                   stageRec, t: { brain5, brain6, stateMotion, setActorState, bulletEnd, target, send, setMode, setTarget, setActionLayer, action2, action3, action56, flinch, die, navOf,
                        makeAttack, attackObjUpdate, attackCentre, sphereCapsule, offence,
                        spreadAim, roomProbe, enemyBulletHit, playerPartTest, targetPoint, damagePlayer, attackDamagePlayer,
-                       endEffect, bulletUpdate, hitEnemy, playerHandler, attackApply, spawnShot },
+                       endEffect, bulletUpdate, hitEnemy, playerHandler, attackApply, spawnShot,
+                       shootMarker, markerWorld, homingStep, bossVolume, motion1 },             // worker 0235
                   // worker 0209: the explosion on a character (props.js), Vincent's object, the twister, the sound hook
                   blast: { filter: blastFilter, actor: blastActor, player: blastPlayer }, player: P, dead, rng, sound: (n, p, r) => sound(n, p, r), seName, roomRay: opts.roomRay || null,
                   difficulty: DIFF, warnOnce: m => warnOnce(m) };

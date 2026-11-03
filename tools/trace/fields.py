@@ -322,6 +322,17 @@ ENEMY_FIELDS += [
 ]
 for _k in range(ENEMY_MAX):
     ENEMY_FIELDS += _enemy_fields(_k)
+# TRACE_BOSS_BRAIN=<hex> (worker 0231, notes/boss-research.md): the z128 boss brain object (AI +0xe0, vtable 0xaa3508,
+# 0x7c bytes: +0x1c prev state, +0x20 last HP, +0x24.. timers, +0x2a sub-state, +0x2c damage counter / bits, +0x2f
+# shots, +0x30 count, +0x31 moves, +0x34.. shot ids) at an absolute address read from the state.
+if __import__("os").environ.get("TRACE_BOSS_BRAIN"):
+    ENEMY_FIELDS += [("boss_brain", None, int(__import__("os").environ["TRACE_BOSS_BRAIN"], 16), "bytes:128", "D",
+                      "boss brain FUN_00aa1220 object (boss_z128.js makeBrain)")]
+# TRACE_PPOS=1 (worker 0235): Vincent's object position P+0x90 (FUN_0054a720 with no parent) and parent P+8; in the boss
+# route state r0b_boss2 the body / camera bases (C, CAM) do not follow him
+if __import__("os").environ.get("TRACE_PPOS"):
+    ENEMY_FIELDS += [("p_pos", "P", 0x90, "vec4", "D", "P+0x90 = object position (FUN_0054a720 without a parent)"),
+                     ("p_par", "P", 0x8, "u32", "L", "P+8 = parent object")]
 # Opt-in with TRACE_LOCK=1 (worker 0141, lock-on FUN_00328968 / FUN_00329778): the camera's
 # lock state and the inputs of the picker, plus the per-soldier fields it reads. Off by default so
 # the enemy record layout of the older traces stays the same.

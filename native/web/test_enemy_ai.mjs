@@ -1210,5 +1210,29 @@ else {
   }
 }
 
+// Motion done after three-clip requests (worker 0236). FUN_00596460 / FUN_00597c60 phase 2 always returns 6 / 0x16 on
+// its first update; it requests 0x40-0x42 / 0x78-0x7a only when the motion is done (FUN_003460d8) or timer > 30.
+// FUN_005978e8 / FUN_00597ae8 phase 1: timer > 20, or timer >= 10 and done. The traces never reach a done clip there
+// (r_st_f is at frame 0.5 on phase 2's first update, m_sq_a has 60 frames), so this puts one on the head layer.
+{
+  const recs = data.records.map((r, i) => (r && r.model === 'e027' ? i : -1)).filter(i => i >= 0);
+  const run = (cls, mp, timer) => {
+    const player = { pos: [5000, 0, 5000], hp: 780, id: 0x16, f118: 0, s64: 0 };
+    const W = AI.createEnemyAI({ data, player, rand: () => 0.5, quiet: true });
+    const a = W.addActor({ rec: recs[0], mode: 0 });
+    W.tick(1.0, player.pos, player.pos);
+    a.C.motion = { cls, phase: cls >= 0x18 ? 1 : 2, timer, done: 0, t: 0, next74: 0 };
+    a.C.mp = mp;
+    const ev = W.tick(1.0, player.pos, player.pos);
+    return `${ev.filter(e => e.startsWith(`clip ${a.id} `)).map(e => e.split(' ')[2]).join('+') || '-'}/0x${a.C.motion?.cls.toString(16)}`;
+  };
+  const got = [run(0xe, { clip: 'r_st_f', frame: 9, loop: false }, 1), run(0xe, { clip: 'r_st_f', frame: 0.5, loop: false }, 1),
+               run(0xe, { clip: 'r_st_f', frame: 0.5, loop: false }, 31), run(0xf, { clip: 'm_sq_f', frame: 9, loop: false }, 1),
+               run(0x18, { clip: 'm_sq_a', frame: 59, loop: false }, 12), run(0x18, { clip: 'm_sq_a', frame: 59, loop: false }, 8),
+               run(0x18, { clip: 'm_sq_a', frame: 6, loop: false }, 12)].join(' ');
+  const want = 'r_st_a/0x6 -/0x6 r_st_a/0x6 r_sq_a/0x16 -/0x16 -/0x18 -/0x18';
+  ok(recs.length && got === want, `three-clip motion done: shot done / not / timer 31, crouched shot done, crouch done t12 / t8, not done t12: ${got} (${want})`);
+}
+
 console.log((fail ? `${fail} FAILED` : 'all ok') + (gaps ? ` (${gaps} known gaps)` : ''));
 process.exit(fail ? 1 : 0);

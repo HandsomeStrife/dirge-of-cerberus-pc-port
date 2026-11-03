@@ -1,0 +1,3 @@
+{"name": "w231_fight2", "frames": 660, "log_from": 0,
+ "doc": "worker 0231: from tools/trace/out/route/r0b_boss2.p2s (the boss fight with the e024 model loaded), no input; Vincent's HP poked to 9999 (TRACE_POKE=960660=270f). TRACE_FIELDSET=enemy TRACE_ENEMIES=1 TRACE_ERECS=32 TRACE_BOSS_BRAIN=8da900 TRACE_CALLLOG=boss.",
+ "events": []}

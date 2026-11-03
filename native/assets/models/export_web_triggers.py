@@ -401,6 +401,7 @@ def weapons(d):
         out.append(dict(idx=k, flags=SE.u32(d, o + 4), pellets=struct.unpack_from('b', d, o + 0x16)[0],
                         range=f(0x18), speed=f(0x2c), damage=h(0x40), first=h(0x42), interval=h(0x44),
                         reload=h(0x46), mag=h(0x48), hit=d[o + 0x4a], w56=h(0x56),   # W+0x56: melee damage % (FUN_00569dc0)
+                        turn=f(0x3c),                       # W+0x3c: homing turn rate, deg/s (FUN_00552dd8 -> bullet +0x154; worker 0235)
                         react=SE.u32(d, o + 0xc),          # W+0xc -> bullet +0x148: the hit reaction flags (FUN_00552dd8, FUN_0055db50)
                         spread=[f(0x1c), f(0x20), f(0x24)],   # W+0x1c / +0x20 / +0x24: cone angle by distance (FUN_005405b0)
                         cls=d[o + 0x14] >> 2 & 7,           # W+0x14 bits 2-4: weapon class (FUN_00564228)
@@ -547,7 +548,18 @@ def model_clips(recs, st, atk):
                 continue
             cbuf, CP = E.V.find_clip(f, c)
             res[c] = int(E.AR.clip_frames(cbuf, CP))
+    # worker 0235: the clips the z128 boss overlay sets by name (FUN_00344840; boss_z128.js), for its motion-done tests
+    for model, clips in BOSS_CLIPS.items():
+        res = out.setdefault(model, {})
+        for c in clips:
+            if c in res:
+                continue
+            cbuf, CP = E.V.find_clip(E.clip_file(model, c), c)
+            res[c] = int(E.AR.clip_frames(cbuf, CP))
     return out
+
+
+BOSS_CLIPS = {'e024': ('idle', 'l_trn', 'r_trn', 'atk_sp1', 'atk_sp2', 'atk_sp3', 'idl_lean', 'lean', 'lean_idl')}
 
 
 # the types enemy_ai.js builds an actor for (notes/enemy-ai-hook.md "Other types"); part boxes are

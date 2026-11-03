@@ -1,0 +1,7 @@
+{
+ "name": "w235_missile",
+ "frames": 330,
+ "log_from": 0,
+ "doc": "worker 0235: from tools/trace/out/route/r0b_boss2.p2s, no input (as w231_fight2: the volley at f135, homing from ~f180); TRACE_FIELDSET=enemy TRACE_ENEMIES=1 TRACE_ERECS=32 TRACE_BOSS_BRAIN=8da900 TRACE_PPOS=1 TRACE_CALLLOG=missile TRACE_CALLLOG_FRAMES=130:330 (each bullet per frame after its move).",
+ "events": []
+}
