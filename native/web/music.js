@@ -169,8 +169,23 @@ const cvtw = (x) => (Number.isFinite(x) ? Math.trunc(x) : x > 0 ? 0x7fffffff : -
 export function mixWeights(f) {
   return [cvtw(Math.fround(f * 256)) & 0xffff, cvtw(Math.fround(Math.fround(1 / Math.fround(1 - Math.fround(1 / f))) * 256)) & 0xffff];
 }
-// FUN_003eb544: sample x (x << 16) / (s16)w >> 8 (pdivbw), as a gain; w == 0 -> the mix is skipped (returns -1: nothing)
-export const mixGain = (w) => { const s = (w << 16) >> 16; return s === 0 ? 1 : 256 / s; };
+// FUN_003eb544, per s16 sample: psllw 16 (the sample in the word's high half), pdivbw by the weight's low halfword as a
+// SIGNED halfword (0xffff = -1; toward zero), psraw 8, then psllw / psrlw 16 keep the LOW 16 bits (a wrap, not a clamp);
+// the two parts are added with paddsh (saturating). A weight 0 skips the whole mix (returns -1: the main slot keeps the old
+// stream's samples as they are).
+export function mixPart(x, w) {
+  const d = (w << 16) >> 16;
+  const q = Math.trunc((x * 65536) / d) | 0;                     // pdivbw (|0: the one overflow, -32768 / -1, wraps)
+  return ((q >> 8) << 16) >> 16;
+}
+export function mixSample(old, nw, a, b) {
+  if (!(a & 0xffff) || !(b & 0xffff)) return old;
+  const v = mixPart(old, a) + mixPart(nw, b);
+  return v > 0x7fff ? 0x7fff : v < -0x8000 ? -0x8000 : v;            // paddsh
+}
+// The same as a gain on the page's per-frame scheduling: 256 / s16(w), exact while |gain| <= 1 (no sample can wrap). A
+// larger gain (s16(w) in -255..255: the first ~3 ms of a crossfade, b = 0xffff at f = 1) wraps samples in the game: null.
+export const mixGain = (w) => { const s = (w << 16) >> 16; if (s === 0) return 1; const g = 256 / s; return Math.abs(g) <= 1 ? g : null; };
 
 export class GameMusic {
   constructor(audio, base = 'data/audio/bgm/') {
@@ -208,6 +223,7 @@ export class GameMusic {
   changeMusicVol(vol, time = 0) {
     const ctx = this.au.ctx;
     (this.ramp ??= new MusicRamp()).set(vol, time, ctx ? clockMs(ctx) : 0);
+    this.reschedule();
     this.pumpStart();
   }
 
@@ -223,15 +239,13 @@ export class GameMusic {
     const buf = await this.track(name, info);
     if (!buf) { if (this.req === req) this.name = null; return null; }
     if (this.req !== req) return null;               // stopped while loading
-    // the IOP's volume node (core-1 input, BgmVolume): one for both streams of a crossfade (they are mixed on the EE)
-    if (!this.gain) {
-      const g = ctx.createGain();
-      // the IOP's volume now (= BGM_GAIN until a FUN_003ed7d0); the ramp keeps running on the IOP between streams
-      this.catchUp(ctx.currentTime);
-      g.gain.value = (this.vol ? this.vol.reg : 0x7fff) / 32768;
-      g.connect(ctx.destination);
-      this.gain = g;
-    }
+    // the IOP's volume node (core-1 input, BgmVolume); a crossfade's second stream joins it (both are mixed on the EE)
+    const g = ctx.createGain();
+    // the IOP's volume now (= BGM_GAIN until a FUN_003ed7d0); the ramp keeps running on the IOP between streams
+    this.catchUp(ctx.currentTime);
+    g.gain.value = (this.vol ? this.vol.reg : 0x7fff) / 32768;
+    g.connect(ctx.destination);
+    this.gain = g;
     this.main = this.startStream(buf, info, vol);
     this.src = this.main.src;
     this.ramp ??= new MusicRamp();
@@ -292,11 +306,23 @@ export class GameMusic {
     this.xf = { s, name, start: t0, end: t0 + fade, curve: crossfadeCurve(fade) };
     this.ramp ??= new MusicRamp();
     this.ramp.set(vol, fade, t0);                     // FUN_003ed740(param_4, param_2) on the main stream
+    this.reschedule();
     this.pumpStart();
     return s.src;
   }
 
-  pumpStart() { if (!this.pumpTimer && this.au.ctx) this.pumpTimer = setInterval(() => this.pump(), 50); this.pump(); }
+  // a new ramp / crossfade applies from the frame playing now: drop the frames already scheduled ahead (page scheduler)
+  reschedule() {
+    const ctx = this.au.ctx, m = this.main;
+    if (!ctx || !m) return;
+    m.next = Math.max(0, Math.ceil((ctx.currentTime - m.at) / BGM_FRAME_S));
+    for (const g of [m.sg, this.xf && this.xf.s && this.xf.s.sg]) if (g && g.gain.cancelScheduledValues) g.gain.cancelScheduledValues(ctx.currentTime);
+  }
+
+  pumpStart() {
+    if (!this.pumpTimer && this.au.ctx) { this.pumpTimer = setInterval(() => this.pump(), 50); if (this.pumpTimer.unref) this.pumpTimer.unref(); }
+    this.pump();
+  }
 
   // FUN_003ed000's per-frame part, scheduled frame by frame a little ahead of the clock (page scheduler: 250 ms)
   pump() {
@@ -313,7 +339,16 @@ export class GameMusic {
       const x = this.xf && this.xf.s ? this.xf : null;
       if (x) {
         const [a, b] = now < x.end ? mixWeights(evalCurve(x.curve, now - x.start)) : [0x7fff, 0x100];
-        wOld = mixGain(a); wNew = mixGain(b);
+        if (!a || !b) { wOld = 1; wNew = 0; }                          // FUN_003eb544 returns -1: no mix this frame
+        else {
+          wOld = mixGain(a); wNew = mixGain(b);
+          // L: a wrapping weight (mixSample) can't be a gain: that frame's part is left out (silent), warned
+          if (wOld === null || wNew === null) {
+            this.warnOnce('music: crossfade frame with a wrapping weight (FUN_003eb544, ' + a + ' / ' + b + ') played without that stream');
+            if (wOld === null) wOld = 0;
+            if (wNew === null) wNew = 0;
+          }
+        }
         x.s.sg.gain.setValueAtTime(sfGain(x.s.off) * wNew, t);
       }
       m.sg.gain.setValueAtTime(sfGain(m.off) * wOld, t);
@@ -373,6 +408,7 @@ export class GameMusic {
     if (this.src) { try { this.src.stop(); } catch (e) { /* not started */ } }
     if (this.xf && this.xf.s) { try { this.xf.s.src.stop(); } catch (e) { /* not started */ } }
     this.src = null; this.name = null; this.req++; this.main = null; this.xf = null;
+    if (this.pumpTimer) { clearInterval(this.pumpTimer); this.pumpTimer = null; }
   }
 
   warnOnce(m) { if (!this.warned.has(m)) { this.warned.add(m); console.warn(m); } }

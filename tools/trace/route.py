@@ -95,6 +95,7 @@ def main():
     ap.add_argument("--fight", type=int, default=600, help="frames of aim-and-fire when stuck (mode 5)")
     ap.add_argument("--fight-first", action="store_true", help="start with a fight (aim and fire)")
     ap.add_argument("--teleport", default="", help="x,y,z: move Vincent within his current walk polygon (documented poke)")
+    ap.add_argument("--drop-poly", action="store_true", help="with --teleport: clear C+0x4c0 (walk polygon)")
     ap.add_argument("--max-stuck", type=int, default=6)
     ap.add_argument("--shots", default="", help="dir for a screenshot each time Vincent is stuck")
     a = ap.parse_args()
@@ -125,6 +126,8 @@ def main():
         for ad in (C + 0x30, C + 0x60, C + 0x3B0, C + 0x3C0, MPb + 0x40):
             print("teleport %#x: %s -> %s" % (ad, [round(v, 2) for v in struct.unpack_from("<3f", ee, ad & 0x1FFFFFF)], tp))
             struct.pack_into("<3f", ee, ad & 0x1FFFFFF, *tp)
+        if a.drop_poly:  # no current walk polygon (body+0x110): the game searches for the floor below
+            print("walk poly %#x: %#x -> 0" % (C + 0x4C0, u32(ee, C + 0x4C0))); struct.pack_into("<I", ee, C + 0x4C0, 0)
     N = a.frames
     neutral = bytes([0xFF, 0xFF, 0x80, 0x80, 0x80, 0x80] + [0] * 12)
     hook.LOG = (hook.SCRIPT + N * hook.SCRIPT_STRIDE + 15) & ~15
@@ -228,10 +231,19 @@ def main():
             entry(f + 1); entry(f + 2)
             if f >= t_end: status = "reached"; break
             continue
-        # waypoint advance: nearest of the next 40 ahead, then aim at the first one >= 14 u away
+        # waypoint advance: nearest path SEGMENT (i -> i+1) of the next 40 ahead, then aim at the first waypoint
+        # after it that is >= look away. (Worker 0221: the old nearest-WAYPOINT rule flipped the target between
+        # waypoint i and i+1 when Vincent stood `look` u past i on a long segment, so the stick swapped every
+        # frame and the run reported "stuck": the x -1001 (wp 25) and x -868 (wp 40) "blockers" were that.)
         dist = lambda q: math.hypot(q[0] - pos[0], q[2] - pos[2]) + 0.3 * abs(q[1] - pos[1])
-        wi = min(range(wi, min(len(route), wi + 40)), key=lambda i: dist(route[i]))
-        ti = wi
+        def segd(i):
+            if i + 1 >= len(route): return dist(route[i])
+            q0, q1 = route[i], route[i + 1]
+            ex, ez = q1[0] - q0[0], q1[2] - q0[2]
+            t_ = max(0.0, min(1.0, ((pos[0] - q0[0]) * ex + (pos[2] - q0[2]) * ez) / ((ex * ex + ez * ez) or 1)))
+            return dist([q0[0] + t_ * ex, q0[1] + t_ * (q1[1] - q0[1]), q0[2] + t_ * ez])
+        wi = min(range(wi, min(len(route), wi + 40)), key=segd)
+        ti = min(wi + 1, len(route) - 1)
         if f < recover_until:                           # back up along the path, then rejoin it
             ti = rec_wp
             if dist(route[ti]) < 3: recover_until = f

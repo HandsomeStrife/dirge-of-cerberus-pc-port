@@ -1,0 +1,1 @@
+{"name": "w221_stop1", "note": "worker 0221: from tools/trace/out/route/r02_barrier.p2s, stick forward (+x) into the x -1001 stop; TRACE_CALLLOG=pushstep; test_walkway_stops.mjs", "frames": 90, "events": [{"from": 4, "to": 90, "ly": -1}]}

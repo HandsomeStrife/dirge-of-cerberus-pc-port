@@ -107,8 +107,11 @@ await t('GameMusic z128 start: playMusic3("bgm_001", 0, 4000) with no stream ope
   assert.strictEqual(src.loop, true);
   assert.strictEqual(src.loopStart, 6700 * 1024 / 48000);
   assert.strictEqual(src.loopEnd, 14948 * 1024 / 48000);
-  assert.strictEqual(src.to.gain.value, 0x7fff / 32768, 'core-1 input gain 0x7fff');
-  assert.deepStrictEqual(src.to.gain.auto, [], 'no gain ramp: FUN_003ed740(0, 100) ramps 0 -> 0');
+  assert.strictEqual(src.to.to.gain.value, 0x7fff / 32768, 'core-1 input gain 0x7fff (the IOP node after the stream node)');
+  assert.deepStrictEqual(src.to.to.gain.auto, [], 'no IOP ramp');
+  assert.strictEqual(src.to.gain.value, 1, 'decoder offset 0: gain 1');
+  assert.ok(src.to.gain.auto.every((a) => a[1] === 1), 'FUN_003ed740(0, 100) ramps 0 -> 0: every frame at 1');
+  m.stopMusic();
 });
 
 await t('GameMusic: loop points in seconds use bgm.json\'s rate', async () => {
@@ -120,34 +123,92 @@ await t('GameMusic: loop points in seconds use bgm.json\'s rate', async () => {
   assert.strictEqual(src.loopEnd, 14948 * 1024 / 24000);
 });
 
-await t('GameMusic FUN_003ec6f8: with a stream open, playMusic3(fade < 1) does nothing (any vol); with fade a crossfade is refused, the stream plays on', async () => {
+await t('GameMusic FUN_003ec6f8: with a stream open, playMusic3(fade < 1) does nothing (any vol); with fade it crossfades (FUN_003ec0d8), a second one is refused while it runs', async () => {
   const a = { ctx: new Ctx() }, m = new M.GameMusic(a, 'x/');
-  m.meta = META;
+  m.meta = { ...META, bgm_012: { ...META.bgm_001, file: 'bgm_012.flac' } };
   globalThis.fetch = fetchOk();
   const src = await m.playMusic3('bgm_001', 0, 0);
   const n = a.ctx.started.length;
   assert.strictEqual(await m.playMusic3('bgm_001', 0, 0), null);
   assert.strictEqual(await m.playMusic3('bgm_001', 3, 0), null);
-  warns.length = 0;
-  assert.strictEqual(await m.playMusic3('bgm_001', 3, 2500), null);
-  assert.ok(/crossfade/.test(warns.join()), 'warns: crossfade not translated');
   assert.strictEqual(a.ctx.started.length, n, 'nothing new started');
-  assert.ok(!src.stopped && m.src === src);
+  const x = await m.playMusic3('bgm_012', 3, 2500);
+  assert.ok(x && a.ctx.started.length === n + 1, 'the crossfade stream starts');
+  assert.strictEqual(await m.playMusic3('bgm_013', 0, 1000), null, 'DAT_004fab84 != 0: refused');
+  assert.ok(!src.stopped && m.src === src, 'the old stream is still the main one');
+  // the first scheduled frame is at t = 0: f = 1, b = (int)(inf) & 0xffff = 0xffff = -1 as the divisor: the game's samples
+  // wrap (mixSample), the page leaves the new stream out of that frame (gain 0, warned) and the old one at 256 / 256
+  const [wa0, wb] = M.mixWeights(M.evalCurve(M.crossfadeCurve(2500), 0));
+  assert.deepStrictEqual([wa0, wb], [256, 0xffff]);
+  assert.strictEqual(M.mixGain(wb), null);
+  assert.strictEqual(x.to.gain.auto[0][1], 0);
+  assert.strictEqual(src.to.gain.auto.at(-1)[1] > 0, true);
   m.stopMusic();
-  assert.ok(src.stopped, 'stopMusic (FUN_003ebfa0) stops it');
+  assert.ok(src.stopped && x.stopped, 'stopMusic (FUN_003ebfa0) stops both');
   const src2 = await m.playMusic3('bgm_001', 0, 4000);
   assert.ok(src2 && !src2.stopped, 'after stopMusic a new stream opens');
+  m.stopMusic();
 });
 
-await t('GameMusic: vol != 0 with no stream open is refused (FUN_00459ed0 not translated): nothing plays', async () => {
+await t('GameMusic crossfade: the curve 1 / 4 / 8 / 64 at 0 / T/4 / T/2 / T, weights old 1/f, new 1 - 1/f, then the swap', async () => {
+  const c = M.crossfadeCurve(4000);
+  assert.deepStrictEqual([0, 1000, 2000, 4000].map((t) => M.evalCurve(c, t)), [1, 4, 8, 64]);
+  assert.ok(M.evalCurve(c, 3000) > 8 && M.evalCurve(c, 3000) < 64);
+  // between the knots, worked by hand from FUN_00261a90 (slopes dy / dx from FUN_002616f0: 3 / 1000, 7 / 2000, 60 / 3000,
+  // 56 / 2000; Hermite (2u + 1) v^2 y0 + u v^2 m0 h - u^2 v m1 h + u^2 (3 - 2u) y1):
+  for (const [t, y] of [[250, 1.7265625], [500, 2.4375], [1500, 3.9375], [3000, 34]]) assert.ok(Math.abs(M.evalCurve(c, t) - y) < 1e-4, t + ': ' + M.evalCurve(c, t));
+  assert.deepStrictEqual(M.mixWeights(2), [512, 512]);                    // 1 / (1 - 1/2) = 2
+  // FUN_003eb544 per sample (hand values): 1000 x 256 / 512 = 500; 1000 / -1 -> -256000 -> low 16 bits 0x1800 = 6144 (the
+  // wrap); 100 / -1 -> -25600 (fits); 256 x 65536 / 0x8000 (-32768) = -512, >> 8 = -2; paddsh saturates; a weight 0 skips the mix
+  assert.strictEqual(M.mixPart(1000, 512), 500);
+  assert.strictEqual(M.mixPart(1000, 0xffff), 6144);
+  assert.strictEqual(M.mixPart(100, 0xffff), -25600);
+  assert.strictEqual(M.mixPart(256, 0x8000), -2);
+  assert.strictEqual(M.mixSample(30000, 30000, 256, 256), 0x7fff);
+  assert.strictEqual(M.mixSample(1234, 999, 0, 256), 1234);
+  assert.strictEqual(M.mixGain(0x8000), -1 / 128);                        // a negative weight that cannot wrap: a gain
+  assert.strictEqual(M.mixGain(0xff80), null);                            // -128: x 2 would wrap
+  assert.strictEqual(M.mixGain(0x7fff), 256 / 0x7fff);                   // the last frame: old nearly gone
+  assert.strictEqual(M.mixGain(0x100), 1);
+  const a = { ctx: new Ctx() }, m = new M.GameMusic(a, 'x/');
+  m.meta = { ...META, bgm_012: { ...META.bgm_001, file: 'bgm_012.flac' } };
+  globalThis.fetch = fetchOk();
+  const old = await m.playMusic3('bgm_001', 0, 0);
+  const x = await m.playMusic3('bgm_012', 0, 100);
+  a.ctx.currentTime = 0.2; m.pump();
+  assert.strictEqual(m.src, x, 'after T the new stream is the main one (DAT_004fab80 = DAT_004fab84)');
+  assert.strictEqual(m.name, 'bgm_012');
+  assert.ok(old.stopped, 'the old stream is stopped after the last mixed frame');
+  m.stopMusic();
+});
+
+await t('GameMusic changeMusicVol (FUN_003ed740): linear offset ramp per decoded frame, clamped to 0..63', async () => {
+  const r = new M.MusicRamp();
+  r.set(3, 2500, 1000);
+  assert.deepStrictEqual([1000, 2000, 3000, 3499, 3500].map((t) => r.apply(t, 0)), [0, 1, 2, 2, 3]);
+  assert.strictEqual(r.active, false);
+  r.set(99, 100, 0); assert.strictEqual(r.to, 0x3f);
+  r.set(-1, 0, 0); assert.strictEqual(r.active, false);
   const a = { ctx: new Ctx() }, m = new M.GameMusic(a, 'x/');
   m.meta = META;
   globalThis.fetch = fetchOk();
-  warns.length = 0;
-  assert.strictEqual(await m.playMusic3('bgm_001', 3, 0), null);
-  assert.strictEqual(a.ctx.started.length, 0);
-  assert.strictEqual(m.name, null, 'no stream open');
-  assert.ok(/vol 3/.test(warns.join()));
+  const src = await m.playMusic3('bgm_001', 0, 0);
+  a.ctx.currentTime = 1; m.changeMusicVol(3, 1000); a.ctx.currentTime = 1.2; m.pump();
+  const last = src.to.gain.auto[src.to.gain.auto.length - 1];
+  assert.ok(last[1] < 1 && last[1] > M.sfGain(3), 'ramping down: ' + last[1]);
+  a.ctx.currentTime = 2.5; m.pump();
+  assert.strictEqual(src.to.gain.auto[src.to.gain.auto.length - 1][1], M.sfGain(3));
+  m.stopMusic();
+});
+
+await t('GameMusic: vol != 0 with no stream open plays with the decoder offset (sfGain 2^(-vol / 3))', async () => {
+  const a = { ctx: new Ctx() }, m = new M.GameMusic(a, 'x/');
+  m.meta = META;
+  globalThis.fetch = fetchOk();
+  const src = await m.playMusic3('bgm_001', 3, 0);
+  assert.ok(src);
+  assert.strictEqual(src.to.gain.value, 0.5);
+  m.stopMusic();
 });
 
 await t('GameMusic: a second playMusic3 while the first is loading does nothing (stream already open); stop while loading cancels', async () => {

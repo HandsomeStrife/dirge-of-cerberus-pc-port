@@ -165,7 +165,9 @@ function switchSound(table, cls) {
 // START_AMMO: the sea-of-flames save's values, hand-written as export_web_hud.py START's ammo (18, 18, 180) is
 // (fidelity-audit 'HUD start values'); w214_dry record 0: R+0x30 18, inventory 225, class sum 45.
 export const START_AMMO = { loaded: 18, reserve: 180 };
-const P10C = 1;                                                 // P+0x10c & 3 (traced 0x333c85 in w214_dry; not decoded further)
+// GUESS: P+0x10c & 3 = the traced 1 (P+0x10c = 0x333c85 in w214_dry; its writer is not decoded; see notes/fidelity-audit.md
+// 'Reload / dry-fire sounds'). It picks the reload sound (bsj_012 for 0 / 1).
+const P10C = 1;
 export class Ammo {
   constructor(cap, start = START_AMMO) { this.cap = cap; this.loaded = Math.min(start.loaded, cap); this.inv = start.reserve + this.loaded; this.sum = this.loaded; }
   // FUN_00317240: R+0x30
@@ -225,9 +227,10 @@ export class WeaponSystem {
     this.events = [];                                           // shots this frame (for the page)
     this.fire = null;                                           // stand-fire class FUN_00596460
     // the slot's rounds (Ammo above)
-    // GUESS: Restart / H back to the save's START_AMMO (the checkpoint's status restore is not decoded; see
-    // notes/fidelity-audit.md 'Ammo after Restart / H'; the restarted HUD shows hud.json's 18/18 180 the same way)
+    // GUESS: Restart / H back to the save's START_AMMO. The values are traced (the reload states show 18/18 180: slots
+    // 18 / 18 / 18, count 234, sum 54), the restore path is not decoded (notes/fidelity-audit.md 'Ammo after Restart / H')
     this.ammo = new Ammo(this.W.magazine);
+    this.chainReset = false;                                    // FUN_003b4f28 pending for the HUD (hud.js tick)
     this.hudMask = 0;                                           // DAT_0046e54c (bit 1: weapon / ammo text; FUN_00339590 clears it)
   }
 
@@ -484,7 +487,7 @@ export class WeaponSystem {
   // inp: { r1Pressed, r1Held, r3Pressed, circlePressed }, onGround, far: CAM+0xb0 (FUN_003296e0(CAM, ., 0))
   // player: the PlayerController (jump_core weaponSwitch: the player side of FUN_005766c0 and the
   // P+0x2a8 bits; null in the weapon-only tests)
-  input(inp, onGround, far = null, player = null) {
+  input(inp, onGround, far = null, player = null, gates = null) {
     this.far = far;
     const P = this.P, W = this.W;
     this.events.length = 0;
@@ -506,11 +509,22 @@ export class WeaponSystem {
       }
     }
     // R2 (id 0xa) pressed: FUN_00316b28 ? FUN_00574f40 (+ FUN_00324440(9), not on the page) : FUN_00563240 (the dry
-    // click at C's muzzle FUN_00341ec8); no shot this frame. Gates left out: the pad object's +0x54 bit 4, C+0x564 bit
-    // 0x4000, FUN_003242e8 bit 0x200 (0 on the page, as in the fire test below).
-    if (inp.r2Pressed) {
-      if (this.ammo.canReload()) this.reload(player);
-      else this.dry();
+    // click at C's muzzle FUN_00341ec8); no shot this frame. Gates (FUN_003320c0 l.394 / l.401 / l.427), from `g`:
+    //   pad54 = the input object's +0x54 (param_2: bit 2 R2 / auto reload off, 4 auto reload off, 2 / 0x400 materia
+    //           and fire off), c564 = C+0x564 (bit 0x4000; FUN_003422f0 = bits 0x18000000), ctl = FUN_003242e8()
+    //           (DAT_0046e290 +0x10 | +0x18, or ~0 while game-state bit 7 / 5 is set; bit 0x200 no reload, 8 no fire;
+    //           P+0x188 bit 39 adds 0x1888).
+    // The page models none of them, so play passes none and they are 0. ctl and pad54: play ticks only with the player in
+    // control (L: nothing on the page's path sets them). c564: set by motion-class enters (factory FUN_00592918, not
+    // decoded on the page); the aim traces show bit 0x4000 during the draw (states 0xd / 0xf, aim_a f11-17) and through
+    // jumps (aim_g f41-81). In the draw FUN_005772c8 refuses a reload anyway (state 0xd / 0xf); in the air the page
+    // reloads where the game would not (fidelity-audit 'Reload gates C+0x564').
+    const g = { pad54: 0, c564: 0, ctl: 0, ...gates };
+    if (inp.r2Pressed && !(g.pad54 & 4) && !(g.c564 & 0x4000)) {
+      if (!(g.ctl & 0x200)) {
+        if (this.ammo.canReload()) this.reload(player);
+        else this.dry();
+      }
       return;
     }
     // the materia shot (L1: FUN_005773f0 / FUN_00574c10, states 5 / 6) is not on the page.
@@ -520,11 +534,13 @@ export class WeaponSystem {
     // 204 state 0 with 0 rounds -> 205 state 9, T 80, 18 rounds, reserve 162).
     if (this.ammo.emptyCanReload()) {
       const idle = P.st === 0 && P.drawn;                     // FUN_00577180 (FUN_0055a410: player states 10-14 / 0x15, not on this path)
-      if (idle || !P.drawn || (W.flags & 2)) { this.reload(player); return; }
+      if ((idle || !P.drawn || (W.flags & 2)) && !(g.pad54 & 4) && !(g.c564 & 0x4000) && !(g.c564 & 0x18000000) && !(g.ctl & 0x200)) {
+        this.reload(player); return;
+      }
     }
     // fire: (R1 held && auto) || (R1 pressed && !auto); FUN_00577180: state 0 and drawn
     const trig = (W.flags & 1) ? inp.r1Held : inp.r1Pressed;
-    if (trig && P.st === 0 && P.drawn) {
+    if (trig && P.st === 0 && P.drawn && !(g.ctl & 8) && !(g.pad54 & 2)) {
       P.m2a0 = 0;                                             // FUN_00574800(P, 0)
       if (W.flags & 1) { P.st = 3; P.T = W.first_delay; }    // FUN_00574b00
       else { P.st = 1; P.T = W.first_delay; }                 // FUN_00574a80
@@ -654,6 +670,7 @@ export class WeaponSystem {
     if (n <= 0 || r === 0) { this.dry(); return false; }
     this.ammo.spend(n);
     this.hudMask |= 2;
+    this.chainReset = true;                                   // FUN_0031d668(1, 1) (a shot counter: not on the page), FUN_003b4f28 (hud.js)
     this.events.push({ type: 'shot', pellets: n });
     this.shotMessage();                                       // camera message 0x3e9 (FUN_0033a310), handled at once
     this.cam.kick = 0.75;                                     // FUN_0032a320(table 0x46eee0[class 1])

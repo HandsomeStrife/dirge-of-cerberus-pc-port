@@ -524,6 +524,10 @@ export class HudState {
     const v = data.values;
     this.hp = v.hp.slice(); this.mp = v.mp.slice(); this.mpCap = v.mp_cap; this.fade = v.fade.slice();
     this.chainG = v.chain.slice(); this.chainBB4 = v.chain_bb4; this.h26 = v.h26;
+    // HUD +3000 the CHAIN count and +0xbb0 (worker 0214): not in hud.json. The gauge is min(count, 10) x 100
+    // (FUN_003b4e08), so count = gauge / 100 below 10 (START's 2: export_web_hud.py); +0xbb0 = 0 as FUN_003ad618 builds it
+    // (the exporter's set-up; the w214 shots reset the chain, which needs it 0)
+    this.chainN = v.chain_count ?? Math.trunc(v.chain[0] / 100); this.chainBB0 = 0;
     // the HUD clock (DAT_004f58ec / FUN_0023c1f0, ms) as the save has it; hud.js advances it
     this.now = v.clock >>> 0;
     // the draws read sprite records the HUD code rewrites (FUN_003d10a8): a copy per state
@@ -665,6 +669,21 @@ export class HudState {
     if (b < 0 || c < 0) { warn('hud: FUN_003ae138 with a negative value (dash text / ammo marks FUN_003ae220) not translated'); return; }
     if (e1a) e1a.text = hpText(a, b);
     if (e19) e19.text = numberCodes(c);
+  }
+  // FUN_003b4f28 (from the shot, FUN_00577480 after the fire sound): with +0xbb0 clear, FUN_003b4e08(HUD, 0): count =
+  // min(n, 99), the gauge 0xbbc = min(count, 10) x 100 with the 1000 ms lag (FUN_003aec10), FUN_00321290(value) (the
+  // game's chain bonus DAT_0046e248 +0x24 = count < 5 ? 30 count : 100 (count - 5) + 200: nothing on the page reads it),
+  // FUN_003b5180 (the gauge's sprites / colours from table 0x472968 / 0x472980 when count < 5, else 0x472970 / 0x472990;
+  // the page's count only falls from START's 2, so the < 5 set hud.json was built with stays). With the gauge at 0 the
+  // CHAIN draw (chainGauge) shows the ITEM label (0x1d) as the game does after a shot (w214 grab f150).
+  chainShot() {
+    if (this.chainBB0 !== 0) return;
+    this.setChain(0);
+  }
+  setChain(n) {
+    this.chainN = n > 99 ? 99 : n;
+    gaugeSet(this.chainG, Math.min(this.chainN, 10) * 100, 1, this.mnow);
+    if (this.chainN >= 5) warn('hud: FUN_003b5180 count >= 5 (the second sprite / colour set) not translated');
   }
   // the draw list in order (the root's sibling chain); a hidden element (+2 bit 0) hides its children
   prims() {

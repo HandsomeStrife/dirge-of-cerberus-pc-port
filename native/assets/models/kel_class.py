@@ -74,11 +74,20 @@ def cipher_consts(elf_path):
 
 def decrypt(data, C):
     """FUN_003a8320 on a "TTTT" class file, C = cipher_consts(elf). Returns (bytes, checksum ok)."""
-    table = C['table']
-    d = bytearray(data)
+    d = bytes(data)
     if d[:4] != b'TTTT':
         raise ValueError('not an encrypted class (magic %r)' % bytes(d[:4]))
-    k = int.from_bytes(d[0:8], 'big')                                   # FUN_003a82c8
+    if len(d) - 8 < 8 or (len(d) - 8) & 7:
+        raise ValueError('bad class length %d' % len(d))
+    body, ok = cipher(d[8:], int.from_bytes(d[0:8], 'big'), C)         # key: FUN_003a82c8
+    return d[:8] + body, ok
+
+
+def cipher(data, k, C):
+    """FUN_0041c1d8(&k, src, dst, len) on len(data) bytes (a multiple of 8) with the 64-bit key k (worker 0220: split
+    out of decrypt for the event message files, FUN_003a6520). Returns (bytes, checksum ok)."""
+    table = C['table']
+    d = bytearray(data)
     hi, lo = k >> 32, k & 0xffffffff
     hi = ((hi >> 16) | (hi << 16)) & 0xffffffff
     lo = ((lo << 8) | (lo >> 24)) & 0xffffffff
@@ -111,13 +120,13 @@ def decrypt(data, C):
         st['cnt'] = cnt + 8
         st['sum'] = (st['sum'] + d[p] + d[p + 4]) & 0xffffffff
 
-    n = len(d) - 8                                                      # FUN_0041c0d8 on file + 8
+    n = len(d)                                                          # FUN_0041c0d8
     if n < 8 or n & 7:
-        raise ValueError('bad class length %d' % len(d))
-    for p in range(8, 8 + n - 8, 8):
+        raise ValueError('bad cipher length %d' % n)
+    for p in range(0, n - 8, 8):
         block(p)
     s0 = st['sum']
-    block(8 + n - 8)
+    block(n - 8)
     return bytes(d), s0 == struct.unpack_from('<I', d, len(d) - 4)[0]
 
 

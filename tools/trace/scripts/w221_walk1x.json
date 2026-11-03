@@ -1,0 +1,1 @@
+{"name": "w221_walk1x", "note": "worker 0221: from tools/trace/out/route/r02_walkway.p2s, stick up (+x) through x -1001; cross at 70 (a jump) and 100. Test: test_walkway_stops.mjs (frames < 70)", "frames": 140, "events": [{"from": 4, "to": 140, "ly": -1}, {"from": 70, "to": 72, "ly": -1, "buttons": ["cross"]}, {"from": 100, "to": 102, "ly": -1, "buttons": ["cross"]}]}

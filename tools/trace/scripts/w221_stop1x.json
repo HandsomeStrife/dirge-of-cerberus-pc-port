@@ -1,0 +1,1 @@
+{"name": "w221_stop1x", "note": "worker 0221: from tools/trace/out/route/r02_barrier.p2s, stick up; Vincent pauses at x -954 (message-box style freeze), cross at 70 and 100 releases him at ~155", "frames": 200, "events": [{"from": 4, "to": 200, "ly": -1}, {"from": 70, "to": 72, "ly": -1, "buttons": ["cross"]}, {"from": 100, "to": 102, "ly": -1, "buttons": ["cross"]}]}

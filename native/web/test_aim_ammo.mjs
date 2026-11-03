@@ -163,5 +163,37 @@ if (!ran) console.log('no w214 traces: run tools/trace/scripts/w214_*.json (see 
   const c = new Ammo(18, { loaded: 3, reserve: 4 }); c.spend(3); c.refill();
   ok(c.rounds() === 4 && c.reserve() === 0, 'refill with a short reserve');
 }
+// the reload gates of FUN_003320c0 (page passes 0; the rules as decoded)
+{
+  const mk = (loaded, reserve) => { const w = new WeaponSystem({ ...W0 }, RET); w.ammo = new Ammo(18, { loaded, reserve });
+    const h = []; w.sound = n => h.push(n); w.P.drawn = true; return [w, h]; };
+  let [w, h] = mk(9, 90); w.input({ r2Pressed: true }, true, null, null, { c564: 0x4000 });
+  ok(w.P.st === 0 && w.ammo.rounds() === 9, 'R2 with C+0x564 bit 0x4000: no reload');
+  [w, h] = mk(9, 90); w.input({ r2Pressed: true, r1Pressed: true }, true, null, null, { pad54: 4 });
+  ok(w.P.st === 1, 'R2 with pad +0x54 bit 4: the fire test runs instead (R1 pressed -> state 1)');
+  [w, h] = mk(0, 0); w.input({ r2Pressed: true }, true, null, null, { ctl: 0x200 });
+  ok(w.P.st === 0 && h.length === 0, 'R2 with FUN_003242e8 bit 0x200: neither reload nor click');
+  [w, h] = mk(0, 90); w.input({}, true, null, null, { c564: 0x8000000 });
+  ok(w.P.st === 0 && w.ammo.rounds() === 0, 'auto reload with FUN_003422f0 (C+0x564 & 0x18000000): none');
+  [w, h] = mk(0, 90); w.input({}, true, null, null);
+  ok(w.P.st === 7 && w.ammo.rounds() === 18, 'auto reload with no gate: state 7, refilled');
+  [w, h] = mk(9, 90); w.input({ r1Pressed: true }, true, null, null, { ctl: 8 });
+  ok(w.P.st === 0, 'fire with FUN_003242e8 bit 8: no shot');
+}
+// FUN_003b4f28 on a shot (hud.js tick): the CHAIN count / gauge go to 0 and the CHAIN draw shows the ITEM label 0x1d
+// (the game after a shot: w214 grab f150 shows ITEM where the start shows CHAIN)
+{
+  const w = new WeaponSystem({ ...W0 }, RET); w.P.drawn = true; w.P.st = 1; w.P.T = 0; w.P.acc = 0;
+  w.stateMachine(null);
+  const h = new HudState(HUD); h.mnow = h.now;
+  const item = () => { h.prims(); return h.find(6, 0x1d).rgba[3]; };
+  const before = [h.chainN, h.chainG[0], item()];
+  if (w.chainReset) h.chainShot();
+  ok(before.join() === '2,200,0' && h.chainN === 0 && h.chainG[0] === 0 && item() === 0x80,
+     `a shot resets the CHAIN (count ${before[0]} -> ${h.chainN}, gauge ${before[1]} -> ${h.chainG[0]}) and ITEM shows (alpha ${before[2]} -> ${item()})`);
+  const e = new WeaponSystem({ ...W0 }, RET); e.ammo = new Ammo(18, { loaded: 0, reserve: 0 }); e.P.drawn = true; e.P.st = 1; e.P.T = 0; e.P.acc = 0;
+  e.stateMachine(null);
+  ok(!e.chainReset, 'an empty shot leaves the CHAIN (FUN_003b4f28 is in the bullet branch)');
+}
 console.log(fails ? `${fails} failure(s)` : 'ok');
 process.exit(fails ? 1 : 0);

@@ -1,0 +1,61 @@
+{
+ "name": "w219_skip",
+ "frames": 1600,
+ "log_from": 770,
+ "doc": "worker 0219: w219_beat + Start at f920 (event pause during rv_matiawase) and cross at f960 (the pause screen's Skip, FUN_003c0520 button 3 -> +0x48 = 1 -> FUN_003c0110 -> FUN_003dfdc8 -> FUN_00372f70). Same env as w219_beat.",
+ "events": [
+  {
+   "from": 10,
+   "to": 230,
+   "lx": 0.6,
+   "ly": -1.0
+  },
+  {
+   "from": 240,
+   "to": 244,
+   "buttons": [
+    "cross"
+   ]
+  },
+  {
+   "from": 280,
+   "to": 284,
+   "buttons": [
+    "cross"
+   ]
+  },
+  {
+   "from": 300,
+   "to": 470,
+   "lx": 0.6,
+   "ly": -1.0
+  },
+  {
+   "from": 490,
+   "to": 494,
+   "buttons": [
+    "cross"
+   ]
+  },
+  {
+   "from": 500,
+   "to": 787,
+   "lx": 0.6,
+   "ly": -1.0
+  },
+  {
+   "from": 920,
+   "to": 924,
+   "buttons": [
+    "start"
+   ]
+  },
+  {
+   "from": 960,
+   "to": 964,
+   "buttons": [
+    "cross"
+   ]
+  }
+ ]
+}

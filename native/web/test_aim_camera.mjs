@@ -41,7 +41,7 @@ let fails = 0;
     console.log((ok ? 'ok   ' : 'FAIL ') + 'order ' + what + ': ' + at.map(([t, i, once]) => `${t}${i < 0 ? ' (missing)' : once ? '' : ' (twice)'}`).join(' -> '));
     if (!ok) fails++;
   };
-  order('play.js frame', region(src('./play.js'), 'while (acc >= TICK', 'acc -= TICK'), ['follow.tick(', 'ctrl.step(']);
+  order('play.js frame', region(src('./play.js'), 'while (acc >= TICK', 'acc -= TICK; n++; stats.ticks++;'), ['follow.tick(', 'ctrl.step(']);
   order('player.js step', region(src('./player.js'), 'if (owned) this.locate();', 'this.frames++;'),
         ['this.weaponHook.pre(', 'this.stickInput(', 'this.intent(', 'this.weaponHook.weapon(', 'this.runC(']);
   // the character's C update (step -> runC; hitReact runs it again after a hit)
@@ -49,7 +49,7 @@ let fails = 0;
         ['this.jump.motionUpdate(', 'this.moveTick()', 'this.rotate()', 'this.weaponHook.post(', 'A.gameFrame(']);
   const hookSrc = region(src('./aim.js'), 'const hook = {', 'ctrl.weapon = core');
   order('aim.js hook.pre', region(hookSrc, 'pre(input', 'actionEnter'), ['aimRay()', 'core.eye =', 'core.hit =', 'core.input(']);
-  order('aim.js hook.weapon', region(hookSrc, 'weapon(input', 'post(input'), ['core.stateMachine(', 'follow.pitch = core.cam.pitch', 'core.reticleFrame(', "core.events.some(e => e.type === 'shot')"]);
+  order('aim.js hook.weapon', region(hookSrc, 'weapon(input', 'post(input'), ['core.stateMachine(', 'follow.pitch = core.cam.pitch', 'core.reticleFrame(', "core.events.find(e => e.type === 'shot')"]);
 }
 for (const file of files) {
   if (!existsSync(file)) { console.log('missing', file); fails++; continue; }

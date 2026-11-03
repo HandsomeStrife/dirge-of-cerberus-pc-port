@@ -327,6 +327,7 @@ export async function setupHud({ output, player, url = 'data/hud/hud.json', camY
       // FUN_00339590 (FUN_00323128, once a frame after the objects): DAT_0046e54c bit 1 -> FUN_003ae138 with the
       // slot's rounds, W+0x48 and the reserve, then the mask is cleared (traced w214_dry: the HUD text changes in the
       // same frame as R+0x30)
+      if (weapon && weapon.chainReset) { weapon.chainReset = false; st.chainShot(); }   // FUN_003b4f28 (the shot)
       if (weapon && (weapon.hudMask & 2)) st.setAmmo(...weapon.ammo.hud());
       if (weapon) weapon.hudMask = 0;
       for (const [p, from] of hits.splice(0)) st.hit(p, from);

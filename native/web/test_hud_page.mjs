@@ -354,7 +354,7 @@ try {
     // 7b. play.html, the ammo text (worker 0214): R1 draws, R1 fires (3 pellets: 15/18 180 on slot 6 0x1a / 0x19 the same
     // frame, FUN_00339590), R2 (F) reloads at the request (18/18 177, weapon state 9, FUN_00574f40 -> FUN_00319f80)
     {
-      const r = await pg2.evaluate(async () => {
+      const r1 = await pg2.evaluate(async () => {
         const P = window.__play, A = P.aim, H = P.gameHud;
         if (!A || !H) return { skip: 'no weapon or game HUD' };
         const wait = n => new Promise(res => { const t0 = P.stats.ticks; const f = () => P.stats.ticks >= t0 + n ? res() : setTimeout(f, 20); f(); });
@@ -365,14 +365,35 @@ try {
         await wait(5);
         A.press('r1'); await until(() => A.core.ammo.rounds() !== 18, 60); await wait(1);
         const shot = [txt(0x1a), txt(0x19), A.state().ammo.join()];
+        const chain = [H.state.chainG[0], H.state.chainN];    // FUN_003b4f28: the shot resets the CHAIN (ITEM shows)
         await until(() => A.core.P.st === 0, 120);
-        A.press('r2'); await until(() => A.core.P.st === 9, 60); await wait(1);
-        const rel = [txt(0x1a), txt(0x19), A.state().ammo.join(), A.core.P.st];
-        return { start, shot, rel };
+        return { start, shot, chain };
       });
+      // R2 = the F key (aim.js keydown), as a player presses it
+      if (!r1.skip) await pg2.keyboard.press('KeyF');
+      const r2 = r1.skip ? {} : await pg2.evaluate(async () => {
+        const P = window.__play, A = P.aim, H = P.gameHud;
+        const wait = n => new Promise(res => { const t0 = P.stats.ticks; const f = () => P.stats.ticks >= t0 + n ? res() : setTimeout(f, 20); f(); });
+        const until = (c, n = 400) => new Promise(res => { const t0 = P.stats.ticks; const f = () => (c() || P.stats.ticks >= t0 + n) ? res() : setTimeout(f, 20); f(); });
+        const txt = id => { const e = H.state.find(6, id); return e ? e.text.map(c => c >= 0x13 && c <= 0x1c ? String(c - 0x13) : c === 0x12 ? '/' : '?').join('') : null; };
+        await until(() => A.core.P.st === 9, 60); await wait(1);
+        const rel = [txt(0x1a), txt(0x19), A.state().ammo.join(), A.core.P.st];
+        // an empty gun with no reserve: R1 sends no bullet through onShot (FUN_00577480's no-bullet branch: dry click)
+        await until(() => A.core.P.st === 0, 120);
+        const am = A.core.ammo; am.loaded = 0; am.sum = 0; am.inv = 0;
+        let sent = 0; const o = A.onShot; A.onShot = (...x) => { sent++; return o && o(...x); };
+        A.press('r1'); await until(() => A.core.P.st === 2, 60); await wait(3);
+        A.onShot = o;
+        return { rel, empty: { sent, st: A.core.P.st, T: A.core.P.T } };
+      });
+      const r = r1.skip ? r1 : { ...r1, ...r2 };
       if (r.skip) console.log('SKIP ammo on play.html: ' + r.skip);
-      else ok(r.start.join() === '18/18,180' && r.shot.join() === '15/18,180,15,18,180' && r.rel.join() === '18/18,177,18,18,177,9',
-        `play.html: the HUD ammo text follows a shot (18/18 180 -> 15/18 180) and an R2 reload (-> 18/18 177, state 9) (${JSON.stringify(r)})`);
+      else {
+        ok(r.start.join() === '18/18,180' && r.shot.join() === '15/18,180,15,18,180' && r.rel.join() === '18/18,177,18,18,177,9',
+          `play.html: the HUD ammo text follows a shot (18/18 180 -> 15/18 180) and the F key's R2 reload (-> 18/18 177, state 9) (${JSON.stringify(r)})`);
+        ok(r.chain.join() === '0,0', `play.html: the shot resets the CHAIN gauge to 0 (FUN_003b4f28; ITEM shows) (${r.chain})`);
+        ok(r.empty.sent === 0 && r.empty.st === 2, `play.html: an empty gun sends no bullet through onShot (${JSON.stringify(r.empty)})`);
+      }
     }
     await pg2.close();
     const pg3 = await browser.newPage({ viewport: { width: 960, height: 540 } });

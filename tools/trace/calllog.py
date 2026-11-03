@@ -485,3 +485,23 @@ SETS["ambfoot"] = [SETS["sound3"][2], SETS["sound3"][5], SETS["sound3"][4],
     dict(id=158, kind="site", where=(0x3E6D70, 0x3E6EC8, 0x3E8B70), name="bg_open_vol", copy=[cpr("a1"), cpr("a2")]),
     dict(id=159, kind="site", where=(0x57E188, 0x57E288, 0x3E8708), name="req15", copy=[cpr("a1")]),
 ]
+# worker 0219: the stage controller's natives (notes/stage-controller.md): music (playMusic3 FUN_003a0198 -> FUN_003ec500 /
+# FUN_003ec560, playMusic2 FUN_003a02b8, changeMusicVol FUN_003a5308 -> FUN_003ed740, playBgAreaSound FUN_0039dd80 ->
+# FUN_003e6c88), the modes (battle2 / battle3 / battle1 -> FUN_0037cf30 / FUN_0037e3c0, event2 / event3 -> FUN_0037e048),
+# the zone load's stream request (FUN_00381518 -> FUN_002677a0), scene_save (FUN_0039c728 -> FUN_0023d690) and Skip
+# (FUN_003dfdc8 -> FUN_00372f70).
+SETS["stage"] = [
+    dict(id=190, kind="site", where=(0x3A0198, 0x3A02B8, 0x3EC500), name="music3", copy=[cp("a0", 0, 2), cpr("a1")]),
+    dict(id=191, kind="site", where=(0x3A0198, 0x3A02B8, 0x3EC560), name="music3_fade", copy=[cp("a0", 0, 2), cpr("a1"), cpr("a2")]),
+    dict(id=192, kind="site", where=(0x3A02B8, 0x3A0378, 0x3EC500), name="music2", copy=[cp("a0", 0, 2), cpr("a1")]),
+    dict(id=193, kind="site", where=(0x3A5308, 0x3A534C, 0x3ED740), name="musicvol", copy=[cpr("a0"), cpr("a1")]),
+    dict(id=194, kind="site", where=(0x39DD80, 0x39DDF0, 0x3E6C88), name="area", copy=[cp("a0", 0, 2), cpr("a1")]),
+    dict(id=195, kind="site", where=(0x39C618, 0x39C650, 0x37CF30), name="battle2", copy=[cpr("a1")]),
+    dict(id=196, kind="site", where=(0x39C650, 0x39C690, 0x37CF30), name="battle3", copy=[]),
+    dict(id=197, kind="site", where=(0x39C7E8, 0x39C83C, 0x37E3C0), name="battle1", copy=[cpr("a1"), cpr("a2")]),
+    dict(id=198, kind="site", where=(0x39C690, 0x39C6B8, 0x37E048), name="event2", copy=[]),
+    dict(id=199, kind="site", where=(0x39C6B8, 0x39C6F0, 0x37E048), name="event3", copy=[cpr("a1")]),
+    dict(id=200, kind="site", where=(0x381518, 0x381654, 0x2677A0), name="zone_req", copy=[cpr("a0"), cpr("a1")]),
+    dict(id=201, kind="site", where=(0x39C728, 0x39C7E4, 0x23D690), name="scene_save", copy=[cpr("a1")]),
+    dict(id=202, kind="site", where=(0x3DFDC8, 0x3DFE0C, 0x372F70), name="skip", copy=[]),
+]

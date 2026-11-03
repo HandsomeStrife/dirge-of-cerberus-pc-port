@@ -25,7 +25,7 @@ def resolve_bases(mem):
     """Player P: FUN_0053bb08(DAT_0046e880) -> entry *(M+0x18) of the table at M+0x1164
     (FUN_0053e040) -> vtable+0x94 (here 0x579ae8, `move v0,a0`) -> FUN_00333150 calls
     vtable+0x9c (0x579b18, `move v0,a0`). Both getters return `this`, checked below."""
-    if FIELDSET in ("event", "evactor"):    # absolute addresses only (worker 0210: states taken mid stage load have no player)
+    if FIELDSET in ("event", "evactor", "stage"):    # absolute addresses only (worker 0210: states taken mid stage load have no player)
         return {}
     m = u32(mem, G_OBJTAB)
     idx = u32(mem, m + 0x18)
@@ -58,6 +58,10 @@ def resolve_bases(mem):
         bases["AIQ"] = u32(mem, G_AISCHED)
         bases["PS"] = u32(mem, P + 0x17C)          # player status record (FUN_0055a370)
         bases["EVF"] = u32(mem, 0x47DBB0)        # DAT_0047dbb0: event-flag block (FUN_003ff658 / FUN_003ff738)
+    elif FIELDSET == "stageinfo":                  # worker 0220: as "enemy" (no enemy records)
+        bases["GSB"] = u32(mem, u32(mem, u32(mem, G_GSTATE)) + 4)
+        bases["AIQ"] = u32(mem, G_AISCHED)
+        bases["EVF"] = u32(mem, 0x47DBB0)
     elif FIELDSET == "ammo":
         # worker 0214: the weapon slot record R (FUN_0031a990(*(PS+0x84))) and the inventory entry of its ammo item
         # (FUN_00319ef0: FUN_0031e658(*(PS+0x80), FUN_00319ec0(R, 5)))
@@ -550,7 +554,44 @@ for _k, _a in enumerate(x for x in __import__("os").environ.get("TRACE_EVMP", ""
     EVACTOR_FIELDS += [("mp%d_l%d" % (_k, _l), None, _a + 0x200 + 0x30 * _l, "bytes:8", "D", "layer clip") for _l in range(8)]
     EVACTOR_FIELDS += [("mp%d_f%d" % (_k, _l), None, _a + 0x218 + 0x30 * _l, "f32", "D", "layer frame") for _l in range(8)]
 
+# Opt-in set for the stage-info / message boxes (TRACE_FIELDSET=stageinfo, worker 0220; notes/message-research.md):
+# displayStageInfo_l FUN_0039e8e8 -> FUN_003fdb48 (kind PTR_0047db6c), FUN_003fdf00 (state DAT_004fadbc), the box object
+# DAT_00479160 (FUN_003c5358). TRACE_SIBOX=addr adds the box's timeline fields (+0x47c step, +0x480 start, +0x48d mode).
+STAGEINFO_FIELDS = [f for f in FIELDS if f[0] in ("step", "pad_held", "matrix")] + [
+    ("gstate", "GSB", 0, "bytes:8", "D", "game-state bits 0..63; bit 6 = AI paused (FUN_00325b10)"),
+    ("ai_now", "AIQ", 0, "u32", "D", "AI scheduler clock (FUN_00365008)"),
+    ("evt_obj", None, 0x47DBB0, "u32", "D", "DAT_0047dbb0 event-flag block"),
+    ("evt_flags", "EVF", 0x38, "bytes:64", "D", "event flags 0..63, XOR evt_key"),
+    ("evt_key", None, 0x47DBF0, "bytes:64", "D", "DAT_0047dbf0"),
+    ("si_kind", None, 0x47DB6C, "bytes:36", "D", "PTR_0047db6c kind, +4 0x47db70 file, +8 db74, +0xc db78 box slot, +0x10 db7c, +0x14 db80, +0x18 db84 clock, +0x1c db88, +0x20 db8c"),
+    ("si_state", None, 0x4FADBC, "u32", "D", "DAT_004fadbc: FUN_003fdf00 state"),
+    ("si_box", None, 0x479160, "u32", "D", "DAT_00479160: the stage-info box (FUN_003c5358)"),
+    ("gclock", None, 0x4B8B2C, "u32", "D", "DAT_004b8b2c game state"),
+    ("si_slots", None, 0x50DB60, "bytes:80", "D", "DAT_0050db60: type-8 box slots 0-1 (0x28 each; +1 result, FUN_003b68b8)"),
+    ("si_focus", None, 0x4F3034, "u32", "D", "DAT_004f3034: focused widget"),
+]
+if __import__("os").environ.get("TRACE_SIBOX"):
+    _b = int(__import__("os").environ["TRACE_SIBOX"], 16)
+    STAGEINFO_FIELDS += [("sb_tl", None, _b + 0x47C, "bytes:20", "D", "box +0x47c step, +0x480 start clock, +0x484, +0x488 script, +0x48c kind / mode / result / +0x48f"),
+                         ("sb_root", None, _b + 0x18, "bytes:8", "D", "box +0x18 root widget")]
+
+
+# Opt-in set for the stage controller (TRACE_FIELDSET=stage, worker 0219; notes/stage-controller.md): the global flags
+# DAT_0050db20 (XOR DAT_0046f608; FUN_0037cea0), the stage flags (zone object DAT_0047dbb0 = 0xa06300 in the z128 states,
+# +0x38, XOR DAT_0047dbf0; FUN_003ff738), the event object's skip +0x156c and mode bits +0x1558 (bit 37 battle, 44 program).
+STAGE_FIELDS = [f for f in FIELDS if f[0] in ("step",)] + [
+    ("gflags", None, 0x50DB20, "bytes:64", "D", "DAT_0050db20 global flags (stored XOR DAT_0046f608)"),
+    ("zflags", None, 0xA06300 + 0x38, "bytes:64", "D", "stage flags: zone object +0x38 (stored XOR DAT_0047dbf0)"),
+    ("ev_skip", None, EV + 0x156C, "u32", "D", "+0x156c skip state"),
+    ("ev_bits", None, EV + 0x1558, "bytes:8", "D", "+0x1558 mode bits"),
+    ("ev_mask", None, EV + 0x514, "u32", "D", "+0x514 live command slots"),
+]
+
 FIELDSET = __import__("os").environ.get("TRACE_FIELDSET")
+if FIELDSET == "stage":
+    FIELDS = STAGE_FIELDS
+if FIELDSET == "stageinfo":
+    FIELDS = STAGEINFO_FIELDS
 if FIELDSET == "evactor":
     FIELDS = EVACTOR_FIELDS
 if FIELDSET == "ammo":

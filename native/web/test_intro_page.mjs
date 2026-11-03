@@ -46,6 +46,18 @@ try {
   ok(a.view && a.view.cam === 1, `event camera 1 drives the view (${a.view && a.view.cam})`);
   ok(a.view && a.cam.every((x, i) => Math.abs(x - a.view.eye[i]) < 1e-3), `the render camera sits at the event camera's eye (${a.cam.map(x => x.toFixed(2))})`);
   ok(!a.hud && !a.vin, 'the game HUD and Vincent\'s gameplay body are hidden while it runs');
+  // the event's actors (worker 0218; event_actor_rt.js / event_actors.js): with data/event/actors, p005 (Vincent on the
+  // railing) plays km0102vn and its body is drawn in the 'event actors' group
+  if (fs.existsSync(path.join(here, 'data/event/actors/actors.json'))) {
+    const e = await pg.evaluate(() => {
+      const P = window.__play, A = P.intro.rt.actors, g = P.root.getObjectByName('event actors');
+      const v = A && A.slots.find(x => x.model === 'p005');
+      let meshes = 0; if (g) g.traverse(o => { if (o.isMesh && o.visible) { let s = o, vis = true; while (s && s !== g) { vis = vis && s.visible; s = s.parent; } if (vis) meshes++; } });
+      return { n: A ? A.slots.length : 0, clip: v && v.mp.clip, frame: v && v.frameDrawn, bodies: g ? g.children.length : 0, meshes };
+    });
+    ok(e.n >= 6 && e.clip === 'km0102vn' && e.frame > 256, `event actors: ${e.n} slots, p005 plays ${e.clip} at ${e.frame && e.frame.toFixed(1)}`);
+    ok(e.bodies >= 6 && e.meshes > 0, `event actor bodies drawn (${e.bodies} bodies, ${e.meshes} visible meshes)`);
+  } else console.log('SKIP event actors: no data/event/actors (export_web_event_actors.py)');
   // every rendered frame from here: what the page shows (sampled between renders, so each sample = the last frame drawn)
   await pg.evaluate(() => {
     const P = window.__play, rec = window.__rec = [];

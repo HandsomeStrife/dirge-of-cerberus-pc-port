@@ -84,6 +84,10 @@ ranges showChunks leaves drawn: chunk 07 hits 07's wall, not 0c's panel; chunk 0
 the blended glow; ff88 additive; the six dump-measured ATE textures still alpha-tested).
 `ROOM_DATA=<dir>` checks another export.
 
+Chunk 06 (market, worker 0217's teleport state r06_tp, game slots 0 / 6 / 8): page from the game's camera
+vs its GS dump, mean |d| 7.8 before -> 7.4 now (room only vs a frame with Vincent and the HUD); no
+defect, the geometry, stall and lights line up (scratchpad w0213_chunk06_game_vs_page.png).
+
 ## Open
 
 - Load timing: a chunk shows the frame its slot is marked loaded (area_stream.js GUESS: the disc

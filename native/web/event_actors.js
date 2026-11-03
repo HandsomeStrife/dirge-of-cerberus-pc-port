@@ -105,6 +105,14 @@ export function createEventActorView({ root, lib, rt, litPatch, light, warn = (m
     return v;
   }
 
+  // a body's own GPU objects: cloned materials and cloneSkinned's skeletons (their bone textures); the glb's
+  // geometry / textures are shared with the library and stay
+  function freeBody(v) {
+    const sk = new Set();
+    for (const o of v.prims) { o.material.dispose(); if (o.isSkinnedMesh && o.skeleton) sk.add(o.skeleton); }
+    for (const s of sk) s.dispose();
+  }
+
   // the actor's motion packs, in its loadmotion order (FUN_005a7390 takes the first file holding the name)
   function syncPacks(v) {
     const fs = v.a.files;
@@ -160,12 +168,13 @@ export function createEventActorView({ root, lib, rt, litPatch, light, warn = (m
       if (!v) continue;
       if (!rt.actors.slots.includes(a)) {                                // finalize_l: the slot is gone
         group.remove(v.body);
-        for (const o of v.prims) o.material.dispose();
+        freeBody(v);
         bodies.delete(a);
       }
     }
+    // everything from the draw-time snapshot (event_actor_rt.js draw: a.drawn), not from this frame's update
     const parentOf = new Map();
-    for (const a of rt.actors.slots) a.mp.kids.forEach((k, i) => { const c = rt.actors.get(k); if (c) parentOf.set(c, [a, a.mp.marker[i]]); });
+    for (const a of rt.actors.slots) if (a.drawn) a.drawn.kids.forEach((k, i) => { const c = rt.actors.get(k); if (c) parentOf.set(c, [a, a.drawn.marker[i]]); });
     const placed = new Set();
     group.updateMatrixWorld(true);
     const Ginv = new THREE.Matrix4().copy(group.matrixWorld).invert();
@@ -174,9 +183,10 @@ export function createEventActorView({ root, lib, rt, litPatch, light, warn = (m
       placed.add(a);
       const v = bodies.get(a);
       if (!v) return;
-      mat.fromArray(a.mp.M || a.M);                                    // game rows -> three's column-major
+      if (!a.drawn) { v.body.visible = false; return; }
+      mat.fromArray(a.drawn.M);                                        // game rows -> three's column-major
       const par = parentOf.get(a);
-      let shown = a.shown;
+      let shown = a.drawn.shown;
       if (par) {
         const [pa, marker] = par;
         placeOne(pa);
@@ -203,7 +213,7 @@ export function createEventActorView({ root, lib, rt, litPatch, light, warn = (m
     group, bodies,
     step() { rt.actors.step(pose); place(); },
     dispose() {
-      for (const v of bodies.values()) if (v) for (const o of v.prims) o.material.dispose();
+      for (const v of bodies.values()) if (v) freeBody(v);
       bodies.clear();
       root.remove(group);
     },

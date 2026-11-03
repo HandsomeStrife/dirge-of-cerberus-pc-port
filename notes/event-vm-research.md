@@ -95,3 +95,31 @@ shown block). Loads complete at once on the page (the game waits for the disc).
   before its first. With that, no fitting: 8 of 9 blocks within 0.0006 u; block 2 is off by one frame from record 800
   on (a slow frame shifts the read against the update), matched at the next record's clock (51 records).
 - Not checked: the fade levels (the particle pointer DAT_0050b504 is logged, its fields are not), GS dumps.
+
+## Event actors (worker 0218, 2026-11-03)
+Decoded and on the page (event_actor_rt.js natives + update, event_actors.js drawing, export_web_event_actors.py data).
+- **Slots**: 64 x 0x200 at event +0x1800 (FUN_00376308 creates, FUN_0037a600 finds by id at +0x18). +0x1c MP; +0x20..+0x5c the
+  actor matrix (rows; identity at creation); +0xa8 bits 48 loop / 49 visible / 52 clip (49 and 52 set at creation); +0xb0 request
+  flags 0x82 / 0x86; +0xb4 start x 2 (-1 none); +0xbc blend frames; +0xc0 4 attached actors, +0x1e5 their markers; +0xdc speed.
+- **load_l(name, id, f)** FUN_0039e2f0 -> FUN_00379c68 (command 9, or FUN_00380370 at once when resident). **loadmotion_l(id, n)**
+  FUN_003a13a8 -> FUN_0037b368: command 0x12 -> FUN_00382220 loads FileCode FUN_00250898(n, event) = 0x0c000400 + event x 0x1000 + n.
+  scr001: e027 <- 0x402 / 0x404 (and 0x4c6 for e063), e048 <- 0x405, p005 / p014 <- 0x422, n013 <- 0x401, g000 <- 0x41d, p000 <- 0x4fe.
+- **ms -> frames** FUN_003787e8: (int)(ms x 0.06). **setmotion2_l(id, clip, blendMs, startMs, z)** FUN_0039f6d0 -> FUN_0037af40:
+  +0xbc blend, +0xb4 = start x 2, bit 48 cleared, flags 0x86 if z else 0x82. **setmotion3_l(id, clip, blendMs, z)** -> FUN_00381268
+  (does NOT touch +0xb4: a setmotion3 right after a setmotion2 inherits its start; scr001's end puts 41-43's battle clips at their
+  last frame this way). **setmotion_l(id, clip, loop, blendMs, z)** -> FUN_003811d8 (ignored while the same name is pending).
+- **Update FUN_003772c8** (FUN_00247428, after the MP draw FUN_005a8e28 in the main loop FUN_00248110): visibility (FUN_005a85f8),
+  attachments (FUN_003771e0 -> FUN_005a7698: parent MP +1000 + 4i = child MP, +0x45e + i marker), the request FUN_005a91c8(MP, clip,
+  blend, flags | loop) (a 0x80 request of the clip already on top is dropped; children get it with | 2), then FUN_005a90f8 ->
+  FUN_005a8fd0: head frame = min(max(+0xb4, 0), 2n - 1) x 0.5; +0xdc -> MP+0x40c = speed x 0.5; FUN_005a6f40 copies the matrix.
+  The MP advances frame += rate x 1.2 a frame (FUN_005aa2a8; T: 0.6 at rate 0.5); default rate 0.5 (T).
+- **setpos** FUN_0037abf8 (row 3), **setrot** FUN_00259bd0: rotX x rotY x rotZ (row vectors; FUN_0026125c(out, A, B) = B x A),
+  degrees x 0.017453292; **setdirrot(id, deg, add)**: add 0 -> deg + 180 wrapped, FUN_00259990 rotY (180 -> identity).
+- **Attached draw** FUN_005ab8f0: child MP+0x50 = socket x parent world, socket = palette[marker bone] x T(marker) (FUN_005ad508 ->
+  FUN_0030bef8); a hidden parent draws no child.
+- **Lights**: KerberosLight -> struct 0x4fc7d0 +0x630 / +0x6a0 / +0x6d0; FUN_0040c988 commits to the fixed rig and sets DAT_004fcaf8
+  bit 36; FUN_005ab0b0 then uses it for lights 0 / 1 + ambient; light 2 stays the room light (FUN_0026a710).
+- **T**: w218_act_a (slots, MPs at 0x14d4700 + 0x480 k from 0210's start1704 state), w218_mp_a (MPs 1 / 3 / 5, records 580-799;
+  `TRACE_FIELDSET=evactor TRACE_EVMP=...`), GS dumps w218_gs f650 / 800 / 900 (`TRACE_STATE=` in grab_gs.py). test_event_actors.mjs.
+- **Open**: p000 (Vincent's own event actor, the last block) and his gun; hide_model_l / setanim_l (eye / face texture animation) /
+  setshadow_l; blended requests; setLOD; the effect sequences on actors (the e063 visor glow is FEDEF HEAD02_ENEMY_HEAD, playseqstr_l).

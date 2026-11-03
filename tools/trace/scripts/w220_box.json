@@ -1,0 +1,3 @@
+{"name": "w220_box", "frames": 560, "log_from": 100, "doc": "worker 0220: run east as k_enemy_engage4 into the x~-1186 box, cross at 400 and 450 (closes it). TRACE_FIELDSET=stageinfo.",
+ "events": [{"from": 10, "to": 230, "lx": 0.6, "ly": -1.0},
+            {"from": 400, "to": 404, "buttons": ["cross"]}, {"from": 450, "to": 454, "buttons": ["cross"]}]}

@@ -431,3 +431,89 @@ values at the 240 Hz clock; a command mid-ramp starts from where the ramp is) an
 buffers stop at their offset and restart there; `playId` shifts vol for codes 2 / 0x16 while paused) when the flow's
 `active` changes, i.e. at the screen's creation and after its close, as FUN_00241f40. L: the volume is applied at once,
 not with the next PCM slot (<= 21 ms); a held SE's release tail is held too (the IOP holds only running tracks' voices).
+
+## Placed sounds (worker 0215, decoded and verified)
+
+**Stage section 22** (FUN_00311530, 0xc0 records; z128: 34) is read at stage load by FUN_00548788 (manager +0xfac keeps the
+object ids): every record with **+0xaa == 7** becomes a class-0xe object (FUN_0053db98(mgr, 0xe), ctor FUN_0057d430, vt
+0x5903b8) through FUN_005503e8(obj, i, 0, 1). The record is the trigger layout: +0x00 matrix, +0x40 its inverse, +0x80 / +0x90
+local box lo / hi, +0xa0 s16 script (-1), +0xa4 flags, **+0xa8 s16 section-1 record** it follows (FUN_0053b920 ->
+FUN_0054c550: the object joins the actor's +0xc0 child list; FUN_0054ef68, the actor's activation, calls vt+0x14c on every
+child, so the sound object is active with its actor), +0xab (-1: FUN_0054c0a8(obj, 0), the area node), +0xb0 name,
+**+0xb8 shape** (0 box, 1 ellipsoid, 2 cylinder), +0xbb volume (area sounds), **+0xbc** request-0x15 value, **+0xbd** 1 =
+area sound. Exporter: native/assets/models/export_web_ambient.py -> data/audio/ambient_z128.json.
+
+| step | code |
+|---|---|
+| init vt+0x2fc | FUN_0057dcd0: c = (lo + hi) / 2, obj+0x1e0 = the world centre (record matrix after T(c)); obj+0x1a0 = S(1 / (hi - c)) after T(-c) after the inverse (the "unit space"); shape 1: obj+0x130 = the same from (hi - lo) / 2; shape 2: obj+0x130 = S(1 / hx, 1, 1 / hz) after the inverse, segment obj+0x180 / +0x190 = (0, hi.y, 0) / (0, lo.y, 0). VU0 code read from the disassembly (capstone); FUN_0026125c(out, A, B) = "B, then A" |
+| update | FUN_0057d4f8: inactive (+0x28 bit 0 clear) -> stop if playing; else FUN_0057d550: point = FUN_005635e0(player) = his position + (0, -7, 0); vt+0x194 = FUN_0057dab8 (shape 0: the inverse, box test FUN_00261218; 1: obj+0x130, x² + y² + z² <= 1; 2: obj+0x130, FUN_0025c770(1.0, q, a, b) = distance to the segment's line <= 1 and 0 <= t <= 1, FUN_00261498 / FUN_002614f4) -> start FUN_0057e188 / stop FUN_0057e220 on a change (+0xe0 bit 0) |
+| start | FUN_0057e188: +0xbd != 1 -> FUN_003e6d70(name, obj+0x1e0, obj, 0): the first free of 8 entries DAT_004f5920 {slot, obj, vol, pos}, slot FUN_003e8e18 + fixed volume FUN_003e8b70 (flag 0x40) = FUN_003e6438(FUN_0057e310(obj, listener +0x3850)); +0xe0 |= 1. +0xbd == 1 -> FUN_003e6c88(name, +0xbb) (playBgAreaSound; +0xe0 stays 0, so it is refreshed every frame inside). Then FUN_003e8708(+0xbc) |
+| stop | FUN_0057e220 (not area): FUN_003e64b0 -> FUN_003e8ff8: slot flag 0x20 (sdb +0xc bit 3) -> FUN_003e9830 -> FUN_003e77f0 = request **0x12** -> FUN_0041a2b8(1, handle, id, 10) = IOP command **0x2f** (FUN_00008bfc: sequence volume +0x54 slides to 0 over 16 sequence ticks, +0x60 = 1 -> FUN_00006830 ends the track); FUN_003e8708(0x14) |
+| volume | FUN_0057e310: q = |obj+0x1a0 x listener|; shape 0 max(qx, qz), 1 sqrt(qx² + qy² + qz²), 2 sqrt(qx² + qz²); FUN_003e6438: (int)((1 - clamp(d, 0, 1)) x 127). **FUN_003e6ec8** sets it every frame (FUN_003e8f70) **before** the objects run (T: the slot stopped on frame 102 still gets its volume on 102) |
+| send | FUN_003e9ed0 / FUN_003e9220: first request 2 (fixed volume, pan from the camera), then **request 0x11** (FUN_003e7718(mgr, id, handle, pan, vol, pitch)) whenever the byte changes -> FUN_003e7e08 -> FUN_0041a380(1, handle, id, 10, pan, vol, pitch) = IOP command **0x30** (FUN_00015d00: FUN_00008f3c pan slide +0x48..0x50, FUN_0000892c sequence-volume slide +0x54..0x5c, FUN_00009320 pitch; ticks = time x 96 / 60 = 16; tracks whose program flag byte has 0x10 are skipped) |
+| request 0x15 | FUN_003e8708(v): only on a change (DAT_0047d710, 20 in the save) -> FUN_00419518(2, 0x3c, clamp(v, 10, 60)) = IOP command 10 (FUN_00014854): the SPU2 **effect return volume** (EVOLL / EVOLR, both cores) ramps to v over 60 driver ticks. Not on the page (no reverb) |
+
+z128: 27 objects follow no actor (all active in the save); records 0 / 1 (area asj_033 / asj_034, actor 27), 27 / 29-33
+(actor 13) are inactive in the save, 28 (asj_039 by the ladder, actor 105 = n017) active. In the save Vincent is inside 2
+(asj_031, cylinder) and 3 (asj_030), both playing (DAT_004f5920 slots 7 / 11). sdb rows asj_029-040: flags 0x28 (stop on
+release, no Doppler); asj_043-045: 8 (Doppler; their pitch updates are not translated).
+
+**Verified** (call-log set `ambfoot`, TRACE_FIELDSET=ambfoot; scripts w215_ambfoot, w215_routeA = the first 525 frames of
+w215_routeB = l_ladder_cam's route to the ladder and up): centres = the save's obj+0x1e0 and the bg_start positions; stops
+of asj_030 / asj_031 on frames 102 / 148 and the start of asj_039 on 170, exactly where FUN_0057dab8 on record f's position
+changes; per-frame volumes 1735 / 1735 (the frame's listener +0x3850); the open volume; update requests 549 exact + 2 pans one
+off (acosf, audio.js L). `node native/web/test_audio3d.mjs` (also replays the PlacedSounds class).
+
+**On the page:** ambient.js `PlacedSounds` (+ `SlotStreams`: the slots as music.js SeStreams, rendered 200 ms ahead),
+audio.js `SeRenderer.update` (command 0x30) / `stopFade` (0x2f); play.js runs it after the enemy tick with the frame-start
+position and the sound listener; linked objects read enemy_ai's record flags28.
+
+## Footsteps (worker 0215, decoded and verified)
+
+The name: **FUN_003466a8** (on a gait change FUN_00346650, a material change FUN_00340e08, enable FUN_003467b8, the cue table
+FUN_003405f8) -> **FUN_003415d8(C, kind)**: kind from the gait C+0x590 bits 30-31 (1 -> 0, 2 -> 1, 3 -> 0, 0 -> 4); the
+material m = DAT_004a1920[C+0x6c1] (14 words, ELF; unless C+0x568 bit 0x10000000: C+0x77a), < 12; jump table 0x4a1960:
+kind 0-3 -> cue kind x 16 + m, kind 4 -> 0x6e + m (stage version >= 0x2f, z128 = 48) else m. The name is the cue table
+C+0x7ec's entry (section 0x1a: Vincent's table 9 = fsj_000..047 by material in four rows, '' for standing). sdb bit 3 clear
+-> MP+0x3b0 = name (FUN_005ae708); C+0x568 bit 0x20000000 -> a looping sound at C (FUN_00341458, range 100) instead (not z128).
+- gait: FUN_00346860 (the locomotion clip choice) calls FUN_00346650 only when its index changes: 0 -> 0, 1 -> 1 (2 when the
+  table has < 2 entries), else 2; every motion-class change (FUN_00341780) sets 0.
+- material: FUN_00340e08: C+0x4c0 (the walk polygon) +6 byte (= FORMAT.md's "u16 not decoded" at face +0x06, the DCOL word6:
+  z128 values 1, 2, 3, 0xc); no polygon (the ladder) -> 0; C+0x520 / C+0x530 (an object stood on) override it (0 in the save).
+
+The footfall: **FUN_005ae828** (the MP update FUN_005ab8f0, after the pose): MP+0x428 bit 3, MP+0x457 != 1, MP+0x440 bit
+0x100000 clear, the head clip version <= 0x11 or clip +0x22 set; the model's mkd ('mk2' header: +2 '2', +0x20 extra legs,
++0x24 / +0x28 thresholds, else -3.0; FUN_0030ba08 / 38 / 68): markers 7 / 8 (and 4 / 5 with legs > 0) through FUN_0030bef8
+(T(marker xyz) x the bone's matrix): y < threshold -> that foot's bit (MP+0x440 bits 16-19) set; y >= threshold with the bit
+set -> cleared, a footfall. Then the name plays in the MP's slot MP+0x3b8 (FUN_005a8bc8: FUN_003e8e18 with a zero position,
+so flag 0x8000 -> pan 0x40; range 400; FUN_003e8f38 keeps it) at MP+0x10 row 3: FUN_003e8fb0 + FUN_003e9c38 -> FUN_003e9798
+(a new request on the next FUN_003e9ed0). Vincent (p000, 07703201): legs 0, threshold -2.2, markers 7 / 8 = bones 84 / 88.
+Clip events (FUN_005aed98 type 1 -> FUN_005ae738) need clip version > 0x11: z128's clips are 0x10. If MP+0x3e4, the footprint
+effect FUN_002dc6c0 (not translated).
+
+**Verified:** w215_ambfoot / routeA / routeB: every game footstep frame (13 / 21 / 23) is a crossing of the record's foot
+bones (TRACE field BM + 84 / 88 x 0x40, model space) while the name is set, and no other; the name = FUN_003415d8(C+0x6c1,
+C+0x590) on every record; the 57 requests (se_new one frame later): pan 0x40, volume from MP+0x10 of record f - 1 (57 / 57;
+record f: 56 / 57; why one frame older is not decoded: play.js GUESS). Only floor material 3 (fsj_002 walk, fsj_014 run)
+and the ladder (material 0, no steps) were reached; two attempts to route onto material 2 (east of the ladder top, past
+z -1086) ran into walls. The page (test_ambient_page): fsj_002 every 34-35 frames, fsj_014 every 16 / 18, as the traces; the
+foot markers' y range on the walk -3.68..-1.59 (trace -3.68..-1.64).
+
+## Music crossfade and changeMusicVol (worker 0215, decoded; not traced)
+
+- **changeMusicVol(vol, time)** -> FUN_003a5308 -> **FUN_003ed740**: DAT_004fab98 = now (FUN_0023c1f0, ms); vol < 0 and time 0
+  -> 98 = 0 (no ramp); else vol clamped 0..0x3f -> DAT_004faba0, end 9c = now + time, DAT_004faba4 = -1. **FUN_003ed000**, per
+  decoded frame of the main stream DAT_004fab80: if 98 != 0: a4 < 0 -> a4 = stream +0x90; now < 9c -> +0x90 =
+  ((a0 - a4) x 0x100 x (now - 98) / (9c - 98) >> 8) + a4 clamped 0..0x3f (0x3e < -> 0x3f); else +0x90 = a0, 98 = 0. The
+  offset is subtracted from every scale-factor index (FUN_00459ed0): with ATRAC3's 2^((i - 15) / 3) table a gain of 2^(-off / 3).
+- **playMusic3 with a stream open** -> FUN_003ec560 -> **FUN_003ec0d8**: a crossfade running (DAT_004fab84) -> nothing; else
+  start 8c = now, end 90 = now + fade; the curve FUN_002616f0(x = 0, T/4, T/2, T (0x47d770, the last three written here),
+  y = 1, 4, 8, 64 (0x47d780), 4): Hermite with central slopes dy / dx inside, one-sided at the ends, FUN_00261a90 (linear
+  where |dy| <= 0.5 = DAT_0046be00); a second stream (its +0x90 = vol from the start, file from frame 0) -> DAT_004fab84;
+  FUN_003ed740(vol, fade) on the main stream. FUN_003ed000 then decodes both and, until 90: f = curve(now - 8c),
+  FUN_003eb52c((int)(f x 256), (int)(1 / (1 - 1 / f) x 256)) and FUN_003eb544(main slot, new slot): per s16 sample
+  sat16((old << 16) / a >> 8 + (new << 16) / b >> 8) (MMI pdivbw by the signed halfword), i.e. old / f + new x (1 - 1 / f);
+  at / after 90 one frame with (0x7fff, 0x100), then **the swap**: DAT_004fab88 = old, DAT_004fab80 = new, DAT_004fab84 = 0.
+- Page: music.js `changeMusicVol`, `crossfade`, `MusicRamp`, `crossfadeCurve` / `evalCurve`, `mixWeights` / `mixGain`, `sfGain`,
+  `pump` (per-frame gains scheduled 250 ms ahead). bgm_012 / 013 / 014 / 018 are extracted by build_web.sh now. The story
+  switching (ev0100: playMusic3(.., 3, 2500), peace + changeMusicVol(3 / 0, 2500), boss bgm_014, kita_ev0145 bgm_018) is P3.

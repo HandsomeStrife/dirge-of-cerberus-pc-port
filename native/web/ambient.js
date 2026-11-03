@@ -137,10 +137,10 @@ export class PlacedSounds {
   }
 
   // FUN_0057e188
-  start(e, L) {
+  start(e, Lv) {
     const o = e.o;
     if (o.area !== 1) {
-      if (o.name) this.bgPlay(e, L);                                                // FUN_003e6d70(name, obj+0x1e0, obj, 0)
+      if (o.name) this.bgPlay(e, Lv);                                               // FUN_003e6d70: FUN_003e8890 = +0x3850                                                // FUN_003e6d70(name, obj+0x1e0, obj, 0)
       e.playing = true;
     } else this.be.area(o.name, o.vol);                                            // FUN_003e6c88(name, +0xbb)
     this.req15(o.req15);
@@ -155,10 +155,10 @@ export class PlacedSounds {
   }
 
   // FUN_003e6d70: the first free table entry (entry 0 is tested first, then 1..7)
-  bgPlay(e, L) {
+  bgPlay(e, Lv) {
     const k = this.table.findIndex((t) => t === null);
     if (k < 0) return;
-    const vol = distVolume(soundDistance(e.o, e.sp, L));
+    const vol = distVolume(soundDistance(e.o, e.sp, Lv));
     const h = this.be.open(e.o.name, e.sp.centre, vol);
     if (h === null || h === undefined) return;
     this.table[k] = { h, e, vol, pos: e.sp.centre };
@@ -176,21 +176,22 @@ export class PlacedSounds {
   // listener +0x3850 (same point, read by FUN_003e6ec8 / FUN_0057e310: audio.js soundListener .alt).
   // active(actor): whether the section-1 record the object follows is active (FUN_0054ef68 passes it on); -1 = none.
   frame(L, Lv = L, active = () => true) {
+    // FUN_003e6ec8 first (T: w215_routeA: the slot stopped on frame 102 still gets its volume on 102). DAT_0047d6b8 == 0
+    // in the save; GUESS: game-state bit 7 (FUN_00326068(7)) clear, what sets it not decoded. FUN_003e6990's
+    // surface-averaged sound (DAT_004f5a3c) is -1 in z128 (none).
+    for (let k = 7; k >= 0; k--) {
+      const t = this.table[k];
+      if (!t) continue;
+      t.vol = distVolume(soundDistance(t.e.o, t.e.sp, Lv));                         // PTR_0047d6b0 = -1: no cap
+      this.be.setVol(t.h, t.vol);
+    }
     for (const e of this.objs) {
       // GUESS: an object that follows no actor is active from the stage load (+0x28 0x200003 in the save; the code that
       // sets it for them was not traced). One that follows an actor takes the actor's state (FUN_0054ef68 -> vt+0x14c).
       const on = e.o.actor < 0 ? true : !!active(e.o.actor);
       if (!on) { if (e.playing) this.stop(e); continue; }                          // FUN_0057d4f8
       const inn = inside(e.o, e.sp, L);                                              // FUN_0057d550
-      if (!inn) { if (e.playing) this.stop(e); } else if (!e.playing) this.start(e, L);
-    }
-    // FUN_003e6ec8 (DAT_0047d6b8 == 0 in the save; game-state bit 7 assumed clear: GUESS, not decoded what sets it).
-    // FUN_003e6990's surface-averaged sound (DAT_004f5a3c) is -1 in z128 (none).
-    for (let k = 7; k >= 0; k--) {
-      const t = this.table[k];
-      if (!t) continue;
-      t.vol = distVolume(soundDistance(t.e.o, t.e.sp, Lv));                         // PTR_0047d6b0 = -1: no cap
-      this.be.setVol(t.h, t.vol);
+      if (!inn) { if (e.playing) this.stop(e); } else if (!e.playing) this.start(e, Lv);
     }
   }
 
@@ -295,6 +296,8 @@ export class SlotStreams {
   update(L) {
     if (!L) return;
     for (const s of this.slots.values()) {
+      // page rule: a slot sent before the AudioContext existed (the browser's first gesture) starts its stream now (L)
+      if (s.sent && !s.stream && !s.failed && this.au.ctx) this.start(s);
       const { vol, pan } = this.vp(s, L);
       if (!s.sent) { s.sent = true; s.vol = vol; s.pan = pan; this.start(s); if (this.log) this.log.push({ code: 2, name: s.name, vol, pan }); continue; }
       if (vol !== s.vol || pan !== s.pan) {                                               // request 0x11
@@ -308,13 +311,13 @@ export class SlotStreams {
     const au = this.au;
     if (!au.ctx || !au.se) return;
     const hex = au.program(s.id);
-    if (!hex) { this.warnOnce('ambient: no SE program ' + s.id + ' (' + s.name + ')'); return; }
+    if (!hex) { s.failed = true; this.warnOnce('ambient: no SE program ' + s.id + ' (' + s.name + '): not played'); return; }
     const prog = this.hex(hex), bank = au.banks[prog[1] | (prog[2] << 8)];
-    if (!bank) return;
+    if (!bank) { s.failed = true; this.warnOnce('ambient: wave bank ' + (prog[1] | (prog[2] << 8)) + ' not loaded (' + s.name + '): not played'); return; }
     // GUESS: own random-table counter per stream (as music.js AreaSound; IOP FUN_0000a870 keeps one for every SE)
     s.stream = new this.SeStream(au.drv, bank, prog, s.vol, s.pan);
     s.next = au.ctx.currentTime + 0.02; s.srcs = [];
-    if (!this.timer) this.timer = setInterval(() => this.pump(), 25);
+    if (!this.timer) { this.timer = setInterval(() => this.pump(), 25); if (this.timer.unref) this.timer.unref(); }
   }
   pump() {
     const ctx = this.au.ctx;

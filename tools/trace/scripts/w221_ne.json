@@ -1,0 +1,1 @@
+{"name": "w221_ne", "note": "worker 0221: from tools/trace/out/route/r02_corridor.p2s, stick toward waypoint 41 (NE); TRACE_CALLLOG=pushstep; test_walkway_stops.mjs", "frames": 140, "events": [{"from": 4, "to": 140, "ly": -1, "lx": -0.957}]}

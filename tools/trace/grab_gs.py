@@ -18,7 +18,7 @@ if oabs == repo or oabs.startswith(repo + os.sep):
     probe = os.path.join(os.path.relpath(oabs, repo), "grab_log.json")
     if subprocess.run(["git", "-C", repo, "check-ignore", "-q", probe]).returncode != 0:
         sys.exit("grab_gs: %s is inside the repo and not gitignored (use tools/trace/out/... or a scratch dir)" % outdir)
-script = json.load(open(script_path)); os.makedirs(outdir, exist_ok=True); state = T.DEFAULT_STATE
+script = json.load(open(script_path)); os.makedirs(outdir, exist_ok=True); state = os.environ.get("TRACE_STATE", T.DEFAULT_STATE)   # TRACE_STATE: another start state (worker 0218)
 mem = read_p2s(state); ee = bytearray(mem["eeMemory.bin"])
 bases = fields.resolve_bases(ee); table = fields.field_table(bases)
 frames = T.build_frames(script); log_from = len(frames) - 2

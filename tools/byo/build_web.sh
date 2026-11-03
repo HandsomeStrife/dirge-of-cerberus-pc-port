@@ -322,6 +322,11 @@ run event $PY export_web_event.py --elf "$ELF" --nopath "$NOPATH" -o "$DATA/even
 [ -s "$DATA/event/ev0100_scr001.json" ] || fail "data/event/ev0100_scr001.json missing (log: $LOGS/event.log)"
 tail -n 1 "$LOGS/event.log" | sed "s#$REPO/##" | cut -c1-160
 
+step "the stage controller (ev0100 scr000..scr007 classes + the ELF's event library + their camera files) -> data/event (stage_controller.js)"
+run stage $PY export_web_stage.py --elf "$ELF" --nopath "$NOPATH" -o "$DATA/event/ev0100_stage.json"
+[ -s "$DATA/event/ev0100_stage.json" ] || fail "data/event/ev0100_stage.json missing (log: $LOGS/stage.log)"
+tail -n 1 "$LOGS/stage.log" | sed "s#$REPO/##" | cut -c1-160
+
 step "the opening event's actors (models + event motion files) -> data/event/actors (event_actors.js)"
 run event_actors $PY export_web_event_actors.py --event "$DATA/event/ev0100_scr001.json" -o "$DATA/event/actors"
 [ -s "$DATA/event/actors/actors.json" ] || fail "data/event/actors/actors.json missing (log: $LOGS/event_actors.log)"
@@ -351,6 +356,11 @@ step "game over menu: layout 0x477c38, sequence table, messages (ELF + locale uk
 run gameover $PY export_web_gameover.py --elf "$ELF" --disc "$KEL" -o "$DATA/gameover.json"
 [ -s "$DATA/gameover.json" ] || fail "data/gameover.json missing (log: $LOGS/gameover.log)"
 [ -s "$DATA/gameover_title.fed" ] || fail "data/gameover_title.fed missing (log: $LOGS/gameover.log)"
+
+step "stage-info boxes (displayStageInfo): step tables, layouts, '$' codes (ELF), MES_ITEM texts (ev0100 messages 0c0641ca), box FED a0211 -> data/stage_info.json + stage_info.fed"
+run stageinfo $PY export_web_stageinfo.py --elf "$ELF" --disc "$KEL" -o "$DATA/stage_info.json"
+[ -s "$DATA/stage_info.json" ] || fail "data/stage_info.json missing (log: $LOGS/stageinfo.log)"
+tail -n 1 "$LOGS/stageinfo.log" | cut -c1-160
 echo "ok"
 
 step "menu layout scripts (ELF) -> data/menu.json (read by the menu layout tests)"
@@ -377,7 +387,7 @@ run ambient $PY export_web_ambient.py "$NOPATH/06800001.bin" "$NOPATH/07703201.b
 tail -n 1 "$LOGS/ambient.log" | sed "s#$REPO/##" | cut -c1-160
 
 if [ $MUSIC -eq 1 ]; then
-  step "zone music bgm_001 (ATRAC3 descrambled with the ELF's keys, decoded, FLAC) -> data/audio/bgm"
+  step "zone music bgm_001 + 012 / 013 / 014 / 018 (ATRAC3 descrambled with the ELF's keys, decoded, FLAC) -> data/audio/bgm"
   if ! make -C "$REPO/native/assets/audio" CC="$CC_FOUND" dirge_atdec > "$LOGS/make_atdec.log" 2>&1; then
     tail -n 10 "$LOGS/make_atdec.log" >&2
     echo "warning: dirge_atdec did not compile (log: $LOGS/make_atdec.log): the zone music is skipped." >&2

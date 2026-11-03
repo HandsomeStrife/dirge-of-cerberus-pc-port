@@ -29,6 +29,7 @@ import { cylinderHit, partTest, cone } from './enemy_hit.js';
 import * as PM from './path_mover.js';
 import * as NG from './nav_graph.js';
 import { floorHit } from './effects.js';
+import { aiPaused } from './game_state.js';
 // PS2 FPU rounding toward zero for a stored f32 (player.js chop; not imported: player.js needs three.js)
 const _cb = new DataView(new ArrayBuffer(4));
 export function chop(x) {
@@ -2645,8 +2646,8 @@ export function createEnemyAI(opts) {
   function makeAttack(a, T, idx) {
     const v = T.volumes && T.volumes[idx];
     if (!v) { warnOnce(`enemy_ai: attack table has no hit volume ${idx} (old ai.json: rebuild data/enemies)`); return; }
-    // FUN_00569dc0 first returns with no object while FUN_00325b40 (AI paused) is set. GUESS: not paused on this
-    // page (as the scheduler's gate, see scheduler).
+    // FUN_00569dc0 first returns with no object while FUN_00325b40 (AI paused, game-state bit 6) is set.
+    if (aiPaused()) return;
     // FUN_00541310: FUN_00541278 = FUN_0053db98(mgr, 0xd) (constructor FUN_00579d00) + activate.
     // FUN_00579ef0: type > 3 -> 0, kept in +0xc0 bits 0-1 (FUN_0055eac8 reads it there), +0xec by type.
     // +0x13c (the repeat interval, record +7) is a signed char (FUN_0057a428 compares it as one).
@@ -3659,6 +3660,7 @@ export function createEnemyAI(opts) {
   // script event 8 (r0 = dmg; cues 0x44 / 0x4c are sound); killed -> FUN_0055c978(dmg, 1) (vt+0x344
   // is empty for e027) and vt+0x334 FUN_0055cac8
   function enemyHP(a, dmg) {
+    if (aiPaused()) return;                                                   // FUN_0055c7f8: FUN_00325b40 set -> nothing
     const was = dead(a);
     if (dmg > 9999) dmg = 9999;
     if ((a.f118 | 0) < 0 && a.hp <= dmg) dmg = a.hp - 1;
@@ -3833,7 +3835,9 @@ export function createEnemyAI(opts) {
     S.runs++;
   }
   function scheduler(step) {
-    // FUN_00325b40 (AI paused) / manager +0x2b0 bit 12: GUESS not paused on this page
+    // FUN_00365008: returns at once while FUN_00325b40 (game-state bit 6, AI paused: Zone.peace, game_state.js) is set;
+    // the clock does not advance (w220_box: AI clock 1821 from f206 to f457). Manager +0x2b0 bit 12: GUESS never set
+    if (aiPaused()) return;
     const f = Math.fround(S.acc + step);
     S.acc = f;
     if (!(1.0 <= f)) return;

@@ -123,6 +123,10 @@ export class EventActors {
   draw(pose) {
     for (const a of this.slots) {
       const mp = a.mp;
+      // what this draw shows: the MP as the LAST update left it (matrix FUN_005a6f40, visibility FUN_005a85f8, attached
+      // MPs FUN_005a7698), posed at the head frame. A slot whose MP was never updated has no matrix from the actor yet:
+      // not placed (its fresh MP matrix is not read)
+      a.drawn = mp.M ? { M: mp.M, shown: a.shown, kids: mp.kids.slice(), marker: mp.marker.slice(), clip: mp.clip, frame: mp.frame } : null;
       if (pose) pose(a);
       a.frameDrawn = mp.frame; a.clipDrawn = mp.clip;
       if (!mp.clip) continue;
@@ -180,11 +184,11 @@ export class EventActors {
       // setpos_l (FUN_0039d170 -> FUN_0037abf8): matrix row 3 (+0x50); +0x1e8 |= 0x200
       'fake/KerberosActor.setpos_l(IFFF)V': (vm, [id, x, y, z]) => { const a = A(id); if (a) { a.M[12] = x; a.M[13] = y; a.M[14] = z; } },
       // setrot_l (FUN_0039f2b0 -> FUN_0037ba58 -> FUN_00381070): degrees x 0.017453292 (0x3c8efa36);
-      // FUN_00259bd0: rows 0-2 = rotX(x) . rotY(y) . rotZ(z) (FUN_0026125c twice), row 3 kept
+      // FUN_00259bd0: rows 0-2 = rotX(x) x rotY(y) x rotZ(z) (row vectors: x applied first), row 3 kept
       'fake/KerberosActor.setrot_l(IFFF)V': (vm, [id, x, y, z]) => {
         const a = A(id); if (!a) return;
         const k = f32(0.017453292);
-        const m = mul(mul(rotX(f32(x * k)), rotY(f32(y * k))), rotZ(f32(z * k)));
+        const m = mul(rotZ(f32(z * k)), mul(rotY(f32(y * k)), rotX(f32(x * k))));   // (X x Y) x Z: FUN_0026125c(out, Y, X), then (out, Z, out)
         for (let i = 0; i < 12; i++) a.M[i] = m[i];
       },
       // setdirrot_l(id, deg, add) (FUN_0039f3b0): add == 0 -> deg + 180 (wrapped to -180..180); FUN_0037be70:
