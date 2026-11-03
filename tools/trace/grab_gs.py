@@ -5,7 +5,7 @@ out of the repo). Each GS dump stalls the emulator, so later grabs land late (gr
 frames); the dump's frame is 4 game frames after its save state (notes/effects-research.md).
 Usage (under the trace lock): flock /srv/shared/dirge-port/trace.lock python3 -I tools/trace/grab_gs.py
     SCRIPT.json TRACE_SCRATCH OUTDIR frame[,frame...]"""
-import json, os, sys, time, subprocess, glob, shutil
+import json, struct, os, sys, time, subprocess, glob, shutil
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import trace as T, fields, hook
@@ -23,6 +23,10 @@ mem = read_p2s(state); ee = bytearray(mem["eeMemory.bin"])
 bases = fields.resolve_bases(ee); table = fields.field_table(bases)
 frames = T.build_frames(script); log_from = len(frames) - 2
 rec = hook.patch_memory(ee, frames, table, log_from)
+# TRACE_POKE="addr=word,..." (hex), as trace.py (worker 0209: w209_barrel moves the barrel)
+for item in filter(None, os.environ.get("TRACE_POKE", "").split(",")):
+    a_, w_ = (int(x, 16) for x in item.split("="))
+    struct.pack_into("<I", ee, a_, w_)
 tstate = os.path.join(scratch, "trace_%s.p2s" % script["name"])
 write_p2s(tstate, {"eeMemory.bin": bytes(ee)}, state)
 env = os.path.join(scratch, "trace.env")

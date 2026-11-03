@@ -387,6 +387,11 @@ def main():
     nm = lambda p: elf.read(p, 8).split(b'\0')[0].decode('latin-1')
     wj['se_draw'] = [nm(elf.u32(0x4a11f0 + 4 * i)) for i in range(4)]
     wj['se_holster'] = [nm(elf.u32(0x4a1218 + 4 * i)) for i in range(4)]
+    # worker 0214: the dry click FUN_0033d2f8 (by weapon class, table 0x4a11c8) and the reload sounds FUN_0033d208
+    # (by P+0x10c & 3, table 0x4a1160) / FUN_0033d448 (the other reload, table 0x4a1240), each copied to the stack
+    wj['se_dry'] = [nm(elf.u32(0x4a11c8 + 4 * i)) for i in range(4)]
+    wj['se_reload'] = [nm(elf.u32(0x4a1160 + 4 * i)) for i in range(4)]
+    wj['se_reload_alt'] = [nm(elf.u32(0x4a1240 + 4 * i)) for i in range(4)]
     md = open(a.menudata, 'rb').read()
     rj['textures'] = {n: menu_texture(md, n) for n in sorted({kd['texture'] for kd in rj['kinds'].values()})}
     # write only once both are built, so a failure leaves neither file half-updated

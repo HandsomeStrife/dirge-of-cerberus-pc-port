@@ -81,7 +81,17 @@ export function makeMaterial(scene, tex, draw, mode, opts = roomOptions()) {
   if ((!tex && draw.kind === 'room' && opts.zprio) || (draw.under && opts.zunder)) {
     m.polygonOffset = true; m.polygonOffsetFactor = 1; m.polygonOffsetUnits = 4;
   }
-  if (mode === 0) {
+  if (draw.blend === 'add') {
+    // Bucketed chain, blend mode 1 (export_z128_room.py chain_blend; FUN_002661a8 with
+    // ALPHA DAT_0046bf60[1] = 0x48: Cs*As + Cd, TEST DAT_0046bf78[1] = 0x51001: ATST NEVER,
+    // AFAIL FB_ONLY, so colour is written and depth never).
+    m.blending = THREE.CustomBlending;
+    m.blendEquation = THREE.AddEquation;
+    m.blendSrc = THREE.SrcAlphaFactor; m.blendDst = THREE.OneFactor;
+    m.blendSrcAlpha = THREE.ZeroFactor; m.blendDstAlpha = THREE.OneFactor;
+    m.depthWrite = false;
+    m.uniforms.uOutAlpha.value = true;
+  } else if (mode === 0) {
     m.blending = THREE.NoBlending;
   } else {
     // GS ATE, AFAIL=RGB_ONLY: every fragment blends by As; only passing ones write depth.
@@ -151,18 +161,53 @@ export async function loadRoom({ skip = null, onProgress = null, normals = false
   const sphere = new THREE.Sphere(lo.clone().add(hi).multiplyScalar(.5), lo.distanceTo(hi));
   for (const [d, di] of draws) {
     const a = attrs[d.mesh];
-    const g = new THREE.BufferGeometry();
-    for (const k of normals ? ['position', 'normal', 'uv', 'color'] : ['position', 'uv', 'color']) g.setAttribute(k, a[k]);
-    g.setDrawRange(d.first, d.count);
-    g.boundingSphere = sphere.clone();
     const tex = d.tex ? textures[d.tex] : null;
-    for (const mode of (d.aref >= 0 && tex ? [1, 2] : [0])) {
-      const mesh = new THREE.Mesh(g, makeMaterial(scene, tex, d, mode, opts));
-      mesh.frustumCulled = false; mesh.matrixAutoUpdate = false;
-      mesh.name = d.name + (mode ? `#ate${mode}` : '');
-      mesh.userData = { draw: di, mode };
-      root.add(mesh);
+    // a draw with per-chunk ranges gets CHUNK_SLOTS geometries (shared attributes) that showChunks
+    // points at the runs of loaded chunks; until then slot 0 draws everything
+    const nslot = d.chunks ? CHUNK_SLOTS : 1;
+    for (let k = 0; k < nslot; k++) {
+      const g = new THREE.BufferGeometry();
+      for (const n of normals ? ['position', 'normal', 'uv', 'color'] : ['position', 'uv', 'color']) g.setAttribute(n, a[n]);
+      g.setDrawRange(d.first, k === 0 ? d.count : 0);
+      g.boundingSphere = sphere.clone();
+      for (const mode of (d.aref >= 0 && tex ? [1, 2] : [0])) {
+        const mesh = new THREE.Mesh(g, makeMaterial(scene, tex, d, mode, opts));
+        mesh.frustumCulled = false; mesh.matrixAutoUpdate = false;
+        mesh.name = d.name + (mode ? `#ate${mode}` : '') + (k ? `#c${k}` : '');
+        mesh.userData = d.chunks ? { draw: di, mode, chunks: d.chunks, slot: k } : { draw: di, mode };
+        root.add(mesh);
+      }
     }
   }
   return { scene, root, lo, hi, floats };
+}
+
+// Area streaming (worker 0213): the game draws chunk 00 and the pair in slots 1 / 2 of its chunk
+// table DAT_004e4c60 only (FUN_002673d8 / FUN_002677a0, streamed by FUN_0026a0c0's area boxes;
+// area_stream.js keeps that table). export_z128_room.py stores each draw's triangles in chunk order
+// with [chunk, first, count] ranges (scene.json draws[].chunks), so the loaded chunks are at most
+// CHUNK_SLOTS runs. loaded: iterable of chunk numbers (AreaStream.loaded()), or null = every chunk.
+// GUESS-free but not timed: a chunk shows the frame its slot is marked loaded (see area_stream.js).
+export const CHUNK_SLOTS = 3;
+export function showChunks(root, loaded) {
+  const want = loaded == null ? null : new Set(loaded);
+  const key = want == null ? '*' : [...want].sort((x, y) => x - y).join(',');
+  if (root.userData.chunksShown === key) return;
+  root.userData.chunksShown = key;
+  const done = new Set();
+  for (const m of root.children) {
+    const u = m.userData;
+    if (!u.chunks || done.has(m.geometry)) continue;
+    done.add(m.geometry);
+    const runs = [];
+    for (const [c, first, count] of u.chunks) {
+      if (want && !want.has(c)) continue;
+      const r = runs[runs.length - 1];
+      if (r && r[0] + r[1] === first) r[1] += count; else runs.push([first, count]);
+    }
+    if (u.slot === 0 && runs.length > CHUNK_SLOTS)
+      console.warn(`room: ${runs.length} chunk runs for ${m.name}, ${CHUNK_SLOTS} slots; the rest not drawn`);
+    const r = runs[u.slot];
+    m.geometry.setDrawRange(r ? r[0] : 0, r ? r[1] : 0);
+  }
 }

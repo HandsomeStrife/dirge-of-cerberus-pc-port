@@ -25,6 +25,8 @@ def resolve_bases(mem):
     """Player P: FUN_0053bb08(DAT_0046e880) -> entry *(M+0x18) of the table at M+0x1164
     (FUN_0053e040) -> vtable+0x94 (here 0x579ae8, `move v0,a0`) -> FUN_00333150 calls
     vtable+0x9c (0x579b18, `move v0,a0`). Both getters return `this`, checked below."""
+    if FIELDSET in ("event", "evactor"):    # absolute addresses only (worker 0210: states taken mid stage load have no player)
+        return {}
     m = u32(mem, G_OBJTAB)
     idx = u32(mem, m + 0x18)
     obj = u32(mem, u32(mem, m + 0x1164) + 4 * idx)
@@ -56,6 +58,15 @@ def resolve_bases(mem):
         bases["AIQ"] = u32(mem, G_AISCHED)
         bases["PS"] = u32(mem, P + 0x17C)          # player status record (FUN_0055a370)
         bases["EVF"] = u32(mem, 0x47DBB0)        # DAT_0047dbb0: event-flag block (FUN_003ff658 / FUN_003ff738)
+    elif FIELDSET == "ammo":
+        # worker 0214: the weapon slot record R (FUN_0031a990(*(PS+0x84))) and the inventory entry of its ammo item
+        # (FUN_00319ef0: FUN_0031e658(*(PS+0x80), FUN_00319ec0(R, 5)))
+        PS = u32(mem, P + 0x17C)
+        L = u32(mem, PS + 0x84)
+        idx = ((u32(mem, L) << 28) & 0xFFFFFFFF) >> 28
+        R = u32(mem, L + 0x10) + idx * 0xCC
+        it = struct.unpack_from("<h", mem, (R + 0x2C) & 0x1FFFFFF)[0]
+        bases.update(PS=PS, WL=L, R=R, INV=u32(mem, u32(mem, PS + 0x80) + 0x34) + it * 0xC)
     elif FIELDSET == "hud":
         # the HUD's top-level groups (worker 0203): root HUD+0x18, slot i HUD+0x38+4i (FUN_003ad618)
         bases["HGR"] = u32(mem, RET + 0x18)
@@ -479,13 +490,81 @@ HUD_FIELDS = [f for f in FIELDS if f[0] in ("step",)] + [
      for s in (0, 1, 5, 6, 7, 8, 9, 10)
      for o, sfx, d in ((0, "", "group +0: +2 flags, +6 x y w h (s16)"), (0x48, "_slide", "group +0x48 slide state (FUN_003d0d38)"))]
 
+# Opt-in set for the event runtime (TRACE_FIELDSET=event, worker 0210; notes/event-vm-research.md): the event object
+# DAT_004efba0 (0x222f80 in the z128 states; also DAT_0046f850), its clock (+0x9848 - +0x9858, ms; FUN_003798a0),
+# the command slots' mask +0x514 and handle counter +0x1520 (FUN_00376040), skip state +0x156c, the system FED's fade
+# particle DAT_0050b504 (FUN_002f4480 / FUN_002f4578), and event cameras 0-5 (+0x30 + id x 0x90: eye, aim, up point,
+# fov, +0x64 active / +0x65 flag; FUN_003779d0 / FUN_00379148).
+EV = 0x222F80
+EVENT_FIELDS = [f for f in FIELDS if f[0] in ("step",)] + [
+    ("ev_clock", None, EV + 0x9848, "bytes:20", "D", "+0x9848 clock, +0x984c last timer ms, +0x9850 shift, +0x9854 pause mark, +0x9858 paused total"),
+    ("ev_mask", None, EV + 0x514, "u32", "D", "+0x514 live command slots (FUN_00376040 / FUN_00377c68)"),
+    ("ev_handle", None, EV + 0x1520, "u32", "D", "+0x1520 last command handle"),
+    ("ev_skip", None, EV + 0x156C, "u32", "D", "+0x156c skip state (FUN_00377c68: 1 -> 2)"),
+    ("fade_p", None, 0x50B504, "u32", "D", "DAT_0050b504: the fade particle (FUN_002f4480 / FUN_002f4578)"),
+] + [("ev_cam%d" % i, None, EV + 0x30 + i * 0x90, "bytes:56", "D", "event camera %d: +0x30 eye, +0x40 aim, +0x50 up point, +0x60 fov, +0x64 flags" % i)
+     for i in range(6)]
+
+# Opt-in set for ammo / reload (TRACE_FIELDSET=ammo, worker 0214; notes/aim-research.md "Ammo and reload"): the weapon
+# state, the slot record's loaded rounds R+0x30 / cap R+0x94, the class sums at L+6, the ammo item count, the HUD text
+# buffers (DAT_00471e08 -> 0x4efba8 + 0x20 k) and the HUD refresh mask DAT_0046e54c.
+AMMO_FIELDS = [f for f in AIM_FIELDS if f[0] in ("step", "pad_held", "p_state", "motion", "p_188", "p_weapon")] + [
+    ("p_10c", "P", 0x10C, "u32", "D", "FUN_00574f40 / FUN_005612e8: P+0x10c & 3 = the reload sound's table index"),
+    ("p_118", "P", 0x118, "u32", "D", "FUN_00574f40: P+0x118 bit 0x200 clear -> reload state 8"),
+    ("ps_60", "PS", 0x60, "bytes:80", "D", "status +0x60 flags (+0x61 bit 0), +0x64 flags, +0x80 inventory, +0x84 slot list, +0x9c"),
+    ("wl", "WL", 0x0, "bytes:32", "D", "slot list: +0 index, +4 count, +6 class sums (FUN_0031aaa0), +0x10 records"),
+    ("r_20", "R", 0x20, "bytes:24", "D", "slot record +0x2c ammo item index, +0x30 loaded rounds (FUN_00319ee0)"),
+    ("r_94", "R", 0x94, "u32", "D", "slot record +0x94 cap (W+0x48)"),
+    ("inv_ammo", "INV", 0x0, "bytes:12", "D", "inventory entry of the ammo item: +4 count (FUN_0031e658 / FUN_0031eb60)"),
+    ("hud_text", None, 0x4EFBA8, "bytes:320", "D", "HUD text buffers 0x4efba8 + 0x20 k"),
+    ("hud_mask", None, 0x46E54C, "u32", "D", "DAT_0046e54c: HUD refresh mask (bit 2 = weapon / ammo)"),
+]
+
+# Opt-in set for footsteps and placed sounds (TRACE_FIELDSET=ambfoot, worker 0215; notes/audio-research.md "Footsteps").
+AMBFOOT_FIELDS = [f for f in FIELDS if f[0] in ("step", "pad_held", "matrix", "ground_speed", "walk_poly", "mp_head")] + [
+    ("c_6c0", "C", 0x6C0, "u32", "D", "byte 1 = C+0x6c1 floor material (FUN_00340e08)"),
+    ("c_568", "C", 0x568, "u32", "D", "C+0x568 (bits 0x10000000 / 0x20000000 / 0x80000000: FUN_003415d8 / FUN_003466a8 / FUN_003467b8)"),
+    ("c_590", "C", 0x590, "u32", "D", "C+0x590 bits 30-31: gait (FUN_00346650; 0 stand, 1 walk, 2 run)"),
+    ("mp_3b0", "MP", 0x3B0, "bytes:12", "D", "MP+0x3b0 footstep name (FUN_005ae708), +0x3b8 slot"),
+    ("mp_440", "MP", 0x440, "u32", "D", "MP+0x440 bits 16-19: feet up (FUN_005ae828)"),
+    ("mp_pos", "MP", 0x40, "vec4", "D", "MP+0x10 matrix row 3 (FUN_005a70c8: the footstep's position)"),
+    ("foot_l", "BM", 84 * 0x40 + 0x30, "vec4", "D", "bone 84 row 3 (p000 marker 7, FUN_0030bef8)"),
+    ("foot_r", "BM", 88 * 0x40 + 0x30, "vec4", "D", "bone 88 row 3 (p000 marker 8)"),
+    ("bg_tab", None, 0x4F5920, "bytes:256", "D", "DAT_004f5920: 8 x {slot, object, vol, _, pos} (FUN_003e6d70)"),
+]
+
+# Opt-in set for the event's actors (TRACE_FIELDSET=evactor, worker 0218; notes/event-vm-research.md "Event actors"):
+# the event clock, actor slots 0..13 (event +0x1800 + 0x200 i: +0x18 id, +0x1c MP, +0x50 matrix row 3 = setpos;
+# FUN_00376308 / FUN_0037abf8). TRACE_EVMP="a,b,..." (hex MP addresses from a first run) adds per MP: +0x10 matrix
+# (64 bytes), +0x40c rate, +0x448 head / count, and each of the 8 layers' clip (+0x200 + 0x30 k) and frame (+0x218).
+EVACTOR_FIELDS = [f for f in FIELDS if f[0] in ("step",)] + [
+    ("ev_clock", None, EV + 0x9848, "bytes:20", "D", "+0x9848 clock .. +0x9858 paused total"),
+] + [("ea%d" % i, None, EV + 0x1800 + 0x200 * i + 0x18, "bytes:8", "D", "actor slot %d: +0x18 id, +0x1c MP" % i)
+     for i in range(14)] + [("ea%d_pos" % i, None, EV + 0x1800 + 0x200 * i + 0x50, "bytes:12", "D", "actor slot %d: matrix row 3" % i)
+                            for i in range(14)]
+for _k, _a in enumerate(x for x in __import__("os").environ.get("TRACE_EVMP", "").split(",") if x):
+    _a = int(_a, 16)
+    EVACTOR_FIELDS += [("mp%d_mat" % _k, None, _a + 0x10, "bytes:64", "D", "MP %#x +0x10 matrix" % _a),
+                       ("mp%d_rate" % _k, None, _a + 0x40C, "f32", "D", "MP +0x40c rate"),
+                       ("mp%d_448" % _k, None, _a + 0x448, "u32", "D", "MP +0x448 head, +0x449 count")]
+    EVACTOR_FIELDS += [("mp%d_l%d" % (_k, _l), None, _a + 0x200 + 0x30 * _l, "bytes:8", "D", "layer clip") for _l in range(8)]
+    EVACTOR_FIELDS += [("mp%d_f%d" % (_k, _l), None, _a + 0x218 + 0x30 * _l, "f32", "D", "layer frame") for _l in range(8)]
+
 FIELDSET = __import__("os").environ.get("TRACE_FIELDSET")
+if FIELDSET == "evactor":
+    FIELDS = EVACTOR_FIELDS
+if FIELDSET == "ammo":
+    FIELDS = AMMO_FIELDS
+if FIELDSET == "event":
+    FIELDS = EVENT_FIELDS
 if FIELDSET == "hud":
     FIELDS = HUD_FIELDS
 elif FIELDSET == "gameover":
     FIELDS = GAMEOVER_FIELDS
 elif FIELDSET == "music":
     FIELDS = MUSIC_FIELDS
+elif FIELDSET == "ambfoot":
+    FIELDS = AMBFOOT_FIELDS
 elif FIELDSET == "path":
     FIELDS = PATH_FIELDS
 elif FIELDSET == "enemy":
@@ -591,3 +670,11 @@ def decode_record(rec):
             v = b.hex()
         out[name] = v
     return out
+
+# TRACE_BARREL=1 (worker 0209; notes/barrel-research.md): record 17's barrel (object 479 at 0x1cedc0 in the save):
+# +0x28 flags (bit 0 active), +0x90 centre, +0x104 HP; its motion player (0x14df680) +0x40 = MP+0x10 row 3, the draw origin
+if __import__("os").environ.get("TRACE_BARREL"):
+    FIELDS = FIELDS + [("b_a28", None, 0x1CEDC0 + 0x28, "u32", "D", "barrel object +0x28 (bit 0 = active, FUN_00584018)"),
+                       ("b_pos", None, 0x1CEDC0 + 0x90, "bytes:16", "D", "barrel object +0x90 (the centre)"),
+                       ("b_hp", None, 0x1CEDC0 + 0x104, "u32", "D", "barrel +0x104 HP (FUN_00585cd8)"),
+                       ("b_mp", None, 0x14DF680 + 0x40, "bytes:16", "D", "barrel MP+0x10 row 3 (FUN_005842c8)")]

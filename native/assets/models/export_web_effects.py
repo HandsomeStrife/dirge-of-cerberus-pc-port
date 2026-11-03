@@ -16,6 +16,11 @@ gitignored native/web/data/effects/. Nothing from the game is stored in this scr
                0x4985e0 row 0 (files 0x3100038 / 0x3100039 / 0x310003a = r0000.fed / r0001.fed / r0002.fez;
                row 1 = the _on variants 0x3300000..2) and links each FED into the effect manager (FUN_002f0ff0);
                the z128 save's RAM holds r0000.fed (not r0000_on.fed) next to r0001.fed in that list.
+  z128_a0.fed  noPath/06800014.bin, 06800114.bin, 06800214.bin (worker 0208): z128's area FEDs (FileCodes 0x20000000,
+  z128_a1.fed  0x20040000, 0x20080000 = 0x20000000 | area << 18, FUN_00306408), loaded into the level manager DAT_004ee3c0
+  z128_a2.fed  (FUN_002f15d0, the z128 RAM holds all three); their auto-start records (flag +4 bit 0) are the stage's fire,
+               smoke and embers (FUN_002e4e38; notes/effects-research.md "Stage effects"). 06800114's pictures are headers
+               only: their texels come with 06800014's (same TEX0 words).
   core_ef.bin  data/effect/core/core_ef.bin: the effect texture pack resident in GS memory.
                27 texture records of 0x20 bytes at +0x70 (u64 GS TEX0, +0xc u16 width, +0xe u16
                height, +0x10 u32 byte size), 27 CLUT records of 0x10 bytes at +0x3d0 (u32 CBP),
@@ -51,10 +56,15 @@ SRC = {
     'r0001.fed': 'data/effect/resident/r0000/r0001/fer/r0001.fed',
     'r0000.fed': 'data/effect/resident/r0000/r0000/fer/r0000.fed',
     'core_ef.bin': 'data/effect/core/core_ef.bin',
+    'z128_a0.fed': 'noPath/06800014.bin',
+    'z128_a1.fed': 'noPath/06800114.bin',
+    'z128_a2.fed': 'noPath/06800214.bin',
 }
+STAGE = ['z128_a0.fed', 'z128_a1.fed', 'z128_a2.fed']     # load order (the z128 RAM emitter list)
 
 
-CODE = {'r0001.fed': 0x40000, 'r0000.fed': 0}     # FUN_002e5c60 finds a FED by id & 0xfffc0000 == its FileCode
+CODE = {'r0001.fed': 0x40000, 'r0000.fed': 0,     # FUN_002e5c60 finds a FED by id & 0xfffc0000 == its FileCode
+        'z128_a0.fed': 0x20000000, 'z128_a1.fed': 0x20040000, 'z128_a2.fed': 0x20080000}
 
 
 def check_fed(b, name):
@@ -114,6 +124,7 @@ def main():
         print('wrote', os.path.join(a.out, name), len(b), 'bytes')
     ids = {'wall': elf_words(a.elf, 0x4a0c68, 28), 'hit': elf_words(a.elf, 0x4a0cd8, 4)}
     ids['feds'] = sorted(n for n in SRC if n.endswith('.fed'))   # worker 0200: play.js fetches only the listed FEDs (no 404)
+    ids['stage'] = STAGE                                          # worker 0208: the level manager's FEDs, in load order
     if any((x & 0xfffc0000) != 0x40000 for x in ids['wall'] + ids['hit']):
         sys.exit('effect id tables: an id outside FED 0x40000')
     if a.state:
@@ -128,7 +139,21 @@ def main():
         # newlib's rand() state (*(PTR_DAT_00495844) + 0x58): FUN_002d97f8 reseeds the effect LCG and VU0 R from
         # rand() at every effect frame (FUN_002efc78)
         ids['rand'] = struct.unpack_from('<I', ee, (struct.unpack_from('<I', ee, 0x495844)[0] & 0x1ffffff) + 0x58)[0]
+        # worker 0208: the hidden-cell mask DAT_004e8710 = DAT_004e86f0 | DAT_004e8700 (FUN_00269410; 128 bits, set /
+        # cleared by scripts FUN_00269368 / FUN_002693a8): FUN_002ea6a0 culls a stage emitter whose param cell (+0x66) is
+        # set (export_z128_room.py's HIDDEN_GROUPS are the same bits). Game state at the save, not level data.
+        # the two halves apart (review): `hidden` = DAT_004e86f0, `hidden_script` = DAT_004e8700 (the half script cmds 0x54 / 0x55
+        # change: enemy_ai.js -> effects.js cellMask)
+        bits = lambda b: [i for i in range(128) if b[i >> 3] >> (i & 7) & 1]
+        ids['hidden'] = bits(ee[0x4e86f0:0x4e8700])
+        ids['hidden_script'] = bits(ee[0x4e8700:0x4e8710])
     else:
+        # worker 0208: the hidden-cell mask then comes from the room exporter's constant (the same bits, read from the save:
+        # export_z128_room.py HIDDEN_GROUPS), so the fire is never drawn inside geometry the room hides
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from export_z128_room import HIDDEN_GROUPS
+        ids['hidden'] = sorted(HIDDEN_GROUPS)
+        ids['hidden_script'] = []
         print('WARNING: no --state given: ids.json has no effect twister (DAT_004e9408) or rand() state, so the page '
               'leaves out the type 137 sparks of the bullet impacts and hits (and does not reseed the effect LCG each '
               'frame). Pass --state sea-of-flames.p2s.', file=sys.stderr)

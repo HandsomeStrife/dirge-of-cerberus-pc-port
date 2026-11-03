@@ -469,3 +469,41 @@ Checks:
 - Headless page (Chromium): loads with no errors or warnings; walk / run / turn and the ladder
   work; draw → camera 0xd, h_st_a, reticle; shot → h_st_f and the recoil; aimed walk / run /
   strafe clips; R3 first person (Vincent hidden) and back; holster.
+
+## 11. Ammo and reload (worker 0214, 2026-11-03) — D + T
+
+On the page: aim_core.js `Ammo`, `WeaponSystem.reload` / `dry` / `shoot`, states 7-11; aim.js R2 = **F**, the
+reload clip; hud_core.js `setAmmo` + hud.js tick (the HUD's ammo text is live). Test: `node native/web/test_aim_ammo.mjs`.
+
+**Data.** Slot record R = FUN_0031a990(*(PS+0x84)) (PS = P+0x17c; list +0 index (low 4 bits, signed), +4 count, +6 the
+class sums, +0x10 records of 0xcc). R+0x30 loaded rounds (FUN_00319ee0 / FUN_00317240), R+0x94 cap = W+0x48, R+0x2c =
+FUN_00319ec0(R, 5) the ammo item's index in the inventory *(PS+0x80) (+0x34 table, 12 B entries, +4 count;
+FUN_0031e658). The **inventory count includes the loaded rounds of every slot of that class**: reserve FUN_00317328 =
+count - class sum (FUN_0031ab98: list +6 + class x 2, class = R+0x60 >> 2 & 7; FUN_0031aaa0 rebuilds the sums from the
+first 4 slots). Save (w214_dry record 0): loaded 18, count 225, class-1 sum 45 (27 in other slots) -> HUD 18/18 180.
+- Shot FUN_00577480: n = W+0x16 (3), cut to R+0x30 if fewer are loaded; a bullet per pellet while FUN_00316a20 (R+0x30
+  != 0). No bullet -> FUN_0033d2f8(class) dry click (table 0x4a11c8: bsj_015 / bsj_015 / bsj_017 / bsj_016), and no
+  camera message / kick (iStack_b0 0). Else FUN_00316a90 -> FUN_0031a138: FUN_0031eb60 takes n from the count, R+0x30 -= n,
+  the class sum -= n (so the reserve stays), DAT_0046e54c |= 2.
+- Interval after a shot (state 1): R+0x30 != 0 ? W+0x44 : min(W+0x44, 15). Traced: 25 after shots 1-5, **15 after the
+  6th** (the emptying one).
+- R2 (id 0xa pressed, FUN_003320c0 l.394): FUN_00316b28 (FUN_0031a1f8: cap >= 1, loaded < cap, count - sum + loaded > 0;
+  and FUN_00317328 != 0) ? FUN_00574f40 : FUN_00563240 (the same dry click at the muzzle). No shot that frame.
+- Auto reload: FUN_00316c18 (R+0x30 == 0 and FUN_00316b28) and FUN_00253f18(9) (FUN_002419d8(0) == 0, story mode: always)
+  -> FUN_00574f40(P, 0) when FUN_00577180 (state 0, drawn) or the gun is away (or W+4 bit 1).
+- FUN_00574f40: gate FUN_005772c8 (state 0 or 2-4; P+0x118 bit 0x200 or FUN_0055a410; C+0x564 bit 0x20000 clear);
+  FUN_00574b98; state 7 (8 when W+4 bit 0x800 or P+0x118 bit 0x200 clear); refill FUN_00316c60 -> FUN_00319f80:
+  R+0x30 = min(count - sum + loaded, cap) **at the request**, not at the end; DAT_0046e54c |= 2; sound FUN_005612e8 ->
+  FUN_0033d208(P+0x10c & 3, ..., FUN_00317a98(PS)) (0x4a1160: bsj_012 / bsj_012 / bsj_014 / bsj_013; FUN_00317a98 ->
+  0x4a1188 bsj_407..; status +0x61 bit 0 -> FUN_0033d2a8 bsj_472) and the motion class 0x1c (FUN_00341780(C, 0x1c, 0);
+  0x1d when P+0x100 bits 40-41 = 1). State 8 instead: FUN_0033d448 (0x4a1240: bsj_049 / bsj_049 / bsj_056 / bsj_057).
+- FUN_00579570: 7 -> 9 with T = W+0x46 (80); 8 -> 9 with T = W+0x44; 9: AIM, T -= 1 until 0 -> 0; 10 -> 11; 11 like 9.
+- HUD: FUN_00339590 (from FUN_00323128, every frame): DAT_0046e54c bit 1 -> FUN_003ae138(HUD, R+0x30, W+0x48,
+  FUN_003172a8 == -1 ? -1 : FUN_00317328), then the mask = 0.
+
+**Traces** (tracked scripts tools/trace/scripts/w214_*.json; `TRACE_FIELDSET=ammo TRACE_CALLLOG=sound`; outputs in
+tools/trace/out, gitignored): w214_dry (draw, 6 shots, 2 presses during the auto reload), w214_r2 (one shot, R2 at
+f80), w214_empty (`TRACE_POKE=a096d0=2d`: the inventory count = the class sum, reserve 0; 6 shots, R1 and R2 on empty).
+Each shot -3 rounds (records 41, 71, ... 191); auto reload on record 205 (state 9, T 80, 18/18 162, bsj_012 at
+P+0x10c & 3 = 1); state 0 again at 273 (h_st_rd 205-272, h_st_a 273); R1 presses during state 9 are ignored.
+test_aim_ammo: every record of w214_dry / w214_r2 equal (state, timer, rounds, reserve, HUD texts 0x1a / 0x19, sounds).

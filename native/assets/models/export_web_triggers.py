@@ -120,6 +120,14 @@ def paths(d):
     return out
 
 
+def locators(d):
+    """Section 16 locators (worker 0212): manager cmd 0x40 (FUN_00545b20) -> FUN_0053c088(mgr, out, r0) -> FUN_003113f8(r0):
+    record r0 of section 0x10 (stride +8), 4x4 matrix at +0; +0x41 = parent object (-1 = none: the matrix is the world
+    one). [m (16 floats), parent byte]."""
+    o, n, st = SE.sections(d)[16]
+    return [dict(m=f32s(d, o + k * st, 16), parent=struct.unpack_from('<b', d, o + k * st + 0x41)[0]) for k in range(n)]
+
+
 def nav_graph(d):
     """Sections 5 / 6 / 7: the stage's nav graph (FUN_0033ef48 / FUN_0033d918; nodes FUN_0033e118,
     neighbours vt+0x14 0x33e540, link records FUN_0033e190)."""
@@ -562,6 +570,9 @@ def main():
     sec0, n0, sz0 = SE.sections(d)[0]
     pset_script = [struct.unpack_from('<i', d, sec0 + i * sz0 + 0x7c)[0] for i in range(n0)]
     want |= {PLAYER_SCRIPT} | {s for s in pset_script if s >= 0}
+    # worker 0209: the barrels' scripts (section 15 +0x44: events 3 / 0x17, props.js through enemy_ai's VM)
+    import export_web_props as PROPS
+    want |= {r['script'] for r in PROPS.records(d, PROPS.types(d)) if r['script'] >= 0}
     scr = {str(s): script(d, s) for s in sorted(want) if 0 <= s < nscr}
     boxes = {m: hitboxes(m) for m in BOX_TYPES if any(r['model'] == m for r in recs)}
     # Vincent's part boxes (player vt+0x17c = FUN_0055bda8 too: the enemy bullets' part test): z128 draws
@@ -576,7 +587,7 @@ def main():
                zones=zone_sets(d, recs, boxes), stances=st, model_clips=model_clips(recs, st, atk), attacks=atk,
                sizes={str(r['zones']): zone_size(d, r['zones']) for r in recs if r['zones'] >= 0},
                lock_bones={str(r['zones']): lock_bone(d, r['zones']) for r in recs if r['zones'] >= 0},
-               paths=paths(d), nav=nav_graph(d), markers={m: markers(m) for m in boxes}, se=se_tables(elf),
+               paths=paths(d), locators=locators(d), nav=nav_graph(d), markers={m: markers(m) for m in boxes}, se=se_tables(elf),
                pset_script=pset_script, player=dict(script=PLAYER_SCRIPT, pset=PLAYER_PSET, cues=PLAYER_CUES, death=death_cues(elf)), cues=cue_tables(d))
     res['hitboxes']['p000'] = pbox
     path = os.path.join(out, 'ai.json')

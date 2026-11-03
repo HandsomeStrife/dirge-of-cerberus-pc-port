@@ -104,6 +104,11 @@ def chain_headers(buf, pay, warn=None):
       128-bit mask DAT_004e8710 (= DAT_004e86f0 | DAT_004e8700). Ids >= 0x80 always draw.
     - FUN_00265bf0: +0xa9 == 1 or 2 resends the chain with ALPHA 0x58 (Cs*Ad + Cd) and
       TEST 0x51001; texture = global TEX0 (1) or table[+0xab] (2). 0 = single pass.
+    - FUN_0026ce60: +0x94 bit 1 set -> the chain is not drawn in place but queued on sort
+      bucket +0x97 (lists DAT_004e4778; 0 means 0x17). FUN_002661a8 draws the buckets later
+      with ALPHA DAT_0046bf60[m] and TEST DAT_0046bf78[m] | +0xa8 << 4, m = (+0x94 & 0xc) >> 2
+      (save RAM: ALPHA 0x44 / 0x48 / 0x42, TEST 0x5300b / 0x51001 / 0x51001). `flags`,
+      `bucket` and `aref` (+0xa8) are returned; export_z128_room.py `chain_blend` reads them.
     The self pointer (+0xa4 == object offset) is checked; a mismatch is a warning and the
     chain gets no header (its packets stay unbound)."""
     ntex = struct.unpack_from('<H', buf, pay + 0x0c)[0]
@@ -123,5 +128,6 @@ def chain_headers(buf, pay, warn=None):
         slot = struct.unpack_from('<h', buf, o + 0x98)[0]
         out[c] = dict(slot=slot, entry=(table[slot] if 0 <= slot < ntex else None),
                       group=buf[o + 0xaa], pass2=buf[o + 0xa9], slot2=buf[o + 0xab],
-                      flags=struct.unpack_from('<H', buf, o + 0x94)[0], bucket=buf[o + 0x97])
+                      flags=struct.unpack_from('<H', buf, o + 0x94)[0], bucket=buf[o + 0x97],
+                      aref=buf[o + 0xa8])
     return out, table

@@ -58,15 +58,22 @@ def pools(p, fed):
 # worker 0200: optional 3rd argument, the FED FileCodes whose emitters are written (default 0x40000; '0,0x40000' adds
 # r0000's): each emitter gets 'code'
 CODES = {int(x, 0) for x in (sys.argv[3] if len(sys.argv) > 3 else '0x40000').split(',')}
+# worker 0208: optional 4th argument, the manager (default DAT_004ee2e0; the level's DAT_004ee3c0 holds the stage FEDs'
+# emitters, FileCodes 0x20000000 | area << 18); each emitter then also gets its cull flags +0x0a / +0x0e, the param record
+# (+0x78) as an offset into its FED, and each particle its first word (+0)
+MGR = int(sys.argv[4], 0) if len(sys.argv) > 4 else 0x4ee2e0
 c = u32(0x50b4f8)
 for nm, o in (('view', 0x150), ('proj', 0x110)):
     out['cam'][nm] = [f32(c + o + 4 * i) for i in range(16)]
-o = u32(0x4ee2e0 + 0x84)
+o = u32(MGR + 0x84)
 while o:
     if u32(u32(o + 0x70) + 4) in CODES:
         em = {'addr': o, **({'code': u32(u32(o + 0x70) + 4)} if len(sys.argv) > 3 else {}), 'ei': u16(o + 8), 'p80': vec(o + 0x80), 'r90': vec(o + 0x90), 'd4': u8(o + 0xd4),
               'age': f32(o + 0x1c), 'dt': f32(o + 0x20), 'p120': vec(o + 0x120),
               'm': [f32(o + 0xe0 + 4 * i) for i in range(16)], 'col': vec(o + 0xb0), 'scale': vec(o + 0xa0), 'parts': []}
+        if len(sys.argv) > 4:
+            em.update({'f0a': u16(o + 0xa), 'f0e': u16(o + 0xe), 'rec': u32(o + 0x78) - u32(o + 0x70), 'p150': vec(o + 0x150), 'd0': f32(o + 0xd0),
+                       'carry': f32(o + 0x24), 'fade': f32(o + 0x28)})
         for L in (0, 1):
             p = u32(o + 0x60 + 4 * L)
             while p:
@@ -78,6 +85,10 @@ while o:
                                     'm50': [f32(u32(p + 0x50) + 4 * i) for i in range(16)] if u32(p + 0x50) else None})
                 em['parts'][-1]['pools'], em['parts'][-1]['data'] = pools(p, u32(o + 0x70))
                 em['parts'][-1]['p1c'] = u32(p + 0x1c) == p      # +0x1c = itself: drawn with its own +0x54 (FUN_002e9db0)
+                if len(sys.argv) > 4:                     # + each channel's keyframe entry (+0x4c array; 0 = none), as a FED offset
+                    em['parts'][-1]['w0'] = u32(p)
+                    em['parts'][-1]['entry'] = [(u32(u32(p + 0x4c) + 4 * i) - u32(o + 0x70)) if u32(u32(p + 0x4c) + 4 * i) else 0
+                                                for i in range(u8(u32(p + 0x40) + 8))]
                 em['parts'][-1]['m54'] = [f32(u32(p + 0x54) + 4 * i) for i in range(16)] if u32(p + 0x54) else None
                 p = u32(p + 0x14)
         out['emitters'].append(em)

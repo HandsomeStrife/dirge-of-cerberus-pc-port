@@ -291,7 +291,7 @@ try {
       const bd = P.bufferData; P.bufferData = function (t, d, ...a) { if (st.on && d && d.byteLength) st.bytes += d.byteLength; return bd.call(this, t, d, ...a); };
       const bs = P.bufferSubData; P.bufferSubData = function (t, off, d, so, len) { if (st.on) st.bytes += len ? len * (d.BYTES_PER_ELEMENT || 1) : d.byteLength - (so || 0) * (d.BYTES_PER_ELEMENT || 1); return bs.call(this, t, off, d, so, len); };
     });
-    await pg2.goto(base + 'play.html?sound=0', { waitUntil: 'load' });
+    await pg2.goto(base + 'play.html?intro=0&sound=0', { waitUntil: 'load' });
     await pg2.waitForFunction(() => window.__play && window.__play.stats.ticks > 30, null, { timeout: 120000 });
     const cost = await pg2.evaluate(async () => {
       const mod = await import('./hud.js');
@@ -351,9 +351,32 @@ try {
     }
     // 6. play.js wiring of OPTION widehud: on by default, ?widehud=0 off
     const wideOn = await pg2.evaluate(() => window.__play.output.wideHud);
+    // 7b. play.html, the ammo text (worker 0214): R1 draws, R1 fires (3 pellets: 15/18 180 on slot 6 0x1a / 0x19 the same
+    // frame, FUN_00339590), R2 (F) reloads at the request (18/18 177, weapon state 9, FUN_00574f40 -> FUN_00319f80)
+    {
+      const r = await pg2.evaluate(async () => {
+        const P = window.__play, A = P.aim, H = P.gameHud;
+        if (!A || !H) return { skip: 'no weapon or game HUD' };
+        const wait = n => new Promise(res => { const t0 = P.stats.ticks; const f = () => P.stats.ticks >= t0 + n ? res() : setTimeout(f, 20); f(); });
+        const until = (c, n = 400) => new Promise(res => { const t0 = P.stats.ticks; const f = () => (c() || P.stats.ticks >= t0 + n) ? res() : setTimeout(f, 20); f(); });
+        const txt = id => { const e = H.state.find(6, id); return e ? e.text.map(c => c >= 0x13 && c <= 0x1c ? String(c - 0x13) : c === 0x12 ? '/' : '?').join('') : null; };
+        const start = [txt(0x1a), txt(0x19)];
+        A.press('r1'); await until(() => A.core.P.drawn && A.core.P.st === 0);
+        await wait(5);
+        A.press('r1'); await until(() => A.core.ammo.rounds() !== 18, 60); await wait(1);
+        const shot = [txt(0x1a), txt(0x19), A.state().ammo.join()];
+        await until(() => A.core.P.st === 0, 120);
+        A.press('r2'); await until(() => A.core.P.st === 9, 60); await wait(1);
+        const rel = [txt(0x1a), txt(0x19), A.state().ammo.join(), A.core.P.st];
+        return { start, shot, rel };
+      });
+      if (r.skip) console.log('SKIP ammo on play.html: ' + r.skip);
+      else ok(r.start.join() === '18/18,180' && r.shot.join() === '15/18,180,15,18,180' && r.rel.join() === '18/18,177,18,18,177,9',
+        `play.html: the HUD ammo text follows a shot (18/18 180 -> 15/18 180) and an R2 reload (-> 18/18 177, state 9) (${JSON.stringify(r)})`);
+    }
     await pg2.close();
     const pg3 = await browser.newPage({ viewport: { width: 960, height: 540 } });
-    await pg3.goto(base + 'play.html?sound=0&widehud=0', { waitUntil: 'load' });
+    await pg3.goto(base + 'play.html?intro=0&sound=0&widehud=0', { waitUntil: 'load' });
     await pg3.waitForFunction(() => window.__play && window.__play.stats.ticks > 2, null, { timeout: 120000 });
     const wideOff = await pg3.evaluate(() => window.__play.output.wideHud);
     await pg3.close();
@@ -366,7 +389,7 @@ try {
     const pg4 = await browser.newPage({ viewport: { width: 960, height: 540 } });
     const errs4 = [];
     pg4.on('pageerror', e => errs4.push(e.message));
-    await pg4.goto(base + 'play.html?sound=0', { waitUntil: 'load' });
+    await pg4.goto(base + 'play.html?intro=0&sound=0', { waitUntil: 'load' });
     await pg4.waitForFunction(() => window.__play && window.__play.stats.ticks > 30, null, { timeout: 120000 });
     const skip = await pg4.evaluate(async () => {
       const P = window.__play;

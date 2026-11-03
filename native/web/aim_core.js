@@ -154,6 +154,54 @@ function switchSound(table, cls) {
   return Array.isArray(table) && cls >= 0 && cls < 4 ? table[cls] || null : null;
 }
 
+// ---------------------------------------------------------------- ammo (worker 0214; notes/aim-research.md "Ammo and reload")
+// The weapon slot record R = FUN_0031a990(*(PS+0x84)) (PS = P+0x17c, the status): R+0x30 the loaded rounds, R+0x94 the
+// cap (= W+0x48). The reserve is the inventory count of the slot's ammo item (FUN_00319ef0: FUN_0031e658(*(PS+0x80),
+// FUN_00319ec0(R, 5))) less the class sum of every slot's loaded rounds (the list's +6 + class x 2, FUN_0031aaa0), so
+// the inventory count includes the rounds in the magazines. The other slots' loaded rounds (27 in the save: the class
+// sum is 45 with this slot's 18; w214_dry) are in both terms and cancel in every reader below, so the page keeps
+// inv = reserve + loaded and sum = loaded. FUN_00317b68 (slot +0x64 bit 0x20 with +0x20 top nibble 2) is false for the
+// page's slot, R+0x50 bits 0x10000 / 0x20000 clear (traced), status +0x64 bits 0x40 / 0x80 clear (traced).
+// START_AMMO: the sea-of-flames save's values, hand-written as export_web_hud.py START's ammo (18, 18, 180) is
+// (fidelity-audit 'HUD start values'); w214_dry record 0: R+0x30 18, inventory 225, class sum 45.
+export const START_AMMO = { loaded: 18, reserve: 180 };
+const P10C = 1;                                                 // P+0x10c & 3 (traced 0x333c85 in w214_dry; not decoded further)
+export class Ammo {
+  constructor(cap, start = START_AMMO) { this.cap = cap; this.loaded = Math.min(start.loaded, cap); this.inv = start.reserve + this.loaded; this.sum = this.loaded; }
+  // FUN_00317240: R+0x30
+  rounds() { return this.loaded; }
+  // FUN_00317328 (R+0x50 bit 0x10000 clear): FUN_00319ef0 - the class sum (FUN_0031ab98)
+  reserve() { return this.inv - this.sum; }
+  // FUN_0031a1f8: cap >= 1, loaded < cap and FUN_00319ef0 - sum + R+0x30 > 0
+  slotCanLoad() { const n = this.inv - this.sum + this.loaded; return this.cap >= 1 && this.loaded < this.cap && n > 0; }
+  // FUN_00316b28 (status +0x64 bits 0x40 / 0x80 clear): FUN_0031a1f8 and FUN_00317328 != 0
+  canReload() { return this.slotCanLoad() && this.reserve() !== 0; }
+  // FUN_00316c18: FUN_00317240 == 0 and FUN_00316b28 (the auto reload's test)
+  emptyCanReload() { return this.rounds() === 0 && this.canReload(); }
+  // FUN_00319f80(R, inventory): n = FUN_00319ef0 - sum + R+0x30; n < 1 -> 0, else min(n, R+0x94 = W+0x48); then
+  // FUN_0031aaa0 sums the loaded rounds again
+  refill() {
+    const n = this.inv - this.sum + this.loaded;
+    this.loaded = n < 1 ? 0 : Math.min(n, this.cap);
+    this.sum = this.loaded;
+    return n >= 1;
+  }
+  // FUN_00316a90 -> FUN_0031a138(R, n, inventory): only with rounds loaded; FUN_0031eb60 takes n from the item count
+  // (at most what it holds; returns what it took), R+0x30 -= n (clamped at 0), FUN_0031ab68: the class sum -= n (at 0)
+  spend(n) {
+    if (this.loaded === 0) return;
+    if (this.inv < n) { n = this.inv; this.inv = 0; } else this.inv -= n;
+    if (this.loaded > 0) { this.loaded -= n; if (this.loaded < 0) this.loaded = 0; }
+    this.sum -= n; if (this.sum < 0) this.sum = 0;
+  }
+  // FUN_00339590 (DAT_0046e54c bit 1) -> FUN_003ae138(HUD, FUN_00317240, W+0x48, FUN_003172a8 == -1 ? -1 : FUN_00317328);
+  // FUN_003172a8 is -1 only with R+0x50 bit 0x20000 (clear here)
+  hud() { return [this.rounds(), this.cap, this.reserve()]; }
+}
+function seTable(table, i) { return Array.isArray(table) && i >= 0 && i < table.length ? table[i] || null : null; }
+let ammoSeWarned = false;
+const warnAmmoSe = () => { if (!ammoSeWarned) { ammoSeWarned = true; console.warn('aim_core: weapon.json has no se_dry / se_reload: rebuild data/aim (export_web_aim.py); no dry-fire / reload sound'); } };
+
 export class WeaponSystem {
   // W: weapon.json (export_web_aim.py, FUN_0031c3f8); reticle: reticle.json (kinds, lengths)
   constructor(W, reticle = null, { step = 1.1999999284744263, lockOn = true } = {}) {
@@ -176,6 +224,11 @@ export class WeaponSystem {
     this.clock = 0;                                             // DAT_004f58ec (ms; FUN_003e2450)
     this.events = [];                                           // shots this frame (for the page)
     this.fire = null;                                           // stand-fire class FUN_00596460
+    // the slot's rounds (Ammo above)
+    // GUESS: Restart / H back to the save's START_AMMO (the checkpoint's status restore is not decoded; see
+    // notes/fidelity-audit.md 'Ammo after Restart / H'; the restarted HUD shows hud.json's 18/18 180 the same way)
+    this.ammo = new Ammo(this.W.magazine);
+    this.hudMask = 0;                                           // DAT_0046e54c (bit 1: weapon / ammo text; FUN_00339590 clears it)
   }
 
   // ---- the gun-out jump's camera (CAM+0x1e8 flag 0x1000000, CAM+0x220). FUN_00326500() is true
@@ -452,6 +505,23 @@ export class WeaponSystem {
         if (this.cam.view === 2) this.setFirstPerson(); else this.setView(2);
       }
     }
+    // R2 (id 0xa) pressed: FUN_00316b28 ? FUN_00574f40 (+ FUN_00324440(9), not on the page) : FUN_00563240 (the dry
+    // click at C's muzzle FUN_00341ec8); no shot this frame. Gates left out: the pad object's +0x54 bit 4, C+0x564 bit
+    // 0x4000, FUN_003242e8 bit 0x200 (0 on the page, as in the fire test below).
+    if (inp.r2Pressed) {
+      if (this.ammo.canReload()) this.reload(player);
+      else this.dry();
+      return;
+    }
+    // the materia shot (L1: FUN_005773f0 / FUN_00574c10, states 5 / 6) is not on the page.
+    // Auto reload: FUN_00316c18 and FUN_00253f18(9) (true when FUN_002419d8(0) == 0: story mode). If FUN_00577180
+    // (state 0, drawn, !FUN_0055a410) is false and the gun is drawn and W+4 bit 1 is clear, only the fire test runs;
+    // otherwise FUN_00574f40(P, 0) (its own FUN_005772c8 gate decides) and no shot this frame (traced w214_dry: record
+    // 204 state 0 with 0 rounds -> 205 state 9, T 80, 18 rounds, reserve 162).
+    if (this.ammo.emptyCanReload()) {
+      const idle = P.st === 0 && P.drawn;                     // FUN_00577180 (FUN_0055a410: player states 10-14 / 0x15, not on this path)
+      if (idle || !P.drawn || (W.flags & 2)) { this.reload(player); return; }
+    }
     // fire: (R1 held && auto) || (R1 pressed && !auto); FUN_00577180: state 0 and drawn
     const trig = (W.flags & 1) ? inp.r1Held : inp.r1Pressed;
     if (trig && P.st === 0 && P.drawn) {
@@ -509,40 +579,86 @@ export class WeaponSystem {
   // clears the flag)
   ladderMount(onGround = true, player = null) { this.P.m29c = 4; this.holsterCore(onGround, player); }
 
+  // FUN_00574f40(P): gate FUN_005772c8 (state 0 or 2-4; P+0x118 bit 0x200 set (traced 1 in every w214 record) or
+  // FUN_0055a410; C+0x564 bit 0x20000 clear). alt = W+4 bit 0x800 or P+0x118 bit 0x200 clear. FUN_00574b98 (auto
+  // release: 3 -> 0, 4 -> 2; POSE(0)), state = alt ? 8 : 7, then the refill FUN_00316c60 -> FUN_00319f80 when FUN_00316b28,
+  // and DAT_0046e54c |= 2 (HUD present). Sound: alt -> FUN_0033d448(P+0x10c & 3) (se_reload_alt), else FUN_005612e8 ->
+  // FUN_0033d208(P+0x10c & 3, C's position, FUN_00317a98(PS)) (se_reload; FUN_00317a98 false and status +0x61 bit 0
+  // clear in the save: traced bsj_012 at P+0x10c & 3 = 1) and the reload motion class 0x1c (event 'reload': aim.js).
+  // The page takes P+0x10c & 3 = 1 and P+0x118 bit 0x200 set (w214 traces); alt is W+4 bit 0x800 only.
+  reload(player = null) {
+    const P = this.P, W = this.W;
+    if (!(P.st === 0 || (P.st >= 2 && P.st <= 4))) return false;   // FUN_005772c8
+    const alt = !!(W.flags & 0x800);
+    if (P.st === 3) P.st = 0; else if (P.st === 4) P.st = 2;  // FUN_00574b98 (its P+0x2a8 bit 0x20 path: not on the page)
+    P.st = alt ? 8 : 7;
+    if (this.ammo.canReload()) this.ammo.refill();             // FUN_00316b28 -> FUN_00316c60
+    this.hudMask |= 2;
+    const name = seTable(alt ? W.se_reload_alt : W.se_reload, P10C);
+    if ((alt ? W.se_reload_alt : W.se_reload) == null) warnAmmoSe();
+    // FUN_0033d448 plays only while FUN_00253ff8() == 1 or P+0x28 bit 4 is clear (the draw sound's DAT_004e0ff8: 1 in play)
+    if (this.sound && name) this.sound(name);
+    if (!alt) this.events.push({ type: 'reload' });            // FUN_005612e8 -> FUN_00341780(C, 0x1c, 0) (P+0x100 bits 40-41 = 0)
+    return true;
+  }
+  // FUN_00563240 / FUN_00577480's no-bullet branch: FUN_0033d2f8(W+0x14 >> 2 & 7, the muzzle) = bsj_015 / bsj_015 /
+  // bsj_017 / bsj_016 (ELF 0x4a11c8; weapon.json se_dry)
+  dry() {
+    const name = seTable(this.W.se_dry, this.W.class);
+    if (this.W.se_dry == null) warnAmmoSe();
+    if (this.sound && name) this.sound(name);
+  }
+
   // ---- 4. FUN_00579570 (aimHit: CAM+0xa0 from this frame's camera)
   stateMachine(aimHit) {
     const P = this.P, W = this.W;
     // FUN_005784d8(P, 1): P+0x2b0 = CAM+0xa0, and face it (FUN_00562ef8: P+0x120, C+0x670/0x2b0)
     const AIM = () => { if (P.drawn && P.m2a0 === 0 && aimHit) { P.aim = aimHit; P.facePt = aimHit; } };
-    const interval = () => W.interval;                        // FUN_00316a20 true (traced 25 = W+0x44)
+    // after a shot (FUN_00317b68 false): state 1 takes W+0x44 when FUN_00316a20 (rounds still loaded), else
+    // min(W+0x44, 15); state 3 always W+0x44. Traced w214_dry: 25 after each shot, 15 after the one that empties it.
+    const interval = semi => (!semi || this.ammo.rounds() !== 0) ? W.interval : (W.interval < 16 ? W.interval : 15);
     P.acc = f32(P.acc + this.step);
     while (P.acc >= 1.0) {
       switch (P.st) {
         case 0: if (P.drawn) AIM(); break;
         case 1:
           if (P.T > 0) { P.T -= 1; break; }
-          this.shoot(); P.st = 2; P.T = interval(); break;
+          this.shoot(); P.st = 2; P.T = interval(true); break;
         case 2: AIM(); if (P.T > 0) P.T -= 1; else P.st = 0; break;
         case 3:
           if (P.T > 0) { P.T -= 1; break; }
-          this.shoot(); P.st = 4; P.T = interval(); break;
+          this.shoot(); P.st = 4; P.T = interval(false); break;
         case 4: AIM(); if (P.T > 0) P.T -= 1; else P.st = 3; break;
+        case 7: P.st = 9; P.T = W.reload; break;              // reload start: T = W+0x46
+        case 8: P.st = 9; P.T = W.interval; break;            // the other reload: T = W+0x44
+        case 9: AIM(); if (P.T > 0) P.T -= 1; else P.st = 0; break;
+        case 10: P.st = 0xb; break;
+        case 11: AIM(); if (P.T > 0) P.T -= 1; else P.st = 0; break;
         case 0xc: P.st = 0xd; break;
         case 0xd: AIM(); if (P.T <= 0) P.st = 0; else P.T -= 1; P.st = 0xf; break;   // falls into 0xe
         case 0xe: P.st = 0xf; break;
         case 0xf: AIM(); if (P.T <= 0) P.st = 0; else P.T -= 1; break;
-        default: P.st = 0;                                    // states 5-11 (materia, reload) not on the page
+        default: P.st = 0;                                    // states 5 / 6 (the materia shot) are not on the page
       }
       P.acc = f32(P.acc - 1.0);
     }
   }
 
-  // FUN_00577480 (the parts on the page): one bullet event per pellet, camera message, kick
+  // FUN_00577480 (the parts on the page): pellets n = W+0x16, cut to R+0x30 when fewer are loaded; a bullet per
+  // pellet while FUN_00316a20 (rounds loaded). No bullet: the dry sound FUN_0033d2f8 and no camera message or kick
+  // (iStack_b0 0). Else FUN_00316a90 spends n, then the fire sound, camera message 0x3e9, DAT_0046e54c |= 2, kick.
   shoot() {
-    this.events.push({ type: 'shot', pellets: this.W.pellets });
+    let n = this.W.pellets;
+    const r = this.ammo.rounds();
+    if (r >= 0 && r < n) n = r;
+    if (n <= 0 || r === 0) { this.dry(); return false; }
+    this.ammo.spend(n);
+    this.hudMask |= 2;
+    this.events.push({ type: 'shot', pellets: n });
     this.shotMessage();                                       // camera message 0x3e9 (FUN_0033a310), handled at once
     this.cam.kick = 0.75;                                     // FUN_0032a320(table 0x46eee0[class 1])
     this.fire = this.fire || { sub: 0, t: 0 };                // stand-fire class request
+    return true;
   }
 }
 

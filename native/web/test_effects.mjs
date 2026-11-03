@@ -159,6 +159,150 @@ const ok = (what, cond, info = '') => { checks++; if (!cond) { fails++; console.
   ok('type 17 transition (FUN_002eccc8): all four lanes', want.every((w, i) => w[0] === v[4 + i] && w[1] === v[8 + i] && w[2] === v[12 + i]), JSON.stringify(Array.from(v.slice(4, 16))));
 }
 
+// --- worker 0208: the z128 stage fire (the level manager DAT_004ee3c0; notes/effects-research.md "Stage effects")
+{
+  const S = n => join(dataDir, n);
+  if (!(ids.stage || []).every(n => existsSync(S(n))) || !(ids.stage || []).length) console.log('  (no stage FEDs in data/effects: the stage-fire checks are skipped; re-run export_web_effects.py)');
+  else {
+    const stage = ids.stage.map(n => rd(S(n)));
+    const mkStage = rng => createEffects({ fed: stage[0], stage, core, rng, rand: ids.rand, cull: true, hidden: ids.hidden, models0: true, warn: () => {} });
+    const viewOf = V => ({ toView: p => [0, 1, 2].map(j => f(f(f(p[0] * V[j]) + f(p[1] * V[4 + j])) + f(f(p[2] * V[8 + j]) + V[12 + j]))),
+      toViewMatrix: () => Float32Array.from(V), eye: [0, 1, 2].map(i => -(V[12] * V[4 * i] + V[13] * V[4 * i + 1] + V[14] * V[4 * i + 2])) });
+    // hand cases (no game data): type 61's envelope and type 62's in-place product
+    {
+      const T = _internals.T, buf = new ArrayBuffer(0x50), dv = new DataView(buf);
+      const W = (o, x) => dv.setFloat32(o, x, true);
+      for (let i = 0; i < 4; i++) { W(4 * i, 0.25); W(0x20 + 4 * i, 0.75); }               // B base 0.25, A base 0.75, ranges 0
+      dv.setUint16(0x40, 2, true); dv.setUint16(0x42, 3, true); dv.setUint16(0x44, 4, true);   // hold 2, hold 3, ramps 4
+      const F = { f32: o => dv.getFloat32(o, true), u16: o => dv.getUint16(o, true), u8: o => dv.getUint8(o) };
+      const vb = new ArrayBuffer(64), p = { v: new Float32Array(vb), i32: new Int32Array(vb) };
+      const X = { F, p, rng: new EffectRng(1) };
+      T[61].init(X, 0, 0);
+      const seq = []; for (let k = 0; k < 18; k++) { T[61].eval(X, 0, 0, 0); seq.push(+p.v[0].toFixed(4)); }
+      // phases: 0 (c 0-1) hold 1, 1 (c 2-5) ramp to 0.75 in 4, 2 (c 6-8) hold, 3 (c 9-12) ramp to 0.25, then wrap (period 13)
+      const want = [1, 1, 0.9375, 0.875, 0.8125, 0.75, 0.75, 0.75, 0.75, 0.625, 0.5, 0.375, 0.25, 0.25, 0.25, 0.375, 0.5, 0.625];
+      ok('type 61 (FUN_002b4660): hold / ramp to A / hold / ramp to B over the frame counter, wrapping at +0x30', JSON.stringify(seq) === JSON.stringify(want), JSON.stringify(seq));
+      const d62 = new Uint8Array(16); const dd = new DataView(d62.buffer);
+      dd.setUint16(0, 62, true); dd.setUint8(2, 2); dd.setUint16(4, 0x20, true); dd.setUint16(6, 0, true); dd.setUint16(8, 1, true); dd.setUint16(10, 0, true); dd.setUint16(12, 0x10, true);
+      const F2 = { u8: o => dd.getUint8(o), u16: o => dd.getUint16(o, true) }, p2 = { v: new Float32Array(16) };
+      for (let i = 0; i < 4; i++) { p2.v[i] = 200; p2.v[4 + i] = 0.5 + 0.5 * i; }
+      T[62].init({ F: F2, d: 0, p: p2 }, 0, 8); T[62].eval({ F: F2, d: 0, p: p2 }, 0, 0, 8);
+      { const pv = { v: new Float32Array(8) }; for (let i = 0; i < 4; i++) { pv.v[i] = 10 + i; pv.v[4 + i] = 1; }
+        T[15].loop({ p: pv }, 0, 0, 0, 0);
+        ok('type 15 loop (FUN_00272238): base = out', JSON.stringify(Array.from(pv.v)) === '[10,11,12,13,10,11,12,13]', JSON.stringify(Array.from(pv.v))); }
+      ok('type 62 (FUN_002b4500): ref 0 x ref 1 written into ref 0, clamped to 255; its own slot keeps the init copy',
+        JSON.stringify(Array.from(p2.v.slice(0, 4))) === '[100,200,255,255]' && JSON.stringify(Array.from(p2.v.slice(8, 12))) === '[200,200,200,200]', JSON.stringify(Array.from(p2.v.slice(0, 12))));
+    }
+    // script cmds 0x54 / 0x55 -> cellMask: hiding cell 27 (E15 k0's) culls it with 0x100; showing it again does not; reset
+    // restores the start mask
+    {
+      const fx = mkStage(undefined), ems = fx.stageLoad(), V = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 1282.8, 56.8, 1024, 1]);
+      const e = ems.find(m => m.ei === 15 && Math.abs(m.param - 0x2420) < 1) ?? ems.find(m => m.ei === 15);
+      const v = viewOf(V);
+      fx.cellMask(27, true); fx.end(v); const hid = e.f0a & 0x100;
+      fx.cellMask(27, false); fx.end(v); const shown = e.f0a & 0x100;
+      fx.cellMask(27, true); fx.reset(); const back = !fx.cells().includes(27);
+      ok('cellMask (cmds 0x54 / 0x55, the DAT_004e8700 half): a hidden cell culls its emitters (0x100), showing it again does not, reset restores the start mask', hid === 0x100 && shown === 0 && back, `${hid} ${shown} ${back}`);
+    }
+    // camera-0 models only with models0 (play.js: the stage engine): the impacts' floor model 0x45400 E20 does not match w206_floor
+    {
+      const fx = createEffects({ fed, core, rng: new EffectRng(7), warn: () => {} }), v = viewOf(new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 60, 1]));
+      fx.begin(f(1.2)); fx.spawn(0x45400, [0, 0, 0]); fx.end();
+      let models = 0; for (let i = 0; i < 4; i++) { fx.update(f(1.2)); models += fx.sprites(v).filter(q => q.type === 11 || q.type === 20).length; }
+      ok('the impacts\' engine (no models0) draws no camera-0 model (the floor impact 0x45400 E20 is unchecked: w206_floor mismatch)', models === 0, `${models}`);
+    }
+    const out208 = join(here, '../../tools/trace/out');
+    const st208 = ['w208_fire/save.json', 'w208_fire/state1.json', 'w208_look/state01.json', 'w208_look/state02.json', 'w208_look/state03.json',
+      'w208_look/state04.json', 'w208_still/state1.json', 'w208_still/state2.json'].filter(n => existsSync(join(out208, n)));
+    if (!st208.length) console.log('  (no tools/trace/out/w208_*: the stage-fire RAM / dump checks are skipped)');
+    // FUN_002f15d0 -> FUN_002e4e38: the stage-load pass spawns the game's emitter list (FED, emitter, record, place, order)
+    let same = 0, cullEq = 0, cullN = 0, alphaBad = '', occl = 0;
+    for (const n of st208) {
+      const st = JSON.parse(readFileSync(join(out208, n), 'utf8')), fx = mkStage(undefined), ems = fx.stageLoad();
+      fx.end(viewOf(st.cam.view));
+      if (ems.length === st.emitters.length && ems.every((e, i) => e.F.code === st.emitters[i].code && e.ei === st.emitters[i].ei && e.param === st.emitters[i].rec &&
+        [0, 1, 2].every(k => Math.abs(e.m[12 + k] - st.emitters[i].p80[k]) < 1e-3))) same++;
+      // FUN_002ea6a0: +0x0a's cull bits per emitter (0x200: the occluder test, not translated: the page may draw those)
+      ems.forEach((e, i) => { const r = st.emitters[i]; cullN++; if (!r || r.code !== e.F.code || r.ei !== e.ei) return; const a = e.f0a & 0x380, b = r.f0a & 0x380;
+        if (b === 0x200) occl++;
+        if (a === b || b === 0x200) cullEq++;
+        if (!a && !b && Math.abs(e.col[3] - r.col[3]) > 1e-5) alphaBad += `${n} #${i} ${e.col[3]} vs ${r.col[3]}; `; });
+    }
+    if (st208.length) {
+      ok(`stage load (FUN_002e4e38): the RAM's emitter list in ${st208.length} states (76 emitters: FED, emitter, param record, position, order)`, same === st208.length, `${same}/${st208.length}`);
+      ok(`emitter cull (FUN_002ea6a0): +0x0a's 0x100 / 0x80 bits equal RAM (${cullEq}/${cullN}; ${occl} occluder-culled 0x200 not compared)`, cullEq === cullN, `${cullEq}/${cullN}`);
+      ok('emitter cull: the visible emitters\' alpha +0xbc equals RAM (the screen-size / distance fades)', !alphaBad, alphaBad.slice(0, 300));
+    }
+    // the draw against the GS dumps of w208_still (camera still; dump = state + 3 frames): the level manager restored from RAM,
+    // replayed 3 frames (RNG reseeded from the state's rand()), drawn
+    const ramPool = pl => {
+      const b = Buffer.from(pl.hex, 'hex'), dv = new DataView(b.buffer, b.byteOffset, b.length), s16 = o => dv.getInt16(o, true), f32 = o => dv.getFloat32(o, true);
+      const cap = s16(0x1c), P = { dur: f32(4), life: f32(8), fade: [f32(0xc), f32(0x10), f32(0x14)], t18: f32(0x18), cap, count: s16(0x1e), start: s16(0x20), flag: dv.getUint8(0x22), recs: [] };
+      for (let i = 0; i < cap; i++) { const r = new ArrayBuffer(0x90); new Uint8Array(r).set(b.subarray(0x30 + i * 0x90, 0x30 + (i + 1) * 0x90));
+        P.recs.push({ f: new Float32Array(r), i: new Int32Array(r), h: new Int16Array(r), u8: new Uint8Array(r) }); }
+      return P;
+    };
+    const restore = (fx, st) => {                                     // test-only: the engine's emitter / particle objects from RAM
+      fx.emitters.length = 0;
+      for (const e of st.emitters) {
+        const F = fx.feds.get(e.code), E = F.emitter(e.ei), cat = F.u8(E + 0xe);
+        const em = { F, E, ei: e.ei, param: e.rec, id: 0, cat: (cat < 5) ? 0 : (cat < 9 || cat === 0xb) ? 1 : 0, flags: 0, f0a: e.f0a, age: e.age, dt: e.dt, carry: e.carry,
+          fade: e.fade, d0: e.d0, sched: -1, n58: 0x8000, lists: [[], []], p120: [...e.p120.slice(0, 3), 1], p130: [0, 0, 0, 0], p140: [1, 1, 1, 1], p150: e.p150.slice(),
+          d4: e.d4, m: Float32Array.from(e.m), col: e.col.slice(), scale: e.scale.slice(), c4: [0xff, 0xff], c8: 0, cc: 0 };
+        for (const pr of e.parts) {
+          const P = F.part(E, pr.tag), buf = new ArrayBuffer(Math.max((F.s16(P + 2) + 99) & ~3, 16)), i32 = new Int32Array(buf);
+          pr.vi.forEach((x, i) => { i32[i] = x; });
+          const blk = F.list(P, 0), n0 = F.u8(blk + 4);
+          const p = { P, tag: pr.tag, pid: F.u16(P), flags: pr.flags, list: pr.list, age: pr.age, life: F.u16(P + 6), ev: pr.ev, cat: F.u8(P + 0xb), parent: null,
+            v: new Float32Array(buf), i32, data: pr.data.slice(), entry: pr.entry.map(x => (x && !(x >= blk + 8 && x < blk + 8 + 8 * n0)) ? x : undefined),
+            m50: Float32Array.from(pr.m50), skip: null, ext: {} };
+          for (let j = 0; j < F.u8(P + 8); j++) {
+            const d = F.desc(P, j), ty = F.u16(d);
+            if (ty === 21) { const pl = Object.values(pr.pools).find(q => q.type === 21); if (pl) p.ext[F.u16(d + 4) / 4] = ramPool(pl); }
+            if (ty === 26) p.skip = 'channel type 26';
+            if (ty === 50 || ty === 53 || ty === 56) p.noDraw = `draw type ${ty}`;
+          }
+          em.lists[pr.list].push(p);
+        }
+        fx.emitters.push(em);
+      }
+    };
+    for (const k of [1, 2]) {
+      const sp = join(out208, `w208_still/state${k}.json`), dp = join(out208, `w208_still/dump${k}.json`);
+      if (!existsSync(sp) || !existsSync(dp)) { console.log(`  (no w208_still state / dump ${k}: skipped)`); continue; }
+      const st = JSON.parse(readFileSync(sp, 'utf8')), dump = JSON.parse(readFileSync(dp, 'utf8'));
+      if (!st.emitters.some(e => e.parts.some(p => p.entry))) { console.log(`  (w208_still/state${k}.json predates the 'entry' field: re-run fx_fixture.py; skipped)`); continue; }
+      const fx = mkStage(new EffectRng(st.lcg, undefined, st.mt, st.rand)), view = viewOf(st.cam.view);
+      restore(fx, st);
+      let drawn = [];
+      for (let i = 0; i < 3; i++) { fx.begin(f(1.2)); fx.end(view); drawn = fx.sprites(view); }
+      // FUN_002ea040: a looping emitter culled the frame before (+0x0a & 0x380) is not aged (the camera is still: the same set)
+      const frozen = st.emitters.map((e, i) => [e, fx.emitters[i]]).filter(([e]) => e.f0a & 0x380);
+      ok(`w208_still state ${k}: the ${frozen.length} culled looping emitters keep their RAM age over the replay`, frozen.length > 30 && frozen.every(([e, m]) => m.age === e.age), frozen.filter(([e, m]) => m.age !== e.age).length);
+      const tx = s => s.tex ? '0x' + s.tex.tex0[1].toString(16) + s.tex.tex0[0].toString(16).padStart(8, '0') : 'untex';
+      const R = {}; let zWorst = 0, zLo = 0;
+      for (const s of drawn) {
+        const dv = dump.tris.filter(t => tx(s) === 'untex' || t.tex0 === tx(s)).flatMap(t => t.v), r = R[s.type] ??= { n: 0, near: 0, rgba: 0, worst: 0 };
+        for (const v of s.verts) {
+          let best = null; for (const u of dv) { const d = Math.hypot(v.gs[0] - u[0], v.gs[1] - u[1]) + (JSON.stringify(u[6]) === JSON.stringify(v.rgba) ? 0 : 1e3); if (!best || d < best.d) best = { d, u }; }
+          r.n++; if (best && best.d < 1) { r.near++; r.rgba++; r.worst = Math.max(r.worst, best.d);
+            if (s.type !== 21) { const e = (v.gs[2] - best.u[2]) / best.u[2]; zWorst = Math.max(zWorst, Math.abs(e)); zLo = Math.min(zLo, e); } }
+        }
+      }
+      const pv = drawn.flatMap(s => s.verts.map(v => [v.gs[0], v.gs[1], tx(s)]));
+      const missing = dump.tris.filter(t => !t.v.every(u => pv.some(q => (q[2] === t.tex0 || q[2] === 'untex') && Math.hypot(q[0] - u[0], q[1] - u[1]) < 1)));
+      for (const ty of [20, 21, 11]) ok(`w208_still dump ${k}: type ${ty} vertices on a game vertex with its RGBA (${R[ty]?.rgba}/${R[ty]?.n}, worst ${R[ty]?.worst.toFixed(3)} px)`,
+        R[ty] && R[ty].n >= 8 && R[ty].rgba === R[ty].n && R[ty].worst < 0.5, JSON.stringify(R[ty]));
+      // every model, with or without a depth matrix, sits the same 0.05-0.075 % above the game's Z here (the camera of the state vs
+      // the dump's); E14 without its depth matrix would be 0.06 % below, with +d as the offset 1.35 % above
+      ok(`w208_still dump ${k}: model GS Z (incl. E14's depth matrix) within 0.1 % and on one side (${(zLo * 100).toFixed(3)} .. ${(zWorst * 100).toFixed(3)} %)`, zWorst < 1e-3 && zLo > -2e-4, `${zLo} ${zWorst}`);
+      // what the page leaves out: E10-E12's type 11 data +0x15 models (FUN_002f93d8, not decoded): 4 gouraud triangles of RGB (130, 50, 5)
+      ok(`w208_still dump ${k}: every game fire triangle drawn but E10-E12's FUN_002f93d8 models (${missing.length} left, all RGB (130, 50, 5))`,
+        missing.length <= 4 && missing.every(t => t.v.every(u => u[6][0] === 130 && u[6][1] === 50 && u[6][2] === 5)), JSON.stringify(missing.map(t => t.v.map(u => u[6]))));
+    }
+  }
+}
+
 const out = join(here, '../../tools/trace/out/w179_fx');
 if (!existsSync(join(out, 'state1.json'))) {
   console.log(`${checks - fails}/${checks} checks passed; SKIP the game comparisons (no tools/trace/out/w179_fx)`);

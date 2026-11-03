@@ -19,16 +19,19 @@ import { TICK, STEP, PlayerController, SpeedAnimator, FollowCamera, cameraRays, 
 import { attachGun } from './gun.js';
 import { loadActions } from './actions/index.js';
 import { initReport } from './report.js';
-import { loadRoom } from './room.js';
+import { loadRoom, showChunks } from './room.js';
 import { CapeCloth } from './cloth.js';
 import { createOutputStage } from './output.js';
 import { setupAim } from './aim.js';
 import { setupHud } from './hud.js';
 import { setupEnemies } from './enemies.js';
+import { createProps } from './props.js';
+import { setupPropsView } from './props_view.js';
 import { createEnemyAI, GameRandom } from './enemy_ai.js';
-import { createEffects, EffectLayer, wallImpactId, hitImpactId } from './effects.js';
+import { createEffects, EffectLayer, wallImpactId, hitImpactId, cameraView } from './effects.js';
 import { boneRows } from './enemy_hit.js';
 import { restoreCheckpoint } from './checkpoint.js';
+import { AreaStream, pickLight, loadedGrids, Light2 } from './area_stream.js';
 
 const params = new URLSearchParams(location.search);
 const hud = document.getElementById('hud');
@@ -38,6 +41,7 @@ if (params.get('hud') === '0') hud.style.display = 'none';
 const SPAWN = { x: -1395.63, z: -1110.51 };
 const ENEMIES = params.get('enemies') !== '0';       // enemies.js: z128's e027 soldiers (the AI's, and stage-load ones alive in the save)
 const ENEMY_AI = params.get('enemyai') !== '0';      // enemy_ai.js: wake trigger + awake soldier AI (?enemyai=0 = off)
+const PROPS = params.get('props') !== '0';           // props.js: z128's explosive barrels in the AI's world (?props=0 = off; worker 0209)
 // OPTION mouselook: the camera turns by mouse pixels (not in the game). ON by default at Dan's request
 // (review board 2026-10-30); ?mouselook=game gives the game's USB-mouse path (FUN_00254ac8)
 const MOUSE_DIRECT = params.get('mouselook') !== 'game';
@@ -53,6 +57,9 @@ const GAMEHUD = params.get('gamehud') !== '0';      // hud.js (hud_core.js): the
 // a user gesture: the AudioContext is made on the first key / click (the page's existing click-to-look); sounds
 // requested before that are dropped (no extra UI).
 const SOUND = params.get('sound') !== '0';
+// the opening event (intro.js, worker 0210): z128 starts with ev0100 scr001, then the Restart path's hand-off; ?intro=0
+// skips it (test aid) and starts from the save state as before
+const INTRO = params.get('intro') !== '0';
 const PACKS = params.has('packs') ? params.get('packs').split(',').filter(Boolean) : (AIM ? ['ladder', 'jump', 'shoot'] : ['ladder', 'jump']);
 // Placement: the game draws the model with the motion player's matrix MP+0x10 (FUN_005ab8f0
 // -> view x MP+0x10), a copy of the character matrix (FUN_00343de8 -> FUN_005a6f40 ->
@@ -233,59 +240,21 @@ async function setupCharLighting(vin, cape) {
   // glb cape keeps its geometric normals, not the game's, and stays prelit)
   if (cape) for (const m of cape.materials) litPatch(m, U, true);
 
-  // FUN_0026a710: DAT_004e88a4 = 1e6, then every loaded BMD's grid (FUN_00270d08); the
-  // threshold carries over, so the result is the global least d^2/k.
-  function pick(p) {
-    let best = L.pick_start, hit = null;
-    for (const g of L.grids) {
-      let ix = Math.trunc((p.x - g.x0) / g.size), iz = Math.trunc((p.z - g.z0) / g.size);   // FUN_0026fb90
-      ix = Math.min(Math.max(ix, 0), g.nx - 1); iz = Math.min(Math.max(iz, 0), g.nz - 1);
-      for (const li of g.cells[iz * g.nx + ix]) {
-        const r = g.lights[li];
-        const dx = p.x - r.pos[0], dy = p.y - r.pos[1], dz = p.z - r.pos[2];
-        const q = (dx * dx + dy * dy + dz * dz) / r.k;
-        if (!(q < best)) continue;
-        if (r.type === 2) {                                    // spot: outside the cone -> skip
-          const d = Math.hypot(dx, dy, dz);
-          if ((dx * r.spot[0] + dy * r.spot[1] + dz * r.spot[2]) / d < r.spot[3]) continue;
-        }
-        best = q; hit = r;
-      }
-    }
-    return hit;
-  }
-  // FUN_005ab608 state: MP+0x110 dir, MP+0x140 colour, MP+0x430 the settled light
-  const s110 = V(), s140 = V();
-  let s430 = undefined;                                        // undefined: not run yet
-  const dir = V(), col = V(), dd = V(), dc = V();
+  // which chunks are loaded (area_stream.js: slot table DAT_004e4c60, streamed by the area boxes)
+  const stream = new AreaStream(L.areas, L.start_pair);
+  if (!L.chunks) console.warn('character lighting: light.json v1 (no chunks / areas): light 2 from its grids only; re-run export_web_light.py');
+  // FUN_0026a710: DAT_004e88a4 = 1e6, then every loaded slot's grid in slot order (FUN_00270ed8 ->
+  // FUN_00270d08); the threshold carries over, so the result is the global least d^2/k.
+  const pick = p => pickLight(L.chunks ? loadedGrids(L, stream) : L.grids, p, L.pick_start);
+  // FUN_005ab0b0 light 2 + FUN_005ab608 smoothing (area_stream.js Light2; MP+0x110 / +0x140 / +0x430)
+  const l2 = new Light2();
   // p = the actor point, MP+0x10 x (MP+0x90 + MP+0xa0)/2 (FUN_005a72a8, FUN_0026138c)
   function frame(p) {
-    const r = pick(p);
-    dir.set(0, 0, 0); col.set(0, 0, 0);
-    if (r) {
-      dir.set(r.pos[0] - p.x, r.pos[1] - p.y, r.pos[2] - p.z);
-      const d = dir.length();
-      if (d !== 0) { dir.multiplyScalar(1 / d); col.set(...r.rgb).multiplyScalar(r.k * 100 / (d * d)); }
-      else dir.set(0, 0, 0);
-    }
-    const id = r || 0;
-    if (s430 === undefined) {
-      // GUESS: start settled on the first light (the actor's initial MP+0x110/0x140/0x430
-      // are not decoded; see notes/fidelity-audit.md "Character lighting")
-      s430 = id; s110.copy(dir); s140.copy(col);
-    } else if (id !== s430) {
-      dc.subVectors(col, s140); dd.subVectors(dir, s110);
-      if (dc.lengthSq() > 0.010000001 || dd.lengthSq() > 0.010000001) {
-        s140.addScaledVector(dc, 0.1); col.copy(s140);
-        s110.addScaledVector(dd, 0.2);
-        const l = s110.length(); if (l > 0) s110.multiplyScalar(1 / l);
-        dir.copy(s110);
-      } else s430 = id;
-    }
-    U.uL2.value.copy(dir); U.uC2.value.copy(col);              // light 2: not x MP+0x450
+    l2.update(pick(p), p);
+    U.uL2.value.set(...l2.dir); U.uC2.value.set(...l2.col);   // light 2: not x MP+0x450
   }
   const centre = V(...L.actor_center);
-  return { U, frame, centre, pick, env: L.env };               // env: unscaled, for enemies.js
+  return { U, frame, centre, pick, stream, startPair: L.start_pair, env: L.env };       // env: unscaled, for enemies.js
 }
 
 // ------------------------------------------------------------ cape cloth (cloth.js)
@@ -621,12 +590,35 @@ async function main() {
   // character lighting (setupCharLighting): FUN_005ab0b0 runs in the draw, once per game
   // frame, with the draw's MP+0x10 (the logic pose: ctrl.prev, prevHeading), after the cloth
   const light = await setupCharLighting(vin, cape);
+  // the room shows only the loaded chunks (room.js showChunks; worker 0213): the stage-load pair now
+  // (light.json without area boxes: every chunk stays drawn)
+  if (light?.stream.areas.length) showChunks(root, light.stream.loaded());
   if (light) {
     const ap = new THREE.Vector3(), Y = new THREE.Vector3(0, 1, 0);
     const actorPoint = () => ap.copy(light.centre).applyAxisAngle(Y, bodyYaw(ctrl.prevHeading)).add(ctrl.prev);
     light.frame(actorPoint());
     const prevHook = anim.drawHook;
     anim.drawHook = () => { if (prevHook) prevHook(); light.frame(actorPoint()); };
+  }
+  {
+    // Vincent's footsteps (ambient.js Footsteps, worker 0215): FUN_005ae828 in the MP update after the pose, i.e. on the
+    // game frame's draw pose (the cape's logicPose: alpha 1, MP+0x10 = ctrl.prev). Name (FUN_003466a8): the floor
+    // material = the walk polygon's +6 byte (FUN_00340e08: C+0x4c0 face +6 = the DCOL word6; no polygon (ladder) -> 0) and
+    // the gait C+0x590 (FUN_00346650: the locomotion choice FUN_00346860; 0 after any other motion class, FUN_00341780).
+    // GUESS: C+0x520 / C+0x530 (FUN_00340e08's other sources) taken as 0, as in the save. T: w215_ambfoot / routeA / routeB.
+    const prevFoot = anim.drawHook;
+    const jy = (b) => { const j = vinJoints[b]; return j ? j.position.y : NaN; };
+    anim.drawHook = () => {
+      if (prevFoot) prevFoot(); else logicPose();
+      if (!amb.foot) return;
+      const mk = amb.data.foot.p000.markers, poly = ctrl.active ? null : ctrl.body.poly;
+      const mat = poly == null || !col.polys ? 0 : (col.polys[poly].word6 & 0xff);
+      const tab = anim.table || null, n = tab ? tab.length : 3;
+      const loco = !anim.override && !(ctrl.jump && ctrl.jump.head) && anim.installed && anim.cur >= 0 && !ctrl.active;
+      const gait = !loco || anim.cur === 0 ? 0 : n < 2 ? 2 : anim.cur === 1 ? 1 : 2;
+      amb.foot.setGround(mat, gait);
+      amb.foot.frame([jy(mk['7'][3]) + mk['7'][1], jy(mk['8'][3]) + mk['8'][1]], [ctrl.prev.x, ctrl.prev.y, ctrl.prev.z]);
+    };
   }
   // enemy AI data (export_web_triggers.py). The save's live soldiers: records 44-49 and 66 (objects
   // #66-#71, #88), active, HP > 0 (T: k_enemy_engage8 f760, every e<k>_flags bit 0 set; the hero dump
@@ -657,7 +649,14 @@ async function main() {
   // until the zone's SE data has loaded. snd(name, pos, range): the game's FUN_0033cc48 / FUN_0033ce10; pos null =
   // FUN_0033cbd8 (at the sound camera = the listener position when sent).
   let sfx = null;
+  // placed sounds (stage section 22) + Vincent's footsteps (ambient.js, worker 0215; notes/audio-research.md "Placed sounds",
+  // "Footsteps"); null until data/audio/ambient_z128.json and the SE data have loaded. sndL: this frame's listener.
+  const amb = { placed: null, foot: null, slots: null, data: null, sndL: null };
   let musicRestart = null;                         // checkpoint.js: the zone music / ambience again (set below)
+  // GUESS (worker 0210): the zone music / ambience stay silent while the opening event plays; the event's own cue
+  // (playMusic2 bgm_274, FUN_003a02b8; ambience asj_036) is not translated (notes/fidelity-audit.md 'event music')
+  const introGate = { on: false };
+  let areaSoundHook = null;                        // stage-script manager cmd 6 -> FUN_003e6c88 (AreaSound.play; worker 0212)
   const pauseSound = { audio: null, music: null };   // pause_layer.js: menu sounds + the pause's SE hold / BGM volume
   const snd = (name, pos, range = 400.0) => { if (sfx) sfx.play(name, pos, range); };
   if (SOUND) import('./audio.js').then(({ GameAudio, SoundEmitters }) => {
@@ -665,6 +664,16 @@ async function main() {
     pauseSound.audio = au;
     au.load(128).then(() => { sfx = new SoundEmitters(au); window.__play && (window.__play.sfx = sfx); })
       .catch((e) => console.warn('audio: no SE data (tools/audio/extract.py)', e));
+    au.ready.then(() => Promise.all([import('./ambient.js'), import('./music.js'), import('./audio.js'),
+        fetch('data/audio/ambient_z128.json').then((r) => { if (!r.ok) throw new Error('ambient_z128.json ' + r.status); return r.json(); })]))
+      .then(([AM, MU, AU, data]) => {
+        amb.data = data; amb.AM = AM;
+        amb.slots = new AM.SlotStreams(au, { emitterVolPan: AU.emitterVolPan, SeStream: MU.SeStream, hexBytes: AU.hexBytes });
+        amb.slots.areaFn = (n, v) => { if (areaSoundHook) areaSoundHook(n, v); };      // FUN_003e6c88 (music.js AreaSound)
+        amb.placed = new AM.PlacedSounds(data, amb.slots);
+        amb.foot = new AM.Footsteps(data.foot, data.version, (n, pos) => snd(n, pos));   // FUN_003e9c38: range 400
+      })
+      .catch((e) => console.warn('ambient: placed sounds / footsteps off (export_web_ambient.py)', String(e)));
     ['keydown', 'pointerdown'].forEach((e) => addEventListener(e, () => { try { au.resume(); } catch (e2) { /* no AudioContext */ } }));
     // zone music bgm_001 + area ambience asj_033 (music.js; notes/audio-research.md "Music and ambience")
     // GUESS: started at the first gesture from frame 0 (browser rule; the game's runs from zone load; notes/fidelity-audit.md)
@@ -673,14 +682,19 @@ async function main() {
       pauseSound.music = mu;
       // ev0100 playBgAreaSound("asj_033"); ev0101 playMusic3("bgm_001", 0, 4000) (no stream open: starts at once)
       const go = () => {
-        if (!au.ctx || !au.se) return;
+        if (!au.ctx || !au.se || introGate.on) return;
         if (!areaOn) { areaOn = true; area.play('asj_033'); }
         if (!muOn && mu.meta) { muOn = true; mu.playMusic3('bgm_001', 0, 4000).catch((e) => console.warn('music:', e)); }
       };
       mu.load(128).then(go, (e) => console.warn('music: no BGM data (tools/audio/bgm.py)', String(e))); au.ready.then(go, () => {});
       // Restart (checkpoint.js). GUESS: the stage reload stops the BGM / ambience and its ev0100 / ev0101 start them again
       // (the teardown is not decoded)
-      musicRestart = () => { mu.stopMusic(); area.stop(); areaOn = muOn = false; go(); };
+      musicRestart = () => { mu.stopMusic(); area.stop(); areaOn = muOn = false; go();
+        // the stage reload makes the section-22 objects again (FUN_00548788): their sounds stop, the new ones start from scratch
+        if (amb.slots) { amb.slots.stopAll(); amb.placed = new amb.AM.PlacedSounds(amb.data, amb.slots); }
+      };
+      // a stage script's cmd 6 (enemy_ai opts.areaSound): FUN_003e6c88(name, vol). L: before the first gesture it is lost
+      areaSoundHook = (n, v) => { if (au.ctx && au.se) { areaOn = true; area.play(n, v); } };
       ['keydown', 'pointerdown'].forEach((e) => addEventListener(e, () => setTimeout(go, 0)));
     });
   }).catch((e) => console.warn('audio: off', e));
@@ -688,6 +702,7 @@ async function main() {
   const sndHist = [];
   // the game's effect engine (effects.js; data from export_web_effects.py): the bullet wall impacts and the hits on Vincent
   let fx = null, fxLayer = null, fxIds = null;
+  let fxStage = null, fxStageLayer = null;          // worker 0208: the level manager DAT_004ee3c0 (z128's fire, smoke, embers)
   // this game frame's camera (follow.update(1): the eye, up -y, along CAM+0x80) for the effect draw pass
   const fxCam = new THREE.PerspectiveCamera();
   const fxCamera = () => {
@@ -705,10 +720,28 @@ async function main() {
     const fed0 = (ids.feds || []).includes('r0000.fed') ? await get('r0000.fed')
       : (console.warn('effects: data/effects has no r0000.fed (re-run export_web_effects.py): effect 0x1000 left out'), null);
     fx = createEffects({ fed, fed0, core, warn: m => console.warn(m), twister: ids.twister, rand: ids.rand }); fxIds = ids;
-    fxLayer = new EffectLayer(THREE, fx); root.add(fxLayer.group);
-    window.__fx = { fx, layer: fxLayer, ids };   // for the page tests
+    fxLayer = new EffectLayer(THREE, fx); fxLayer.deferred = true; root.add(fxLayer.group);
+    // worker 0208: z128's area FEDs in the level manager DAT_004ee3c0 (its own engine on the same LCG / VU0 R, reseeded
+    // once a frame by the impacts' engine, which FUN_002efc78 runs first): FUN_002f15d0's load spawns their auto-start
+    // records (stageLoad); FUN_002ea6a0 culls them by the hidden cells of the save (ids.hidden), the camera and their fade
+    // without rand() (no --state export) the impacts' engine spawns nothing (createEffects); the stage engine, which shares
+    // its RNG, is left out the same way rather than run on an unseeded LCG
+    if ((ids.stage || []).length && (ids.rand === undefined || !ids.hidden)) console.warn('effects: ids.json has no rand() state or no hidden-cell mask (re-run export_web_effects.py --state): the z128 fire is left out');
+    else if ((ids.stage || []).length) {
+      const stage = await Promise.all(ids.stage.map(get));
+      fxStage = createEffects({ fed: stage[0], stage, core, rng: fx.rng, reseed: false, cull: true, hidden: ids.hidden, hiddenScript: ids.hidden_script || [], models0: true, warn: m => console.warn(m) });
+      fxStage.stageLoad();
+      fxStageLayer = new EffectLayer(THREE, fxStage); fxStageLayer.orderBase = 3000; fxStageLayer.deferred = true; root.add(fxStageLayer.group);
+    } else console.warn('effects: data/effects has no stage FEDs (re-run export_web_effects.py): the z128 fire is left out');
+    window.__fx = { fx, layer: fxLayer, ids, stage: fxStage, stageLayer: fxStageLayer };   // for the page tests
   } catch (e) { console.warn(`effects: off (${e.message}; run export_web_effects.py)`); fx = null; }
   let enemyAI = null, aiOpts = null, wakeSave = null;
+  // worker 0209: the barrels (data/props/props.json, export_web_props.py): their logic joins each AI world (props.attach)
+  const propsData = PROPS && ENEMY_AI && aiData ? await fetch('data/props/props.json').then(r => r.ok ? r.json() : null).catch(() => null) : null;
+  if (PROPS && ENEMY_AI && aiData && !propsData) console.warn('props: data/props/props.json missing (run export_web_props.py): no barrels');
+  const props = propsData ? createProps({ data: propsData, weapons: aiData.weapons,
+    effect: fx ? { spawn: (id, p, sc) => fx.spawn(id, p, sc), hit: (kind, cls, p) => { const id = hitImpactId(fxIds, kind, cls, fx.warn); if (id >= 0) fx.spawn(id, p); } } : null }) : null;
+  let propsView = null;
   const bodyRecs = new Set();                        // records the AI activated (onActivate): their bodies go at a Restart
   const startBodies = new Set(enemies ? enemies.actors.map(a => a.rec) : []);   // the bodies drawn at the start   // aiOpts / wakeSave: rebuilt by the Restart (checkpoint.js)
   let gameHud = null;                                // the game's HUD (hud.js), set up below; enemyAI's hudHit reads it
@@ -716,10 +749,13 @@ async function main() {
     if (enemies) enemies.mpHead = vin.body;            // newer actors draw before older ones (enemies.js add)
     aiOpts = ENEMY_AI && aiData && enemies ? { data: aiData, player: php, rand: () => aiRng.rand(), log: m => console.log(m), damage: ENEMY_DMG,
       sound: snd,
+      areaSound: (n, v) => { if (areaSoundHook) areaSoundHook(n, v); },   // stage-script cmd 6 (worker 0212)
+      cellMask: (bit, on) => { if (fxStage) fxStage.cellMask(bit, on); },   // stage-script cmds 0x54 / 0x55 (worker 0208)
       // FUN_00335f40 / FUN_003361b8: the impact and hit effects (effects.js)
       effect: fx ? { wall: (mat, n, p) => { const id = wallImpactId(fxIds, mat, n, fx.warn); if (id >= 0) fx.spawn(id, p); },
         hit: (kind, cls, p) => { const id = hitImpactId(fxIds, kind, cls, fx.warn); if (id >= 0) fx.spawn(id, p); },   // FUN_003361b8
         spawn: (id, p) => fx.spawn(id, p) } : null,           // FUN_003366b8(id) + FUN_00335020(pos): the bullet-end effect
+      props,                                                   // worker 0209: the barrels (props.js)
       // FUN_00567c08: a bullet's hit on Vincent -> the HUD's hit-direction ring (hud.js; gameHud is set up below)
       hudHit: (p, from) => { if (gameHud) gameHud.hit(p, from); },
       // the walk mesh for soldiers' physics bodies (mover 3, move mode 0xc; body flags 0x36: not a block80 body)
@@ -763,6 +799,8 @@ async function main() {
         };
       } } : null;
     enemyAI = aiOpts ? createEnemyAI(aiOpts) : null;
+    if (props && enemyAI) propsView = await setupPropsView({ root, props, litPatch, light }).catch(e => { console.warn('props: not drawn:', e.message); return null; });
+    if (props) { window.__props = props; window.__propsView = propsView; }   // for the page tests
     // The save's soldiers, as stored in sea-of-flames.p2s (object table *(DAT_0046e880+0x1164)[rec + 22]):
     // actor state +0x104 (also T: k_enemy_engage8 f760) and +0x118. Their script vars +0xa0 are all 0
     // there (the page's default), and +0x28 = 0x208403 (bit 0x100000 clear: their activation's script
@@ -779,7 +817,10 @@ async function main() {
   // angles are CAM_SPAWN, and whether the game resets the camera on a warp is not decoded)
   // Warp (ladder test aid): FUN_003285d0 takes the angles from render view 1's forward. GUESS:
   // that is the current view (not decoded; notes/fidelity-audit.md), so the warp keeps yaw/pitch.
-  ctrl.onTeleport = () => { if (cape) cape.cloth.started = false; follow.reset(ctrl.pos, { yaw: follow.yaw, pitch: follow.pitch }); };
+  ctrl.onTeleport = () => {
+    if (cape) cape.cloth.started = false; follow.reset(ctrl.pos, { yaw: follow.yaw, pitch: follow.pitch });
+    if (light) light.stream.everyChunk();          // PAGE AID (area_stream.js): every chunk until a box's pair has loaded
+  };
   attachGun(vin.mixRoot);                          // static gun under j56 (gun.js), loads in the background
   // the game's follow camera (player.js, FUN_0032ace0); its ray tests the camera collision
   // class (null with the stub: no pull-in). Starts at the save state's camera values (GUESS
@@ -816,10 +857,10 @@ async function main() {
   // the draw / holster sounds (weapon.json se_draw / se_holster (aim_core.js): FUN_005766c0 at Vincent's C+0x90)
   if (weapon) weapon.core.sound = (name) => snd(name, [ctrl.pos.x, ctrl.pos.y, ctrl.pos.z]);
   // the lock-on's soldiers (FUN_00328968 in aim.js aimRay; lock_on.js)
-  if (weapon && enemyAI) weapon.targets = () => enemyAI.lockTargets();
+  if (weapon && enemyAI) weapon.targets = () => props ? enemyAI.lockTargets().concat(props.lockTargets()) : enemyAI.lockTargets();   // + the barrels (worker 0209)
   // the game's HUD in the frame (hud.js, after the reticle in output.hud); follows php.hp each game frame
   // fetched only when scene.json declares it (export_web_hud.py writes "hud"): no 404 without the data
-  gameHud = GAMEHUD && scene.hud ? await setupHud({ output, player: php, url: 'data/' + scene.hud, camYaw: () => follow.yaw }) : null;
+  gameHud = GAMEHUD && scene.hud ? await setupHud({ output, player: php, url: 'data/' + scene.hud, camYaw: () => follow.yaw, weapon: weapon ? weapon.core : null }) : null;
   if (GAMEHUD && !scene.hud) console.warn('hud: not exported (run native/assets/models/export_web_hud.py)');
 
   // detached debug camera (?cam=), same format as main.js
@@ -849,7 +890,7 @@ async function main() {
     // stage-result Status screen -> (not traced further); the soldiers keep their target-dead state.
     // H also rebuilds the HUD and slides it in as after a Restart (hud.js reset; page aid, not the game's: even while
     // Vincent is alive).
-    if (e.code === 'KeyH') { php.hp = 780; if (gameOver) gameOver.reset(); if (gameHud) gameHud.reset(); follow.clearDeath(); ctrl.reset(); if (cape) cape.cloth.started = false; if (weapon) weapon.reset(); follow.reset(ctrl.pos); detached = null; }   // respawn: spawn angles (ctrl.reset cancels the ladder: its exit() clears CAM+0x1c8; the reset FUN_00329f68 -> FUN_003285d0 leaves CAM+0x1c4 / +0x1c8)
+    if (e.code === 'KeyH') { php.hp = 780; if (gameOver) gameOver.reset(); if (gameHud) gameHud.reset(); follow.clearDeath(); ctrl.reset(); if (cape) cape.cloth.started = false; if (weapon) weapon.reset(); follow.reset(ctrl.pos); detached = null; if (light) light.stream.reset(light.startPair); }   // respawn (PAGE AID: the stream back to the start pair, area_stream.js): spawn angles (ctrl.reset cancels the ladder: its exit() clears CAM+0x1c8; the reset FUN_00329f68 -> FUN_003285d0 leaves CAM+0x1c4 / +0x1c8)
     if (e.code === 'KeyR') { e.preventDefault(); report.open(); }
     if (e.code === 'Space' || e.code.startsWith('Arrow')) e.preventDefault();
   });
@@ -879,6 +920,7 @@ async function main() {
   addEventListener('resize', () => {
     renderer.setSize(innerWidth, innerHeight);
     output.fitCamera(camera);
+    if (intro) intro.refit();                      // the event camera's fov again at the next render (intro.js)
   });
 
   // keys -> camera-relative world direction through the camera matrix (rows 2 / 0)
@@ -959,19 +1001,43 @@ async function main() {
     const due = Math.min(Math.floor(acc / TICK), 8);   // game frames this rendered frame runs (MouseFeed)
     while (acc >= TICK && n < 8) {
       if (restartReady) { restartReady = false; restart(); }   // Restart: the checkpoint, before this game frame (bodies attached)
+      if (intro) {                                 // the opening event: its frame instead of play's (intro.js)
+        pressed.clear(); mouse.dx = mouse.dy = 0;
+        if (!intro.done) {
+          // FUN_00248110 runs on during events: the chunk stream at Vincent's MP+0x10 (FUN_0026a0c0; the page's player
+          // holds still while the event runs) and the effect managers (FUN_002efc78 / FUN_002efe00 / FUN_002efe98), the
+          // level fire included (worker 0208's fxStage), drawn with the event camera
+          if (light) { light.stream.frame(ctrl.prev); if (light.stream.areas.length) showChunks(root, light.stream.loaded()); }
+          if (fx) fx.begin(STEP);
+          if (fxStage) fxStage.begin(STEP);
+          intro.tick();
+          if (fx) { const c = introFxCamera(); fx.end(); if (fxStage) fxStage.end(cameraView(c)); fxLayer.update(c); if (fxStage) fxStageLayer.update(c); }
+          if (intro.done) endIntro();
+        }
+        acc -= TICK; n++; continue;                // ended: held (still hidden, the event's last view) until the hand-off
+      }
       mouse.feed(follow, due - n);                 // this game frame's share of the mouse counts
       // FUN_003e9ed0: last frame's sound requests go out with the listener of two frames back (sndHist)
       if (sfx && follow.eye && follow.M) {
         sfx.setListener(sfx.listenerOf(sndHist, follow.eye, follow.M[2], ctrl.pos));
         sfx.update();
+        amb.sndL = sfx.listener;                   // FUN_003e9ed0 also sends the placed sounds' slots (ambient.js SlotStreams)
+        if (amb.slots) amb.slots.update(amb.sndL);
       }
       // the camera runs first in the game frame: it follows the player as the last frame
       // left him, and this frame's stick-to-world uses its new matrix (player.js camera notes)
+      // FUN_00248110: FUN_00267970 + FUN_0026a0c0 before the game logic, at MP+0x10's translation: the matrix
+      // last frame's draw used, which the page models as ctrl.prev (logicPose; not ctrl.pos, the moved position)
+      if (light) { light.stream.frame(ctrl.prev); if (light.stream.areas.length) showChunks(root, light.stream.loaded()); }
       const inp = readInput();
       const moving = Math.hypot(inp.x, inp.z) > 1e-6;
       // gameover.js: FUN_003fdf00 / FUN_00334590 / FUN_004012c0 on last frame's HP (worker 0192). Before the camera:
       // FUN_00334590 case 2 starts the death camera and FUN_0032ace0 looks down in the same frame (T: w199_deathcam
       // f789 -> record f790, worker 0199)
+      // FUN_002efc78 / FUN_002efe00 (before the game logic): the reseed, then every manager in DAT_004ee8c0's order: the
+      // impacts' DAT_004ee2e0, the stage's DAT_004ee3c0, then the title's DAT_004ee4a0 (gameOver.frame's title.begin)
+      if (fx) fx.begin(STEP);
+      if (fxStage) fxStage.begin(STEP);
       if (gameOver) {
         gameOver.frame(php.hp === 0, STEP);
         if (gameOver.go.events.includes('deathCamera')) follow.startDeath();   // FUN_0032a420(CAM, 1, 0, 0) + FUN_00328720(CAM)
@@ -985,7 +1051,6 @@ async function main() {
       vinStart.pos = pOld; vinStart.h = ctrl.heading;
       // FUN_0053b500 -> FUN_00542ab8 (actor push-out) runs before the actors move (T: k_push16, the push of
       // frame f comes from the positions it starts with and moves Vincent in the same frame)
-      if (fx) fx.begin(STEP);                      // FUN_002efc78 / FUN_002efe00 (before the game logic)
       ctrl.push = enemyAI ? enemyAI.pushOut(pOld) : null;
       ctrl.step(aim(inp, b));
       pressed.clear();                             // an edge is seen by one tick only
@@ -993,10 +1058,16 @@ async function main() {
       const g = col.groundY(ctrl.pos.x, ctrl.pos.z, ctrl.pos.y);
       if (g != null) stats.groundErrMax = Math.max(stats.groundErrMax, Math.abs(g - ctrl.pos.y));
       stats.lastGroundErr = g == null ? null : g - ctrl.pos.y;
-      if (enemyAI) { php.pos = [ctrl.pos.x, ctrl.pos.y, ctrl.pos.z]; php.face = [ctrl.C.face.x, ctrl.C.face.y, ctrl.C.face.z]; enemyAI.tick(STEP, pOld, php.pos); }
+      if (enemyAI) { php.pos = [ctrl.pos.x, ctrl.pos.y, ctrl.pos.z]; php.face = [ctrl.C.face.x, ctrl.C.face.y, ctrl.C.face.z]; enemyAI.tick(STEP, pOld, php.pos); if (propsView) propsView.sync(); }
+      // the section-22 sound objects (FUN_0057d4f8 -> FUN_0057d550): Vincent's frame-start position + (0, -7, 0), T: w215_routeA
+      // start / stop frames; their volume from the listener +0x3850 of this frame (FUN_003e6ec8). A linked actor's state:
+      // enemy_ai record activity (FUN_0054ef68)
+      if (amb.placed && amb.sndL) amb.placed.frame([pOld[0], pOld[1] - 7.0, pOld[2]], amb.sndL.alt,
+        (k) => { const o = enemyAI && [...enemyAI.objects.values()].find((x) => x.kind === 'record' && x.rec === k); return !!(o && (o.flags28 & 1)); });
       // FUN_002efe98, then the effect draw pass (once a game frame) with this frame's camera: follow.tick ran at
       // the start of this game frame, as the game's camera does before the draw (the render camera lags a frame)
-      if (fx) { fx.end(); fxLayer.update(fxCamera()); }
+      // FUN_002efe98 runs every manager (worker 0208: the level manager's cull FUN_002ea6a0 with this frame's camera), then the draw passes
+      if (fx) { fx.end(); if (fxStage) fxStage.end(cameraView(fxCamera())); fxLayer.update(fxCamera()); if (fxStage) fxStageLayer.update(fxCamera()); }
       if (gameOver) gameOver.endFrame(fxCamera());   // the GAME OVER title's manager DAT_004ee4a0 (gameover_title.js)
       if (gameHud) gameHud.tick();
       if (enemies) enemies.tick(enemyAI);
@@ -1009,13 +1080,16 @@ async function main() {
     anim.update(ctrl.speed, dt);
     if (cape) cape.render();
 
-    if (detached) {
+    if (intro) {                                   // the event camera (a ?cam= view applies after the hand-off)
+      hideForIntro(); intro.render();
+    } else if (detached) {
       camera.position.copy(detached.pos); camera.up.set(0, -1, 0);
       camera.lookAt(detached.pos.clone().add(detached.dir));
     } else {
       follow.update(acc / TICK);                   // between the last two game frames, as the body
     }
-    if (weapon) weapon.render();                   // Vincent's first-person fade; the reticle draws in output.render
+    if (weapon && !intro) weapon.render();         // Vincent's first-person fade (not while the opening event hides him); the reticle draws in output.render
+    if (fxLayer) fxLayer.flush(); if (fxStageLayer) fxStageLayer.flush();   // the effect meshes once per drawn frame (worker 0208)
     output.render(root, camera);
 
     frames++; fpsAcc += dt;
@@ -1073,10 +1147,19 @@ async function main() {
   let handoff = null;
   fetch('data/checkpoint.json').then(r => r.ok ? r.json() : null).then(j => { handoff = j; }).catch(() => {});
   const restart = () => {
-    restarts++;
-    restoreCheckpoint({ ctrl, groundY: (x, z, y) => col.groundY(x, z, y), follow, php, gameOver, weapon, cape, fx,
+    const handing = introHandoff;
+    if (handing) finishIntro();                    // the event's hiding / view end in the hand-off's own frame
+    else if (introData) introGate.on = true;       // a replay follows: restoreCheckpoint's music restart stays silent
+    if (light) light.stream.reset(light.startPair);      // the stage reload: FUN_003ff7a8(0x80, 1, 2) again
+    if (introHandoff) introHandoff = false; else restarts++;
+    // worker 0208: the stage reload reloads the area FEDs (FUN_002f15d0 spawns their records again; GUESS as fx.reset's)
+    const fxAll = fx ? { reset: () => { fx.reset(); if (fxStage) { fxStage.reset(); fxStage.stageLoad(); } } } : null;
+    restoreCheckpoint({ ctrl, groundY: (x, z, y) => col.groundY(x, z, y), follow, php, gameOver, weapon, cape, fx: fxAll,
                         hud: gameHud, sfx, rebuildEnemies, handoff, music: () => { if (musicRestart) musicRestart(); } });
     detached = null; pressed.clear(); mouse.dx = mouse.dy = 0;
+    // the stage reload runs the stage program from its start, so the opening event plays again (T: w210 restart drive,
+    // the reload after the game over's Restart plays ev0100 scr001); its end hands off again (uncounted, above)
+    if (!handing && introData) startIntro();
   };
 
   // ---- pause menu (pause_layer.js / pause.js; Start = Esc or Enter). While it is open the world is frozen
@@ -1084,7 +1167,7 @@ async function main() {
   let paused = false;
   const pause = await (await import('./pause_layer.js')).setupPause({
     // the kill's own frame: FUN_00576b48 -> FUN_00241760(1, 3, 0); then gameover.js's FUN_00241760 count / the pad given to the menus (FUN_00253fd8(2))
-    output, blocked: () => frozen || php.hp === 0 || !!(gameOver && gameOver.go.pauseBlocked), sound: pauseSound,
+    output, blocked: () => frozen || !!intro || php.hp === 0 || !!(gameOver && gameOver.go.pauseBlocked), sound: pauseSound,
     onPause(on) { paused = on; if (gameHud) gameHud.pause(on); pressed.clear(); mouse.dx = mouse.dy = 0; drag = null; if (!on) { clock.getDelta(); acc = 0; } },
     // Sent when the confirm box (pause.js openBox, layout 0x472ad8) is answered OK. Restart: FUN_003c0a20 +
     // FUN_003dee40(0xf) -> FUN_004012c0 case 0xf returns 6 -> the checkpoint (restart above). Tempsave / Quit:
@@ -1095,9 +1178,58 @@ async function main() {
   // game over (gameover_layer.js): Restart (result 6) -> the checkpoint (restart above); Quit warns (no title)
   gameOver = await (await import('./gameover_layer.js')).setupGameOver({ output, blocked: () => frozen, THREE, root, fxRng: fx ? fx.rng : null,
     onRequest(r) { if (r === 'restart') restartPending = true; } });
-  window.__play = { ctrl, anim, follow, aim: weapon, col, stats, camera, renderer, output, root, vin, light, spawnY: gy,
+  window.__play = { ctrl, anim, follow, aim: weapon, col, stats, amb, camera, renderer, output, root, vin, light, spawnY: gy,
                     playerState, camView, report, keys, pressed, motions, packsReady, actionHelp, cape, enemies, enemyAI, php, pause, gameHud, pauseSound, gameOver,
-                    restart: { get count() { return restarts; }, get pending() { return restartPending || !!restartHold || restartReady; } } };
+                    restart: { get count() { return restarts; }, get pending() { return restartPending || !!restartHold || restartReady; } },
+                    intro: { get active() { return !!intro; }, get rt() { return introRt; }, get ended() { return introEnded; } } };
+  // ---- the opening event (intro.js): played before play on a fresh load; at its end the Restart path (checkpoint.js)
+  // places Vincent and soldiers 41-43 as the event's end hands them to play. The page's gameplay bodies and HUD are
+  // hidden while it runs (the event's own actors are left out, see intro.js)
+  let intro = null, introRt = null, introEnded = 0, introHandoff = false, introHidden = [], introHud = null;
+  function hideForIntro() {
+    for (const o of [vin.body, ...(enemies ? enemies.actors.map(a => a.body) : [])]) if (o && o.visible) { o.visible = false; introHidden.push(o); }
+  }
+  // the event's end: the Restart path (uncounted) runs the hand-off; until restart() runs it, the page keeps the event's
+  // last view, hidden bodies and no HUD (no frame shows the world as it was before the hand-off)
+  function endIntro() {
+    introEnded++;
+    introHandoff = true; restartPending = true;
+  }
+  function finishIntro() {
+    intro.finish();
+    for (const o of introHidden) o.visible = true;
+    introHidden = [];
+    output.hud = introHud;
+    intro = null; introGate.on = false;
+  }
+  // the effect pass's camera while the event plays: the event view (FUN_00379148's matrix)
+  function introFxCamera() {
+    const v = intro && intro.rt.view;
+    if (!v) return fxCamera();
+    fxCam.position.set(v.eye[0], v.eye[1], v.eye[2]); fxCam.up.set(-v.upDir[0], -v.upDir[1], -v.upDir[2]); fxCam.lookAt(v.aim[0], v.aim[1], v.aim[2]);
+    return fxCam;
+  }
+  let introData = null, createIntro = null, introActors = null;
+  function startIntro() {
+    // the event's Zone.load(128, a, b) is the stage load FUN_002673d8 (slots 1 / 2 = a / b; area_stream.js reset)
+    intro = createIntro({ data: introData, camera, output, canvas: renderer.domElement,
+                          zoneLoad: (z, a, b) => { if (light) light.stream.reset([a, b]); },
+                          actorLib: introActors, root, litPatch, light });       // the event's actors (event_actors.js, worker 0218)
+    introGate.on = true;
+    introRt = intro.rt;
+    introHud = output.hud; output.hud = null;
+  }
+  if (INTRO) {
+    introData = await fetch('data/event/ev0100_scr001.json').then(r => (r.ok ? r.json() : null)).catch(() => null);
+    if (!introData) console.warn('intro: data/event/ev0100_scr001.json missing (tools/byo/build_web.sh step event); starting from the save');
+    else {
+      ({ createIntro } = await import('./intro.js'));
+      // the event's actors, resident before it starts (data/event/actors: build step event_actors)
+      introActors = await (await import('./event_actors.js')).loadEventActors()
+        .catch(e => { console.warn('intro: the event\'s actors not drawn (data/event/actors: build step event_actors):', e.message); return null; });
+      startIntro();
+    }
+  }
   requestAnimationFrame(frame);
 }
 

@@ -26,7 +26,7 @@
  *
  * CLUT is a 32-bit RGBA table (PS2 alpha 0..0x80), read CSM1 (bit not set in
  * FUN_0030ab10's TEX0), so 256-entry palettes get the CSM1 reorder.
- * PSMT8 image data is stored in GS page order -> dtex_unswizzle8. PSMT4 and the
+ * PSMT8 image data with descriptor +0x11 set is stored in GS page order -> dtex_unswizzle8. PSMT4 and the
  * direct PSMCT* formats are linear.  (PSMT4 wider than one GS page uses an
  * additional column swizzle that is not yet cracked; see RST-FORMAT.md.)
  */
@@ -114,7 +114,13 @@ int dtex__decode_rst(const uint8_t *data, size_t size, const char *name,
     if (img->psm == PSM_T8 || img->psm == PSM_T8H) {
         uint8_t *lin = (uint8_t *)malloc((size_t)img->w * img->h);
         if (!lin) { dtex_free_image(out); return -1; }
-        if ((img->w % 16) == 0 && (img->h % 4) == 0) {
+        /* OBSERVED, not decoded: descriptor +0x11 selects the deswizzle. No game code is known to read +0x11 (the upload
+         * path FUN_002f20f8 -> FUN_0030a188 -> FUN_0030aa68 -> FUN_0030a5c0 takes its PSM from the 0x20-byte sub-header
+         * +0x18). Evidence: +0x11 is set exactly when width >= 128 and height >= 64 (1971 set, 411 clear, no exception),
+         * and the GS dump w209_gs f262 uploads e057_1 (64x128, +0x11 clear) with BITBLTBUF dpsm 0x13 = the payload byte
+         * for byte, i.e. linear (worker 0209; notes/barrel-research.md). The PSMT4 rule below disagrees (339 PSMT4 images
+         * with width >= 128 have +0x11 clear): not changed without a dump. */
+        if (data[img->off + 0x11] != 0 && (img->w % 16) == 0 && (img->h % 4) == 0) {
             dtex_unswizzle8(lin, data + img->dataoff, img->w, img->h);
             out->deswizzled = 1;
         } else {

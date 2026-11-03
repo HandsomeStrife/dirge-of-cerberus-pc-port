@@ -655,6 +655,17 @@ export class HudState {
     this.hp[1] = max;
     if (this.hpElem) this.hpElem.text = hpText(this.hp[0], max);
   }
+  // FUN_00339590 (DAT_0046e54c bit 1) -> FUN_003ae138(HUD, a, b, c) (worker 0214): slot 6 0x1a = "a/b" (FUN_003cbb58;
+  // b < 0: the fixed dash text, not reached: b = W+0x48), 0x19 = c's digits (FUN_003cba90; c < 0: empty), both through
+  // FUN_003d7218 with flag 0x80 (number font: tflags bit 0x80 already set in hud.json), then FUN_003ae220 (ammo marks:
+  // shows 0x19 or 0x20 by whether 0x19's text is empty). The page's c is never < 0 (FUN_003172a8 is -1 only for an
+  // R+0x50 bit 0x20000 slot), so 0x19 stays non-empty and FUN_003ae220 changes nothing: not translated (warned if hit).
+  setAmmo(a, b, c) {
+    const e1a = this.find(6, 0x1a), e19 = this.find(6, 0x19);
+    if (b < 0 || c < 0) { warn('hud: FUN_003ae138 with a negative value (dash text / ammo marks FUN_003ae220) not translated'); return; }
+    if (e1a) e1a.text = hpText(a, b);
+    if (e19) e19.text = numberCodes(c);
+  }
   // the draw list in order (the root's sibling chain); a hidden element (+2 bit 0) hides its children
   prims() {
     const out = [];

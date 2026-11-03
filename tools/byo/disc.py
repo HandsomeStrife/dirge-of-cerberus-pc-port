@@ -206,6 +206,8 @@ INPUTS = {
     '076506c1.bin': 'a4e4e9d70dbf65d279acb18fdcba34717e4006afdc4c42c46a9dc31e8c9b9f73',   # e027 model (export_web_enemy)
     '076506c2.bin': 'b69e6647ad51724335f325eec6b7ff97c019bde8dfa8868e7c4ec51f071c820a',   # e027 textures
     '076506cb.bin': '95430e94db04ee4cd74dd28b991ce8d30540423a827e162b24bdc1f470bac500',   # e027 rifle clips (r_gst)
+    '07650e41.bin': '46566553c97b678893e7553b809cfe8a298853752e891944157beb8b81bac65e',   # e057 barrel model (export_web_enemy, props_view.js)
+    '07650e42.bin': '9d3f285ec76e66595b0eb125e913f1e8aa8067d698a2a88783d0b3d0c0d2d313',   # e057 barrel texture
     '077700c1.bin': '3651ff2ee1a90b9ff2c40de1078d9a1d4d829c31c8edb178a100792c082fed4e',   # w003 rifle model (soldiers)
     '077700c2.bin': 'b3872f96ba1ca583b327c0edcd0279638928356d0acc734f4e2d88fecbac11a5',   # w003 textures
     '07770101.bin': 'abddbc0ed50cdcf956cf807ffde04258e9a21fb0916f1168376384e7e6a3aab9',   # w004 model
@@ -251,6 +253,10 @@ INPUTS = {
     # z128 sound: SE programs sep.bin (06zz0005) and names sdb.bin (06zz0008) for tools/audio/extract.py / bgm.py
     '06800005.bin': '519b914c16e6ab40592cb59c7a5f1270b772c65dc62778cd5cb08c0e3cc8ce28',
     '06800008.bin': 'e5854eb93c8e80479cda8935879d40dbdbab5fc5dbb5e81793c8227028bfeb3d',
+    # z128's area FEDs: the stage fire / smoke / embers (export_web_effects.py, worker 0208)
+    '06800014.bin': '290b9e553387611a48cffa0aed1764563f3662a67bb5bd9371d3fda182860369',
+    '06800114.bin': '0a54e64bbe31df21d5739aa27a6a41f28a40a7939c1221bf9ff81ae0c57651ec',
+    '06800214.bin': '5328fabb1e1e41e85b7fffb9df3ca0dd952037b3530a00f80a79498062c12185',
     # outside noPath: sound driver + wave bank 0 (tools/audio/extract.py), the zone music (tools/audio/bgm.py)
     '../data/sound/lib/iopsound.irx': '86164af27e90c49ee8984ae3497d2225165a789a8271bdd019b16e74bfe74aa1',
     '../data/sound2/wave0000.wd': '2ded3a27599d1adb9d7ddaa564a0aacda1a58195634ab546ae36e7dffc9e308b',
@@ -258,6 +264,11 @@ INPUTS = {
     '../data/sound2/resident.bin': '3267617ab9456d458206ffffbfb44d3ed440e0a85e87f60019d01624ee98c43f',
     '../data/etc/ressddb.bin': 'a7f70c5cc23467ec3db99b28e34aefc02806bb2070cbac49a6f1d18fc1b9e1c2',
     '../data/zone/z128/sound/bgm_001.at3': '5c0e50d546d728590f4c974247401624d123df2d32abf2510da27ffd80555138',
+    # worker 0215: the stage's other music (playMusic3 crossfade targets: battle 012 / 013, boss 014, kita_ev0145 018)
+    '../data/zone/z128/sound/bgm_012.at3': 'dc3da1c5b53f8a84eb5ec06fa6305a1365b52db43ac6f282088c6d2151ba3e16',
+    '../data/zone/z128/sound/bgm_013.at3': 'fe67537de52fe53dcda98a0ef8f6d8daded4a994e2e7110430a13dc45eac3ddb',
+    '../data/zone/z128/sound/bgm_014.at3': 'fe0008071682681535119d01f5aaed86af551abc32bd729f6792100f4d81448f',
+    '../data/zone/z128/sound/bgm_018.at3': 'c296a5ca8738724528846643a43218699065631346c8411c6121f88298b3aed6',
     # outside noPath: resident effect file + effect texture pack (export_web_effects.py)
     '../data/effect/resident/r0000/r0001/fer/r0001.fed': '5faf7fdfd9f3a8c8f07de02cd4551711c544e531c8f9c602acf05e005fc0726b',
     '../data/effect/resident/r0000/r0000/fer/r0000.fed': 'b10188567af8d5f5d23be74b1e411672f1a259a9e5ee6672ee95ebff0fc60675',
@@ -271,12 +282,30 @@ INPUTS = {
     # the opening event ev0100: its script class scr001 and the motion files searched for the battle clips
     # (export_web_checkpoint.py, worker 0205)
     '0c064001.bin': '5dd916bd71766dae09682eccdec6adfebafce057190ec9f42cc0e310d37a9393',
+    '0c064205.bin': 'e8f0aece411862028c0d3b8e31b94ed1ee58f5132abeae12c5ed51fc65f642d2',
     '0c064400.bin': 'c74099cba44ad1eecaf611e8615415a41aeeadaa5ef563b86f5b606e52b0039a',
     '0c064401.bin': 'e128959c63fbd3640d03629bec059e7ec39e68e3eb9b6571a6395a9380fb67bf',
     '0c064402.bin': 'a716f42197442e7328dd7b38991fc09b09ff34f3f23fa7fb14a96f4e31ad4de6',
     '0c064403.bin': '7a0335a29ce376a2b8d1629a554b0514f5ff8928d13bdfacd800d1ac42f6042e',
     '0c064404.bin': 'c7852a87b94be09d779c6e5a3346bdbb6ecfb5e2a2000ef9a4ed8b29665a03ef',
     '0c064405.bin': '86c2e2c2df92db05099572113ed1476329cfcb8c6eb808c0773318fa94d02514',
+    # the opening event's actors: scr001's other motion files and its models p005 / g013 / e063 / n013 / g000 / p014
+    # (export_web_event_actors.py, worker 0218)
+    '0c06441d.bin': '41372ed0a2baffe6b72db1b30e33a4afea80622d1f39d30d25e6cfce82494f80',
+    '0c064422.bin': 'c57f07fc4e5bf053f58f3e5d4e28d26916054ec7d0c4b58306e3b283c9ccc5a5',
+    '0c0644c6.bin': 'c932e42809a879e378dad26ba50e57408af25c843b7a9a33d5b86d66d04cf7eb',
+    '07700141.bin': '8e39417027c58f7d3adbd49c439cc48e72d9edd0733f034be948c5f714f3103c',
+    '07700142.bin': '48642817f47dda6249601cfd68727bc9883bef3eccc58ad414d8a4bcfe440844',
+    '07670341.bin': '95afdc7eee628ac4fafdb533aade5e662fc6b893fde57ae5013f642cb6a5e883',
+    '07670342.bin': '1a889e116f853c7a80b3f608bb9865ae29303d82a6d08340c6713e9f8e9e4bf3',
+    '07650fc1.bin': '78192811ac0592f38bbeaeb674f147203b4b02a45ea45ad02d6e52146c548ba9',
+    '07650fc2.bin': 'b86f9b9a00bc0b376d49197e590351377fe32a459358fd0183e1b2da1f816b32',
+    '076e0341.bin': '4f0b321245d35b20442a296d80112d16c52582bd02a530d32c9c04201fc42e09',
+    '076e0342.bin': '1a77b5bdbcc030cbdb134931dab8897e923511e1c4214ccefe321228cbbd81b5',
+    '07670001.bin': '77a91ce9829dd6a41bd3ec9ef50099c0c464b72dfac22600ab67a303bfd9e037',
+    '07670002.bin': '7078772714c60e7fe78f33e2f8e121cadbb74883746aa8c02edef383dba1b051',
+    '07700381.bin': '46ea22d2c243b639a4fc36fb5a0f3d9e5803fd0f1821c5203edc402b9c1a4f0e',
+    '07700382.bin': '45bc8fcebcd52b02a5ec625134e0367b5549afc9b1b5453615237e325361ce9b',
 }
 
 

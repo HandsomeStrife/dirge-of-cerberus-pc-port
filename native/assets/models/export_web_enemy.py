@@ -535,7 +535,7 @@ if __name__ == '__main__':
     opt = lambda k, d=None: a[a.index(k) + 1] if k in a else d
     if not a or a[0] == 'export':
         model = opt('--model', 'e027'); out = opt('--out', DEFAULT_OUT)
-        cl = opt('--clips', ','.join(DEFAULT_CLIPS)).split(',')
+        cl = [c for c in opt('--clips', ','.join(DEFAULT_CLIPS)).split(',') if c]   # --clips '' = none (static props: e057)
         pth, buf, _NB, _sk = load(model)
         vs = [int(opt('--variant'))] if '--variant' in a else variants(buf)
         for v in vs:

@@ -175,6 +175,8 @@ Sizes: S = under a session, M = one worker-night, L = several. "Files" = what th
 - Leads: FUN_0026a710 → FUN_00270d08, export_web_light.py.
 - Evidence: one GS dump in chunk 06 (vertex colours on Vincent), as for the hero dump.
 - Files: export_web_light.py, play.js light update. Independent.
+- **Done (worker 0216, 2026-11-02):** slot table + area boxes decoded and on the page (notes/area-stream.md). Open: the
+  chunk-06 GS dump (no save state there), the load time (GUESS), events' load(128, a, b) (P3), set_ambientcolor etc.
 
 ### P11. Help / objective messages — M
 - Missing: the stage's message boxes (the x -1186 box closed with two ✕, game-state bit 6 pauses the AI:

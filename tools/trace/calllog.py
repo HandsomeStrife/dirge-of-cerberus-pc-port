@@ -364,6 +364,34 @@ SETS["menusnd"] = [SETS["sound3"][1],
     dict(id=134, kind="site", where=(0x3ED8E0, 0x3EDA60, 0x41AF80), name="bvol_send", copy=[cpr("a0"), cpr("a1")]),
 ]
 
+# worker 0209: the explosive barrel (e057, class vt 0x5914e8) and its explosion (object type 7, vt 0x5906c0).
+# Pointer slots: +0x1b4 bullet hit FUN_00585000, +0x1ec HP FUN_00585cd8, +0x1cc blast FUN_00585448, +0x2f4 script
+# event FUN_0054e4a0; explosion +0x214 update FUN_0057e638; player / e027 +0x1cc blast FUN_00572418 / FUN_0055e498.
+SETS["barrel_all"] = [SETS["sound3"][0],
+    dict(id=210, kind="vt", where=(0x5914E8, 0x1B4), name="b_bullet",
+         copy=[cp("a1", 0x120, 1), cp("a1", 0x134, 1), cp("a0", 0x104, 1), cp("a0", 0x90, 4)]),   # bullet flags, dmg; HP
+    dict(id=211, kind="vt", where=(0x5914E8, 0x1EC), name="b_hp", copy=[cp("a0", 0x104, 1)]),        # a1 = damage
+    dict(id=212, kind="vt", where=(0x5914E8, 0x1CC), name="b_blast", copy=[cp("a0", 0x104, 1)]),     # a1 = explosion
+    dict(id=213, kind="vt", where=(0x5914E8, 0x2F4), name="b_event", copy=[]),                        # a1 = event
+    dict(id=214, kind="site", where=(0x540B90, 0x540C88, 0x57F040), name="expl_new",
+         copy=[cpr("a2"), cp("a1", 0, 4), cpr("a3")]),                                               # f12 radius, a0 obj; damage, pos, owner
+    dict(id=215, kind="vt", where=(0x5906C0, 0x214), name="expl_upd",
+         copy=[cp("a0", 0xC4, 8), cp("a0", 0x168, 12), cp("a0", 0x90, 4)]),
+    dict(id=216, kind="vt", where=(0x58F128, 0x1CC), name="p_blast", copy=[]),                       # a1 = explosion
+    dict(id=217, kind="vt", where=(0x58E1F8, 0x1CC), name="e_blast", copy=[cp("a0", 0x90, 4)]),
+    dict(id=218, kind="site", where=(0x55E498, 0x55EA50, 0x55E240), name="blast_dmg", copy=[]),     # v0 = damage
+    dict(id=219, kind="site", where=(0x55E498, 0x55EA50, 0x565480), name="blast_react",
+         copy=[cpr("a1"), cp("a2", 0, 4), cp("a3", 0, 4)]),                                           # flags, dir, pos
+    dict(id=220, kind="vt", where=(0x58F128, 0x1EC), name="p_damage", copy=[]),                       # a1 = damage
+    dict(id=221, kind="sites", where=(0x3366B8, [0x33629c]), name="fx_expl", copy=[cpr("ra")]),       # a0 = effect id
+    dict(id=222, kind="site", where=(0x336280, 0x336338, 0x2E7660), name="fx_place",
+         copy=[cp("a2", 0, 8)]),                                                                       # a2 = {5, .., pos, scale}
+    dict(id=223, kind="site", where=(0x57E7D0, 0x57EBB8, 0x541B08), name="blast_dir",
+         copy=[cp("a1", 0, 4), cp("a2", 0, 4)]),                                                      # centre, unit dir
+]
+SETS["barrel"] = [h for h in SETS["barrel_all"] if h["name"] not in ("b_blast", "b_event", "fx_place", "blast_dir")]
+SETS["barrel_b"] = [h for h in SETS["barrel_all"] if h["name"] in ("b_blast", "b_event", "fx_place", "blast_dir", "b_hp", "expl_new")]
+
 def patch(mem, setname, frame_lo, frame_hi, log_end):
     """Install the hooks of SETS[setname]. Returns (clog_start, clog_end, hooks)."""
     hooks = SETS[setname]
@@ -437,3 +465,23 @@ def decode(raw, hooks):
             k += n
         out.append(e)
     return out
+
+
+# worker 0215: footsteps and the stage's section-22 sound objects (notes/audio-research.md "Footsteps", "Placed sounds").
+# Footsteps: FUN_003466a8 -> FUN_005ae708 stores the name in MP+0x3b0; FUN_005ae828 (foot markers) / FUN_005ae738 (clip
+# event) -> FUN_003e9c38(mgr, slot MP+0x3b8, name). Sound objects (class 0xe, vt 0x5903b8): FUN_0057e188 starts
+# (FUN_003e6d70 positioned / FUN_003e6c88 area, FUN_003e8708 request 0x15), FUN_0057e220 stops (FUN_003e64b0);
+# FUN_003e6ec8 -> FUN_003e8f70 sets the fixed volume every frame; FUN_003e9ed0 -> FUN_003e7718 sends the 0x11 / 0x18 updates.
+SETS["ambfoot"] = [SETS["sound3"][2], SETS["sound3"][5], SETS["sound3"][4],
+    dict(id=150, kind="site", where=(0x5AE828, 0x5AEBC8, 0x3E9C38), name="foot_play", copy=[cpr("a1"), cp("a2", 0, 2)]),
+    dict(id=151, kind="site", where=(0x5AE738, 0x5AE828, 0x3E9C38), name="foot_event", copy=[cpr("a1"), cp("a2", 0, 2)]),
+    dict(id=152, kind="site", where=(0x3466A8, 0x3467B8, 0x5AE708), name="foot_name", copy=[cp("a1", 0, 2)]),
+    dict(id=153, kind="site", where=(0x57E188, 0x57E220, 0x3E6D70), name="bg_start", copy=[cp("a0", 0, 2), cp("a1", 0, 4)]),
+    dict(id=154, kind="site", where=(0x57E188, 0x57E220, 0x3E6C88), name="area_start", copy=[cp("a0", 0, 2), cpr("a1")]),
+    dict(id=155, kind="site", where=(0x57E220, 0x57E288, 0x3E64B0), name="bg_stop", copy=[]),
+    dict(id=156, kind="site", where=(0x3E6EC8, 0x3E6FC8, 0x3E8F70), name="bg_vol", copy=[cpr("a1"), cpr("a2")]),
+    dict(id=157, kind="site", where=(0x3E9220, 0x3E9798, 0x3E7718), name="se_update",
+         copy=[cpr("a1"), cpr("a2"), cpr("a3"), cpr("t0"), cpr("t1")]),            # id, handle, pan, vol, pitch
+    dict(id=158, kind="site", where=(0x3E6D70, 0x3E6EC8, 0x3E8B70), name="bg_open_vol", copy=[cpr("a1"), cpr("a2")]),
+    dict(id=159, kind="site", where=(0x57E188, 0x57E288, 0x3E8708), name="req15", copy=[cpr("a1")]),
+]

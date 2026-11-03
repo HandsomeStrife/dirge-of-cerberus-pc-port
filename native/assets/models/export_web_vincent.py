@@ -342,7 +342,7 @@ def add_anims(g, clips, bc, ext):
     return anims
 
 
-def local_pose(sk, parent, clips, out, name='vincent_local.bin'):
+def local_pose(sk, parent, clips, out, name='vincent_local.bin', in_place=True):
     """vincent_local.bin (a pack: vincent_<pack>_local.bin, same format): each clip's LOCAL (parent-relative) TRS per bone at frames 0..nf,
     for native/web/player.js's translation of the game's pose build (FUN_005a9db0 ->
     FUN_005afa30 / FUN_005afa58: per-bone local blend, then compose). Frame nf is the
@@ -356,7 +356,7 @@ def local_pose(sk, parent, clips, out, name='vincent_local.bin'):
         for f in range(nf + 1):
             for b, (t, s, q) in enumerate(AR.decode_frame_trs(cbuf, CP, bc, f)):
                 t = list(t if t is not None else sk['local_T'][b]); s = s if s is not None else (1.0, 1.0, 1.0)
-                if b == 1:
+                if b == 1 and in_place:      # in_place=False: bone 1 keeps the root motion (event actors)
                     t[0] = t[2] = 0.0
                     if d['zero_y']: t[1] = 0.0
                 recs.append(list(t) + list(s) + list(q))

@@ -290,3 +290,42 @@ draws at all at f834). The 52-82 triangles of that TEX0 in the w188 dumps are th
 spawns them; the reviewer matched E8 to w188 A / C, 68 / 68 triangles). fx_end 0x800 (r0000 E3) belongs to weapons 26 / 27,
 which no z128 record uses: not reachable on the page.
 
+
+## Stage effects: the z128 fire (worker 0208, 2026-11-03)
+- **Where**: the level manager DAT_004ee3c0 (FUN_002f0878 case 2) holds z128's area FEDs, FileCode 0x20000000 | area << 18
+  (FUN_00306408): noPath/06800014.bin (area 0), 06800114.bin (area 1: the fire), 06800214.bin (area 2). The z128 save's RAM
+  has all three; 76 emitters (1 + 74 + 1). The 7 x 0x406c0000 emitters on DAT_004ee2e0 at (0.4, -1.5, 0) are something else
+  (FED not found on the disc as a file; not on the page).
+- **Placement**: FUN_002f15d0 (a stage FED's load) -> FUN_002e4d80 -> FUN_002e4e38: every param record of table A whose flag
+  word +4 has bit 0, in group / record order, FUN_002e63d0 with age 0 and no position (the record's +0x10 is the place).
+  All 76 records of the three FEDs with bit 0 are what RAM holds, in that order. Scripts can spawn more (FUN_00545b20 case
+  0x17 = FUN_00336a18(id) + FUN_00336c10 scale, 0x18 = FUN_00336b28 stop; FUN_005823d8 / FUN_00582470 objects): not on the
+  page (0x20000400, flag 2, is one such record). FUN_002e4fb0 (header +0x20 table): empty in these FEDs.
+- **Cull** FUN_002ea6a0 (after FUN_002e7cd0, per emitter): clears +0x0a / +0x0e & 0x380; 0x100 when the param cell (+0x66,
+  s16 >= 0) has its bit set in the manager's copy (+0x30) of DAT_004e8710 = DAT_004e86f0 | DAT_004e8700 (the room's hidden
+  groups: export_z128_room.py HIDDEN_GROUPS 0 / 19 / 25 / 56 / 57 in the save; ids.json `hidden`); camera 1: no test; else by
+  +0x1e: 1 / > 3 no test, 0 = box DAT_0046d280 (100) at the origin, 2 / 3 = box +0x40 at +0x50 (the stack copy of +0xe0 is
+  48 bytes and the centre FUN_002d8578 writes lands on its row 3: MEASURED, only so do E15's flags / alpha match):
+  FUN_002da928 (8 corners x M x camera +0x210 (= view x clip +0x250), VU0 CLIP, all outside one plane) -> 0x80; FUN_00269978
+  occluders -> 0x200 (not translated); fade by +0x1f: 0 / 4 screen size FUN_002daae8 (corners x camera +0x1d0, extent, ends
+  125 / 75 and 62.5 / 37.5), 2 / 3 eye distance FUN_002dac58 (+0x3c / +0x4c), 1 none; fade 0 -> 0x80; alpha +0xbc = +0x15c
+  x +0xd0 x fade; then the angle fade (+0x06 = 2 / 3: s16 +0x60.. Euler, +0x68 / +0x70 band). FUN_002ea040: a culled looping
+  emitter (fade +0x28 < 0) is not aged at all. All matched against RAM in 8 states (test_effects).
+- **Draws used by the fire** (06800114): type 20 flame models (E0-E6), type 21 bursts (embers / smoke; E15's are in world
+  space: data +0xfb = 7), type 11 glow models (E10-E14; E10-E12 with +0x15 -> FUN_002f93d8: not translated), type 10 (E3, E7,
+  E8), lens flares 50 + 53 / 56 (E0 tag 3, E7, E16, E17: not translated, they read the GS depth buffer back), channel types 5
+  / 6 / 61 / 62 (translated), 26 (E8 only, hidden), random 23.
+- New in effects.js: the four channel types, loops of 15 / 16 / 21, type 21's alpha fade (asm 0x27d214), world-space spawn
+  (FUN_002e3ee8 case 7: in . (P+0x50 . E)) and pool flag (cone x P+0x50 x E), model kinds 0 / 1 (20-byte untextured tris),
+  the model depth matrix (FUN_002e3948's float scale arrives in $f12: the decomp's arguments are shifted by one), camera-0
+  models on, header-only TIM2 pictures skipped (06800114's 4 pictures have no texels; 06800014 brings the same TEX0s).
+- **Evidence** (tools/trace/out, gitignored): w208_fire (a_idle: dumps f20 / f70 + states: the start view, no fire in sight),
+  w208_look (w208_fire_look: turning, f40..160: the burning window at f160), w208_still (w208_fire_still: turn, then still;
+  dumps f201 / f245; **this dump = state + 3 frames**). Fixtures: `fx_fixture.py STATE OUT 0x20000000,0x20040000,0x20080000
+  0x4ee3c0` (4th arg = the manager; adds +0x0a / +0x0e, the record, p150, d0, carry, fade, particle entries) and `dumpfx.py
+  DUMP OUT --fed <the three .bin>`. w208_fire/save.json = the sea-of-flames save itself.
+- **Check**: test_effects restores the level manager from w208_still RAM, replays 3 frames (rand() reseed from the state)
+  and draws: every type 20 / 21 / 11 vertex lies on a dump vertex (<= 0.37 px) with its RGBA, model GS Z within 0.075 %;
+  the dumps' only fire triangles the page does not draw are E10-E12's 4 FUN_002f93d8 ones.
+- Open: FUN_002f93d8, the flares, the occluders, gameplay model fog (FUN_002f2d90, FOG register: not read from the dumps),
+  script-spawned stage effects and hidden-cell changes, the start ages (page starts the fire at age 0).

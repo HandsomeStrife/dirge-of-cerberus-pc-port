@@ -270,7 +270,8 @@ export class HudLayer {
 
 // play.js hook: draws after the reticle (the reticle's group is the root of the game's draw list) and
 // follows Vincent's HP (FUN_00339988 -> FUN_003adda8 when the status HP changes).
-export async function setupHud({ output, player, url = 'data/hud/hud.json', camYaw = null }) {
+// weapon: aim_core's WeaponSystem (its hudMask = DAT_0046e54c, ammo = the slot's rounds; worker 0214)
+export async function setupHud({ output, player, url = 'data/hud/hud.json', camYaw = null, weapon = null }) {
   let data;
   try {
     const r = await fetch(url);
@@ -323,6 +324,11 @@ export async function setupHud({ output, player, url = 'data/hud/hud.json', camY
     tick() {
       st.now += 20; st.mnow += 20;                 // both HUD clocks (hud_core HudState: now / mnow)
       if (player && player.hp !== lastHp) { lastHp = player.hp; st.setHP(player.hp, st.hp[1]); }
+      // FUN_00339590 (FUN_00323128, once a frame after the objects): DAT_0046e54c bit 1 -> FUN_003ae138 with the
+      // slot's rounds, W+0x48 and the reserve, then the mask is cleared (traced w214_dry: the HUD text changes in the
+      // same frame as R+0x30)
+      if (weapon && (weapon.hudMask & 2)) st.setAmmo(...weapon.ammo.hud());
+      if (weapon) weapon.hudMask = 0;
       for (const [p, from] of hits.splice(0)) st.hit(p, from);
       if (hide) { hide = false; st.hideAll(); }
       // the screen update's group step (FUN_003d5a80 -> FUN_003d5d10); its order against the stage loop's hide is

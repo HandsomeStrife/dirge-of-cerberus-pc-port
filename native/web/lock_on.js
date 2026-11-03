@@ -54,7 +54,7 @@ function probe2Actor(a, S, E, c) {
   const C = a.point, D = sub(E, S);
   const t = dot(sub(C, S), D) / dot(D, D);
   const q = add(S, mul(D, t));
-  if (t <= 0 || a.radius * PROBE2_R <= len(sub(q, C))) return null;
+  if (t <= 0 || (a.r2 ?? a.radius) * PROBE2_R <= len(sub(q, C))) return null;   // r2: a gimmick's bound radius +0x2c (worker 0209, props.js)
   if (!onScreen(c.screen(C), PROBE2_BOX)) return null;
   if (c.blocked && c.blocked(S, a.losPoint)) return null;
   return { a, hit: C.slice(), normal: unit(sub(S, C)) };
@@ -65,10 +65,11 @@ function probe2Actor(a, S, E, c) {
 // (that is mode 0's, the bullets'). The caller's cylinder(r, p0, p1, A, B) is enemy_hit.js cylinderHit.
 function probe1Actor(a, S, E, c) {
   if (!a.alive) return null;
-  const A = a.feet, B = [a.feet[0], a.feet[1] - a.height, a.feet[2]];
-  const h = c.cylinder(a.radius, S, E, A, B);
+  // a gimmick (props.js) brings its own shape cylinder (FUN_00584408's non-2 modes): cylA / cylB / cylR
+  const A = a.cylA ?? a.feet, B = a.cylB ?? [a.feet[0], a.feet[1] - a.height, a.feet[2]], r = a.cylR ?? a.radius;
+  const h = c.cylinder(r, S, E, A, B);
   if (!h) return null;
-  const back = c.cylinder(a.radius, E, S, A, B);
+  const back = c.cylinder(r, E, S, A, B);
   if (back && (h.point[0] !== S[0] || h.point[1] !== S[1] || h.point[2] !== S[2])) {
     return { a, hit: mul(add(h.point, back.point), 0.5), normal: null };
   }
@@ -84,7 +85,7 @@ function probe(k, S, E, c) {
     if (!(a.probeBits & (1 << k))) continue;
     const h = k === 2 ? probe2Actor(a, S, E, c) : probe1Actor(a, S, E, c);
     if (!h) continue;
-    const d = len(sub(S, h.hit)) - a.radius;
+    const d = len(sub(S, h.hit)) - (a.dR ?? a.radius);                         // dR 0: not an actor (vt+0x8c 0)
     if (d < bd) { bd = d; best = h; }
   }
   if (k === 1 && c.world) {

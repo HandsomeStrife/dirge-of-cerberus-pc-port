@@ -119,4 +119,49 @@ t('volume law FUN_00001380 (master 0x7f, full volume / expression, region vol 12
   assert.strictEqual(v.volR, 8000);                 // 16255 * pan[0x3f] (126) >> 8
 });
 
+// worker 0215: the IOP's update / stop of a running SE (placed sounds, ambient.js SlotStreams)
+// an endless track: instrument 0, note on, loop back forever (op 0x06) after a long delta
+const endless = prog([0, 0x20, 0, 0, 0x04, 0, 0x12, 60, 100, 0x81, 0x00, 0x06]);
+t('cmd 0x30 (SeRenderer.update): pan / sequence volume slide over time x 96 / 60 = 16 sequence ticks', () => {
+  const r = new A.SeRenderer(drv2, bank);
+  r.start(endless, 0x40, 0x40);
+  const trk = r.tracks[0];
+  r.update(0x20, 0x60, 10);
+  assert.strictEqual(trk.seqVolTicks, 16);
+  assert.strictEqual(trk.seqVolStep, Math.trunc((((0x20 << 12) | 0x800) - (0x40 << 12)) / 16));
+  assert.strictEqual(trk.panTicks, 16);
+  assert.strictEqual(trk.panStep, Math.trunc((((0x60 << 12) | 0x800) - (0x40 << 12)) / 16));
+  // 16 sequence ticks = 40 driver ticks (96 / s at 240 Hz): the slide lands on the targets' >> 12
+  const L = new Float32Array(200 * 60), R = new Float32Array(200 * 60);
+  for (let i = 0; i < 60; i++) r.tick(i, L, R, i * 200);
+  assert.strictEqual(trk.seqVol >> 12, 0x20);
+  assert.strictEqual(trk.pan >> 12, 0x60);
+  assert.strictEqual(trk.seqVolTicks, 0);
+});
+
+t('cmd 0x30 skips programs whose flag byte has 0x10 (track +0x1a1)', () => {
+  const r = new A.SeRenderer(drv2, bank);
+  const p = endless.slice(); p[4] = 0x10;
+  r.start(p, 0x40, 0x40);
+  r.update(0x20, 0x60, 10);
+  assert.strictEqual(r.tracks[0].seqVolTicks, 0);
+});
+
+t('cmd 0x2f (SeRenderer.stopFade): sequence volume to 0 over 16 ticks, then the track ends and the voice is keyed off', () => {
+  const r = new A.SeRenderer(drv2, bank);
+  r.start(endless, 0x7f, 0x40);
+  const L = new Float32Array(200 * 400), R = new Float32Array(200 * 400);
+  let t0 = 0;
+  for (; t0 < 10; t0++) r.tick(t0, L, R, t0 * 200);
+  r.stopFade(10);
+  const trk = r.tracks[0];
+  assert.strictEqual(trk.seqVolTicks, 16);
+  assert.strictEqual(trk.seqVolStep, Math.trunc((0x800 - (0x7f << 12)) / 16));
+  let done = false;
+  for (; t0 < 400 && !done; t0++) done = r.tick(t0, L, R, t0 * 200);
+  assert.strictEqual(trk.active, false);
+  assert.ok(done, 'the SE ends after the fade (release)');
+  assert.ok(t0 > 10 + 40 - 2 && t0 < 400, 'ends after the 16-tick fade: ' + t0);
+});
+
 console.log(`${pass} passed`);

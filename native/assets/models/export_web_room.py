@@ -32,6 +32,10 @@ SCHEMA (scene.json, version 1)
   meshes   {id: {file, vcount}}
   draws    [ {name, kind 'room'|'char', mesh, first, count (vertices), tex|null,
               aref (-1 = opaque, else GS ATE two-pass ref 0..1), fog bool,
+              chunks [[chunk, first, count], ...] (optional; vertex ranges per z128 chunk, from
+              the room manifest: room.js shows only the chunks area_stream.js has loaded),
+              blend 'add' (optional; room.list col 6: GS ALPHA 0x48 Cs*As + Cd, no depth
+              write; export_z128_room.py chain_blend, FUN_002661a8),
               under bool (optional; room.list col 5 = 1: loses depth ties, drawn with a
               polygon offset; see export_z128_room.py UNDER_SUFFIX)} ]  in draw order
   char     {mesh, s, yaw, x, y, z, pivot, runs:[[start_tri,count],...], aref, bbox}
@@ -105,7 +109,11 @@ def parse_list(path):
                 x = float(c[3])
                 aref = x if 0.0 <= x <= 1.0 else -1.0
             under = len(c) > 4 and c[4].strip() == "1"      # col 5: export_z128_room UNDER_SUFFIX
-            groups.append(dict(mesh=c[0], tex=c[1] if len(c) > 1 else "NONE", aref=aref, under=under))
+            blend = c[5].strip() if len(c) > 5 else ""      # col 6: 'add' = chain blend m 1 (chain_blend)
+            if blend not in ("", "add"):
+                raise SystemExit(f"unknown blend column {blend!r} in {c[0]}")
+            groups.append(dict(mesh=c[0], tex=c[1] if len(c) > 1 else "NONE", aref=aref, under=under,
+                               blend=blend))
     return fog, nofog, groups
 
 
@@ -160,6 +168,14 @@ def main():
         os.remove(old)
 
     fog, nofog, groups = parse_list(a.room)
+    # per-chunk vertex ranges (export_z128_room.py manifest `chunks`); a room without them draws whole
+    man = os.path.splitext(a.room)[0] + "_manifest.json"
+    chunk_ranges = {}
+    if os.path.exists(man):
+        chunk_ranges = {g["mesh"]: g["chunks"] for g in json.load(open(man))["groups"] if g.get("chunks")}
+    if not chunk_ranges:
+        print("warning: no per-chunk ranges in %s: the page will draw every chunk (no area streaming)" % man,
+              file=sys.stderr)
     ldir = os.path.dirname(os.path.abspath(a.room))
     cache, textures, meshes, draws = {}, {}, {}, []
     lo, hi = np.full(3, 1e30), np.full(3, -1e30)
@@ -184,6 +200,10 @@ def main():
                  tex=tid, aref=aref, fog=fog is not None and g["mesh"] not in nofog)
         if g["under"]:
             d["under"] = True
+        if g["blend"]:
+            d["blend"] = g["blend"]
+        if g["mesh"] in chunk_ranges:
+            d["chunks"] = chunk_ranges[g["mesh"]]
         draws.append(d)
 
     pl = json.load(open(os.path.join(a.char, "placement.json")))

@@ -1,0 +1,1 @@
+{"name": "w218_act_a", "frames": 800, "log_from": 0, "doc": "worker 0218: the opening event's actors from the stage start (0210's state start1704.p2s, w210 restart drive), no input; records 0-799. TRACE_FIELDSET=evactor TRACE_LOG_AT=B4000 (+ TRACE_EVMP for the MP fields)", "events": []}

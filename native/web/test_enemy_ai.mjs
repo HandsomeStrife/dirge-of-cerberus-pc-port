@@ -1022,5 +1022,191 @@ else {
   }
 }
 
+// ---- Stage-script commands (worker 0212; notes/stage-script-cmds.md): manager 0xb (FUN_003ff658) / 0x40 (FUN_0053c088) /
+// 6 (FUN_003e6c88), object 0x10a (FUN_0053fa08 -> FUN_0053fde8 case 1 -> FUN_0053e1e0) / 0x10e (FUN_0054b1d8) / 0x14a
+// (FUN_00316948 + manager event 6 -> event 0x21) / 0x133 (FUN_003533e0) / 0x155 (C+0x1d4). The game's scripts where one is
+// reachable (trigger 15 = script 88; record 19's script 13 death event; script 1's area sound); hand-written ones otherwise.
+// T: w212_flag95 (trigger 95 poked to run script 88 at f784; tools/trace/out, gitignored).
+{
+  const trig = k => data.triggers[k].m[3].slice(0, 3);
+  const cross = (W, k) => { const [x, y, z] = trig(k), a = [x - 40, y, z], b = [x + 40, y, z]; W.tick(1.0, a, b); W.tick(1.0, b, b); };
+  const ev21 = { locals: 0, code: [[32, 0], [4, 3], [52, 0], [26, 0], [4, 1], [26, 1], [4, -2], [38, 0x104], [2, 0], [17, 0]] };   // var 3 = 1
+  const sdata = { ...data, scripts: { ...data.scripts, 105: { ...data.scripts[105], 33: ev21 },
+    // 9995 ev 2: 0x40(3) (manager: locator 3), then to itself 0x10e, 0x14a, 0x108 (the respawn of scripts 161-164 ev 2)
+    9995: { 2: { locals: 0, code: [[32, 0], [4, 3], [52, 0], [26, 0], [4, -2], [38, 0x40], [2, 0], [4, -2], [38, 0x10e], [2, 0],
+                                   [4, -2], [38, 0x14a], [2, 0], [4, -2], [38, 0x108], [2, 0], [17, 0]] } },
+    // 9996 ev 2: cmd (patched) to itself with the event's r0 / r1
+    9996: { 2: { locals: 0, code: [[32, 0], [4, -2], [38, 0], [2, 0], [17, 0]] } } } };
+  const mk = (extra = {}) => {
+    const player = { pos: [-1395, -99, -1110], hp: 780, id: 0x16, f118: 0, s64: 0 }, removed = [], area = [];
+    const W = AI.createEnemyAI({ data: sdata, player, rand: () => 0.5, quiet: true, log: () => {}, deadRecs: [41, 42, 43],
+      onDeactivate: rec => removed.push(rec.rec), areaSound: (n, v) => area.push([n, v]), ...extra });
+    return { W, player, removed, area };
+  };
+  const send = (W, o, cmd, r0 = 0, r1 = 0) => { sdata.scripts[9996][2].code[2][1] = cmd; const s = o.script; o.script = 9996; W.runEvent(o, 2, [r0, r1]); o.script = s; };
+
+  // 1. trigger 15 (script 88 ev 0xd, flag 0 < 2): flag 0 = 2, flag 63 = 6; 0x10a to records 41-43 and trigger 76
+  {
+    const given = { 2: 7, 46: 1 };
+    const { W } = mk({ eventFlags: given });
+    cross(W, 15);
+    const f = W.eventFlags, live = [41, 42, 43].map(k => W.objects.has(k + 22)).concat(W.objects.has('t76'));
+    ok(f[0] === 2 && f[63] === 6 && f[2] === 7 && f[46] === 1 && JSON.stringify(given) === '{"2":7,"46":1}',
+       `trigger 15 (script 88): flags 0 / 63 / 2 / 46 = ${f[0]} / ${f[63]} / ${f[2]} / ${f[46]} (2 / 6 / 7 / 1); the caller's object kept`);
+    const t76 = W.triggers[76];
+    ok(live.every(x => !x) && t76.id === 't76' && !t76.active && W.triggers[77].id === 't77',
+       `cmd 0x10a: records 41-43 and trigger 76 deleted (still there: ${live}); trigger 76 off in place, indices kept (77 = ${W.triggers[77].id})`);
+    // the game's guard (flag 0 < 2) now stops script 88 (cmd 0xc reads the written flag)
+    const ev = (cross(W, 15), W.events.join('|'));
+    ok(!/flag 0 =/.test(ev), 'trigger 15 again: flag 0 is 2, script 88 writes nothing');
+  }
+  // 2. FUN_00545b20 case 0xb: no write while the player is dead for good (FUN_00316d08: HP 0, status +0x64 bits 4 / 8 clear)
+  {
+    const { W, player } = mk();
+    player.hp = 0;
+    cross(W, 15);
+    ok((W.eventFlags[0] ?? 0) === 0 && (W.eventFlags[63] ?? 0) === 0, `Vincent dead: trigger 15 writes no flag (0 / 63: ${W.eventFlags[0]} / ${W.eventFlags[63]})`);
+    const { W: W2, player: p2 } = mk();
+    p2.hp = 0; p2.s64 = 8;                                  // FUN_00316d08: +0x64 bit 8 -> not final
+    cross(W2, 15);
+    ok(W2.eventFlags[0] === 2, `Vincent at HP 0 with status +0x64 bit 8: the flag is written (${W2.eventFlags[0]})`);
+  }
+  // 3. kills: records 27-30 (scripts 47-50 event 0x17, FUN_0055cac8) count deaths in manager short 35; the 4th writes
+  // flag 1 = 12. (Records 19-21's script 13 / 14 flag 1 = 10 also needs cmd 0x186 on trigger 62: not translated.)
+  {
+    const { W } = mk();
+    const seen = [];
+    for (const k of [27, 28, 29, 30]) { const a = W.addActor({ rec: k, astate: 1, mode: 0 }); W.runEvent(a, 0x17); seen.push(W.eventFlags[1] ?? 0); }
+    ok(seen.join() === '0,0,0,12', `records 27-30 die (scripts 47-50 ev 0x17): flag 1 after each ${seen} (0,0,0,12)`);
+  }
+  // 4. respawn: dead record 41 -> 0x40(3), 0x10e, 0x14a, 0x108: built at locator 3 with full HP; event 0x21 at the frame end
+  {
+    const { W } = mk();
+    const o = W.objects.get(41 + 22); o.script = 9995;
+    W.runEvent(o, 2);
+    const a = W.objects.get(41 + 22), L = data.locators[3].m;
+    const at = a.pos && [0, 1, 2].every(i => Math.abs(a.pos[i] - L[12 + i]) < 1e-4);
+    const v0 = a.vars[3];
+    W.tick(1.0, null, null);
+    ok(a.kind === 'actor' && at && a.hp === data.records[41].hp && v0 === 0 && a.vars[3] === 1,
+       `respawn: record 41 ${a.kind} at ${a.pos && a.pos.map(v => v.toFixed(2))} (locator 3 ${L.slice(12, 15).map(v => v.toFixed(2))}), HP ${a.hp} (${data.records[41].hp}); event 0x21 var3 ${v0} -> ${a.vars[3]} (0 -> 1)`);
+    // without 0x14a the dead record stays off (FUN_00559748: status dead)
+    const { W: W2 } = mk();
+    const o2 = W2.objects.get(41 + 22); o2.script = 9995;
+    const code = sdata.scripts[9995][2].code, keep = code[11][1];
+    code[11][1] = 0x104;                                    // 0x14a -> a var write (r0 3 = locator index -> var 3)
+    W2.runEvent(o2, 2);
+    code[11][1] = keep;
+    ok(W2.objects.get(41 + 22).kind === 'record', `respawn without 0x14a: record 41 stays a record (${W2.objects.get(41 + 22).kind})`);
+  }
+  // 5. 0x10a: deleted at the end of the frame (manager event 0), once; an active actor's body goes
+  {
+    const { W, removed } = mk();
+    const a = W.addActor({ rec: 44, astate: 1, mode: 0 });
+    send(W, a, 0x10a); send(W, a, 0x10a);
+    const mid = [W.objects.has(a.id), !!(a.flags28 & 0x80000), W.actors.includes(a)];
+    W.tick(1.0, null, null);
+    ok(mid.join() === 'true,true,true' && !W.objects.has(a.id) && !W.actors.includes(a) && removed.join() === '44',
+       `cmd 0x10a on actor 44: during the frame [object, 0x80000, actor] ${mid} (true,true,true); after: gone, bodies removed ${removed} (44)`);
+  }
+  // 5b. FUN_0053e1e0's tail frees the id slot (manager +0x3b2 / +0x7b0 / +0x5b2 = 0xffff): after trigger 15, cmd 0x3a for
+  // records 41-43 and 0x3d for trigger 76 answer -1; the others keep their ids
+  {
+    const { W } = mk();
+    const ctl = { kind: 'trigger', id: 'ctl', script: 9996, vars: new Int16Array(8), flags28: 0 };
+    const ids = () => [W.t.send(ctl, -2, 0x3a, [41, 0, 0, 0]), W.t.send(ctl, -2, 0x3a, [44, 0, 0, 0]), W.t.send(ctl, -2, 0x3d, [76, 0, 0, 0]), W.t.send(ctl, -2, 0x3d, [77, 0, 0, 0])];
+    const before = ids();
+    cross(W, 15);
+    const after = ids();
+    ok(before.join() === '63,66,t76,t77' && after.join() === '-1,66,-1,t77', `id slots: 0x3a 41 / 44, 0x3d 76 / 77 before ${before}, after trigger 15 ${after} (-1,66,-1,t77)`);
+  }
+  // 5c. 0x10f (FUN_0054cd70: manager +0x260 = the object's +0x90) then 0x10e on another record; 0x14a on a trigger does nothing
+  {
+    const { W } = mk();
+    const r44 = W.objects.get(44 + 22), r49 = W.objects.get(49 + 22);
+    send(W, r44, 0x10f); send(W, r49, 0x10e);
+    const want = data.records[44].pos;
+    ok(W.mgr260 && r49.p90set && [0, 1, 2].every(i => Math.abs(r49.p90[i] - want[i]) < 1e-6), `0x10f on record 44 then 0x10e on 49: 49's +0x90 ${r49.p90} (44's placement ${want})`);
+    const t = W.triggers[20], v = t.vars.join();
+    send(W, t, 0x14a);
+    const ev = W.tick(1.0, null, null);
+    ok(!ev.some(e => e.startsWith('revive') || / ev 33 /.test(e)) && t.vars.join() === v, '0x14a on a trigger (no status +0x17c): nothing');
+  }
+  // 5d. a deleted owner's owner-following hit volume (c1 bit 3) stays, fixed where it was (FUN_0054b9b0(child, 0, 1, ..),
+  // vt+0x2c4 = 0x54bf38 empty)
+  {
+    const { W } = mk({ boneWorld: a => () => [[1, 0, 0], [0, 1, 0], [0, 0, 1], a.pos.slice()] });
+    const a = W.addActor({ rec: 44, astate: 1, mode: 0 });
+    const h = { owner: a, v: {}, type: 0, shape: 1, ec: 2, c1: 8, life: 1000, every: 0, r: 5, grow: 0, dmg: 1, kind: 1, cand: [], local: [0, 0, 0], fixed: null, marker: 1 };
+    W.attackObjs.push(h);
+    W.tick(1.0, null, null);
+    a.pos = [a.pos[0] + 10, a.pos[1], a.pos[2]];
+    const at = a.pos.slice();
+    send(W, a, 0x10a);
+    W.tick(1.0, null, null);
+    a.pos = [a.pos[0] + 10, a.pos[1], a.pos[2]];
+    W.tick(1.0, null, null);
+    ok(!W.objects.has(a.id) && W.attackObjs.includes(h) && h.fixed && h.fixed.every((v, i) => Math.abs(v - at[i]) < 1e-3),
+       `0x10a on the owner: its following hit volume stays (${W.attackObjs.includes(h)}) at ${h.fixed} (owner at the delete ${at})`);
+  }
+  // 5e. a barrel (props.js) on the same queue: 0x14a -> manager event 6 -> event 0x21 at the frame end; 0x10a -> deleted at the
+  // frame end, then 0x3e (manager +0x5b2) answers -1 for it
+  {
+    const pj = path.join(here, 'data/props/props.json');
+    if (!existsSync(pj)) console.log('SKIP: data/props/props.json missing (barrel delete / revive)');
+    else {
+      const { createProps } = await import(pathToFileURL(path.resolve(process.env.MUTATE_PROPS ?? path.join(here, 'props.js'))).href);
+      const props = createProps({ data: JSON.parse(readFileSync(pj, 'utf8')), weapons: data.weapons, warn: () => {} });
+      const { W } = mk({ props });
+      const ctl = { kind: 'trigger', id: 'ctl', script: 9996, vars: new Int16Array(8), flags28: 0 };
+      const k = props.barrels[0].rec, b0 = props.barrels[0];
+      const id0 = W.t.send(ctl, -2, 0x3e, [k, 0, 0, 0]);
+      b0.script = 9997;
+      sdata.scripts[9997] = { 33: ev21 };
+      send(W, b0, 0x14a);
+      const v0 = b0.vars[3];
+      W.tick(1.0, null, null);
+      const v1 = b0.vars[3];
+      send(W, b0, 0x10a);
+      const mid = [b0.gone, W.t.send(ctl, -2, 0x3e, [k, 0, 0, 0])];
+      W.tick(1.0, null, null);
+      const id1 = W.t.send(ctl, -2, 0x3e, [k, 0, 0, 0]);
+      ok(v0 === 0 && v1 === 1 && mid.join() === `false,${id0}` && b0.gone && id0 === b0.id && id1 === -1,
+         `barrel ${k}: 0x14a -> event 0x21 at the frame end (var3 ${v0} -> ${v1}); 0x10a: during the frame [gone, 0x3e] ${mid}, after: gone ${b0.gone}, 0x3e ${id0} -> ${id1} (-1)`);
+    }
+  }
+  // 6. 0x155 (C+0x1d4 = r0) and 0x133 (FUN_003533e0 stops the path)
+  {
+    const { W } = mk();
+    const a = W.addActor({ rec: 46, astate: 1, mode: 0 });
+    send(W, a, 0x155, 68.0);
+    const spd = a.C.spd;
+    send(W, a, 0x131, 8);
+    const moving = a.C.mover;
+    send(W, a, 0x133);
+    ok(spd === 68 && moving !== 0 && a.C.mover === 0, `cmd 0x155: C+0x1d4 ${spd} (68); 0x131 path 8 mover ${moving} -> 0x133 -> ${a.C.mover} (0)`);
+  }
+  // 7. cmd 6 (script 1 ev 0xd): the area sound name and volume to the page's AreaSound
+  {
+    const { W, area } = mk();
+    W.runEvent({ kind: 'trigger', id: 'x', script: 1, vars: new Int16Array(8), flags28: 0 }, 0xd);
+    ok(area.length === 1 && /^asj_\d+$/.test(area[0][0]) && area[0][1] === 255, `cmd 6 (script 1): area sound ${JSON.stringify(area)} (one asj_ name, 255)`);
+  }
+  // 8. T: w212_flag95 (trigger 95 runs script 88 at its crossing): the game's flags before / after
+  {
+    const T = path.join(OUT, 'w212_flag95.jsonl');
+    if (!existsSync(T)) console.log('SKIP: tools/trace/out/w212_flag95 trace missing (flag writes in the game)');
+    else {
+      const R = readFileSync(T, 'utf8').trim().split('\n').slice(1).map(l => JSON.parse(l.replace(/\bNaN\b/g, 'null')));
+      const flags = r => { const v = hex(r.evt_flags), k = hex(r.evt_key); return [...v].map((b, i) => b ^ k[i]); };
+      const first = flags(R[0]), last = flags(R[R.length - 1]);
+      const changed = R.findIndex(r => flags(r)[0] !== first[0]);
+      const diff = last.map((v, i) => v !== first[i] ? `${i}:${first[i]}->${v}` : null).filter(Boolean);
+      ok(first[0] === 0 && first[2] === 7 && first[46] === 1 && last[0] === 2 && last[63] === 6 && diff.length === 2,
+         `T: game flags at the start 0/2/46 = ${first[0]}/${first[2]}/${first[46]} (0/7/1); changed ${diff} at record ${changed >= 0 ? R[changed].frame : '-'} (0:0->2, 63:0->6)`);
+    }
+  }
+}
+
 console.log((fail ? `${fail} FAILED` : 'all ok') + (gaps ? ` (${gaps} known gaps)` : ''));
 process.exit(fail ? 1 : 0);

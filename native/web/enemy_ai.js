@@ -416,6 +416,15 @@ export function createEnemyAI(opts) {
   // decoded; short 18 = MANAGER_SHORT_18, the rest 0.
   const mshort = new Int16Array(0x100);
   mshort[18] = MANAGER_SHORT_18;
+  // manager +0x260: the position cmd 0x40 (a locator, FUN_0053d960) / 0x10f (the object's +0x90) write; 0x10e and the
+  // gimmicks' 0x2a / 0x2b / 4 (props.js, through world.mgr260) read it. One field for both (worker 0212). L: its
+  // stage-start value is not read (null until the first write; every z128 reader follows a 0x40 / 0x10f in its event).
+  let mgr260 = null;
+  // FUN_0053e1e0's tail writes 0xffff into the deleted object's id slot: manager +0x3b2[status slot] (records, cmd 0x3a),
+  // +0x7b0[k] (triggers, 0x3d), +0x5b2[k] (gimmicks, 0x3e). The page's ids map one to one onto those slots, so the
+  // freed ids are kept here and the lookups answer -1 for them.
+  const freedIds = new Set();
+  const slot = id => (freedIds.has(id) ? -1 : id);
 
   // AI scheduler (*DAT_0046f4e4): +0 clock, +8 step accumulator, +0x10 rays / +0x11 shots /
   // +0x12 runs / +0x13 total this tick, +0x20 AI queue (sorted by due), +0x2c fire timers.
@@ -451,12 +460,14 @@ export function createEnemyAI(opts) {
   // activated (+0x144(1)) unless its flags +0xa4 have bit 17 (0x20000); those wait for a script's
   // cmd 0x108 (manager 0x3d lookup). L: an inactive trigger runs no volume test (FUN_005517a8).
   for (const o of triggers) o.active = !((o.t.flags >>> 17) & 1);
-  // GUESS: trigger object id = 't' + index (manager +0x7b0 table, cmd 0x3d, not read; scripts only pass it on)
-  const trigObj = k => triggers[k] ? triggers[k].id : -1;
+  // GUESS: trigger object id = 't' + index (manager +0x7b0 table, cmd 0x3d, not read; scripts only pass it on).
+  // -1 once the trigger is deleted (FUN_0053e1e0: +0x7b0[k] = 0xffff; `slot`).
+  const trigObj = k => triggers[k] ? slot(triggers[k].id) : -1;
   // Section-1 records exist as (inactive) objects from stage load; cmd 0x3a gives their id and
   // 0x101 / 0x108 reach them by it. addActor replaces the record object with the active actor.
   const DIFF = opts.difficulty ?? SAVE_DIFFICULTY;
-  const EVFLAGS = opts.eventFlags ?? SAVE_EVENT_FLAGS;
+  // the world's own copy: manager cmd 0xb writes it (FUN_003ff658; worker 0212); the caller's object stays as given
+  const EVFLAGS = { ...(opts.eventFlags ?? SAVE_EVENT_FLAGS) };
   const deadRecs = new Set(opts.deadRecs ?? []);
   const onActivate = opts.onActivate || (() => {});
   const onDeactivate = opts.onDeactivate || (() => {});
@@ -685,19 +696,70 @@ export function createEnemyAI(opts) {
   // else the object's +0xc handler (generic FUN_0054cd70, e027 FUN_005661e8).
   function send(o, tgt, cmd, r) {
     if (cmd < 0x100) {
-      if (cmd === 0x3a || cmd === 0x3f) return r[0] + ID_BASE; // object id of section-1 record r0 (manager +0x3b2)
+      if (cmd === 0x3a || cmd === 0x3f) return slot(r[0] + ID_BASE);   // object id of section-1 record r0 (manager +0x3b2; -1 after a delete)
       if (cmd === 0x3d) return trigObj(r[0]);                  // object id of section-8 trigger r0 (manager +0x7b0)
       if (cmd === 0xc) return EVFLAGS[r[0]] ?? 0;              // event flag r0 (FUN_003ff738)
       if (cmd === 0xa6) return +(DIFF === 2);                  // FUN_00242c28() == 2
       if (cmd === 0xa7) return +(DIFF === 3);                  // FUN_00242c28() == 3
       if (cmd === 0x2f) { if ((r[0] >>> 0) < 0x100) mshort[r[0]] = r[1]; return 0; }   // FUN_00545b20 case 0x2f
       if (cmd === 0x30) return (r[0] >>> 0) < 0x100 ? mshort[r[0]] : 0;                 // case 0x30
+      // worker 0209: section-15 gimmicks (props.js): 0x3e = object id of gimmick r0 (manager +0x5b2), 0x2a / 0x2b the explosion
+      if (cmd === 0x3e) return opts.props ? slot(opts.props.id(r[0])) : -1;   // manager +0x5b2 (-1 after a delete)
+      if (opts.props) { const v = opts.props.mgr(o, cmd, r); if (v !== undefined) return v; }
+      // worker 0212 (notes/stage-script-cmds.md): FUN_00545b20 case 0xb: unless the player object (FUN_00318c98) is
+      // dead for good (FUN_00316d08), FUN_003ff658(DAT_0047dbb0, r0, (byte) r1): flag r0 (< 0x40) = r1 (stored XOR
+      // DAT_0047dbf0[r0]; the page keeps the plain value, FUN_003ff738 reads it back the same). FUN_003ff658's mode-0x11
+      // branch (FUN_002419d8(0x11), flag 10, value != 0: FUN_00325b10(1), skipped while FUN_00323578) is not translated:
+      // no z128 script writes flag 10 (tools/stage_events.py --cmds 0xb); warned if one does.
+      if (cmd === 0xb) {
+        if (P && deadFinal(P)) return 0;
+        const n = r[0] >>> 0;
+        if (n === 10 && (r[1] & 0xff)) warnOnce('enemy_ai: cmd 0xb flag 10: FUN_003ff658 mode-0x11 branch not translated (written as other flags)');
+        if (n < 0x40) { EVFLAGS[n] = r[1] & 0xff; events.push(`flag ${n} = ${r[1] & 0xff}`); }
+        return 0;
+      }
+      // case 0x40: FUN_0053c088(mgr, m, r0): locator r0 (stage section 16, FUN_003113f8) -> m; found -> FUN_0053d960(mgr,
+      // m row 3): manager +0x230 = identity with position +0x260 = the locator's (w 1). Read by 0x10e / 0x13b / 0x13e.
+      // A locator with a parent object (+0x41 != -1: FUN_0053bdb8 x the matrix) is not translated (none on z128).
+      if (cmd === 0x40) {
+        const L = data.locators && (r[0] | 0) >= 0 ? data.locators[r[0] | 0] : null;
+        if (!data.locators) { warnOnce('enemy_ai: cmd 0x40: ai.json has no locators (re-export data/enemies); skipped'); return 0; }
+        if (!L) return 0;                                                       // FUN_003113f8 0: FUN_002613b8(out) only
+        if (L.parent !== -1) { warnOnce(`enemy_ai: cmd 0x40 locator ${r[0]} with a parent object (FUN_0053bdb8) not translated`); return 0; }
+        mgr260 = [L.m[12], L.m[13], L.m[14], 1];
+        return 0;
+      }
+      // case 6: r0 (a name) != 0 -> FUN_003e6c88(r0, r1) = the area sound (music.js AreaSound.play: same name refreshes only),
+      // then FUN_003e8708(DAT_0047d718, r2) -> FUN_003e85a8(0x15, r2 < 0 ? 0x14 : r2) when it changed: request 0x15 (the
+      // IOP side is not decoded: warned, not sent).
+      if (cmd === 6) {
+        if (!r[0]) return 0;
+        const nm = refName(r[0]);
+        if (!nm) { warnOnce('enemy_ai: cmd 6 without a name (rebuild data/enemies)'); return 0; }
+        events.push(`area sound ${nm} ${r[1]}`);
+        if (opts.areaSound) opts.areaSound(nm, r[1] | 0);
+        warnOnce('enemy_ai: cmd 6: FUN_003e8708 sound request 0x15 not translated');
+        return 0;
+      }
+      // worker 0208: case 0x54 / 0x55 (r0 < 0x81): FUN_002693a8 / FUN_00269368(r0) clear / set bit max(r0 - 1, 0) of
+      // DAT_004e8700, the script half of the hidden-cell mask DAT_004e8710 (FUN_00269410): the stage effects' cull reads it
+      // (play.js -> effects.js cellMask). The room's chain skip (FUN_0026ccc8) reads it too: the page's room keeps the save's mask.
+      if (cmd === 0x54 || cmd === 0x55) {
+        if ((r[0] >>> 0) < 0x81) {
+          const b = Math.max((r[0] | 0) - 1, 0);
+          events.push(`cell ${b} ${cmd === 0x55 ? 'hidden' : 'shown'}`);
+          if (opts.cellMask) opts.cellMask(b, cmd === 0x55);
+        }
+        return 0;
+      }
       // GUESS: other manager commands are skipped (return 0, the script goes on)
       warnOnce(`enemy_ai: manager cmd 0x${cmd.toString(16)} not translated (skipped)`);
       return 0;
     }
     const t = tgt === -2 ? o : objects.get(tgt);
     if (!t) return 0;
+    // a gimmick's own handler (barrel vt+0xc FUN_00586520 -> FUN_00588b78 -> FUN_0054cd70: props.js); undefined = the generic cases below
+    if (t.kind === 'prop' && opts.props) { const v = opts.props.cmd(t, cmd, r); if (v !== undefined) return v; }
     switch (cmd) {
       // FUN_0054cd70 case 0x125 (worker 0174): FUN_0033cc48(r0 name, FUN_0054a720(object) = its +0x90 position, 1),
       // a released one-shot. r1 != 0: FUN_0033cc48(.., 0) keeps the slot, FUN_003e8ec8(r1, DAT_0047d728, slot)
@@ -784,6 +846,58 @@ export function createEnemyAI(opts) {
         }
         return 0;
       case 0x193: if (t.kind === 'actor' && t.ai) setTarget(t.ai, P); return 0;   // FUN_005661e8 0x193 (FUN_0053bb08 = the player)
+      // worker 0212 (notes/stage-script-cmds.md). FUN_0054cd70 case 0x10a: vt+0x54 (actors 0x58e24c -> FUN_0054e908 = 0;
+      // triggers FUN_00550380) -> FUN_0054add0(obj, 1): only with a script event 0x54 (FUN_0054e7c8), which no z128 script
+      // has (warned); then FUN_0053fa08(mgr, id): +0x28 bit 0x80000 already set -> nothing; else set it and queue manager
+      // event 0 keyed to this object; FUN_0053fde8 case 1 deletes it (destroyObject, FUN_0053e1e0).
+      case 0x10a: {
+        const sc = scripts[String(t.script)];
+        if (t.kind !== 'actor' && sc && sc['84']) warnOnce(`enemy_ai: cmd 0x10a on ${t.id}: script event 0x54 (FUN_0054add0 / FUN_00550380) not translated`);
+        if (t.flags28 & 0x80000) return 0;
+        t.flags28 |= 0x80000;
+        postManager(0, t.id);
+        return 0;
+      }
+      // FUN_0054cd70 case 0x10e: FUN_0054cd18 (+0x40 bit 0 off; the manager's gimmick +0x10ac -> 0 if it is this object:
+      // not modelled on the page, L) and FUN_0054b1d8(obj, manager +0x260): +0x90 = FUN_0054a698 (no parent, +8 == 0:
+      // identity) x the point, vt+0x234(obj, 1, 0); +0x28 |= 0x8000. A record not yet active keeps it as its +0x90
+      // (objPos90; setActive builds the body there: L, FUN_00559748's placement read not traced); an active actor moves.
+      case 0x10e: {
+        if (!mgr260) { warnOnce('enemy_ai: cmd 0x10e before any 0x40 / 0x10f (manager +0x260 stage-start value not read): skipped'); return 0; }
+        const p = mgr260.slice(0, 3);
+        // an actor: FUN_00588b78 then runs FUN_00588430: body +0xe8 -> FUN_0034aae0 (C+0x00.. = the actor matrix +0x60) and
+        // FUN_00356d98(C+0x3b0, +0x90, 1, 0, 0) (the body's three position slots, FUN_00356740, +0x70 (FUN_003562d0 with
+        // body +0xac bit 12), velocity +0x60 = 0): not translated (the page's body keeps no such slots); position only
+        if (t.kind === 'actor') { t.pos = [p[0], p[1], p[2]]; if (t.C) warnOnce('enemy_ai: cmd 0x10e on an actor with a body: FUN_00588430 body sync (FUN_0034aae0 / FUN_00356d98) not translated (position only)'); }
+        else if (t.kind === 'record') { t.p90 = p; t.p90set = true; }
+        else { warnOnce(`enemy_ai: cmd 0x10e on ${t.kind} ${t.id} not translated`); return 0; }
+        t.flags28 |= 0x8000;
+        events.push(`move ${t.id} to ${p.map(v => +v.toFixed(2)).join(',')}`);
+        return 0;
+      }
+      // FUN_005661e8 case 0x14a: status +0x17c -> FUN_00316948(status, 1): HP = max (+4); vt+0x33c(a, 0) = FUN_0055cff8;
+      // manager event 6 -> FUN_0053fde8 case 7: script event 0x21. With 0x108 after it this is the scripts' respawn.
+      // A record not yet active: FUN_0055cff8's +0x184 AI is 0, +0x28 bit 1 cleared, FUN_0055b8e0(a, 2, 1, 0) (the page's
+      // activation starts every body in state 2), FUN_005aad08 / FUN_0031e060 / vt+0x344 (MP / status side, L: not read).
+      // An active actor (FUN_0035f268 on its AI, state 2, the MP reset) is not translated: warned, skipped.
+      // The game acts only with a status (+0x17c != 0). Every page record / actor object has one: the stage load
+      // (FUN_00547ce0) makes an object only for a status slot (FUN_00318bf8(k) != 0) and links it (FUN_0055a168 ->
+      // FUN_00563fc0: +0x17c); ai.json's records are those slots. Anything else (triggers): nothing.
+      case 0x14a:
+        if (t.kind === 'record' && data.records[t.rec]) {
+          t.hp = data.records[t.rec].hp ?? 100;                               // FUN_00316948(s, 1): +0x20 = +4
+          t.flags28 &= ~2;
+          events.push(`revive rec ${t.rec}`);
+          postManager(6, t.id);
+        } else if (t.kind === 'actor') warnOnce('enemy_ai: cmd 0x14a on an active actor (FUN_0055cff8 with a body) not translated');
+        return 0;
+      // FUN_00588b78 case 0x133: body +0xe8 -> FUN_003533e0 (the mover stop; path_mover.js stopAll)
+      // FUN_0054cd70 case 0x10f: FUN_0054a720(obj) (its +0x90) -> FUN_0053d960(mgr, it): manager +0x260
+      case 0x10f: { const p = objPos90(t); if (p) mgr260 = [p[0], p[1], p[2], 1]; else warnOnce(`enemy_ai: cmd 0x10f on ${t.kind} ${t.id}: no +0x90 on the page`); return 0; }
+      case 0x133: if (t.kind === 'actor' && t.C) PM.stopAll(t, warnOnce); return 0;
+      // FUN_00588b78 case 0x155: body +0xe8 -> FUN_0034b978: C+0x1d4 (the constant move speed) = r0 as a float (lwc1 of
+      // the cell: asm 0x588e7c)
+      case 0x155: if (t.kind === 'actor' && t.C) t.C.spd = Math.fround(+r[0] || 0); return 0;
       // 0x113 (FUN_0054cd70): object +0x36 = r0 and a delayed message to itself through
       // FUN_0053e9e0, whose delivery is not decoded. GUESS: it and other commands are skipped
       // (return 0, the script goes on).
@@ -812,7 +926,8 @@ export function createEnemyAI(opts) {
       if (buildsActor(rec)) {
         // FUN_0055b8e0(a, 2, 1, 0): actor state 2 for a plain placement (addActor without astate)
         const f28 = t.flags28 | 0;                           // the object's +0x28 before the activation
-        a = addActor({ rec: t.rec, mode });
+        // a record moved by cmd 0x10e (worker 0212) is built at that +0x90 (L: the placement read in FUN_00559748 not traced)
+        a = addActor(t.p90set ? { rec: t.rec, mode, pos: t.p90.slice(0, 3) } : { rec: t.rec, mode });
         a.flags28 |= 0x100000;                               // FUN_00559748; cleared by manager event 7
         // FUN_00559748 -> FUN_00365c50 (the AI) -> FUN_0035ee08(ai, a, 1) -> FUN_00360418(ai, 1): the magazine plus
         // trunc(((mag >> 1) + 1) x FUN_0040b5c0()), one draw (worker 0204; T w204_reload: 41 8, 42 6 with mag 6; T w204_t56rng:
@@ -2978,6 +3093,9 @@ export function createEnemyAI(opts) {
   function enemyBulletHit(b) {
     if (b.f120 & 0x200) warnOnce('enemy_ai: friendly-fire bullet (+0x120 bit 0x200) vs soldiers not translated');
     const hit = playerFilter(b) ? playerPartTest(b) : null;
+    // worker 0209: a gimmick nearer than Vincent ends the bullet there (props.js; FUN_005442d8's closest solid hit)
+    const ph = opts.props ? opts.props.bulletTest(b) : null;
+    if (ph && (!hit || ph.dist < hit.dist)) { shotVolumes(b, ph.dist); b.hitPoint = ph.point; return opts.props.bulletHit(ph, b); }
     shotVolumes(b, hit ? hit.dist : FLT_MAX);
     if (hit) b.hitPoint = hit.point;                                          // +0xd0 = +0xf0 = +0x110 = the hit
     return hit ? playerHandler(b, hit) : 0;
@@ -3177,7 +3295,9 @@ export function createEnemyAI(opts) {
       bullets.push({
         from: P, start, dir, end, endDist: f(len3(sub3(start, end))), range,
         speed: f(W.speed10 * f(0.16666667)),                                  // +0x12c = W+0x2c / 6
-        age: 0, pos: start.slice(), prev: start.slice(), f120: bulletFlags(W), f148: 0,
+        // FUN_005405b0: +0x120 |= 0x100004 with the shooter's status (param_6) +0x60 bit 1 (Vincent's 0x8233; worker 0209:
+        // bit 2 lets the bullet break a gimmick with type flag bit 6, FUN_00585000)
+        age: 0, pos: start.slice(), prev: start.slice(), f120: (bulletFlags(W) | ((PS.f60 & 2) ? 0x100004 : 0)) >>> 0, f148: 0,
         cls: W.class & 3,                                                     // +0x150 bits 16-17 = W+0x14 >> 2 & 3 (FUN_00552dd8)
         delay: i + 2,                                                         // +0x142 = pellet index + 2
         damage: W.damage, hit: W.hit ?? 0,                                    // +0x134 (short)W+0x40, +0x153 W+0x4a
@@ -3262,6 +3382,9 @@ export function createEnemyAI(opts) {
       const dist = len3(sub3(b.prev, cyl.point));
       if (!best || dist < best.dist) best = { a, part, point: cyl.point, dist };
     }
+    // worker 0209: the gimmicks (props.js: filter FUN_00584f40, cylinder FUN_00584408); the closest solid hit wins
+    const ph = opts.props ? opts.props.bulletTest(b) : null;
+    if (ph && (!best || ph.dist < best.dist)) { shotVolumes(b, ph.dist); return opts.props.bulletHit(ph, b); }
     shotVolumes(b, best ? best.dist : FLT_MAX);
     if (!best) return 0;
     best.a.part = best.part;                                                  // +0x142
@@ -3462,6 +3585,74 @@ export function createEnemyAI(opts) {
     }
     // FUN_00567f10 (actor +0x28 bit 0x20 clear): not on the page
     events.push(`hit ${a.id} part ${a.part} dmg ${dmg} hp ${a.hp}`);
+  }
+
+  // ---- worker 0209: an explosion (object type 7, props.js; notes/barrel-research.md) on a character.
+  // ex = { dmg: +0xdc, owner: +0xe0 (-1 for a barrel's), kind: FUN_0057f0e8 (1), flags: +0x1ec (8), id }.
+  // FUN_0055e0d8 (vt+0x1c4, Vincent's and the soldiers'): dead -> false unless +0x28 bit 0x20; +0x188 bit 39 (clear for
+  // both in the save: 0x00cccf20c00c0605 / 0x8765430087652d01) -> false; +0x28 bit 2 (Vincent) with a body: motion class
+  // 0x3c / 0x3e / 0x3d -> false (MISSING as in playerFilter: P.motionClass is never set); +0x28 bit 0x100000 -> false;
+  // no owner (+0xe0 == -1) -> true. An owner's side test (FUN_0031d1a8, +0xc4 bits 5 / 6) is not translated (warned).
+  function blastFilter(t, ex) {
+    if (dead(t) && !(((t === P ? P.f28 ?? 0x20901f : t.flags28) | 0) & 0x20)) return false;
+    if (t === P && JITTER_ON && P.motionClass != null && P.motionClass >= 0x3c && P.motionClass <= 0x3e) return false;
+    if (((t === P ? P.f28 ?? 0x20901f : t.flags28) | 0) & 0x100000) return false;
+    if (ex.owner !== -1) warnOnce('enemy_ai: an explosion with an owner (FUN_0055e0d8 side test FUN_0031d1a8) not translated: hit');
+    return true;
+  }
+  // FUN_0055e498 (vt+0x1cc) on a soldier: owner = FUN_0053b978(+0xe0), else Vincent when the actor's +0x188 byte
+  // (FUN_00563288) is 1 or 2 (z128's soldiers: 1). Gate FUN_0055f0e0(a, 1) / (a, 0) -> only the AI count FUN_00360948.
+  // FUN_0055e240: the explosion's +0x16b nibble 0 -> FUN_00318120(status, +0xdc, FUN_0057f0e8) capped at 9999, 0 with
+  // actor +0x118 bits 0x20 / 0x40. Alive with dmg >= 0: vt+0x1ec (enemyHP), the owner's vt+0x314 / +0x31c (Vincent's
+  // damage / kill callbacks: not translated, as in hitEnemy), FUN_00360870 (aiHit). Then FUN_00565480(a, +0x1ec, dir,
+  // centre, alive before) unless +0x118 bit 0x10000; FUN_00360948; script event 0x15 (r0 = +0xe0, r2 = the owner's id
+  // or -1); FUN_00336338 (needs +0x16b != 0: nothing here); FUN_00568080 (the damage number: not on the page).
+  function blastActor(a, ex, centre, dir) {
+    const owner = ex.owner !== -1 ? objects.get(ex.owner) : ((a.f188 ?? 1) === 1 || (a.f188 ?? 1) === 2) ? P : null;
+    const ownerId = owner === P ? (P.id ?? 0x16) : owner ? owner.id : 0;
+    let dmg = 0;
+    if (!(a.s64 & 3)) {
+      const wasDead = dead(a);
+      dmg = Math.min(defence({ ...ENEMY_STATUS, lvl: a.lvl }, ex.dmg, ex.kind), 9999);
+      if (a.f118 & 0x60) dmg = 0;
+      if (!wasDead && dmg >= 0) { enemyHP(a, dmg); aiHit(a, ownerId, dmg); }
+      if (!(a.f118 & 0x10000)) react(a, ex.flags, dir, centre, wasDead ? 0 : 1);
+      if (a.f118 & 0x2000000) warnOnce('enemy_ai: blast on an actor with +0x118 bit 0x2000000 (FUN_00562898) not translated');
+    }
+    if (a.ai) { a.ai.f72 = short((a.ai.f72 | 0) + 1); a.ai.f50 = S.now; if (ownerId) a.ai.f90 = ownerId; }   // FUN_00360948 (+0x72, +0x50; FUN_003608d8)
+    runEvent(a, 0x15, [ex.owner, 0, owner ? ownerId : -1, 0]);
+    events.push(`blast ${a.id} dmg ${dmg} hp ${a.hp}`);
+    return 0;
+  }
+  // FUN_00572418 (Vincent's vt+0x1cc): P+0x118 bit 0x20 -> 0; +0xdc >= 0 and FUN_0055f0e0 -> 0; P+0x28 bit 0x20 clear ->
+  // FUN_0055e498 on him (owner: +0x188 byte 5, none): HP through vt+0x1ec (as damagePlayer: +0x118 bit 31, the hit cues
+  // vt+0x324, the death cues vt+0x334), the reaction FUN_00565480(P, 8, dir, centre); it returns 0, so FUN_00336508 (the
+  // screen flash) does not run. No HUD ring (FUN_00567c08 is the bullet path's). The pad vibration (+0x28 bit 2) is not
+  // on the page.
+  function blastPlayer(ex, centre, dir) {
+    if (P.f118 & 0x20) return 0;
+    if (P.s64 & 3) return 0;
+    const wasDead = dead(P);
+    let dmg = Math.min(defence(PST, ex.dmg, ex.kind), 9999);
+    if ((P.f118 & 0x20) || (P.f118 & 0x40)) dmg = 0;
+    if (!wasDead && dmg >= 0) {
+      if (DAMAGE) {
+        if ((P.f118 | 0) < 0 && P.hp <= dmg) dmg = P.hp - 1;                  // FUN_0055c7f8
+        const before = P.hp;
+        P.hp = Math.max(0, P.hp - dmg);
+        events.push(`blast player ${before}->${P.hp}`);
+        log(`enemy_ai: Vincent HP ${before} -> ${P.hp} (explosion)`);
+        playerHitCues(dmg, dead(P));
+        if (dead(P)) { playerDeathCues(); deathCount(); }
+      } else events.push('blast player (damage off)');
+    }
+    if (playerReact && !((P.f118 | 0) & 0x10000)) {
+      const r = playerReact({ flags: ex.flags | 0, dir, point: centre, aliveBefore: !wasDead, deadNow: dead(P), f118: P.f118 ?? 0x20209 });
+      events.push(`react player ${r}`);
+      if (r === 'death' && !wasDead) deathMotionCue();
+    }
+    runEvent(P, 0x15, [ex.owner, 0, -1, 0]);
+    return 0;
   }
 
   // FUN_0055c7f8: HP -= dmg (cap 9999; +0x118 bit 31 leaves 1); alive -> vt+0x324 FUN_0055c978(dmg, 0):
@@ -3701,6 +3892,9 @@ export function createEnemyAI(opts) {
     // 2b. melee attack objects (FUN_0057a330), oldest first; one made in step 3 first updates next frame
     // (T k_melee18: made f1460, first update f1461). L: their place among the manager's object lists.
     for (const o of attackObjs.slice()) if (attackObjUpdate(o, step)) attackObjs.splice(attackObjs.indexOf(o), 1);
+    // worker 0209: the explosions (object type 7, vt+0x214 FUN_0057e638; props.js). GUESS: after the bullets and attack
+    // objects (the FUN_005810e8 list order of type 7 is not read)
+    if (opts.props) opts.props.update(step);
     // 3. bodies: turn (FUN_0034ea18 -> FUN_0034de50), then the motion state (may spawn bullets).
     // GUESS: turn before the motion state (their order inside the body update is not traced; the turn
     // reads only C+0x2b0, which neither changes)
@@ -3847,6 +4041,39 @@ export function createEnemyAI(opts) {
   // zero args (0x4ef400, BSS), then +0x28 &= ~0x100000) and 8 (case 9: script event 4; then, if it is
   // the manager's +0x10ac object, FUN_0053be88(0): the page never sets +0x10ac, L). The other types (3-6
   // from cmds 0x12c-0x12f, ...) carry no consumer on the page yet: MISSING, warned.
+  // FUN_0053e1e0(mgr, obj) (worker 0212; from cmd 0x10a): the object leaves the world. Translated: its script timers leave
+  // the timer list (+0x3c running -> FUN_0053e7a8), its queued manager events of type != 0 go (+0x27 count ->
+  // FUN_0053fcf8), its pending 0x101 messages go (+0x26 count -> FUN_0053ec98; L: the page's mailbox is the GUESS queue
+  // of FUN_0053e9e0), an actor's AI / fire timer / mover / nav node and body go (as a deactivation: FUN_003497c8 via
+  // vt+0x84), a trigger stops testing its volume, a gimmick goes (props.js `deleted`), the object is unlinked and its id
+  // slot freed (the tail's 0xffff into manager +0x3b2 / +0x7b0 / +0x5b2: `freedIds`, so 0x3a / 0x3d / 0x3e give -1).
+  // Child objects (+0xc list): each is detached into the world keeping its world matrix (FUN_0054b9b0(child, 0, 1, 1, 1))
+  // and gets vt+0x2c4, which for the melee hit volumes (vtable 0x58f9f0 +0x2c4 = 0x54bf38) is an empty function: an
+  // owner-following hit volume (FUN_00569dc0 links it with FUN_0054b9b0 / FUN_0054bf48 / FUN_0054bf90; c1 bit 3) stays
+  // alive where it is and stops following; a once-placed one (FUN_0054b770) is no child.
+  // L (not modelled on the page): FUN_00326130(1, +0x24), manager +0x18 and Vincent's lock (+0x272 -> FUN_00573378(P, -1)),
+  // manager +0x10ac, other child kinds, FUN_0036e2c8.
+  function destroyObject(o) {
+    const id = o.id;
+    const ti = timerList.indexOf(id); if (ti >= 0) timerList.splice(ti, 1);
+    for (let i = mgrQueue.length - 1; i >= 0; i--) if (mgrQueue[i].id === id && mgrQueue[i].type !== 0) mgrQueue.splice(i, 1);
+    for (let i = mailbox.length - 1; i >= 0; i--) if (mailbox[i].to === id) mailbox.splice(i, 1);
+    if (o.kind === 'actor') {
+      const i = actors.indexOf(o); if (i >= 0) actors.splice(i, 1);
+      if (G) NG.setNode(G, o, -1);
+      if (o.C && o.C.mover !== 0) PM.stopAll(o, warnOnce);
+      if (o.ai) { const j = S.q.indexOf(o.ai); if (j >= 0) S.q.splice(j, 1); stopFire(o.ai); }
+      for (const h of attackObjs) if (h.owner === o && !h.fixed) h.fixed = attackCentre(h);   // no pose: warned, it keeps following (L)
+      onDeactivate(data.records[o.rec]);
+    } else if (o.kind === 'trigger') {
+      // kept in `triggers` (trigObj(k) indexes it), off for good: no volume test; trigObj gives -1 (freedIds)
+      o.active = false; o.deleted = true;
+    } else if (o.kind === 'prop' && opts.props && opts.props.deleted) opts.props.deleted(o);
+    if (o.kind !== 'stage') freedIds.add(id);
+    objects.delete(id);
+    events.push(`delete ${id}`);
+  }
+
   function drainManager() {
     for (let n = 0; mgrQueue.length && n < 0x1000; n++) {
       const e = mgrQueue.shift();
@@ -3858,6 +4085,10 @@ export function createEnemyAI(opts) {
       else if (e.type === 0xf) runEvent(o, 0x13);                              // case 0x10: event 0x13, no args (0x4ef400)
       else if (e.type === 0x11) runEvent(o, 0x26);                             // case 0x12: event 0x26, no args (the node is dropped)
       else if (e.type === 0x12) runEvent(o, 0x27, [e.arg, 0]);                 // case 0x13: event 0x27 (node, 0)
+      else if (e.type === 6) runEvent(o, 0x21);                                // case 7: event 0x21, no args (cmd 0x14a; worker 0212)
+      // case 1 (cmd 0x10a's FUN_0053fa08; worker 0212): the key (+0x4c << 16 | id) still matches -> FUN_0053e1e0. The page
+      // never re-creates an object under the same id, so the id alone is the key.
+      else if (e.type === 0) destroyObject(o);
       else warnOnce(`enemy_ai: manager event ${e.type} (FUN_0053fde8 case ${e.type + 1}) not translated`);
     }
   }
@@ -3868,13 +4099,21 @@ export function createEnemyAI(opts) {
   const world = { S, actors, triggers, bullets, attackObjs, objects, addActor, tick, runEvent, recById, events, activated, setActive, stageLoad, scheduleHandOff, handOffs,
                   timerList,                              // script-timer list (FUN_0053e6e8; tests)
                   playerShot, queueShot, lockTargets, pushOut, boneWorld: opts.boneWorld || null,
-                  eventFlags: EVFLAGS,                    // the world's event flags (FUN_003ff738; tests: checkpoint.js)
+                  eventFlags: EVFLAGS,
+                  // manager +0x260 (cmds 0x40 / 0x10f write, 0x10e and props.js 0x2a / 0x2b / 4 read; worker 0212)
+                  get mgr260() { return mgr260; }, set mgr260(v) { mgr260 = v; },
+                  postManager,                            // FUN_0053fbe8 (props.js: cmd 0x14a's event 6)                    // the world's event flags (FUN_003ff738; tests: checkpoint.js)
                   playerBoneWorld: opts.playerBoneWorld || null,
                   attackPick: a => attackPick(a.ai),     // FUN_0035ff98 on an actor's AI (tests)
                   // single translated functions, for the tests' direct state checks
                   stageRec, t: { brain5, brain6, stateMotion, setActorState, bulletEnd, target, send, setMode, setTarget, setActionLayer, action2, action3, action56, flinch, die, navOf,
                        makeAttack, attackObjUpdate, attackCentre, sphereCapsule, offence,
                        spreadAim, roomProbe, enemyBulletHit, playerPartTest, targetPoint, damagePlayer, attackDamagePlayer,
-                       endEffect, bulletUpdate, hitEnemy, playerHandler, attackApply } };
+                       endEffect, bulletUpdate, hitEnemy, playerHandler, attackApply, spawnShot },
+                  // worker 0209: the explosion on a character (props.js), Vincent's object, the twister, the sound hook
+                  blast: { filter: blastFilter, actor: blastActor, player: blastPlayer }, player: P, dead, rng, sound: (n, p, r) => sound(n, p, r), seName, roomRay: opts.roomRay || null,
+                  difficulty: DIFF, warnOnce: m => warnOnce(m) };
+  // the section-15 gimmicks join this world's objects (props.js attach; again for the Restart's new world)
+  if (opts.props) opts.props.attach(world);
   return world;
 }

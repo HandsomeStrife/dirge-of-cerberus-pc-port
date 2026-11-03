@@ -51,6 +51,7 @@ import { SpeedAnimator, STEP } from './player.js';
 import { boneRows, rootTrack as rootTrackOf } from './enemy_hit.js';
 import { rootSpeed as clipRootSpeed } from './aim.js';
 import { mpDrops, carryFrame, chop } from './enemy_ai.js';
+import { Light2 } from './area_stream.js';
 
 const DIR = 'data/enemies/';
 const CLIP = 'r_gst';            // GUESS: the idle the brain requests at activation (FUN_0055b8e0 from the brain; not decoded). Save state: idle soldiers play r_gst / r_gst_lk
@@ -134,18 +135,10 @@ async function json(path) {
   return r.json();
 }
 
-// light 2 for a fixed actor point: FUN_0026a710 pick (play.js light.pick), colour rgb*k*100/d^2.
-// The enemies don't move, so FUN_005ab608's smoothing stays settled on the first light
-// (GUESS: start settled, as Vincent's; notes/fidelity-audit.md "Character lighting").
-function light2(light, p, dir, col) {
-  dir.set(0, 0, 0); col.set(0, 0, 0);
-  const r = light.pick(p);
-  if (!r) return;
-  dir.set(r.pos[0] - p.x, r.pos[1] - p.y, r.pos[2] - p.z);
-  const d = dir.length();
-  if (d !== 0) { dir.multiplyScalar(1 / d); col.set(...r.rgb).multiplyScalar(r.k * 100 / (d * d)); }
-  else dir.set(0, 0, 0);
-}
+// light 2: FUN_005ab0b0 per drawn frame at the actor point (MP+0x10 x the bbox centre), picked over the loaded chunk
+// slots (play.js light.pick) and smoothed by FUN_005ab608 per motion player (area_stream.js Light2). Set at spawn and
+// again every game frame in tick() (worker 0216; was once, at spawn).
+const actorPoint = (body, Y) => new THREE.Vector3(...ACTOR_CENTRE).applyAxisAngle(Y, body.rotation.y).add(body.position);
 
 // extra: section-1 records the AI drives at the start (enemy_ai.js; ai.json records, up = (0,-1,0)
 // as every z128 placement). Later activations (cmd 0x108, enemy_ai onActivate) come through add().
@@ -228,9 +221,9 @@ export async function setupEnemies({ root, litPatch, light, extra = [] }) {
     pose.setLocalPose(lp, lpBuf, scn);
     const a = { rec: pl.rec, tag: pl.tag, model: pl.model, side, lp, lpData: M.lpData ??= new Float32Array(lpBuf), body, prims, pose, frame: 0, clip };   // GUESS: frame 0 at activation, all in phase
     if (light && litPatch) {
-      const p = new THREE.Vector3(...ACTOR_CENTRE).applyAxisAngle(Y, body.rotation.y).add(body.position);
-      const dir = new THREE.Vector3(), col = new THREE.Vector3();
-      light2(light, p, dir, col);
+      const p = actorPoint(body, Y);
+      a.l2 = new Light2().update(light.pick(p), p);
+      const dir = new THREE.Vector3(...a.l2.dir), col = new THREE.Vector3(...a.l2.col);
       const E = light.env;                                     // unscaled env slot 0 (Vincent's U carries his MP+0x450)
       const U = {
         uL0: { value: new THREE.Vector3(...E.dir0) }, uC0: { value: new THREE.Vector3(...E.col0).multiplyScalar(s) },
@@ -379,6 +372,12 @@ export async function setupEnemies({ root, litPatch, light, extra = [] }) {
         a.pose.poseLocal(a.head.clip, a.head.frame, a.out ? a.out.clip : null, a.out ? a.out.frame : 0, w);
         a.clip = a.head.clip; a.frame = a.head.frame;
         a.posed = { pos: a.body.position.toArray(), heading: a.body.rotation.y - Math.PI };
+        if (a.l2) {                                  // FUN_005ab0b0 / FUN_005ab608 this frame, at this frame's body matrix
+          const p = actorPoint(a.body, Y);
+          a.l2.update(light.pick(p), p);
+          a.U.uL2.value.set(...a.l2.dir); a.U.uC2.value.set(...a.l2.col);
+          a.light = { point: p.toArray(), L2: a.l2.dir.slice(), C2: a.l2.col.slice() };
+        }
         // MP+0x40c: the body's locomotion rate (enemy_ai C.rate, FUN_00346c10) while a table is installed,
         // else 0.5 (FUN_003456c0 rate 1.0). GUESS (other types): e027's RATE for every type
         const rate = s && s.C.rate != null ? s.C.rate : RATE;

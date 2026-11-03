@@ -161,6 +161,35 @@ ALPHA_TEST = {
     '0680ff07': (96, 'TBP 10792: deck wash at Vincent\'s feet, Av 0-66 (blends, no depth)'),
 }
 ATEST_SUFFIX = '@atest'
+ADD_SUFFIX = '@add'
+
+# Blend of each chain, decoded (worker 0213, 2026-11-02). FUN_0026ce60: a chain whose header
+# +0x94 has bit 1 set is queued on sort bucket +0x97 (0 = bucket 0x17) instead of drawn in
+# place; FUN_002661a8 then draws buckets 0..0x17 (and, in a second call, 0x18..0x1f) with
+# FUN_00265b80(ALPHA = DAT_0046bf60[m], TEST = DAT_0046bf78[m] | (+0xa8) << 4),
+# m = (+0x94 & 0xc) >> 2. Values from save RAM (BUCKET_ALPHA / BUCKET_TEST). In z128 a packet
+# has PRIM ABE set exactly when its chain is bucketed (3906 of 3906), m is 0 or 1, +0xa8 = 96.
+# Hero dump: m 0 draws carry TEST 0x5360b + ALPHA 0x44, m 1 draws TEST 0x51601 + ALPHA 0x48.
+#   m 0: (Cs-Cd)*As + Cd, ATST GEQUAL ref, AFAIL RGB_ONLY  -> the '@atest' two-pass draw
+#   m 1: Cs*As + Cd, ATST NEVER, AFAIL FB_ONLY (no depth)  -> '@add' (additive, no depth write)
+#   m 2: Cd - Cs*As, no depth: not used by z128; warned and drawn opaque.
+# ALPHA_TEST above is the dump-measured list from before this decode; it is now only a check.
+BUCKET_ALPHA = (0x44, 0x48, 0x42)          # DAT_0046bf60
+BUCKET_TEST = (0x5300b, 0x51001, 0x51001)  # DAT_0046bf78
+
+
+def chain_blend(h):
+    """(suffix, ref, bucket order) of a chain header, or (None, None, None) when the chain is
+    drawn in place (opaque). bucket order: FUN_002661a8's list index (bucket - 1, 0 -> 0x17)."""
+    if h is None or not (h['flags'] & 2):
+        return None, None, None
+    m = (h['flags'] & 0xc) >> 2
+    b = h['bucket'] - 1 if h['bucket'] else 0x17
+    if m == 0:
+        return (ATEST_SUFFIX if h['aref'] == 96 else '%s%d' % (ATEST_SUFFIX, h['aref'])), h['aref'], b
+    if m == 1:
+        return ADD_SUFFIX, None, b
+    return '?', None, b
 
 SKY_FC = '0680ff35'   # TBP 11504 sky-dome texture (correlation 1.000), see export_z128_sky.py
 
@@ -200,6 +229,43 @@ HERO_FRAME = {'0680ff04': '0680ff05', '0680ff06': '0680ff07'}
 HIDDEN_GROUPS = {0, 19, 25, 56, 57}
 
 
+# Area streaming (worker 0213, 2026-11-02). The game never draws all 13 chunks: the chunk table
+# DAT_004e4c60 has 3 slots, slot 0 = chunk 00 and slots 1 / 2 = a pair. The stage load requests
+# (1, 2) (FUN_003ff7a8(0x80, 1, 2) -> FUN_002673d8); then every frame FUN_0026a0c0 takes the first
+# 'eib' box of 06800011 (FUN_00269bd0 / FUN_00271b60 / FUN_00271aa8) holding Vincent and calls
+# FUN_002677a0(a, b) (save state: slots = chunks 0 / 1 / 2). So two chunks only show together when
+# a box (or the start) pairs them, and chunk 0c (paired only with 06) never shows from 07, whose
+# room it covers with black panels. The page streams like that (area_stream.js + room.js), so a
+# copy of a triangle may only be dropped for a copy in a chunk that is ALWAYS loaded alongside
+# (CO_LOADED), and depth ties are only marked against chunks that CAN be loaded alongside.
+# --all-chunks restores the old rule (every earlier chunk), for a viewer that draws every chunk.
+AREA_FILE = '06800011'
+START_PAIR = (1, 2)
+
+
+def area_pairs():
+    """The chunk pairs the game can have loaded: the type-0 area boxes and the stage-load pair."""
+    from export_web_light import read_areas
+    boxes = read_areas(os.path.join(EXTRACT, AREA_FILE + '.bin'))
+    if not boxes:
+        sys.exit('no area boxes in %s (eib block)' % AREA_FILE)
+    return sorted({(b['a'], b['b']) for b in boxes if b['type'] == 0} | {START_PAIR})
+
+
+def co_loaded(pairs, nchunks):
+    """always[c]: chunks loaded whenever c is (chunk 00 + the partner every pair of c shares);
+    can[c]: chunks that may be loaded with c. Chunk 00 itself is always loaded."""
+    always = {}; can = {}
+    for c in range(nchunks):
+        ps = [set(p) - {c} for p in pairs if c in p]
+        always[c] = {0} | (set.intersection(*ps) if ps else set())
+        can[c] = {0}.union(*ps) if ps else {0}
+        if c == 0:
+            always[c] = set(); can[c] = set(range(nchunks)) - {0}
+        always[c].discard(c); can[c].discard(c)
+    return always, can
+
+
 def tri_key(pk, t):
     """Position (1/16 unit, the V3-16 grid) + UV (1/4096) of a triangle, order-free, plus the
     packet's ABE flag: a blended overlay is never a duplicate of an opaque triangle (as in
@@ -226,11 +292,8 @@ UNDER_SUFFIX = '@under'
 
 
 def group_fc(key):
-    """FileCode (or 'unbound') of a group key, without the @atest / @under suffixes."""
-    for suf in (UNDER_SUFFIX, ATEST_SUFFIX):
-        if key.endswith(suf):
-            key = key[:-len(suf)]
-    return key
+    """FileCode (or 'unbound') of a group key, without the @atest / @add / @under suffixes."""
+    return key.split('@')[0]
 
 
 def build_flat_kept(packets, idxs, kept):
@@ -277,6 +340,9 @@ def main():
                     'triangle that several chunks/packets store at the same position, UVs and ABE flag')
     ap.add_argument('--keep-covered', action='store_true', help='keep opaque triangles that lie '
                     'wholly inside coplanar opaque triangles of earlier chunks (room_overlap.py)')
+    ap.add_argument('--all-chunks', action='store_true', help='de-duplicate / mark depth ties against '
+                    'every earlier chunk (a viewer drawing all 13 chunks), not only the chunks the '
+                    'area streaming loads alongside (CO_LOADED)')
     ap.add_argument('--no-underlay', action='store_true', help='do not mark triangles that '
                     'partly share a plane with an earlier chunk (UNDER_SUFFIX groups, list col 5)')
     a = ap.parse_args()
@@ -291,10 +357,15 @@ def main():
     abe_by = defaultdict(bool);  npk_by = defaultdict(int)
     ntri_chunk = defaultdict(int)
     overrides_applied = set()
-    seen_tris = set(); seen_tris_fc = {}; cover = PlaneIndex()          # dedupe keys, global across chunks (chunk order, packet order)
-    cover_abe = PlaneIndex()                                            # earlier chunks' kept ABE tris (underlay test only)
+    seen_by = defaultdict(set); seen_tris_fc = {}                       # dedupe keys per chunk (chunk order, packet order)
+    cover_by = defaultdict(PlaneIndex)                                  # per chunk: kept opaque tris
+    cover_abe_by = defaultdict(PlaneIndex)                              # per chunk: kept ABE tris (underlay test only)
+    pairs = area_pairs()
+    always, can = co_loaded(pairs, max([len(cids)] + [max(p) + 1 for p in pairs]))
+    ranges_by = defaultdict(list)                                       # group key -> [chunk, first vertex, count]
     stats = defaultdict(int); dup_xtex = defaultdict(int); ovr_check = {}
     hidden_by = defaultdict(int)
+    blend_ref = {}; bucket_tris = defaultdict(lambda: defaultdict(int))   # chain_blend per group key
     chain_filled = {}; chain_mixed = []; chain_single = {}; chain_skipped = []
     for cid in cids:
         binp = os.path.join(EXTRACT, cid + '.bin')
@@ -383,24 +454,29 @@ def main():
                     if len(anchors) == 1:
                         chain_single['%s/%d' % (cid, i)] = '%s/%d' % (cid, anchors[0])
         kept = {}; under = {}
+        ci = int(cid[4:6], 16)
+        earlier = [int(c[4:6], 16) for c in cids[:cids.index(cid)]]
+        drop_from = earlier if a.all_chunks else [c for c in earlier if c in always[ci]]
+        tie_with = earlier if a.all_chunks else [c for c in earlier if c in can[ci]]
         for i in sorted(final):
             ks = []; us = []
             for t in packet_tris(packets[i]):
                 key = tri_key(packets[i], t)
-                if key in seen_tris and not a.keep_duplicates:
+                if not a.keep_duplicates and any(key in seen_by[c] for c in drop_from):
                     stats['dup_tris_dropped'] += 1
                     if seen_tris_fc.get(key) != final[i]:
                         dup_xtex[(seen_tris_fc.get(key), final[i])] += 1
                     continue
                 V = packets[i]['verts']
                 if (not a.keep_covered and not packets[i]['abe']
-                        and cover.covered(V[t[0]], V[t[1]], V[t[2]])):
+                        and any(cover_by[c].covered(V[t[0]], V[t[1]], V[t[2]]) for c in drop_from)):
                     stats['covered_tris_dropped'] += 1; continue
                 if final[i]:         # an unbound copy never blocks a later bound one
-                    seen_tris.add(key); seen_tris_fc.setdefault(key, final[i])
-                if not a.no_underlay and (
-                        cover_abe.overlaps(V[t[0]], V[t[1]], V[t[2]]) or
-                        (not packets[i]['abe'] and cover.overlaps(V[t[0]], V[t[1]], V[t[2]]))):
+                    seen_by[ci].add(key); seen_tris_fc.setdefault(key, final[i])
+                if not a.no_underlay and any(
+                        cover_abe_by[c].overlaps(V[t[0]], V[t[1]], V[t[2]]) or
+                        (not packets[i]['abe'] and cover_by[c].overlaps(V[t[0]], V[t[1]], V[t[2]]))
+                        for c in tie_with):
                     us.append(t); stats['underlay_tris'] += 1
                 else:
                     ks.append(t)
@@ -408,34 +484,62 @@ def main():
         for i in sorted(final):      # this chunk's triangles cover / tie with later chunks only
             if not final[i]:         # unbound tris never cover or underlay a later copy: the
                 continue             # textured copy must win (main.js already pushes unbound back)
-            idx = cover_abe if packets[i]['abe'] else cover
+            idx = cover_abe_by[ci] if packets[i]['abe'] else cover_by[ci]
             V = packets[i]['verts']
             for t in kept[i] + under[i]:
                 idx.add(V[t[0]], V[t[1]], V[t[2]])
         for i in sorted(final):
             fc = final[i]
-            if fc in ALPHA_TEST and packets[i]['abe']:
-                fc += ATEST_SUFFIX
+            suf, ref, border = chain_blend(hdrs.get(chain[i]))
+            if bool(suf) != bool(packets[i]['abe']):
+                print('warning: %s/%d PRIM ABE %d but chain bucketed %s' % (cid, i, packets[i]['abe'],
+                      bool(suf)), file=sys.stderr)
+            if suf == '?':
+                print('warning: %s/%d blend mode %d not handled; drawn opaque' % (
+                      cid, i, (hdrs[chain[i]]['flags'] & 0xc) >> 2), file=sys.stderr)
+                suf = None
+            if suf and fc:
+                fc += suf
+                blend_ref[fc] = ref
+                bucket_tris[fc][border] += len(kept.get(i, ()))
+                if suf.startswith(ATEST_SUFFIX) and group_fc(fc) not in ALPHA_TEST:
+                    stats['atest_decoded_new'] += 1
+            elif fc in ALPHA_TEST and packets[i]['abe']:
+                print('warning: %s/%d %s is in ALPHA_TEST but its chain is not bucketed' % (cid, i, fc),
+                      file=sys.stderr)
             groups[fc if fc else 'unbound'].append(i)
         for key, idxs in list(groups.items()) + [(k + UNDER_SUFFIX, v) for k, v in groups.items()]:
             flat, ntri = build_flat_kept(packets, idxs, under if key.endswith(UNDER_SUFFIX) else kept)
             if ntri == 0:
                 continue
+            ranges_by[key].append([ci, len(flat_by[key]) // 12, len(flat) // 12])
             flat_by[key].extend(flat); ntri_by[key] += ntri; npk_by[key] += len(idxs)
             ntri_chunk[cid] += ntri
             if any(packets[i]['abe'] for i in idxs):
                 abe_by[key] = True
 
-    order = sorted([k for k in flat_by if k != 'unbound' and not k.endswith(ATEST_SUFFIX)
+    def base_key(k):
+        return k[:-len(UNDER_SUFFIX)] if k.endswith(UNDER_SUFFIX) else k
+    def blended(k):
+        return base_key(k) in blend_ref
+    order = sorted([k for k in flat_by if k != 'unbound' and not blended(k)
                     and not k.endswith(UNDER_SUFFIX)], key=lambda k: -ntri_by[k])
     if 'unbound' in flat_by:
         order.append('unbound')
-    atest = sorted([k for k in flat_by if k.endswith(ATEST_SUFFIX)], key=lambda k: -ntri_by[k])
-    # underlay groups go last in their pass (opaque before the sky, ATE after it), so the
-    # base groups keep their indices and order; draw order does not decide their ties anyway
+    # Bucketed (blended) groups after the opaque pass and the sky, in FUN_002661a8's bucket
+    # order. A group merges chains of several buckets: it is placed by the bucket holding most
+    # of its triangles. GUESS: order inside a bucket (the game's lists are per chain, newest
+    # first, across all chunks) and where the second call (buckets 0x18..0x1f) falls are not
+    # decoded; see notes/fidelity-audit.md 'Room blend order'.
+    def border(k):
+        bt = bucket_tris[base_key(k)]
+        return max(bt, key=lambda b: (bt[b], -b)) if bt else 0x17
     under_keys = sorted([k for k in flat_by if k.endswith(UNDER_SUFFIX)], key=lambda k: -ntri_by[k])
-    order += [k for k in under_keys if not k[:-len(UNDER_SUFFIX)].endswith(ATEST_SUFFIX)]
-    atest += [k for k in under_keys if k[:-len(UNDER_SUFFIX)].endswith(ATEST_SUFFIX)]
+    # underlay groups go last in the opaque pass, so the base groups keep their indices and
+    # order; draw order does not decide their ties anyway
+    order += [k for k in under_keys if not blended(k)]
+    atest = sorted([k for k in flat_by if blended(k)],
+                   key=lambda k: (border(k), k.endswith(UNDER_SUFFIX), -ntri_by[k]))
     for fc in sorted(ALPHA_TEST):
         if fc + ATEST_SUFFIX not in flat_by:
             print('warning: ALPHA_TEST %s matched no blended (ABE) packet; entry does nothing '
@@ -477,13 +581,22 @@ def main():
              'texture_container': cont, 'abe': abe_by[key]}
         if key.endswith(UNDER_SUFFIX):
             g['underlay'] = True
-        if base.endswith(ATEST_SUFFIX):
-            aref, why = ALPHA_TEST[fc]
-            g['alpha_ref'] = round((aref - 0.5) / 128, 5); g['alpha_test_reason'] = why
+        g['chunks'] = ranges_by[key]       # [chunk, first vertex, vertex count]: area streaming
+        if base in blend_ref:
+            g['bucket'] = border(key)
+        if ATEST_SUFFIX in base:
+            aref = blend_ref[base]
+            g['alpha_ref'] = round((aref - 0.5) / 128, 5)
+            g['alpha_test_reason'] = 'chain blend m 0, ref +0xa8 = %d (FUN_002661a8)' % aref
+        elif base.endswith(ADD_SUFFIX):
+            g['blend'] = 'add'
         manifest['groups'].append(g)
         total += ntri_by[key]
     for gi, key in enumerate(order):
         add_group(gi, key)
+    manifest['streaming'] = {'pairs': [list(p) for p in pairs], 'all_chunks': a.all_chunks,
+                             'always': {'%02x' % c: sorted(always[c]) for c in range(len(cids))},
+                             'can': {'%02x' % c: sorted(can[c]) for c in range(len(cids))}}
     manifest['excluded_packets'] = sorted('%s/%d' % k for k in EXCLUDE_PACKETS)
     manifest['chain_fill'] = {'enabled': not a.no_chain_fill, 'filled': chain_filled,
                               'single_anchor': chain_single,
@@ -502,7 +615,7 @@ def main():
             sys.exit('sky mesh not found: %s (run export_z128_sky.py first)' % skyp)
         manifest['groups'].append({'mesh': a.sky, 'filecode': SKY_FC, 'sky': True,
             'texture_container': os.path.join(EXTRACT, SKY_FC + '.bin'), 'abe': True})
-    # alpha-tested passes after the sky, as in the game's draw order
+    # bucketed (blended) passes after the sky, as in the game's draw order
     for k, key in enumerate(atest):
         add_group(len(order) + k, key)
     # Fog from the BMD env block (bmd_env.py), not from constants. The sky dome is
@@ -553,11 +666,13 @@ def main():
             if a.sky:
                 f.write('@nofog %s\n' % a.sky)
         for g in manifest['groups']:
-            # col 5 (only on underlay groups): 1 = depth-tie loser, see UNDER_SUFFIX. The native
-            # renderer reads 4 columns and draws these like any other group.
+            # col 5: 1 = depth-tie loser, see UNDER_SUFFIX; col 6 (only on additive groups):
+            # 'add' = chain blend m 1 (see chain_blend). The native renderer reads 4 columns
+            # and draws these like any other group.
             f.write('%s\t%s\t%d\t%g%s\n' % (g['mesh'], g['texture_container'] or 'NONE',
                                           1 if g['abe'] else 0, g.get('alpha_ref', -1),
-                                          '\t1' if g.get('underlay') else ''))
+                                          ('\t%d\tadd' % (1 if g.get('underlay') else 0)) if g.get('blend') == 'add'
+                                          else ('\t1' if g.get('underlay') else '')))
     nb = len({g['filecode'] for g in manifest['groups'] if g['filecode'] and not g.get('sky')})
     print('binding %s: %s; hidden groups %s: %d packets; duplicates dropped: %d tris (%d with '
           'another texture), %d covered by earlier chunks; %d marked underlay' % (a.bind, dict(stats),

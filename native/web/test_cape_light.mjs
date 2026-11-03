@@ -84,7 +84,8 @@ Tw = T @ Rr.T + t
 # light 2 at the actor point, the global least d^2/k (play.js pick, FUN_0026a710)
 p = Rr @ np.array(LJ['actor_center']) + t
 bq, hit = 1e6, None
-for gd in LJ['grids']:
+# the loaded slots at the hero frame: chunks 1, 2 (save state; area_stream.js), not every chunk's grid
+for gd in ([LJ['chunks'][str(c)] for c in LJ['start_pair']] if 'chunks' in LJ else LJ['grids']):
     ix = min(max(int(np.trunc((p[0] - gd['x0']) / gd['size'])), 0), gd['nx'] - 1)
     iz = min(max(int(np.trunc((p[2] - gd['z0']) / gd['size'])), 0), gd['nz'] - 1)
     for li in gd['cells'][iz * gd['nx'] + ix]:

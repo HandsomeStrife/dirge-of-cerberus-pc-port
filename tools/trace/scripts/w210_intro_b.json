@@ -1,0 +1,1 @@
+{"name": "w210_intro_b", "frames": 1600, "log_from": 800, "doc": "worker 0210: the opening event from the stage start (state f1704 of the w210 restart drive: w201 death route, Restart, cross only to f1824; hook area zeroed), no input; records 800-1599. TRACE_FIELDSET=event TRACE_LOG_AT=B4000", "events": []}

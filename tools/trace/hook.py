@@ -175,6 +175,11 @@ def assemble_hook():
 def patch_memory(mem, script_frames, field_table, log_from=0):
     """mem: bytearray of eeMemory.bin. script_frames: list of 18-byte pad payloads.
     field_table: list of (abs_addr, nwords). Returns the log record size in bytes."""
+    # (worker 0217) a state saved during a hooked run (tools/trace/out/route/*.p2s) still holds this hook:
+    # take it out first (call site back to scePadRead, hook area zeroed), then patch as usual.
+    if struct.unpack_from("<I", mem, CALL_SITE)[0] == 0x0C000000 | (HOOK >> 2):
+        struct.pack_into("<I", mem, CALL_SITE, 0x0C000000 | (PAD_READ >> 2))
+        mem[FREE_LO:FREE_HI] = bytes(FREE_HI - FREE_LO)
     if any(mem[FREE_LO:FREE_HI]):
         raise RuntimeError("hook area 0x96000-0xfffff is not zero in this state")
     old = struct.unpack_from("<I", mem, CALL_SITE)[0]

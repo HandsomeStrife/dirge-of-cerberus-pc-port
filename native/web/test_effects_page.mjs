@@ -34,7 +34,7 @@ try {
   pg.on('console', m => { if (m.type() === 'error') errs.push(m.text()); });
   const fxWarns = []; pg.on('console', m => { if (m.type() === 'warning' && /no rand\(\) state|no effect twister/.test(m.text())) fxWarns.push(m.text()); });
   const open = async q => {
-    for (let i = 0; ; i++) { try { await pg.goto(`http://127.0.0.1:${port}/play.html${q}`, { waitUntil: 'load' }); break; } catch (e) { if (i > 20) throw e; await new Promise(r => setTimeout(r, 250)); } }
+    for (let i = 0; ; i++) { try { await pg.goto(`http://127.0.0.1:${port}/play.html${q}${q ? '&' : '?'}intro=0`, { waitUntil: 'load' }); break; } catch (e) { if (i > 20) throw e; await new Promise(r => setTimeout(r, 250)); } }
     await pg.waitForFunction(() => window.__play && window.__play.stats.ticks > 30, null, { timeout: 180000 });
   };
   await open('?enemydmg=0&sound=0');
@@ -101,7 +101,8 @@ try {
       const n2 = fx.emitters.filter(e => e.id === 0x1000).length;
       const t0 = window.__play.stats.ticks, seen = [];
       const up = layer.update.bind(layer);
-      layer.update = cam => { up(cam); const s = layer.last.find(x => x.screen); const m = (layer.spool ?? []).find(x => x.visible);
+      layer.update = cam => { up(cam); if (layer.flush) layer.flush(); const s = layer.last.find(x => x.screen);   // flush: the meshes this draw pass builds (play.js defers them to the drawn frame)
+         const m = (layer.spool ?? []).find(x => x.visible);
         seen.push(s ? { rgba: s.rgba, alpha: s.alpha, mesh: !!m && m.material.uniforms.rgba.value.toArray() } : null); };
       await new Promise(r => { const k = () => window.__play.stats.ticks > t0 + 14 ? r() : setTimeout(k, 20); k(); });
       layer.update = up;
@@ -174,6 +175,105 @@ try {
     const want = gs(alpha, [200, 100, 50, 0x80], [128, 128, 128, 64], [40, 80, 160]), got = px[alpha];
     ok(got && got.every((x, k) => Math.abs(x - want[k]) <= 1), `GS ALPHA 0x${alpha.toString(16)}: pixel ${got} = the GS's ${want} (+-1)`);
   }
+  // --- worker 0208: the z128 stage fire (the level manager's engine, play.js fxStage)
+  {
+    const zlib = await import('node:zlib'), fs = await import('node:fs');
+    const png = buf => {                                           // 8-bit RGB / RGBA, non-interlaced (playwright screenshots)
+      let o = 8, w = 0, h = 0, ct = 0; const idat = [];
+      while (o < buf.length) { const n = buf.readUInt32BE(o), t = buf.toString('ascii', o + 4, o + 8);
+        if (t === 'IHDR') { w = buf.readUInt32BE(o + 8); h = buf.readUInt32BE(o + 12); ct = buf[o + 17]; }
+        if (t === 'IDAT') idat.push(buf.subarray(o + 8, o + 8 + n)); o += 12 + n; }
+      const bpp = ct === 6 ? 4 : 3, raw = zlib.inflateSync(Buffer.concat(idat)), out = Buffer.alloc(w * h * bpp), st = w * bpp;
+      for (let y = 0; y < h; y++) { const ft = raw[y * (st + 1)];
+        for (let x = 0; x < st; x++) { const a = x >= bpp ? out[y * st + x - bpp] : 0, b = y ? out[(y - 1) * st + x] : 0, c = x >= bpp && y ? out[(y - 1) * st + x - bpp] : 0;
+          let v = raw[y * (st + 1) + 1 + x]; const p = a + b - c, pa = Math.abs(p - a), pb = Math.abs(p - b), pc = Math.abs(p - c);
+          v = (v + [0, a, b, (a + b) >> 1, pa <= pb && pa <= pc ? a : pb <= pc ? b : c][ft]) & 255; out[y * st + x] = v; } }
+      return { w, h, bpp, px: out };
+    };
+    // pixels the stage layer changes in this view: two screenshots, the layer shown / hidden (the same frame state: the
+    // engine is paused for both, play.js keeps drawing the scene)
+    const fireDiff = async () => {
+      await pg.evaluate(() => { const st = window.__fx.stage; window.__fxHold = [st.begin, st.end]; st.begin = () => {}; st.end = () => {}; });
+      const shot = async vis => { await pg.evaluate(v => { window.__fx.stageLayer.group.visible = v; }, vis); await new Promise(r => setTimeout(r, 400)); return png(await pg.screenshot()); };
+      const a = await shot(true), b = await shot(false);
+      await pg.evaluate(() => { const st = window.__fx.stage; window.__fx.stageLayer.group.visible = true; [st.begin, st.end] = window.__fxHold; delete window.__fxHold; });
+      let n = 0, warm = 0;
+      for (let i = 0; i < a.w * a.h; i++) { const d = Math.abs(a.px[i * a.bpp] - b.px[i * b.bpp]) + Math.abs(a.px[i * a.bpp + 1] - b.px[i * b.bpp + 1]) + Math.abs(a.px[i * a.bpp + 2] - b.px[i * b.bpp + 2]);
+        if (d > 12) { n++; if (a.px[i * a.bpp] > b.px[i * b.bpp] && a.px[i * a.bpp] >= a.px[i * a.bpp + 2]) warm++; } }
+      return { n, warm, a };
+    };
+    const S0 = await pg.evaluate(() => {
+      const { stage, stageLayer, ids } = window.__fx;
+      if (!stage) return null;
+      return { n: stage.emitters.length, codes: [...new Set(stage.emitters.map(e => e.F.code.toString(16)))], stage: ids.stage, hidden: ids.hidden,
+        list: stage.emitters.map(e => [e.F.code, e.ei, e.param, e.f0a & 0x380]), drawn: stageLayer.last.length };
+    });
+    if (!S0) ok(false, 'stage fire: window.__fx.stage missing (data/effects has no stage FEDs? re-run export_web_effects.py)');
+    else {
+      ok(S0.n === 76 && S0.codes.join() === '20000000,20040000,20080000', `stage load (FUN_002f15d0 -> FUN_002e4e38): 76 emitters of the three area FEDs (${S0.n}, ${S0.codes})`);
+      const save = path.join(here, '../../tools/trace/out/w208_fire/save.json');
+      if (existsSync(save)) {
+        const R = JSON.parse(fs.readFileSync(save, 'utf8')).emitters;
+        ok(R.length === S0.n && R.every((e, i) => e.code === S0.list[i][0] && e.ei === S0.list[i][1] && e.rec === S0.list[i][2]), 'stage load: the sea-of-flames save\'s emitter list, in order (FED, emitter, param record)');
+        // the page engine's cull (FUN_002ea6a0) run once with the save's own camera (the engine paused around it, so the earlier
+        // steps' camera / position don't matter), compared both ways with the save's +0x0a flags. 0x200 (the occluder test
+        // FUN_00269978) is not translated (GUESS row): those may be unculled on the page and are listed, not failed.
+        const SV = JSON.parse(fs.readFileSync(save, 'utf8')).cam.view;
+        const pf = await pg.evaluate(V => {
+          const st = window.__fx.stage, f = Math.fround;
+          const view = { toView: p => [0, 1, 2].map(j => f(f(f(p[0] * V[j]) + f(p[1] * V[4 + j])) + f(f(p[2] * V[8 + j]) + V[12 + j]))),
+            toViewMatrix: () => Float32Array.from(V), eye: [0, 1, 2].map(i => -(V[12] * V[4 * i] + V[13] * V[4 * i + 1] + V[14] * V[4 * i + 2])) };
+          const keep = st.emitters.map(e => [e.f0a, e.col.slice()]);
+          st.end(view);
+          const flags = st.emitters.map(e => e.f0a & 0x380);
+          st.emitters.forEach((e, i) => { e.f0a = keep[i][0]; e.col = keep[i][1]; });
+          return flags;
+        }, SV);
+        const bad = [], occl = [];
+        R.forEach((e, i) => { const a = pf[i], b = e.f0a & 0x380; if (b === 0x200) { if (a !== b) occl.push(i); } else if (a !== b) bad.push(`#${i} page ${a.toString(16)} save ${b.toString(16)}`); });
+        ok(bad.length === 0, `start view (the save's camera): the page's cull flags = the save's, both ways (${bad.join(', ') || 'all equal'}; occluder-culled in the save, drawn on the page: ${occl.join(', ') || 'none'})`);
+      } else console.log('  (no tools/trace/out/w208_fire/save.json: the save comparison is skipped)');
+      // the frame order on the real page (play.js): per game frame fx.begin (the reseed) < fxStage.begin < fx.end < fxStage.end, and
+      // the stage's begin draws no random numbers once its timeline has spawned (FUN_002efc78 ages; the evals draw in end)
+      const ord = await pg.evaluate(async () => {
+        const { fx, stage } = window.__fx, r = fx.rng, log = [], draws = {}, undo = [];
+        let phase = 'other';
+        for (const k of ['next', 'vrInt', 'vrSpan', 'mtNext']) { const o = r[k]; r[k] = function (...a) { draws[phase] = (draws[phase] ?? 0) + 1; return o.apply(this, a); }; undo.push(() => { r[k] = o; }); }
+        for (const [o, k, nm] of [[fx, 'begin', 'fx.begin'], [stage, 'begin', 'stage.begin'], [fx, 'end', 'fx.end'], [stage, 'end', 'stage.end']]) {
+          const g = o[k]; o[k] = (...a) => { log.push(nm); const pv = phase; phase = nm; try { return g(...a); } finally { phase = pv; } }; undo.push(() => { o[k] = g; });
+        }
+        await new Promise(res => setTimeout(res, 2000));
+        undo.forEach(u => u());
+        return { log, draws };
+      });
+      const want = ['fx.begin', 'stage.begin', 'fx.end', 'stage.end'];
+      const k0 = ord.log.indexOf('fx.begin'), cyc = ord.log.slice(k0, k0 + 4 * Math.floor((ord.log.length - k0) / 4));
+      ok(cyc.length >= 8 && cyc.every((x, i) => x === want[i % 4]), `frame order: ${want.join(' < ')} every game frame (${cyc.length / 4} frames)`);
+      ok(!ord.draws['stage.begin'] && ord.draws['stage.end'] > 0, `fxStage.begin draws no random numbers (${ord.draws['stage.begin'] ?? 0}); its end does (${ord.draws['stage.end']}), after fx.end's (${ord.draws['fx.end'] ?? 0})`);
+      const d0 = await fireDiff();
+      ok(S0.drawn > 0 && d0.n > 0, `start view: the stage layer draws (${S0.drawn} primitives) and changes ${d0.n} pixels (the far embers / smoke, E15)`);
+      // the burning window behind the start (the game's camera at w208_still f201 when that fixture is there, else 180 degrees)
+      const still = path.join(here, '../../tools/trace/out/w208_still/state1.json');
+      const V = existsSync(still) ? JSON.parse(fs.readFileSync(still, 'utf8')).cam.view : null;
+      await pg.evaluate(async ([V]) => {
+        const P = window.__play, wait = ms => new Promise(r => setTimeout(r, ms));
+        if (!V) { P.follow.yaw += Math.PI; await wait(1500); return; }
+        const fwd = [V[2], V[6], V[10]], ang = () => { const d = P.follow.M[2]; const a = Math.atan2(d[0], d[2]) - Math.atan2(fwd[0], fwd[2]); return Math.atan2(Math.sin(a), Math.cos(a)); };
+        const pit = () => Math.asin(P.follow.M[2][1]) - Math.asin(fwd[1]);
+        for (let it = 0; it < 8; it++) {
+          const e0 = ang(); P.follow.yaw += 0.05; await wait(120); const k = (ang() - e0) / 0.05 || 1; P.follow.yaw -= ang() / k; await wait(120);
+          const p0 = pit(); P.follow.pitch += 0.02; await wait(120); const kp = (pit() - p0) / 0.02 || 1; P.follow.pitch -= pit() / kp; await wait(120);
+        }
+        await wait(1500);
+      }, [V]);
+      const S1 = await pg.evaluate(() => { const { stage, stageLayer } = window.__fx; const t = {}; for (const s of stageLayer.last) t[s.type] = (t[s.type] ?? 0) + 1;
+        return { vis: stage.emitters.filter(e => !(e.f0a & 0x380)).map(e => e.ei), types: t }; });
+      const d1 = await fireDiff();
+      ok((S1.types[20] ?? 0) > 20 && (S1.types[21] ?? 0) > 20 && (S1.types[11] ?? 0) > 0, `fire view: flame models (type 20 ${S1.types[20]}), bursts (21 ${S1.types[21]}), glow models (11 ${S1.types[11]}) drawn; visible emitters ${S1.vis}`);
+      ok(d1.warm > 1500, `fire view: the fire is on screen (${d1.n} pixels changed by the stage layer, ${d1.warm} of them warmer)`);
+      if (process.env.FIRE_SHOT) fs.writeFileSync(process.env.FIRE_SHOT, await pg.screenshot());
+    }
+  }
   ok(errs.length === 0, `no page errors (${errs.slice(0, 3).join(' | ')})`);
   await open('?fx=0&enemydmg=0&sound=0');
   ok(await pg.evaluate(() => !window.__fx), '?fx=0: no effects');
@@ -194,5 +294,9 @@ try {
   ok(!fxReq.some(u => u.includes('r0000.fed')) && fxReq.some(u => u.includes('r0001.fed')) && errs.length === 0 && (await pg.evaluate(() => !!window.__fx && !window.__fx.fx.feds.has(0))) && warns.some(w => w.includes('no r0000.fed')),
     `ids.json without "feds": no r0000.fed request (${fxReq.filter(u => u.includes('r0000')).length}), r0001 loaded, no console error (${errs.slice(0, 2).join(' | ')}), warned`);
   await pg.unroute('**/data/effects/ids.json');
-} finally { await browser.close(); srv.kill(); }
+} finally {
+  // a crashed renderer ('Target crashed', low memory) can leave close() pending: bounded, then the server goes and node exits
+  await Promise.race([browser.close().catch(() => {}), new Promise(r => setTimeout(r, 10000))]);
+  srv.kill();
+}
 done();

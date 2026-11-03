@@ -233,7 +233,7 @@ export class SeRenderer {
         pos: q, active: true, remaining: d0 + 1, counter: 1, loopIdx: 0, loopPtr: [0, 0, 0, 0], loopCnt: [0, 0, 0, 0],
         key: 0, vel: 0, inst: null, ov: [-1, -1, -1, -1, -1, -1, -1, -1],
         vol: 0x3fff000, volStep: 0, volTicks: 0, expr: 0x3fff000, exprStep: 0, exprTicks: 0,
-        pan: pan << 12, panStep: 0, panTicks: 0, seqVol: vol << 12,
+        pan: pan << 12, panStep: 0, panTicks: 0, seqVol: vol << 12, seqVolStep: 0, seqVolTicks: 0,
         f148: 0xc00, f154: 0, rnd: [0, 0, 0, 0, 0, 0], pitchStep: 0, pitchTicks: 0, note: 0, voices: [],
       });
       p += v & 0x3fff;
@@ -241,6 +241,38 @@ export class SeRenderer {
     this.prog = prog; this.tracks = tracks; this.voices = []; this.keyOnQueue = []; this.keyOffQueue = [];
     this.events = [];
     this.liveTracks = tracks.length;
+  }
+
+  // IOP command 0x30 (irx table 0x1b8e4 -> FUN_00015d00; EE: request 0x11 FUN_003e7718 -> FUN_003e80d8 -> FUN_003e7e08 ->
+  // FUN_0041a380(1, handle, id, 10, pan, vol, pitch)): on every running track of this SE whose program flag byte (+0x1a1)
+  // lacks 0x10, slide the pan (FUN_00008f3c: +0x48 / +0x4c / +0x50) and the sequence volume (FUN_0000892c: +0x54 / +0x58 /
+  // +0x5c) to the new values over time x 96 / 60 sequence ticks (10 -> 16): step = ((v << 12 | 0x800) - cur) / ticks
+  // (MIPS div). The pan target goes through FUN_00008dc4 (= itself in stereo) and, 0x100 or more away, cur += 0x200000.
+  // The pitch (FUN_00009320, the Doppler byte) is not translated (worker 0215; see notes/fidelity-audit.md 'Placed sounds').
+  update(vol, pan, time = 10) {
+    const ticks = Math.trunc((time * 96) / 60);   // mult by 0x88888889: / 60 toward zero
+    // MISSING: time 0 (the immediate set, irx 0x8ab4 / 0x9178) is not decoded; FUN_003e7e08 always sends 10
+    if (!this.tracks || (this.prog[4] & 0x10) || ticks < 1) return;
+    for (const trk of this.tracks) {
+      if (!trk.active) continue;
+      const tp = (pan << 12) | 0x800;
+      if (Math.abs((tp - trk.pan) >> 12) >= 0x100) trk.pan += 0x200000;
+      trk.panStep = idiv(tp - trk.pan, ticks); trk.panTicks = ticks;
+      trk.seqVolStep = idiv(((vol << 12) | 0x800) - trk.seqVol, ticks); trk.seqVolTicks = ticks;
+    }
+  }
+
+  // IOP command 0x2f (FUN_00015be8 -> FUN_00008bfc; EE: FUN_003e8ff8 -> FUN_003e9830 -> FUN_003e77f0 = request 0x12 ->
+  // FUN_003e80d8 -> FUN_0041a2b8(1, handle, id, 10, or 0xb4 for a slot with 0x20000)): on every running track (not flag
+  // 0x10) the sequence volume slides to 0 over time x 96 / 60 sequence ticks (+0x60 = 1: then the track ends).
+  // FUN_00013340, called first, is not translated (worker 0215).
+  stopFade(time = 10) {
+    const ticks = Math.trunc((time * 96) / 60) || 1;      // FUN_00015be8: time 0 -> 1
+    if (!this.tracks || (this.prog[4] & 0x10)) return;
+    for (const trk of this.tracks) {
+      if (!trk.active) continue;
+      trk.seqVolStep = idiv(0x800 - trk.seqVol, ticks); trk.seqVolTicks = ticks; trk.fadeStop = true;
+    }
   }
 
   // One 240 Hz driver tick t, mixed into L / R at sample `at` (TICK_SAMPLES samples). True once the SE is over.
@@ -294,6 +326,13 @@ export class SeRenderer {
     if (trk.volTicks) { const s = Math.min(k, trk.volTicks); trk.volTicks -= s; trk.vol += trk.volStep * s; }
     if (trk.exprTicks) { const s = Math.min(k, trk.exprTicks); trk.exprTicks -= s; trk.expr += trk.exprStep * s; }
     if (trk.panTicks) { const s = Math.min(k, trk.panTicks); trk.panTicks -= s; trk.pan = (trk.pan + trk.panStep * s) & 0x1fffff; }
+    // +0x54 sequence volume / +0x58 step / +0x5c ticks: only IOP command 0x30 starts this slide (update(), worker 0215).
+    // At the slide's end with +0x60 == 1 (stopFade, IOP command 0x2f) the track is ended (irx 0x6984: its read pointer
+    // goes to an end opcode, +0x158 = 1). L: ended here at once, not at the next sequence event.
+    if (trk.seqVolTicks) {
+      const s = Math.min(k, trk.seqVolTicks); trk.seqVolTicks -= s; trk.seqVol += trk.seqVolStep * s;
+      if (!trk.seqVolTicks && trk.fadeStop) { trk.fadeStop = false; this.endTrack(trk); }
+    }
     if (trk.pitchTicks) {
       const s = Math.min(k, trk.pitchTicks); trk.pitchTicks -= s;
       trk.note += s * trk.pitchStep;

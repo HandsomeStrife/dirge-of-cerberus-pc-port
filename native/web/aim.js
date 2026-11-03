@@ -14,7 +14,10 @@ import { createLock, lockFrame, lockRay, screenPoint } from './lock_on.js';
 import { cylinderHit } from './enemy_hit.js';
 export { aimRayPoints };
 
-export const HELP = 'LMB draw/fire   Z first person   C holster';
+let holsterWarned = false;
+const warnHolsteredReload = () => { if (!holsterWarned) { holsterWarned = true; console.warn('aim: reload with the gun away: its motion is not traced, none played'); } };
+const AIM_RELOAD = 'h_st_rd';                                    // motion slot 0x1c (actions-research: 40 f)
+export const HELP = 'LMB draw/fire   Z first person   C holster   F reload';
 
 async function json(url) {
   const r = await fetch(url);
@@ -157,7 +160,7 @@ export function aimTable(motions, anim, q) {
 export function makeClipControl({ core, anim, ctrl, motions, step = STEP }) {
   const tables = {};
   const IDLE = [{ key: AIM_IDLE, thr: 0.0, root: 0.0 }];      // the aim idle class: h_st_a (slot 0x40)
-  let quad = 0, fire = null, inMove = false;
+  let quad = 0, fire = null, inMove = false, reload = false;
   function clips() {
     // the jump's motion states (FUN_00598f50 / FUN_00599aa0, jump_core.js) own the head layer
     // from the take-off until the landing ends; no other class runs (aim_g: a shot in the air
@@ -166,7 +169,10 @@ export function makeClipControl({ core, anim, ctrl, motions, step = STEP }) {
     if (!core.drawn()) {
       if (anim.request) anim.clearRequest();
       if (anim.table && anim.table !== GAME.loco) { anim.setTable(null, ctrl.C.groundSpeed); quad = 0; }
-      fire = null; inMove = false;
+      fire = null; inMove = false; reload = false;
+      // FUN_00574f40 has no drawn test (the auto reload runs with the gun away), but its motion with the gun away is
+      // not traced: left out (warned once)
+      if (core.events.some(e => e.type === 'reload')) warnHolsteredReload();
       core.events.length = 0;
       return;
     }
@@ -180,7 +186,18 @@ export function makeClipControl({ core, anim, ctrl, motions, step = STEP }) {
     // the clip ends (FUN_003460d8) or after 30 ticks; moving leaves it (FUN_00596678 -> 9).
     // GUESS: a shot while the class runs doesn't restart it (traced aim_a f64; the class
     // dispatcher isn't decoded).
-    if (core.events.length && !moving && !fire && anim.has(AIM_FIRE)) {
+    // the reload motion class 0x1c (FUN_005612e8 -> FUN_00341780(C, 0x1c, 0)): h_st_rd (slot 0x1c's clip, 40 f).
+    // GUESS: the class plays the clip to its end and then hands back (not decoded; see notes/fidelity-audit.md 'Reload
+    // motion': class 0x1c's code in FUN_00341918's table is not read; traced w214_dry: h_st_rd 205-272, h_st_a at 273).
+    if (core.events.some(e => e.type === 'reload') && anim.has(AIM_RELOAD)) {
+      if (anim.playRequest(AIM_RELOAD)) { reload = true; fire = null; }
+    }
+    if (reload) {
+      core.events.length = 0;
+      if (!anim.request || anim.request.ended) { anim.clearRequest(); reload = false; }
+      else return;
+    }
+    if (core.events.some(e => e.type === 'shot') && !moving && !fire && anim.has(AIM_FIRE)) {
       if (anim.playRequest(AIM_FIRE)) fire = { t: 0 };
     }
     core.events.length = 0;
@@ -209,8 +226,8 @@ export function makeClipControl({ core, anim, ctrl, motions, step = STEP }) {
       if (anim.request) anim.clearRequest();
       fire = null;
     },
-    reset() { quad = 0; fire = null; inMove = false; if (anim.request) anim.clearRequest(); if (anim.table && anim.table !== GAME.loco) anim.setTable(null); },
-    state: () => ({ quad, fire: !!fire }),
+    reset() { quad = 0; fire = null; inMove = false; reload = false; if (anim.request) anim.clearRequest(); if (anim.table && anim.table !== GAME.loco) anim.setTable(null); },
+    state: () => ({ quad, fire: !!fire, reload }),
   };
 }
 
@@ -256,8 +273,8 @@ export async function setupAim({ ctrl, anim, motions, col, follow, output, vin, 
 
   // ---- buttons (GUESS mapping; touch input isn't mapped). LMB on the game canvas is R1 with or without pointer lock
   // (the drag fallback); clicks on the report UI never reach the canvas.
-  const btn = { r1: false, r1Edge: false, r3Edge: false, circleEdge: false };
-  const clearEdges = () => { btn.r1 = false; btn.r1Edge = btn.r3Edge = btn.circleEdge = false; };
+  const btn = { r1: false, r1Edge: false, r3Edge: false, circleEdge: false, r2Edge: false };
+  const clearEdges = () => { btn.r1 = false; btn.r1Edge = btn.r3Edge = btn.circleEdge = btn.r2Edge = false; };
   const gate = mouseR1Gate();
   let lockRefused = typeof canvas.requestPointerLock !== 'function';
   document.addEventListener('pointerlockerror', () => { lockRefused = true; });
@@ -278,6 +295,7 @@ export async function setupAim({ ctrl, anim, motions, col, follow, output, vin, 
     if (e.repeat || isFrozen() || /^(INPUT|TEXTAREA)$/.test(e.target.tagName)) return;
     if (e.code === 'KeyZ') btn.r3Edge = true;
     if (e.code === 'KeyC') btn.circleEdge = true;
+    if (e.code === 'KeyF') btn.r2Edge = true;                  // R2 (id 0xa): reload
   });
   addEventListener('blur', () => { btn.r1 = false; });
 
@@ -331,9 +349,9 @@ export async function setupAim({ ctrl, anim, motions, col, follow, output, vin, 
       lastRay = aimRay();
       core.eye = { x: follow.eye[0], y: follow.eye[1], z: follow.eye[2] }; core.hit = lastRay.hit;
       if (inAction || isFrozen()) { clearEdges(); core.events.length = 0; return; }
-      core.input({ r1Pressed: btn.r1Edge, r1Held: btn.r1, r3Pressed: btn.r3Edge, circlePressed: btn.circleEdge },
+      core.input({ r1Pressed: btn.r1Edge, r1Held: btn.r1, r3Pressed: btn.r3Edge, circlePressed: btn.circleEdge, r2Pressed: btn.r2Edge },
                  ctrl.onGround, lastRay.far, ctrl);
-      btn.r1Edge = btn.r3Edge = btn.circleEdge = false;
+      btn.r1Edge = btn.r3Edge = btn.circleEdge = btn.r2Edge = false;
     },
     actionEnter: a => ctl.actionEnter(a),
     // FUN_00579570 (every frame, FUN_005786e8: right after FUN_00578748, before the character's
@@ -343,10 +361,12 @@ export async function setupAim({ ctrl, anim, motions, col, follow, output, vin, 
       core.stateMachine(lastRay ? lastRay.hit : null);
       if (core.cam.pitch !== before) follow.pitch = core.cam.pitch;   // shot: pitch carry-over (message 0x3e9)
       core.reticleFrame(1000 / 50);                  // GUESS: DAT_004f58ec counts ms (phase 1 = 100 -> 5 frames, traced)
-      const shot = core.events.some(e => e.type === 'shot');
+      const ev = core.events.find(e => e.type === 'shot');
+      const shot = !!ev;
       if (shot && api.onShot && lastRay) {          // the bullets (enemy_ai playerShot, hooked by play.js)
         const m = muzzle(), h = lastRay.hit;
-        if (m) api.onShot(m, [h.x, h.y, h.z], W, chest());
+        // FUN_00577480: the pellet count cut to the loaded rounds (aim_core shoot)
+        if (m) api.onShot(m, [h.x, h.y, h.z], ev.pellets === W.pellets ? W : { ...W, pellets: ev.pellets }, chest());
       }
       return shot;
     },
@@ -365,13 +385,13 @@ export async function setupAim({ ctrl, anim, motions, col, follow, output, vin, 
     lock,                                           // lock_on.js state (CAM+0x1e4 = lock.id)
     // H (respawn): the weapon, the latched buttons and the clip classes (the camera resets itself)
     reset() { core.reset(); clearEdges(); ctl.reset(); },
-    // test aid (Playwright): press a game button for one frame ('r1', 'r3', 'circle'); 'r1' also holds
+    // test aid (Playwright): press a game button for one frame ('r1', 'r2', 'r3', 'circle'); 'r1' also holds
     press(b) { if (b === 'r1') { btn.r1 = true; btn.r1Edge = true; setTimeout(() => { btn.r1 = false; }, 60); }
-               if (b === 'r3') btn.r3Edge = true; if (b === 'circle') btn.circleEdge = true; },
+               if (b === 'r3') btn.r3Edge = true; if (b === 'circle') btn.circleEdge = true; if (b === 'r2') btn.r2Edge = true; },
     // per drawn frame: Vincent's fade (CAM+0x1e0 -> FUN_00342318)
     // GUESS: the fade is drawn as visible / hidden (the 16-frame partial alpha is left out).
     render() { vin.body.visible = core.cam.fade > 0; },
-    state: () => ({ st: core.P.st, T: core.P.T, drawn: core.P.drawn, view: core.cam.view, type: core.cam.type,
+    state: () => ({ st: core.P.st, T: core.P.T, drawn: core.P.drawn, ammo: core.ammo.hud(), view: core.cam.view, type: core.cam.type,
                     ramp: core.cam.ramp, fade: core.cam.fade, fov: core.cam.fov, offY: core.hud.offY, kind: core.r.kind,
                     phase: core.r.phase.slice(1, 4), aim: core.P.aim, quad: ctl.state().quad,
                     table: anim.table && anim.table.map ? anim.table.map(e => e.key) : null }),

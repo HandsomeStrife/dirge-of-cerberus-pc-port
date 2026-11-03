@@ -1,0 +1,47 @@
+{
+ "name": "w212_flag95",
+ "frames": 830,
+ "log_from": 770,
+ "doc": "worker 0212: w159_walk95's route (trigger 95 entered ~f784) with trigger 95 poked to run script 88 (trigger 15's: flag 0 < 2 -> cmd 0x66, cmd 0xb flag 0 = 2, flag 63 = 6, cmd 0x10a to records 41 / 42 / 43 and trigger 76, 0x109 to 44, short 1 = 2). Run with TRACE_POKE=9540a4=58,10a2140=58 TRACE_FIELDSET=enemy TRACE_ERECS=41,42,43,44 TRACE_ENEMIES=4.",
+ "events": [
+  {
+   "from": 10,
+   "to": 230,
+   "lx": 0.6,
+   "ly": -1.0
+  },
+  {
+   "from": 240,
+   "to": 244,
+   "buttons": [
+    "cross"
+   ]
+  },
+  {
+   "from": 280,
+   "to": 284,
+   "buttons": [
+    "cross"
+   ]
+  },
+  {
+   "from": 300,
+   "to": 470,
+   "lx": 0.6,
+   "ly": -1.0
+  },
+  {
+   "from": 490,
+   "to": 494,
+   "buttons": [
+    "cross"
+   ]
+  },
+  {
+   "from": 500,
+   "to": 787,
+   "lx": 0.6,
+   "ly": -1.0
+  }
+ ]
+}

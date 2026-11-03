@@ -174,19 +174,23 @@ export function createOutputStage(renderer, { enabled = true, msaa = false, nati
     // full: the projection centre at the canvas centre, one frame row = h / 512, one frame column
     // = (4/3 h / 425.5), the CRTC's 4:3 picture); full mode also passes side (widehud, below)
     hud: null,
-    // set the camera's projection for this mode (call at start and on resize)
-    fitCamera(camera) {
+    // set the camera's projection for this mode (call at start and on resize). fovGame (event cameras, worker 0210):
+    // the game's horizontal fov in degrees, FUN_003edce0: screen distance = DAT_004fcab8 (448) / 2 / tan(fov x
+    // 0.008726647); null = the gameplay projection (SCRZ)
+    fitCamera(camera, fovGame = null) {
       if (camera.userData.fov0 === undefined) camera.userData.fov0 = camera.fov;
+      const scrz = fovGame == null ? SCRZ : SCR_W * 0.5 / Math.tan(fovGame * 0.008726647);
       if (stage.native) {
         // centre (213, 256) inside a 432 x 512 view: a symmetric frustum of 438 x 512 px
         // (centre 219, 256) cropped to x 6..438
         const hw = Math.max(CX, FB_W - CX), hh = Math.max(CY, FB_H - CY);
-        camera.fov = 2 * Math.atan(hh / (SCRZ * AY)) * 180 / Math.PI;
+        camera.fov = 2 * Math.atan(hh / (scrz * AY)) * 180 / Math.PI;
         camera.setViewOffset(2 * hw, 2 * hh, hw - CX, hh - CY, FB_W, FB_H);
-        camera.aspect = (2 * hw / SCRZ) / (2 * hh / (SCRZ * AY));   // after: setViewOffset sets aspect = fullW / fullH
+        camera.aspect = (2 * hw / scrz) / (2 * hh / (scrz * AY));   // after: setViewOffset sets aspect = fullW / fullH
       } else {
-        // improvement option: today's behaviour, the hero fov with the canvas's aspect
-        camera.fov = camera.userData.fov0;
+        // improvement option: today's behaviour, the hero fov with the canvas's aspect (an event camera's fov through
+        // the same vertical extent, FB_H / 2 lines, as the hero fov 59.27 = SCRZ's)
+        camera.fov = fovGame == null ? camera.userData.fov0 : 2 * Math.atan(FB_H * 0.5 / (scrz * AY)) * 180 / Math.PI;
         camera.clearViewOffset();
         renderer.getDrawingBufferSize(size);
         camera.aspect = size.x / size.y;

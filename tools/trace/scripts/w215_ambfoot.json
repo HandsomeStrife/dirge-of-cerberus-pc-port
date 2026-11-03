@@ -1,0 +1,2 @@
+{"name": "w215_ambfoot", "frames": 440, "log_from": 0, "doc": "worker 0215: stand, walk forward, stop, run back toward the camera, run right toward the ladder (TRACE_FIELDSET=ambfoot TRACE_CALLLOG=ambfoot): footsteps on the deck's floor materials, the start deck's sound objects (section 22 records 2 / 3)",
+ "events": [{"from": 20, "to": 110, "ly": -0.5}, {"from": 140, "to": 230, "ly": 1.0}, {"from": 250, "to": 440, "lx": 0.615, "ly": -0.788}]}

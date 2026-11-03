@@ -183,7 +183,8 @@ if [ $have_extract -eq 0 ]; then
   run kel_unpack $PY "$REPO/tools/kel_unpack.py" "$WORK/FILELIST.BIN" "$WORK/KEL.DAT" "$KEL.tmp" bin,fed,irx,wd,at3
   tail -n 1 "$LOGS/kel_unpack.log" | sed 's/^/  /'
   grep -q ' fail=0$' "$LOGS/kel_unpack.log" || fail "kel_unpack reported failures (see $LOGS/kel_unpack.log)"
-  (cd "$KEL.tmp" && find . -name '*.at3' ! -path ./data/zone/z128/sound/bgm_001.at3 -delete)
+  (cd "$KEL.tmp" && find . -name '*.at3' ! -path ./data/zone/z128/sound/bgm_001.at3 ! -path ./data/zone/z128/sound/bgm_012.at3 \
+    ! -path ./data/zone/z128/sound/bgm_013.at3 ! -path ./data/zone/z128/sound/bgm_014.at3 ! -path ./data/zone/z128/sound/bgm_018.at3 -delete)
   $PY "$BYO/disc.py" verify "$KEL.tmp/noPath" || fail "the unpacked files do not match the supported disc"
   date -u +%Y-%m-%dT%H:%M:%SZ > "$KEL.tmp/.byo-extract"
   rm -rf "$KEL"
@@ -236,7 +237,7 @@ run vincent $PY export_web_vincent.py export --no-dump
 grep 'cloth.json' "$LOGS/vincent.log" | tail -n 1 | sed "s#$REPO/##" | cut -c1-160
 echo "ok"
 
-step "Vincent's light rig (env slot + room BMD light grids -> data/vincent/light.json)"
+step "Vincent's light rig (env slot + every chunk's light grid + the area boxes -> data/vincent/light.json)"
 run light $PY export_web_light.py "$DATA/vincent"
 tail -n 1 "$LOGS/light.log" | sed "s#$REPO/##"
 for p in jump ladder shoot; do
@@ -301,6 +302,14 @@ head -n 1 "$LOGS/enemy_placements.log" | cut -c1-160
 run enemy_ai $PY export_web_triggers.py "$NOPATH/06800001.bin" "$DATA/enemies" "$ELF"
 [ -s "$DATA/enemies/ai.json" ] || fail "data/enemies/ai.json missing (log: $LOGS/enemy_ai.log)"
 grep '^wrote' "$LOGS/enemy_ai.log" | sed "s#$REPO/##" | cut -c1-160
+
+step "explosive barrels (stage file sections 14/15: e057 gimmicks -> data/props/props.json; model e057 -> data/props)"
+# props.js / props_view.js; notes/barrel-research.md. The model has no clips (--clips '').
+run props $PY export_web_props.py "$NOPATH/06800001.bin" "$DATA/props"
+[ -s "$DATA/props/props.json" ] || fail "data/props/props.json missing (log: $LOGS/props.log)"
+run props_e057 $PY export_web_enemy.py export --model e057 --out "$DATA/props" --clips ''
+[ -s "$DATA/props/e057.glb" ] || fail "data/props/e057.glb missing (log: $LOGS/props_e057.log)"
+grep '^wrote' "$LOGS/props.log" "$LOGS/props_e057.log" | sed "s#$REPO/##" | cut -c1-160
 echo "ok"
 
 step "the opening cutscene's hand-off (ev0100 scr001 class + its battle clips, ELF table) -> data/checkpoint.json"
@@ -308,17 +317,27 @@ run checkpoint $PY export_web_checkpoint.py --elf "$ELF" --nopath "$NOPATH" --pl
 [ -s "$DATA/checkpoint.json" ] || fail "data/checkpoint.json missing (log: $LOGS/checkpoint.log)"
 tail -n 1 "$LOGS/checkpoint.log" | sed "s#$REPO/##" | cut -c1-160
 
+step "the opening event (ev0100 scr001 class + the ELF's event library classes) -> data/event (intro.js)"
+run event $PY export_web_event.py --elf "$ELF" --nopath "$NOPATH" -o "$DATA/event/ev0100_scr001.json"
+[ -s "$DATA/event/ev0100_scr001.json" ] || fail "data/event/ev0100_scr001.json missing (log: $LOGS/event.log)"
+tail -n 1 "$LOGS/event.log" | sed "s#$REPO/##" | cut -c1-160
+
+step "the opening event's actors (models + event motion files) -> data/event/actors (event_actors.js)"
+run event_actors $PY export_web_event_actors.py --event "$DATA/event/ev0100_scr001.json" -o "$DATA/event/actors"
+[ -s "$DATA/event/actors/actors.json" ] || fail "data/event/actors/actors.json missing (log: $LOGS/event_actors.log)"
+tail -n 1 "$LOGS/event_actors.log" | sed "s#$REPO/##" | cut -c1-160
+
 step "weapon stats + reticle tables and texture (bgd.bin parts, menudata.bin menu2, ELF from the disc) -> data/aim"
 run aim $PY export_web_aim.py --iso "$ISO" -o "$DATA/aim"
 tail -n 1 "$LOGS/aim.log"
 
 
-step "effects: resident effect files r0001.fed / r0000.fed + texture pack core_ef.bin, id tables from the ELF -> data/effects"
+step "effects: resident effect files r0001.fed / r0000.fed, z128 area FEDs, texture pack core_ef.bin, id tables from the ELF -> data/effects"
 # export_web_effects.py also declares "effects" in scene.json (play.js loads the effects only then).
 # It takes the effect random generator's state from --state (the type 137 sparks); an empty
 # --state (none given) leaves it out, so the sparks are off.
 run effects $PY export_web_effects.py --extract "$KEL" --elf "$ELF" -o "$DATA/effects" --state "$STATE"
-for f in r0001.fed r0000.fed core_ef.bin ids.json; do
+for f in r0001.fed r0000.fed core_ef.bin z128_a0.fed z128_a1.fed z128_a2.fed ids.json; do
   [ -s "$DATA/effects/$f" ] || fail "data/effects/$f missing after the effects export (log: $LOGS/effects.log)"
 done
 tail -n 1 "$LOGS/effects.log" | cut -c1-160
@@ -351,6 +370,12 @@ run audio $PY "$REPO/tools/audio/extract.py" --kel "$KEL" --elf "$ELF" --zone 12
 [ -s "$DATA/audio/se_z128.json" ] || fail "data/audio/se_z128.json missing (log: $LOGS/audio.log)"
 head -n 1 "$LOGS/audio.log" | cut -c1-160
 
+step "placed sounds (stage section 22) + Vincent's footstep data (cue table, ELF material map, mkd markers) -> data/audio"
+# ambient.js (worker 0215; notes/audio-research.md "Placed sounds", "Footsteps")
+run ambient $PY export_web_ambient.py "$NOPATH/06800001.bin" "$NOPATH/07703201.bin" "$ELF" "$DATA/audio/ambient_z128.json"
+[ -s "$DATA/audio/ambient_z128.json" ] || fail "data/audio/ambient_z128.json missing (log: $LOGS/ambient.log)"
+tail -n 1 "$LOGS/ambient.log" | sed "s#$REPO/##" | cut -c1-160
+
 if [ $MUSIC -eq 1 ]; then
   step "zone music bgm_001 (ATRAC3 descrambled with the ELF's keys, decoded, FLAC) -> data/audio/bgm"
   if ! make -C "$REPO/native/assets/audio" CC="$CC_FOUND" dirge_atdec > "$LOGS/make_atdec.log" 2>&1; then
@@ -361,7 +386,7 @@ if [ $MUSIC -eq 1 ]; then
 fi
 if [ $MUSIC -eq 1 ]; then
   # bgm.py also adds "bgm" to se_z128.json (music.js fetches bgm.json only then), so it runs after extract.py
-  run music $PY "$REPO/tools/audio/bgm.py" --kel "$KEL" --elf "$ELF" --zone 128 --out "$DATA/audio/bgm" --names bgm_001
+  run music $PY "$REPO/tools/audio/bgm.py" --kel "$KEL" --elf "$ELF" --zone 128 --out "$DATA/audio/bgm" --names bgm_001 bgm_012 bgm_013 bgm_014 bgm_018
   [ -s "$DATA/audio/bgm/bgm_001.flac" ] || fail "data/audio/bgm/bgm_001.flac missing (log: $LOGS/music.log)"
   echo "ok"
 else
