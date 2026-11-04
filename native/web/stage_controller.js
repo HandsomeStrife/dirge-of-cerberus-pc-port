@@ -549,6 +549,22 @@ export class StageRuntime extends EventRuntime {
         if (a.lent) a.lent.release();
         log('finalize ' + id);
       },
+      // isPlayerReadyGun (FUN_003a4420 -> FUN_00325bb0): game-state bit 8. __sv_lock / __sv_unlock (FUN_003a3150 / FUN_003a3190): the event mutex + a mode bit: the page's VM never yields there (event_vm.js). Worker 0261
+      'fake/KerberosEvent.isPlayerReadyGun()Z': () => { const g = gs(); return g && g.test(8) ? 1 : 0; },
+      'fake/KerberosEvent.__sv_lock()V': () => {},
+      'fake/KerberosEvent.__sv_unlock()V': () => {},
+      // getposx / y / z_l (FUN_0039d488 / FUN_0039e108 / FUN_0039e158 -> FUN_0037a580(ev, id, axis)): slot +0x50 + axis, 0 without a slot. main's setpos(getpos()) (worker 0261)
+      'fake/KerberosActor.getposx_l(I)F': (vm, [id]) => { const a = R.actors.get(id); return a ? a.M[12] : 0; },
+      'fake/KerberosActor.getposy_l(I)F': (vm, [id]) => { const a = R.actors.get(id); return a ? a.M[13] : 0; },
+      'fake/KerberosActor.getposz_l(I)F': (vm, [id]) => { const a = R.actors.get(id); return a ? a.M[14] : 0; },
+      // get_battle_camera_l(i, j) (FUN_003a29c8 -> FUN_0037da58): event +0x390 = the current view's matrix, copied at the top of FUN_00377c68 (FUN_003ee608 -> FUN_003ede00), +0x3d0 its fov
+      // (view +0x40). j < 0 or i > 2: fov; i 0 row 3 (the eye), 1 row 3 + row 2 (aim), 2 row 3 - row 1 (up point). main keeps the follow camera through an event with it (worker 0261)
+      'fake/KerberosCamera.get_battle_camera_l(II)F': (vm, [i, j]) => {
+        const v = o().viewMatrix && o().viewMatrix();
+        if (!v) { R.warnOnce('stage: get_battle_camera_l: no page hook (viewMatrix)'); return 0; }
+        if (j < 0 || i > 2 || i < 0) return f32(v.fov);
+        return i === 0 ? v.eye[j] : i === 1 ? f32(v.eye[j] + v.fwd[j]) : f32(v.eye[j] - v.down[j]);
+      },
       // setVisibleAll (FUN_0039d118 -> FUN_00380048(ev, mode, b, 1)). Mode 0: every MP of the list DAT_005b3788: FUN_00408900(MP, b) ->
       // FUN_005a85f8(MP, b ? 0 : 2) (+ its gun, FUN_002dbfc8). An event slot's own MP takes its slot's flag back in FUN_003772c8. Worker 0261
       'fake/KerberosActor.setVisibleAll(IZ)V': (vm, [mode, v]) => {

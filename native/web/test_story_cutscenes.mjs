@@ -1,6 +1,6 @@
 // test_story_cutscenes.mjs -- main's story events that play out (worker 0261; notes/story-cutscenes.md).
 //   node --import ./native/web/test_hooks.mjs native/web/test_story_cutscenes.mjs
-// Needs data/event/ev0100_stage.json. MUTATE=nextevent|frames1|plays|roll|rollsign|rollraw|voicepause|hide|visall|group runs one mutant of the modules in a scratch copy.
+// Needs data/event/ev0100_stage.json. MUTATE=getpos|battlecam|nextevent|frames1|plays|roll|rollsign|rollraw|voicepause|hide|visall|group runs one mutant of the modules in a scratch copy.
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -23,6 +23,8 @@ if (MUT) {
     lentshow: ['stage_controller.js', 'a.lent.show(!!v && !a.mp.clip)', 'a.lent.show(!!v)'],
     plays0262: ['stage_controller.js', "'ev0103.heri_lasted', ", ''],
     playsht: ['stage_controller.js', "'ev0103.heri_toujou', ", ''],
+    getpos: ['stage_controller.js', "return a ? a.M[12] : 0; }", "return 0; }"],
+    battlecam: ['stage_controller.js', "i === 1 ? f32(v.eye[j] + v.fwd[j])", "i === 1 ? 0"],
     frames1: ['stage_controller.js', "if (E && /^ev\\d/.test(E.cls)", "if (false && /^ev\\d/.test(E.cls)"],
     rollraw: ['event_rt.js', 'r1 = crs(fw, raw); v = r1;', 'r1 = crs(fw, r0); v = r1;'],
     voicepause: ['event_sound.js', 'if (on) this.hold(rec); else this.start(rec, rec.off);', ''],
@@ -180,6 +182,18 @@ for (const [ev, flags, g1, extra] of [
   ok(back, ev + ': main back in battle');
   ok(!R.log.some(x => /^skip /.test(x[1])), ev + ': no Skip: ' + R.log.filter(x => /^skip /.test(x[1])).map(x => x[1]).join());
   ok(!vis.length || vis[vis.length - 1] === true, ev + ': everything shown again: ' + vis.join());
+}
+// 3i. help_orei02's end: main's setpos(getpos()) keeps Vincent where he was (FUN_0037a580; 0 used to send him to the origin), and its camera comes back from get_battle_camera_l
+{
+  const places = [], resets = [], at = [-1940, 0, 330];
+  const S = make({ 0: 12, 1: 12, 39: 1, 40: 1, 41: 1 }, G({ 0: 1, 1: 12 }), { battleObject: n => ({ tag: n, matrix: () => [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, at[0], at[1], at[2], 1], lend() {}, show() {}, release() {}, place: (p) => places.push([n, p]) }),
+    viewMatrix: () => ({ eye: [1, 2, 3], fwd: [0, 0, 1], down: [0, 1, 0], fov: 73.5 }), cameraReset: (v) => resets.push(v && { eye: v.eye.slice(), aim: v.aim.slice() }) });
+  const R = S.R, seen = new Set();
+  S.run(4000, () => { for (const F of R.vm.frames) seen.add(F.m.name); return seen.has('help_orei02') && R.gflags[1] >= 12 && R.battle && places.length; });
+  const p = places.find(x => x[0] === 'p_Vin');
+  ok(p && Math.hypot(p[1][0] - at[0], p[1][2] - at[2]) < 1e-3, 'help_orei02: Vincent stays: ' + JSON.stringify(places));
+  const r = resets[resets.length - 1];
+  ok(r && r.eye.join() === '1,2,3' && r.aim.join() === '1,2,4', 'its battle() reads main\'s Camera.set from get_battle_camera_l: ' + JSON.stringify(r));
 }
 // 4. hide_model_l: bit set = the smd list entry is skipped (FUN_0037aa20: b 0 sets, b 1 clears)
 {

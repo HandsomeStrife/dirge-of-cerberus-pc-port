@@ -221,11 +221,12 @@ def main():
             if os.path.basename(f) not in listed or not os.path.exists(f):
                 continue
             buf = open(f, 'rb').read()
-            ents = [x for x in mod_entries(buf) if x[0] in strs]
-            if not ents or not all(fits(buf, P, end, bc) for _nm, P, end in ents):
+            # worker 0261: the clips that fit (e027's m001 names r_stlaf0, which doesn't, and the whole file went: help_people01's r_st_a)
+            ents = [x for x in mod_entries(buf) if x[0] in strs and fits(buf, x[1], x[2], bc)]
+            if not ents:
                 continue
             key = 'r%x' % k
-            if any(key == r for r in resident) or any(nm in p_.get('clipFrames', {}) for p_ in packs.values() for nm, _P, _e in ents):
+            if any(key == r for r in resident):       # (worker 0261: an event file holding the name doesn't count: its actor may not load that file)
                 continue
             clips = {nm: dict(cont=f, nf=AR.clip_frames(buf, P), zero_y=False) for nm, P, _e in ents}
             lp = V.local_pose(sk, list(sk['parent']), clips, out, '%s_%s_local.bin' % (m, key), in_place=False)
@@ -234,10 +235,11 @@ def main():
             packs[key] = lp
             resident.append(key)
         # marker.mkd (FUN_0030bef8 -> the socket of an attached actor, FUN_005ab8f0 / FUN_005ad508): [bone, x, y, z]
-        import export_cerberus as EC
+        # (worker 0263) no tag test in the game: 'mkd' headers too (n043's rifle socket), export_web_triggers.markers
+        import export_web_triggers as T
         try:
-            mk = [[int(b)] + [float(v) for v in xyz] for xyz, b in EC.markers(open(E.paths(m)['cont'], 'rb').read())]
-        except (ValueError, AssertionError):  # no marker.mkd / not the mk2 layout: no sockets (the page warns)
+            mk = [[int(b), float(x), float(y), float(z)] for x, y, z, b in T.markers(m)]
+        except ValueError:  # no marker.mkd: no sockets (the page warns)
             mk = []
         index['models'][m] = dict(glb=m + '.glb', side=m + '.json', bones=bc, parent=[int(x) for x in sk['parent']],
                                   markers=mk, packs=packs, resident=resident)

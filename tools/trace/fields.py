@@ -570,11 +570,12 @@ AMBFOOT_FIELDS = [f for f in FIELDS if f[0] in ("step", "pad_held", "matrix", "g
 # the event clock, actor slots 0..13 (event +0x1800 + 0x200 i: +0x18 id, +0x1c MP, +0x50 matrix row 3 = setpos;
 # FUN_00376308 / FUN_0037abf8). TRACE_EVMP="a,b,..." (hex MP addresses from a first run) adds per MP: +0x10 matrix
 # (64 bytes), +0x40c rate, +0x448 head / count, and each of the 8 layers' clip (+0x200 + 0x30 k) and frame (+0x218).
+_EVSLOTS = int(__import__("os").environ.get("TRACE_EVSLOTS", "14"))   # worker 0262: kita_ev0145 has 30 slots
 EVACTOR_FIELDS = [f for f in FIELDS if f[0] in ("step",)] + [
     ("ev_clock", None, EV + 0x9848, "bytes:20", "D", "+0x9848 clock .. +0x9858 paused total"),
 ] + [("ea%d" % i, None, EV + 0x1800 + 0x200 * i + 0x18, "bytes:8", "D", "actor slot %d: +0x18 id, +0x1c MP" % i)
-     for i in range(14)] + [("ea%d_pos" % i, None, EV + 0x1800 + 0x200 * i + 0x50, "bytes:12", "D", "actor slot %d: matrix row 3" % i)
-                            for i in range(14)]
+     for i in range(_EVSLOTS)] + [("ea%d_pos" % i, None, EV + 0x1800 + 0x200 * i + 0x50, "bytes:12", "D", "actor slot %d: matrix row 3" % i)
+                            for i in range(_EVSLOTS)]
 for _k, _a in enumerate(x for x in __import__("os").environ.get("TRACE_EVMP", "").split(",") if x):
     _a = int(_a, 16)
     EVACTOR_FIELDS += [("mp%d_mat" % _k, None, _a + 0x10, "bytes:64", "D", "MP %#x +0x10 matrix" % _a),

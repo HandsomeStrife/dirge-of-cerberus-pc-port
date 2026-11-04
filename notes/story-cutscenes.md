@@ -16,8 +16,8 @@ Class = the export's name; scrNNN = the file's script (ev0100 scrNNN). pc = main
 | 8 | help_people01 | ev0143 (scr005) | 3833 | stage 1 sub-beat | no | |
 | 9 | help_orei01 | ev0143 (scr005) | 3974 | stage 1 sub-beat | no | |
 | 10 | help_orei02 | ev0143 (scr005) | 4401 | stage 1 sub-beat (3 args) | no | |
-| 11 | heri_toujou | ev0103 (scr002) | 5162 | stage 0 = 13 | no | |
-| 12 | heri_dgsol | ev0103 (scr002) | 5438 | stage 0 = 14 | no | |
+| 11 | heri_toujou | ev0103 (scr002) | 5162 | stage 0 = 13 | **yes (0262)** | |
+| 12 | heri_dgsol | ev0103 (scr002) | 5438 | stage 0 = 14 | **yes (0262)** | |
 | 13 | heri_taijou | ev0103 (scr002) | 5756 | stage 0 = 16 | **yes (0261)** | **Skip in it: main's pc 6355 jumps past sk_mituketa2** |
 | 14 | sk_mituketa2 | ev0101 (scr001) | 6366 | right after 13, only if not skipped | **yes (0261)** | never played before |
 | 15 | first_encounter | ev0141 (scr003) | 6887 | stage 0 = 20 | no | |
@@ -26,9 +26,9 @@ Class = the export's name; scrNNN = the file's script (ev0100 scrNNN). pc = main
 | 18 | help_people03 | ev0143 (scr005) | 9302 | stage 1 = 29.. | no | |
 | 19 | help_orei03 | ev0143 (scr005) | 9771 | stage 1 = 30.. | no | |
 | 20 | wro_kaisetu | ev0141 (scr003) | 10226 | stage 1 = 32 | no | |
-| 21 | heri_lastst | ev0103 (scr002) | 10609 | stage 0 = 36 | no | |
-| 22 | heri_lasted | ev0103 (scr002) | 10949 | stage 0 = 40 | no | **Skip in it: main's pc 11079 jumps past kita_ev0145** |
-| 23 | kita_ev0145 | ev0145 (scr006) | 11082 | right after 22, only if not skipped | no | never played; needs 22 to play first |
+| 21 | heri_lastst | ev0103 (scr002) | 10609 | stage 0 = 36 | **yes (0262)** | |
+| 22 | heri_lasted | ev0103 (scr002) | 10949 | stage 0 = 40 | **yes (0262)** | **Skip in it: main's pc 11079 jumps past kita_ev0145** |
+| 23 | kita_ev0145 | ev0145 (scr006) | 11082 | right after 22, only if not skipped | **yes (0262)** | plays when 22 is not Skipped |
 
 Not called by anything in the stage's classes: run_people02, run_people03 (ev0143), private_ev (ev0142). Only three isSkip tests exist,
 all in main (pcs 754, 6355, 11079); no event tests it itself.
@@ -88,3 +88,32 @@ Image: tools/trace/out/w261/w261_game_vs_page.png (left game, right page). Botto
 - **Chunk animations**: start_anim_l isn't drawn (above).
 - **rv_matiawase's hold + memory-card box**: decoded in checkpoint-research (FUN_003bf250); the box is the checkpoint worker's. Page goes straight on.
 - **113 / 114 "reappearing far away"**: T w229_rescue_pos: their +0x28 bit 0 stays clear to the trace's end (f2399), only bit 0x40 changes at the hand-back, so they are off and not drawn; test_npc_page checks them off. Their status position / clip change at f2126 (status not decoded), nothing a player sees. Not a gap.
+
+## scr002 and scr006: heri_toujou, heri_dgsol, heri_lastst, heri_lasted, kita_ev0145 (worker 0262)
+
+All five are in `PLAYS`. Traces in tools/trace/out/w262 (gitignored). Scripts tools/trace/scripts/w262_*.json; states: heri_toujou r06_door3 + w253_box2's answers; heri_dgsol r06_heli + **poke** stage flag 0 = 14 (`TRACE_POKE=a06338=9131920e`); heri_lastst r0b_save, no input (no box comes up); heri_lasted + kita_ev0145 r0b_fight + **poke** flag 0 = 40 (`a06338=9133ba28`), chained windows out/w262/ld1..ld8.p2s (new `TRACE_SAVE=<path>` in trace.py; a few frames are lost between windows). New `TRACE_EVSLOTS` (fields.py; kita_ev0145 has 30 slots), cmp_event_cams `--jump` (fast shots move over 5 u a frame), cmp_event_actors `--lend`, `--mp MODEL#ID`.
+
+Cameras, largest error by event clock (u). Shot counts equal in all five; the game's extra last "shot" is main's own Camera.set.
+| event | trace | shots | eye | aim | up point | fov |
+|---|---|---|---|---|---|---|
+| heri_toujou | w262_ht_0, _a, _b | 6 / 6 | 0.762 | 0.792 | 0.762 | 0 |
+| heri_dgsol | w262_dg_a, _b | 9 / 9 | 0.276 | 0.164 | 0.276 | 0.017 |
+| heri_lastst | w262_ls_a | 6 / 6 | 0.728 | 0.694 | 0.727 | 0.152 |
+| heri_lasted | w262_ld_a, _2, _3 | 24 / 24 | 0.922 | 0.541 | 0.922 | 0.231 |
+| kita_ev0145 | w262_ld_3 .. _8 | 20 / 20 | 0.057 | 0.255 | 0.057 | 0.016 |
+heri_lasted's shot 12 reads 5.7 eye / 18.9 aim in cmp_event_cams: not real. A window gap falls on its start; aligned by hand inside the shot it is 0.007 / 0.041 / 0.007. **The roll's sign holds:** shots 18-23 (files 139-143) have up point errors 0.001-0.136.
+Shots run longer in the game than on the page where it loads from disc (kita_ev0145 shot 1: 306 frames against 275; heri_toujou's last: 350 against 290, the e027 load before its end): the known drift (Open), larger at loads.
+
+Actors (`cmp_event_actors.mjs`, windows of about 390 frames, not whole events): actor matrix row 3 error 0.000 for every actor compared. Clip frame error: heri_toujou e023, p000 3.60; heri_dgsol e023 0.60; heri_lastst e024 0.60, p000 3.00; heri_lasted p000 3.60; kita_ev0145 e027, e048, e024 7.80 on the window's first record, p000 0.60. Compared: e_Heri, p000, g013, g071 / e_Heri, p_Vin, g013, g033 / e_HobH, p000, g013 / e024, p000 / e027, e048, e024, p000, n000, n043. The rest were not traced.
+
+**Lent actors now draw on the page.** getbattleactor hands the object's own MP to the slot, so the event's loadmotion_l / setmotion_l pose it (FUN_00376b00 -> FUN_0056a5e0). The page keeps two bodies: until the slot has a clip the gameplay body stands for it; from the first clip on the slot's body draws (`obj.model`, event_actors.js) and the gameplay body is held off every frame. The hand-back moves enemies now (`place`, FUN_003157b0's status +0x30 / +0x40). T w262_htpos: e_Heri at (0, 0, 0) facing (0, 0, 1) after heri_toujou, up to its flight in battle().
+
+**Export:** `PAIRS` / `PAIR_MODELS` in export_web_event_actors.py: the size filter `fits` let every townsperson's skeleton take every townsperson's file (335 MB and rising), so these events' files go only to the models that load them. Worker 0263's later files still use the size filter.
+
+Open:
+- **The page loads the whole actor library at start** (loadEventActors): now 36+ models, 463 MB on disk. test_warp_page's renderer crashed once at its boss place ("Target crashed"). Loading per event as the game does (load_l) is the fix; not done here.
+- **e_para_1..6 in heri_dgsol:** under the flag poke they have no object (T w262_dgac: no slots), so neither game nor page draws them. In real play script 29's event 0x16 drops them first, so they would be lent; that path is not traced. Flag 14's real way (event 0x16's last leg) did not fire in w259_heli's 1420 frames.
+- **km0701dj** (kita_ev0145, w003): 4 bones' tracks on the 5-bone w003; how the game reads it is not decoded. Left out, warned: that gun keeps its last pose.
+- **A hidden MP's frame stops in the game** (T w262_kmp_a: e048 stays at 178.2 from its setVisible(0)); the page's goes on. No visible effect in these events: kita_ev0145 restarts the clips with setmotion2 when it shows them again. Not changed (shared by every event).
+- Page tests start the beats from aids (`?warp=heritoujou`, `heridgsol`, `chunk0b`, `herilasted` + the trigger's event or a flag): not walked.
+- Left out with their warnings, as agreed: effects, chunk animations (start_anim in heri_lasted), focus blur, flash_in, cblur_in, setshadow_l, Effect.changeTargetActor, pad vibration, the event SE bank (loadSoundEffectEx_l).

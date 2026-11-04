@@ -1512,6 +1512,9 @@ async function main() {
       // worker 0261: setVisibleAll(0, b) -> FUN_00408900 on every model; setVisibleModelGroup -> DAT_004e8700 (as stage script cmds 0x54 / 0x55)
       allVisible: (v) => { vin.eventHidden = !v; if (enemies) for (const da of enemies.actors) if (da.body) da.body.visible = v; if (itemsView) itemsView.hideAll = !v; },
       cellMask: (bit, on) => visMask.setScript(bit, on),
+      // FUN_003ee608's matrix (the camera last rendered): rows 1 (screen down), 2 (forward), 3 (eye), as sceVu0CameraMatrix; +0x40 its fov (worker 0261)
+      viewMatrix: () => { const v = renderView(); if (v) { const n = Math.hypot(v.aim[0] - v.eye[0], v.aim[1] - v.eye[1], v.aim[2] - v.eye[2]) || 1; return { eye: v.eye, fwd: v.aim.map((x, k) => (x - v.eye[k]) / n), down: v.upDir, fov: v.fov }; }
+        const e = camera.matrixWorld.elements; return { eye: [e[12], e[13], e[14]], fwd: [-e[8], -e[9], -e[10]], down: [-e[4], -e[5], -e[6]], fov: renderFov() }; },
       chunkAnim: (c, an, loop) => { if (chunkAnims) chunkAnims.play(c, an, loop); },   // Zone.start_anim_l (worker 0261)
       battleObject, cameraReset: (view, first) => { if (stage) stageCameraReset(view, first); } });   // main's battle actors (worker 0229)
     if (stageViewMod) stageView = stageViewMod.createStageView({ rt: stage.rt, camera, output, canvas: renderer.domElement, lib: stageLib,
@@ -1523,7 +1526,7 @@ async function main() {
     const k = aiData && aiData.records ? aiData.records.findIndex(r => r.tag === name) : -1;
     if (k < 0) { if (aiData && aiData.records && !aiData.records.some(r => r.tag)) console.warn('stage: ai.json records have no tag (re-export data/enemies: export_web_triggers.py)'); return null; }
     if (k === 0) return vinBattle;
-    const wa = enemyAI && enemyAI.actors.find(a => a.rec === k), da = enemies && enemies.actors.find(a => a.rec === k);
+    const wa = enemyAI && enemyAI.actors.find(a => a.rec === k);
     if (!wa) return null;
     return {
       tag: name,
@@ -1531,7 +1534,8 @@ async function main() {
       // the model's rows: row 2 = -facing (FUN_003157b0 reads -row 2), row 1 = (0, -1, 0) (the y-down frame of the traced
       // matrices; FUN_00383d10's row 2 does not depend on its sign)
       matrix: () => [-wa.face[2], 0, wa.face[0], 0, 0, -1, 0, 0, -wa.face[0], 0, -wa.face[2], 0, wa.pos[0], wa.pos[1], wa.pos[2], 1],
-      lend() {}, show(v) { if (da && da.body) da.body.visible = v; }, release() { if (da && da.body) da.body.visible = true; },
+      // looked up per call: a body activated just before the lend may still be loading (worker 0262)
+      lend() {}, show(v) { const d = enemies && enemies.actors.find(a => a.rec === k); if (d && d.body) d.body.visible = v; }, release() { const d = enemies && enemies.actors.find(a => a.rec === k); if (d && d.body) d.body.visible = true; },
       // FUN_003157b0(status, 0): status +0x30 = the position, +0x40 = the facing (+0x50 = (0, -1, 0)); the actor's own copies follow (worker 0262)
       place(p, f) { wa.pos = [p[0], p[1], p[2]]; wa.face = [f[0], f[1], f[2]]; if (wa.C) wa.C.t2b0 = wa.pos.map((x, i) => Math.fround(x + wa.face[i])); },
     };

@@ -1,0 +1,1 @@
+{"name": "w262_gs_ht", "frames": 640, "log_from": 639, "doc": "worker 0262: GS dump in heri_toujou. TRACE_STATE=r06_door3.", "events": [{"from": 10, "to": 15, "buttons": ["left"]}, {"from": 30, "to": 35, "buttons": ["cross"]}, {"from": 130, "to": 135, "buttons": ["cross"]}, {"from": 230, "to": 235, "buttons": ["cross"]}]}

@@ -1,0 +1,1 @@
+{"name": "w262_htmp", "frames": 630, "log_from": 240, "doc": "worker 0262: r06_door3, heri_toujou actors with TRACE_EVMP (e_Heri, p000, g013, g071). TRACE_FIELDSET=evactor.", "events": [{"from": 10, "to": 15, "buttons": ["left"]}, {"from": 30, "to": 35, "buttons": ["cross"]}, {"from": 130, "to": 135, "buttons": ["cross"]}, {"from": 230, "to": 235, "buttons": ["cross"]}]}

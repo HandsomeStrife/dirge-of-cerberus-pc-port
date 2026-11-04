@@ -6,6 +6,7 @@
 // range, both lengths and the largest eye / aim / up point / fov errors.
 import fs from 'node:fs';
 import { StageRuntime } from '../../native/web/stage_controller.js';
+import { answers } from './event_answers.mjs';
 
 const args = process.argv.slice(2), [ev, tr] = args;
 const opt = (k, d) => { const i = args.indexOf(k); return i < 0 ? d : Number(args[i + 1]); };
@@ -26,10 +27,12 @@ for (const file of tr.split(',')) for (const l of fs.readFileSync(file, 'utf8').
 }
 const [cls, m] = ev.split('.'), M = data.classes[cls].methods.find(x => x.name === m);
 const zf = new Array(64).fill(0), warns = [];
-const R = new StageRuntime(data, { autoSkip: false, warn: w => warns.push(w), flags: () => zf, sound: {} });
+const ans = args.includes('--answers') ? answers(args[args.indexOf('--answers') + 1].split(',')) : null;   // worker 0263: a choice box's keys
+const R = new StageRuntime(data, { autoSkip: false, warn: w => warns.push(w), flags: () => zf, sound: {}, ...(ans ? { windows: ans.windows } : {}) });
 R.vm.start(cls, m, M.desc, M.desc === '()V' ? [] : [101, 102, 103].map(id => ({ f: { id } })));   // help_orei02's actors
 const page = [];
 for (let f = 0; f < 20000 && !R.vm.done; f++) {
+  if (ans) ans.step(f);
   R.frame(20);
   const i = R.cams.findIndex(c => c.active);
   page.push({ f, cam: i < 0 ? null : { i, eye: R.cams[i].eye.slice(), aim: R.cams[i].aim.slice(), up: R.cams[i].up.slice(), fov: R.cams[i].fov } });

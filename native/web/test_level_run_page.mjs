@@ -8,7 +8,7 @@
 //      LEVEL_UNTIL=<goal name>    stop after that goal (a section run: the market = 'dogs')
 //      LEVEL_HOLD=<seconds>       after LEVEL_UNTIL stay in place that long, sampling memory (a real-time soak)
 //      LEVEL_EVENTS=play|skip     main's events and the opening: watch them (default) or Start + ✕ as a player does
-//      LEVEL_SITTING=<seconds>    browser lock hold (default 480): then the game's pause, lock released, tab frozen until the next hold
+//      LEVEL_SITTING=<seconds>    browser lock hold (default 1500; a released tab is earlyoom's first choice here, three of three): then the game's pause, lock released, tab frozen until the next hold
 //      LEVEL_OUT=<dir>            log + screenshots (default tools/trace/out/w264)
 //      WEBDIR=<dir>               serve another copy (mutation runs)
 // Mouse look: under pointer lock CDP's mouse moves arrive with movementX / Y = 0 (Chromium takes them from the OS path), so the bot sends the
@@ -30,7 +30,7 @@ const OUT = process.env.LEVEL_OUT || path.join(ROOT, 'tools/trace/out/w264');
 const LOCK = path.join(ROOT, 'tools/trace/out/.browser.lock');
 const [vw, vh, vd] = (process.env.LEVEL_VIEW || '480x360').match(/\d+(\.\d+)?/g).map(Number);
 const UNTIL = process.env.LEVEL_UNTIL || null, HOLD = +(process.env.LEVEL_HOLD || 0);
-const EVENTS = process.env.LEVEL_EVENTS || 'play', SITTING = +(process.env.LEVEL_SITTING || 480);
+const EVENTS = process.env.LEVEL_EVENTS || 'play', SITTING = +(process.env.LEVEL_SITTING || 1500);
 const QUERY = process.env.LEVEL_QUERY || '';
 mkdirSync(OUT, { recursive: true });
 const LOGF = path.join(OUT, `run_${Date.now()}.log`);
@@ -118,7 +118,10 @@ function browserRss(rootPid) {
 
 const port = await new Promise(r => { const s = net.createServer().listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => r(p)); }); });
 const srv = spawn('python3', ['-I', '-m', 'http.server', String(port), '--bind', '127.0.0.1', '--directory', WEB], { stdio: 'ignore' });
+// earlyoom kills under 10% (about 3 GB): this run is long, so start with 5 GB (the page tests' rule is 4.5)
+const availMB = () => +readFileSync('/proc/meminfo', 'utf8').match(/MemAvailable:\s+(\d+)/)[1] >> 10;
 await lockTake();
+while (availMB() < 5000) { log(`waiting for memory (${availMB()} MB available)`); lockDrop(); await new Promise(r => setTimeout(r, 60000)); await lockTake(); }
 let holdStart = Date.now();
 const browser = await chromium.launch({ args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--enable-precise-memory-info', '--autoplay-policy=no-user-gesture-required'] });
 const ctx = await browser.newContext({ viewport: { width: vw, height: vh }, deviceScaleFactor: vd || 1 });
@@ -129,7 +132,9 @@ pg.on('console', m => { const t = m.text();
   if (m.type() === 'error') { errs.push(t); log('console.error', t.slice(0, 300)); }
   if (m.type() === 'warning') { const k = t.slice(0, 80); warnSeen.set(k, (warnSeen.get(k) || 0) + 1); if (warnSeen.get(k) === 1) appendFileSync(LOGF, `${sec()}s warn ${t.slice(0, 200)}\n`); } });
 pg.on('pageerror', e => { errs.push(e.message); log('PAGEERROR', e.message, (e.stack || '').split('\n').slice(1, 4).join(' | ')); });
-pg.on('crash', () => { errs.push('page crash'); log('PAGE CRASH'); });
+// a dead tab is usually earlyoom (journalctl -u earlyoom) on this box: name what the journal says, and exit 3 so a wrapper can run again
+let crashed = false;
+pg.on('crash', () => { crashed = true; let oom = ''; try { oom = execSync('journalctl -u earlyoom --since "-2 min" -q | grep -c "sending SIG"', { encoding: 'utf8' }).trim(); } catch { /* no journal */ } log(`PAGE CRASH (earlyoom kills in the last 2 min: ${oom || 0})`); lockDrop(); srv.kill(); browser.close().catch(() => {}).finally(() => process.exit(3)); });
 const OPTIONAL = new Set(['/game_state.js', '/stage_info.js']);
 pg.on('response', r => { if (r.status() === 404) { const u = r.url().replace(/^http:..[^/]+/, ''); if (!OPTIONAL.has(u)) log('404', u); } });
 await pg.goto(`http://127.0.0.1:${port}/play.html${QUERY ? '?' + QUERY : ''}`, { waitUntil: 'load', timeout: 240000 });
@@ -144,12 +149,13 @@ await pg.evaluate(() => { window.__lost = []; const c = window.__play.renderer.d
 // second, and can't keep a moving target). It reads the camera and the actor and sends input events only: mouse counts to play.js's listener,
 // mousedown / mouseup on the canvas (aim.js), F (reload). Node names the target: __botServo.rec.
 const SERVO = () => {
-  const V = window.__botServo = { rec: null, signX: -1, signY: 1, sens: 0.15 * Math.PI / 180, down: false, shots: 0, on: false, err: [0, 0], last: 0 };
+  const V = window.__botServo = { rec: null, prop: null, signX: -1, signY: 1, sens: 0.15 * Math.PI / 180, down: false, shots: 0, on: false, err: [0, 0], last: 0 };
   const P = window.__play, canvas = P.renderer.domElement, btn = (t) => canvas.dispatchEvent(new MouseEvent(t, { button: 0, bubbles: true, clientX: 240, clientY: 180 }));
   const step = () => { requestAnimationFrame(step);
     if (V.down) { btn('mouseup'); V.down = false; }
-    if (V.rec == null || !P.enemyAI) return;
-    const a = P.enemyAI.actors.find(x => x.rec === V.rec); if (!a || !a.pos || !(a.hp > 0)) { V.rec = null; return; }
+    if ((V.rec == null && V.prop == null) || !P.enemyAI) return;
+    let a = V.rec != null ? P.enemyAI.actors.find(x => x.rec === V.rec) : (window.__props && window.__props.barrels.find(x => x.rec === V.prop));
+    if (!a || !a.pos || !(a.hp > 0)) { V.rec = null; V.prop = null; return; }
     const f = P.follow, core = P.aim.core, M = f.M, c = core.cam.c1cc, sn = Math.sin(c), cs = Math.cos(c), F = [0, 1, 2].map(k => -sn * M[1][k] + cs * M[2][k]);
     const dx = a.pos[0] - f.eye[0], dy = a.pos[1] - 12 - f.eye[1], dz = a.pos[2] - f.eye[2];
     let yaw = Math.atan2(dz, dx) - Math.atan2(F[2], F[0]); while (yaw > Math.PI) yaw -= 2 * Math.PI; while (yaw < -Math.PI) yaw += 2 * Math.PI;
@@ -215,10 +221,24 @@ function sampleMem(why) { const m = S.mem, b = browserPid ? browserRss(browserPi
 const browserPid = (() => { try { const me = process.pid; for (const l of execSync('ps -e -o pid=,ppid=,args=', { encoding: 'utf8', maxBuffer: 1 << 24 }).trim().split('\n')) { const m = l.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/); if (+m[2] === me && /chrome|headless_shell/.test(m[3])) return +m[1]; } } catch { /* no rss */ } return null; })();
 function memTick() { const k = S.slots.join('/'); if (k !== lastSlots) { sampleMem('swap'); lastSlots = k; lastMem = Date.now(); } else if (Date.now() - lastMem > 30000) { sampleMem('t'); lastMem = Date.now(); } }
 
+// ---- wedge: no move of 3 u in 150 s of running game frames, whatever the bot believes it is doing: dump what the game says and stop
+const DUMP = () => { const P = window.__play, gs = P.gameState, st = P.stage, si = P.stageInfo, w = P.stageWin, bits = [];
+  if (gs) for (let i = 0; i < 64; i++) if (gs.test(i)) bits.push(i);
+  return { bits, si: si ? { kind: si.kind, screen: si.screen ?? null } : null, ev: st ? { running: st.rt.running, battle: st.rt.battle, skip: st.rt.skip, done: st.done } : null, win: w && w.entries ? w.entries.length : null,
+    action: P.ctrl.active ? P.ctrl.active.name : null, pstate: P.ctrl.P.state, grounded: P.ctrl.onGround, keys: [...P.keys], paused: P.pause.active, fps: null, stagePaused: P.stagePaused, hudParked: P.intro.hudParked, intro: P.intro.active, introEnded: P.intro.ended, locked: document.pointerLockElement === P.renderer.domElement }; };
+let wedge = { p: null, tk: 0 };
+async function wedgeCheck() { if (!wedge.p || Math.hypot(S.pos[0] - wedge.p[0], S.pos[1] - wedge.p[1], S.pos[2] - wedge.p[2]) > 3 || S.ev || S.intro || S.hp === 0) { wedge = { p: S.pos.slice(), tk: S.ticks }; return; }
+  if (S.ticks - wedge.tk < 7500) return;
+  const d = await pg.evaluate(DUMP); const { actors, items, ...rest } = S;
+  log(`WEDGE at ${S.pos.map(v => v.toFixed(1))} for ${S.ticks - wedge.tk} ticks: ${JSON.stringify(d)}`); appendFileSync(LOGF, `state ${JSON.stringify(rest)}\nactors ${JSON.stringify(actors.filter(a => a.d < 80))}\nitems ${JSON.stringify(items.filter(a => a.d < 40))}\n`);
+  await pg.screenshot({ path: path.join(OUT, `wedge_${Math.round(S.pos[0])}_${Math.round(S.pos[2])}.png`) }).catch(() => {});
+  throw new Error(`wedged at ${S.pos.map(Math.round)}`); }
+
 // ---- system states the bot answers before anything else; returns true when it handled the frame
 const stats = { deaths: 0, stucks: 0, restarts: 0, events: [], kills: 0, shots: 0 }; let lastEvLog = 0, evSince = 0, wasEv = false;
 async function systems() {
   await sittingCheck();
+  await wedgeCheck();
   if (servoRec != null && (S.intro || S.ev || S.evPaused || S.hp === 0 || S.goOn || S.goMenu || S.pause || S.siKind >= 0 || S.noCtl || S.restartPending)) await servo(null);
   memTick();
   lastMove.tk = lastMove.tk ?? 0;
@@ -248,7 +268,7 @@ let lastHeal = 0;
 async function heal() { if (S.hp > 0 && S.hp < 350 && S.inv && S.inv.potion > 0 && Date.now() - lastHeal > 4000 && S.pstate !== 7) { lastHeal = Date.now(); log(`heal: E at HP ${S.hp}, potions ${S.inv.potion}`); await tap('KeyE'); } }
 
 // ---- fight: turn the view onto the nearest live enemy with a clear line and hold the gun on it
-const FOES = a => a.ai && a.hp > 0;
+const FOES = a => a.ai && a.hp > 0 && /^e/.test(a.type || '');   // n0xx = townspeople: a player doesn't shoot them
 const notTown = new Set();     // records we were told not to shoot: filled by the goal (townspeople)
 let ignoreUntil = new Map();
 const lineClear = (a, b) => { try { return !col.segment || !col.segment({ x: a[0], y: a[1], z: a[2] }, { x: b[0], y: b[1], z: b[2] }); } catch { return true; } };
@@ -274,47 +294,48 @@ async function fightStep(range = 110) {
 }
 
 // ---- walking
-let lastCross = 0, path_ = null, pi = 0, lastMove = { t: 0, p: null }, stuckN = 0;
+let climb = 1, stuckAt = null, stuckEnd = null, lastCross = 0, path_ = null, pi = 0, lastMove = { t: 0, p: null }, stuckN = 0;
 function planTo(t) { path_ = route(S.pos, t); pi = 0; lastMove = { t: Date.now(), p: S.pos.slice(), tk: S.ticks }; stuckN = 0; return !!path_; }
 let lastShot = 0;
 async function shot(name) { if (Date.now() - lastShot < 20000) return; lastShot = Date.now(); await pg.screenshot({ path: path.join(OUT, `${name}.png`) }).catch(() => {}); }
 // one step toward the plan's next waypoint; 'arrived' at the end. Stuck: ✕, sidestep, replan (a stuck is logged with its place).
 async function walkStep(goalName, tol = 5, noLook = false) {
   if (!path_ || pi >= path_.length) return 'arrived';
-  // ladders
-  if (S.action === 'ladder') { const w = path_[pi]; const dn = w && w.k === 'dn'; const up = S.pos[1] > ((w && w.p[1]) ?? S.pos[1]);
-    await hold(new Set([up ? 'KeyW' : 'KeyS'])); await wait(60); return 'ladder'; }
+  // ladders: the walk mesh runs up the ladder faces, so a waypoint far above (below) at a ladder's bottom (top) box means this ladder.
+  // actions/ladder.js selects: inside the box, facing along its z axis; then ✕; W / S climb until he is off
+  if (S.action === 'ladder') { await hold(new Set([climb > 0 ? 'KeyW' : 'KeyS'])); await wait(60); return 'ladder'; }
+  { const w0 = path_[pi], dyW = w0.p[1] - S.pos[1];
+    if (Math.abs(dyW) > 20) for (const L of LADDERS) { const b = dyW < 0 ? L.bottom : L.top, d = dist(S.pos, b.origin);
+      if (d > 14 || Math.abs(S.pos[1] - b.origin[1]) > 25) continue;
+      const z = b.axes[2];
+      if (d > 2.5) { const m = moveKeys(S, b.origin[0] - S.pos[0], b.origin[2] - S.pos[2]); await hold(m.want); await wait(40); return 'walk'; }
+      const m = moveKeys(S, z[0], z[2]);
+      if (Math.sin(S.heading) * z[0] + Math.cos(S.heading) * z[2] < 0.5) { await hold(m.want); await wait(90); await release(); return 'walk'; }
+      await release(); await tap('Space'); await wait(300); await read();
+      if (S.action === 'ladder') { climb = dyW < 0 ? 1 : -1; log(`ladder ${L.id} ${climb > 0 ? 'up' : 'down'} from ${S.pos.map(Math.round)}`); }
+      lastMove = { t: Date.now(), p: S.pos.slice(), tk: S.ticks };
+      return 'ladder'; } }
   // advance: the waypoint within tol in xz and near in height, or the next one closer (same floor)
   while (pi < path_.length) { const w = path_[pi];
-    if ((w.k === 'up' || w.k === 'dn')) break;
     const d = dist(S.pos, w.p), dy = Math.abs(S.pos[1] - w.p[1]);
     const next = path_[pi + 1];
-    if ((d < tol && dy < 30) || (next && next.k !== 'up' && next.k !== 'dn' && dist(S.pos, next.p) < d && dy < 30 && d < 25)) { pi++; continue; }
+    if ((d < tol && dy < 30) || (next && dist(S.pos, next.p) < d && dy < 30 && d < 25)) { pi++; continue; }
     break; }
   if (pi >= path_.length) { await release(); return 'arrived'; }
   const w = path_[pi];
-  if (w.k === 'up' || w.k === 'dn') { const d = dist(S.pos, w.p);
-    if (d < 7) { await release(); const lp = w.k === 'up' ? w.lad.top.origin : w.lad.bottom.origin; const m = moveKeys(S, w.lad.bottom.origin[0] - S.pos[0], w.lad.bottom.origin[2] - S.pos[2]);
-      await hold(m.want); await wait(80); await tap('Space'); await wait(250); await read();
-      if (S.action === 'ladder') { log(`ladder ${w.lad.id} ${w.k} at ${S.pos.map(Math.round)}`); pi++; return 'ladder'; } } }
   const dx = w.p[0] - S.pos[0], dz = w.p[2] - S.pos[2];
   // the view follows the walk: mouse toward the walking direction, the keys for the rest
   if (!noLook) { const e = aimErr([w.p[0], S.eye[1], w.p[2]]); await look(signX * e.yaw / SENS * 0.25, 0); }
-  // a walk polygon up a ladder face (the mesh has them): ✕ at its foot
-  if (S.pstate !== 3 && dist(S.pos, w.p) < 9 && S.pos[1] - w.p[1] > 25 && S.ticks - lastCross > 60) { lastCross = S.ticks; await tap('Space'); }
   const m = moveKeys(S, dx, dz); m.want.add('ShiftLeft'); await hold(m.want);
   // stuck: < 4 u in 100 game ticks while not fighting
   if (S.ticks - lastMove.tk > 100) { const moved = Math.hypot(S.pos[0] - lastMove.p[0], S.pos[1] - lastMove.p[1], S.pos[2] - lastMove.p[2]);
-    if (moved < 4) { stuckN++; stats.stucks++;
+    const endP = path_[path_.length - 1].p;
+    if (moved < 4) { if (stuckEnd !== endP || !stuckAt || dist(S.pos, stuckAt) > 40) { stuckEnd = endP; stuckN = 0; stuckAt = S.pos.slice(); } stuckN++; stats.stucks++;       // counted per place, never decays: a corner that lets him hop still ends
       log(`STUCK ${stuckN} on '${goalName}' at ${S.pos.map(v => v.toFixed(1))} toward ${w.p.map(Math.round)} (${w.k}), wp ${pi}/${path_.length}, state ${S.pstate}, action ${S.action}, flag0 ${S.flags[0]}`);
       await shot(`stuck_${goalName.replace(/\W+/g, '_')}_${stuckN}`);
-      const a = stuckN % 4;
-      if (a === 1) { await tap('Space'); }
-      if (a === 2) { const q = moveKeys(S, -dz, dx); q.want.add('ShiftLeft'); await hold(q.want); await wait(1200); }
-      if (a === 3) { const q = moveKeys(S, dz, -dx); q.want.add('ShiftLeft'); await hold(q.want); await wait(1200); }
-      if (a === 0) { const q = moveKeys(S, -dx, -dz); await hold(q.want); await wait(1000); const end = path_[path_.length - 1].p; await release(); await read(); path_ = route(S.pos, end) || path_; pi = 0; }
-      if (stuckN >= 12) return 'stuck'; }
-    else stuckN = Math.max(0, stuckN - 1);
+      if (stuckN % 2 === 1) await tap('Space');                                                               // ✕ (a door, a gimmick, a jump)
+      else { const sgn = stuckN % 4 === 2 ? 1 : -1, q = moveKeys(S, -dz * sgn, dx * sgn); q.want.add('ShiftLeft'); await hold(q.want); await wait(1000); await release(); await read(); path_ = route(S.pos, endP) || path_; pi = 0; }   // sidestep, plan again from there
+      if (stuckN >= 10) return 'stuck'; }
     lastMove = { t: Date.now(), p: S.pos.slice(), tk: S.ticks }; }
   return 'walk';
 }
@@ -326,25 +347,31 @@ function nearItem() { let b = null; for (const it of S.items) { if (skipItems.ha
 const G = [];
 const goal = (name, opt) => G.push({ name, ...opt });
 const f0 = n => s => (s.flags[0] | 0) >= n;
-goal('stairs', { to: [-842, -28, -574], done: f0(2), until: f0(2) });                       // trigger 15, rv_matiawase; the record scene_save(1)
-goal('dogs', { to: [-1348, 0, -600], done: s => f0(4)(s), near: 8 });                          // trigger 63 wakes 59-61, 64, 65
-goal('square', { to: [-1507, 0, -573], done: s => f0(4)(s), near: 8 });                        // Dan's market spot
-goal('alcove', { to: [-1672, 0, -407], done: s => f0(4)(s) || s.inv.key > 0, hunt: 147, near: 10 });   // Cardkey 1: soldier 147's drop
-goal('gate1', { to: [-1739, 0, -351], done: f0(4), use: true, near: 12 });                    // script 202 ev 0x11
+// flag 0: 2 rv_matiawase, 4 trigger 63 (dogs), 11 chunk 05, 13 trigger 14, 16 Dragonfly, 20 trigger 18, 24 e036, 36 chunk 0b (notes/route-states.md).
+// The spots are the walked route states' (r03_card, r05_next, r05_key3, r06_door, r08_box ...). In a run a goal that is walked counts as passed;
+// `done` only decides where a Restart re-enters (a record restores flags and items, so gates are shut again unless flag 0 is past them).
+const key = s => s.inv.key > 0;
+goal('stairs', { to: [-842, -28, -574], done: f0(2), until: f0(2) });                          // trigger 15, rv_matiawase; the record scene_save(1)
+goal('dogs', { to: [-1348, 0, -600], done: f0(4), until: f0(4), near: 4 });                    // trigger 63 (flag 0 = 4) wakes 59-61, 64, 65
+goal('square', { to: [-1507, 0, -573], done: f0(11), near: 8 });                               // Dan's market spot
+goal('south', { to: [-1642, 0, -936], done: s => f0(11)(s) || key(s), near: 12 });             // r03_mid: dog 65's side of the square
+goal('alcove', { to: [-1672, 0, -407], done: s => f0(11)(s) || key(s), hunt: 147, near: 10 }); // Cardkey 1: soldier 147's drop
+goal('gate1', { to: [-1732, 0, -356], face: [-1739, -351], done: f0(11), use: true, near: 6 });   // script 202 ev 0x11
 goal('east', { to: [-728, 0, -37], done: f0(11), near: 12 });
-goal('west', { to: [-1420, 0, 684], done: f0(11), near: 12 });
-goal('key2', { to: [-1889, 0, 1084], done: s => f0(11)(s) && false, near: 6 });
-goal('gate2', { to: [-1305, 0, 851], use: true, near: 12, done: f0(13) });
-goal('door', { to: [-1327.5, 0, 1130], use: true, near: 8, done: f0(13) });                   // trigger 12: ✕ facing the door; trigger 14: flag 0 = 13
-goal('past door', { to: [-1328, 0, 1205], done: f0(13), until: f0(13), near: 8 });
-goal('dragonfly', { to: [-1591, 0, 1364], done: f0(16), until: f0(16), fightOnly: true, near: 8 });
-goal('chunk07', { to: [-1753, -44, 1571], done: f0(20), until: f0(20), near: 8 });
+goal('west', { to: [-1420, 0, 684], done: s => f0(13)(s) || key(s), near: 12 });
+goal('key2', { to: [-1888, 0, 1085], done: s => f0(13)(s) || key(s), near: 5 });               // placed item
+goal('gate2', { to: [-1302, 0, 842], face: [-1305, 851], done: f0(13), use: true, near: 6 });  // script 199
+goal('past gate2', { to: [-1368, -40, 1102], done: f0(13), near: 10 });
+goal('door', { to: [-1327, 0, 1134], face: [-1327.5, 1140], done: f0(13), use: true, near: 6 });   // trigger 12: ✕ facing the door
+goal('past door', { to: [-1328, 0, 1205], done: f0(13), until: f0(13), near: 8 });             // trigger 14: flag 0 = 13, heri_toujou
+goal('dragonfly', { to: [-1591, 0, 1364], done: f0(16), until: f0(16), fightOnly: true, near: 8 });   // in the open; a hit under HP 20000 starts timer 0 (script 29)
+goal('chunk07', { to: [-1753, -44, 1571], done: f0(20), until: f0(20), near: 8 });             // sk_mituketa2 moved him; trigger 18
 goal('e036', { to: [-1753, -44, 1571], done: f0(24), until: f0(24), fightOnly: true, near: 15 });
-goal('key3 box', { to: [-703, 0, 845], done: s => f0(36)(s) || s.inv.key > 0, shootBox: 72, near: 12 });
-goal('key3', { to: [-700.8, 0, 858.5], done: s => f0(36)(s) || s.inv.key > 0, near: 4 });
-goal('gate3', { to: [-478, 0, 801], use: true, done: f0(36), near: 12 });
+goal('box spot', { to: [-697.4, 0, 881.5], done: s => f0(36)(s) || key(s), near: 6 });         // r08_box
+goal('key3 box', { to: [-697.4, 0, 881.5], shoot: 72, done: s => f0(36)(s) || key(s), near: 8 });     // Cardkey 3 is in box prop 72 (-703, -6, 857.5); nearItem walks onto it
+goal('gate3', { to: [-510, 0, 802], face: [-478, 801], use: true, done: f0(36), near: 6 });    // script 211
 goal('chunk09', { to: [-80, -40, 606], done: f0(36), near: 12 });
-goal('chunk0b', { to: [407, -100, 1471], done: f0(36), until: f0(36), near: 8 });
+goal('chunk0b', { to: [407, -100, 1471], done: f0(36), until: f0(36), near: 8 });              // script 35
 goal('boss', { to: null, boss: true, done: s => s.exit });
 goal('results', { to: null, results: true });
 
@@ -384,7 +411,7 @@ try {
     if (g.done && g.done(S)) { gi++; continue; }
     log(`goal '${g.name}' from ${S.pos.map(Math.round)}, HP ${S.hp}, rounds ${S.loaded}/${S.inv && S.inv.ammo}, flag0 ${S.flags[0]}, key ${S.inv && S.inv.key}, slots ${S.slots.join('/')}`);
     if (g.to && !planTo(g.to)) { log(`no route to ${g.to}`); throw new Error('no route for ' + g.name); }
-    const startT = Date.now(); let usedN = 0, itemT = 0;
+    const startT = Date.now(); let usedN = 0, itemT = 0, keyAt = 0, shootT = 0;
     while (true) {
       await read();
       if (await systems()) { lastMove = { t: Date.now(), p: S.pos.slice(), tk: S.ticks }; if (S.restarts !== lastRestarts) break; continue; }
@@ -408,8 +435,13 @@ try {
       if (w === 'stuck') { log(`goal '${g.name}': stuck for good`); await shot(`stuckend_${g.name.replace(/\W+/g, '_')}`); throw new Error(`stuck on ${g.name} at ${S.pos.map(Math.round)}`); }
       if (w === 'arrived') {
         await release();
-        if (g.use && usedN < 6) { usedN++; const q = moveKeys(S, g.to[0] - S.pos[0], g.to[2] - S.pos[2]); await hold(q.want); await wait(300); await release(); await tap('Space'); log(`✕ at '${g.name}' (${usedN}), key ${S.inv && S.inv.key}, flag0 ${S.flags[0]}`); await wait(1000); continue; }
+        if (g.use && usedN === 0) keyAt = S.inv.key;
+        if (g.use && usedN > 0 && S.inv.key < keyAt) { log(`'${g.name}': the key went (${keyAt} -> ${S.inv.key})`); break; }
+        if (g.use && usedN < 6) { usedN++; const ft = g.face ? [g.face[0], 0, g.face[1]] : g.to; const q = moveKeys(S, ft[0] - S.pos[0], ft[2] - S.pos[2]); await hold(q.want); await wait(300); await release(); await tap('Space'); log(`✕ at '${g.name}' (${usedN}), key ${S.inv && S.inv.key}, flag0 ${S.flags[0]}`); await wait(1000); continue; }
         if (g.hunt != null) { const a = S.actors.find(x => x.rec === g.hunt); if (a && a.hp > 0) { await wait(150); continue; } }
+        if (g.shoot != null) { if (!shootT) { shootT = Date.now(); await pg.evaluate(r => { window.__botServo.prop = r; }, g.shoot); }
+          if (Date.now() - shootT > 60000) { log(`'${g.name}': box still up after 60 s`); break; }
+          await read(); if (key(S)) break; await wait(150); continue; }
         if (g.until) { await wait(150); continue; }
         break;
       }
@@ -421,7 +453,8 @@ try {
     gi++;
   }
   finished = true;
-} catch (e) { runError = e; log('RUN STOPPED:', e.message); await shot('stopped').catch(() => {}); }
+} catch (e) { if (crashed) await new Promise(() => {});   // the crash handler exits 3
+  runError = e; log('RUN STOPPED:', e.message); await shot('stopped').catch(() => {}); }
 
 await release().catch(() => {}); await fire(false).catch(() => {});
 if (HOLD && !runError) { log(`holding ${HOLD} s at ${S.pos.map(Math.round)}`); const end = Date.now() + HOLD * 1000; while (Date.now() < end) { await read(); await systems(); await fightStep(150); await wait(100); await sittingCheck(); } }

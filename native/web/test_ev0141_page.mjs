@@ -30,7 +30,7 @@ for (const name of (process.env.EV || 'encounter,toujou,wro').split(',')) {
   const C = CASES[name];
   const pg = await browser.newPage({ viewport: { width: 960, height: 540 } });
   try {
-    const errs = []; pg.on('pageerror', e => errs.push(e.message)); pg.on('console', m => { if (m.type() === 'error') errs.push(m.text()); });
+    const errs = []; pg.on('pageerror', e => errs.push(e.message)); pg.on('console', m => { if (m.type() === 'error' || /no marker/.test(m.text())) errs.push(m.text()); });
     for (let i = 0; ; i++) {
       try { await pg.goto(`http://127.0.0.1:${port}/play.html?intro=0&sound=0&enemydmg=0&warp=${name}`, { waitUntil: 'load' }); break; }
       catch (e) { if (i > 20) throw e; await new Promise(r => setTimeout(r, 250)); }
@@ -40,7 +40,8 @@ for (const name of (process.env.EV || 'encounter,toujou,wro').split(',')) {
       const f = () => { const R = P.stage.rt, E = window.__ev;
         if (R.vm.frames.some(F => F.m.name === m)) { E.n++; E.t0 ??= R.clock;
           for (const a of R.actors.slots) if (a.drawn && a.drawn.shown && !a.lent) E.shown.add(a.model);
-          if (P.vin && P.vin.body && P.vin.body.visible) E.vin++;
+          // wro_kaisetu's setVisibleAll(0, 1) (FUN_0039d118) shows every MP again, Vincent's included, by the script's order
+          if (P.vin && P.vin.body && P.vin.body.visible && !R.log.some(x => /^setVisibleAll 0 (1|true)/.test(x[1])) && !R.actors.slots.some(a => a.lent && a.lent.tag === 'p_Vin' && a.visible) && !R.log.some(x => /^handback p_Vin/.test(x[1]))) { E.vin++; (E.vinAt ??= []).push(R.clock - E.t0); }   // first_encounter's last shot: setVisible(1) on the slot lending him
           if (P.stageView && P.stageView.active) E.cam++;
           if (P.stageWin && P.stageWin.drawAll(performance.now()).length) E.win++;
           if (P.stageWin && P.stageWin.entries.some(e => e.kind === 27 && e.box && e.box.box && e.box.box.result === 0 && !(e.box.box.flags & 0x30))) E.box++;
@@ -76,16 +77,19 @@ for (const name of (process.env.EV || 'encounter,toujou,wro').split(',')) {
     }
     await pg.waitForFunction((e) => { const R = window.__play.stage.rt; return R.gflags[1] === e && R.battle; }, C.end, { timeout: 500000, polling: 500 });
     const s = await pg.evaluate(() => { const P = window.__play, R = P.stage.rt, E = window.__ev;
-      return { n: E.n, shown: [...E.shown], vin: E.vin, win: E.win, cam: E.cam, log: R.log.map(x => x[1]), vis: P.vin && P.vin.body && P.vin.body.visible, pos: [P.ctrl.pos.x, P.ctrl.pos.y, P.ctrl.pos.z], g: R.gflags[1] }; });
+      return { n: E.n, shown: [...E.shown], vin: E.vin, vinAt: (E.vinAt || []).filter((_, i, l) => i < 3 || i >= l.length - 3).map(x => Math.round(x)).join(), win: E.win, cam: E.cam, log: R.log.map(x => x[1]), vis: P.vin && P.vin.body && P.vin.body.visible, pos: [P.ctrl.pos.x, P.ctrl.pos.y, P.ctrl.pos.z], g: R.gflags[1] }; });
     ok(s.n > 50, `${C.m} ran on the page's frames`, String(s.n));
     ok(!s.log.some(m => /^skip /.test(m)), 'no Skip in it', s.log.filter(m => /^skip /.test(m)).join());
     ok(C.want.every(m => s.shown.includes(m)), 'draws its actors', s.shown.join());
-    ok(s.vin === 0, 'Vincent\'s own body hidden in it', String(s.vin));
+    ok(s.vin === 0, 'Vincent\'s own body hidden in it', s.vin + ' at ms ' + s.vinAt);
     ok(s.cam > 50, 'the event camera renders', String(s.cam));
     ok(s.win > 0, 'its subtitles open', String(s.win));
     ok(s.vis === true, 'after it: Vincent drawn again', s.pos.map(v => v.toFixed(1)).join());
     ok(!errs.length, 'no page errors', errs.slice(0, 3).join(' | '));
-  } catch (e) { ok(false, name + ' exception', e.message.slice(0, 300)); }
+  } catch (e) {
+    const st = await pg.evaluate(() => { const R = window.__play.stage.rt; return { where: R.vm.where(), clock: R.clock, flag1: R.gflags[1], battle: R.battle, n: window.__ev && window.__ev.n, slots: R.cmds ? R.cmds.filter(c => c && c.type).map(c => c.type) : null, log: R.log.slice(-12).map(x => x[1]) }; }).catch(x => x.message);
+    ok(false, name + ' exception', e.message.slice(0, 300) + ' ' + JSON.stringify(st));
+  }
   await pg.close();
 }
 await browser.close(); srv.kill();

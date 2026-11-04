@@ -295,7 +295,8 @@ export function createEventActorView({ root, lib, rt, litPatch, light, weapon = 
     // gives it a clip the gameplay body stands for it; from then on the slot's body poses (worker 0262)
     if (a.lent && !a.mp.clip) return;
     let v = bodies.get(a);
-    if (!v) { v = spawn(a); bodies.set(a, v); if (a.lent) a.lent.show(false); }
+    if (!v) { v = spawn(a); bodies.set(a, v); }
+    if (a.lent) a.lent.show(false);             // every frame: the gameplay body can appear after the lend (its model still loading), and a setVisible before the clip shows it
     if (!v || v.weapon) return;
     syncPacks(v);
     applyMask(v);
@@ -333,7 +334,7 @@ export function createEventActorView({ root, lib, rt, litPatch, light, weapon = 
         placeOne(pa);
         const pv = bodies.get(pa);
         const mk = pv && pv.model.info.markers[marker];
-        if (!pv || !mk) { shown = false; warnOnce('marker ' + pa.model + marker, `event actor ${a.id}: no marker ${marker} on ${pa.model}`); }
+        if (!pv || !mk || !pv.joints[mk[0]]) { shown = false; warnOnce('marker ' + pa.model + marker, `event actor ${a.id}: no marker ${marker} on ${pa.model}`); }
         else {
           // world = child matrix x socket x parent world (row vectors) = J . T(marker) . C here; body.matrix is
           // relative to the group
