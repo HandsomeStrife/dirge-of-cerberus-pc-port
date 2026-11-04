@@ -1515,6 +1515,13 @@ DRAWN_ELSEWHERE[56] = 'FUN_002c8578 (flare object)';
 // (125, 75) / (62.5, 37.5); DAT_0046c7a0 / DAT_0046c7c0 the corner signs (x 0.5 the size; the same 8 corners in two orders).
 const CULL = { cx: bitsF(0x3fab69ab), cy: bitsF(0x3f95fc76), cz: bitsF(0x3f80022f), cw: bitsF(0xc0000118),
   box0: [100, 100, 100], ctr0: [0, 0, 0], near: [125, 62.5], far: [75, 37.5], big: 99999.8984 };
+// FUN_002efe98 -> FUN_002dacf8 every frame: camera 0's +0x30 = DAT_004fcad4 (display +0x304 = 224 / tan(fov x 0.008726647), FUN_0040ce28), +0x110 = 0x4fcb50
+// (FUN_0040d478: scrz, ax 1, ay = display +0x2f8; RAM 449.9585 / 299.9724 = 1.5), and FUN_002da810 rebuilds +0x250 with +0x18 = 448, +0x1c = 512, near +0x28 = 1
+export function camera0(fov, proj = PROJ) {
+  const scrz = f(224 / f(Math.tan(f(fov * 0.008726647))));
+  const hw = f(f(0.5 * 448) / scrz), hh = f(f(0.5 * 512) / scrz);   // FUN_002da810: near x 0.5 x +0x18 / +0x30
+  return { clip: { ...CULL, cx: f(2 / f(hw + hw)), cy: f(2 / f(hh + hh)) }, proj: { ...proj, fx: scrz, fy: f(scrz * 1.5) } };
+}
 const SGN_A = [[-1, -1, -1], [-1, -1, 1], [1, -1, 1], [1, -1, -1], [-1, 1, -1], [-1, 1, 1], [1, 1, 1], [1, 1, -1]];   // DAT_0046c7a0 (bytes)
 const SGN_B = SGN_A;                                                                                                    // DAT_0046c7c0 (floats +-0.5)
 // the box corners go through one matrix, M . view (FUN_002d8368 first, then FUN_002d8578 per corner, as the game), into
@@ -1534,12 +1541,12 @@ function boxView(MV, box, s) {
 }
 // FUN_002da928(cam, M, size): the 8 corners through M x +0x210; VU0 CLIP of each against |w|; true when all 8 are outside
 // the same plane (the AND of the six per-corner masks 0x41041 .. 0x820820)
-function clipOut(M, box, view) {
+function clipOut(M, box, view, clip = CULL) {
   let all = 0x3f;
   const MV = boxMV(M, view);
   for (const s of SGN_A) {
     const [x, y, z] = boxView(MV, box, s);
-    const X = f(x * CULL.cx), Y = f(y * CULL.cy), Z = f(f(z * CULL.cz) + CULL.cw), W = Math.abs(z);
+    const X = f(x * clip.cx), Y = f(y * clip.cy), Z = f(f(z * clip.cz) + clip.cw), W = Math.abs(z);
     const m = (X > W ? 1 : 0) | (X < -W ? 2 : 0) | (Y > W ? 4 : 0) | (Y < -W ? 8 : 0) | (Z > W ? 0x10 : 0) | (Z < -W ? 0x20 : 0);
     all &= m;
   }
@@ -1547,13 +1554,13 @@ function clipOut(M, box, view) {
 }
 // FUN_002daae8(near, far, cam, M, size): the 8 corners through M x +0x1d0, divided by w (a w of 0 sets the max to the big
 // constant DAT_0046c850); the screen extent max(dx, dy): 0 when <= 0, 1 at >= near, (e - far) / (near - far) above far, else 0
-function sizeFade(near, far, M, box, view) {
+function sizeFade(near, far, M, box, view, pr = PROJ) {
   let mn0 = CULL.big, mn1 = CULL.big, mx0 = -CULL.big, mx1 = -CULL.big;
   const MV = boxMV(M, view);
   for (const s of SGN_B) {
     const [x, y, z] = boxView(MV, box, s);
     if (z === 0) { mx0 = mx1 = CULL.big; continue; }
-    const q = f(1 / z), X = f(f(f(PROJ.fx * x) + f(PROJ.cx * z)) * q), Y = f(f(f(PROJ.fy * y) + f(PROJ.cy * z)) * q);
+    const q = f(1 / z), X = f(f(f(pr.fx * x) + f(pr.cx * z)) * q), Y = f(f(f(pr.fy * y) + f(pr.cy * z)) * q);
     mn0 = Math.min(mn0, X); mn1 = Math.min(mn1, Y); mx0 = Math.max(mx0, X); mx1 = Math.max(mx1, Y);
   }
   let e = f(mx0 - mn0); const ey = f(mx1 - mn1);
@@ -1950,7 +1957,11 @@ export function createEffects({ fed, fed0 = null, core, warn = console.warn, twi
     for (const em of emitters) if (em.lists[0].length) warnOnce('effects: list-0 particles (FUN_002ea5f0) not translated');
     phase = 5;
   }
-  function end(view = null) {
+  // fov: this frame's view +0x40 (camera0); none = the constants, 73.5 (the 2D managers, tests)
+  let cam0 = null, cam0Fov = null;
+  function end(view = null, fov = null) {
+    if (fov === null || fov === undefined) cam0 = null;
+    else if (fov !== cam0Fov || !cam0) { cam0 = camera0(fov, proj); cam0Fov = fov; }
     // FUN_002efe98 -> FUN_002ea6a0: emitter matrix (FUN_002e7cd0), the cull (worker 0208; only with `cull` and a view),
     // then FUN_002eacc8 on list 1
     // GUESS (without `cull`: the impacts' manager): the emitter cull is not run there, never culled
@@ -1993,7 +2004,7 @@ export function createEffects({ fed, fed0 = null, core, warn = console.warn, twi
         const Mc = CUL.Mc; Mc.set(em.m);
         for (let j = 0; j < 3; j++) Mc[12 + j] = f(f(f(ctr[0] * em.m[j]) + f(ctr[1] * em.m[4 + j])) + f(f(ctr[2] * em.m[8 + j]) + em.m[12 + j]));
         Mc[15] = 1; const c = Mc.subarray(12, 15);
-        if (clipOut(Mc, box, view)) { em.f0a |= 0x80; return true; }
+        if (clipOut(Mc, box, view, cam0 ? cam0.clip : CULL)) { em.f0a |= 0x80; return true; }
         // LAB_002ea898 (worker 0233): the 8 corners FUN_002d9df8 (param +0x40 x DAT_0046c720 = SGN_A x 0.5, w 1; +0x40 / +0x50
         // in every box mode, also 0) through the matrix with row 3 = the +0x50 centre (FUN_002d8578); all inside one of this
         // frame's room occluder volumes (FUN_00269978; room_occl.js, built by the room draw before this cull) -> 0x200
@@ -2010,7 +2021,7 @@ export function createEffects({ fed, fed0 = null, core, warn = console.warn, twi
           if (occl.inside(oc, 8)) { em.f0a |= 0x200; return true; }
         }
         const fm = F.u8(r + 0x1f);
-        if (fm === 0 || fm === 4) fade = sizeFade(CULL.near[fm >> 2], CULL.far[fm >> 2], Mc, box, view);
+        if (fm === 0 || fm === 4) fade = sizeFade(CULL.near[fm >> 2], CULL.far[fm >> 2], Mc, box, view, cam0 ? cam0.proj : PROJ);
         else if (fm === 2 || fm === 3) fade = distFade(F.f32(r + 0x3c), F.f32(r + 0x4c), c, view);
         if (!(fade > 0)) { em.f0a |= 0x80; return true; }
       }
@@ -2047,7 +2058,7 @@ export function createEffects({ fed, fed0 = null, core, warn = console.warn, twi
         const P = p.P, Ld = F.list(P, 3);
         // FUN_002e3300: emitter byte +1 picks the camera; camera 1 (2D) with the emitter's +0x40 / +0x44 added to
         // the projection's centre (worker 0198)
-        const [V, Pj] = em.cat === 1 ? [CAM2D_VIEW, cam2dProj(em.p40 ?? [0, 0])] : [view, proj];
+        const [V, Pj] = em.cat === 1 ? [CAM2D_VIEW, cam2dProj(em.p40 ?? [0, 0])] : [view, cam0 ? cam0.proj : proj];
         for (let j = 0; j < F.u8(P + 0x23); j++) {
           const idx = F.u16(Ld + 2 * j), d = F.desc(P, idx), h = T[D.type(F, d)];
           // FUN_002eadc0: the draw gets t = age - the draw entry's start (as the evals' segT; type 20's UV offset)

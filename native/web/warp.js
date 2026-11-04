@@ -33,16 +33,35 @@ export const WARPS = {
   // flag 1 = 25 at pc 7187 with stage flag 0 = 24, then scene_save(4)); the next block (pc 8296: global 1 < 29, stage 0
   // < 36) is the market's townspeople beats on stage flag 1 (28 / 29 / 30 / 32 from triggers 33 / 64 / 65 / 26)
   market: { pos: [-1328.1, 0, 1205.5], face: [1, 0], pair: [6, 8], stage: { 0: 24 }, global: { 1: 25 }, note: 'chunk 06 market, townspeople beats' },
+  // worker 0261: inside trigger 59 (script 17, event 0xd: soldiers 19-21 and n_helpMe 123 up, stage flag 1 = 8 -> help_people01), pair (4, 5); flags from r05_west's RAM
+  helpme: { pos: [-1415.8, 0, 697.6], face: [0, 1], pair: [4, 5], stage: { 0: 11, 1: 7, 2: 8 }, global: { 1: 8 }, note: 'chunk 05, trigger 59: help_people01' },
+  // worker 0261: inside trigger 58 (script 31, event 0xd: townspeople 120 .. up), pair (4, 5)
+  citizens: { pos: [-1895.5, 0, 695.8], face: [0, 1], pair: [4, 5], stage: { 0: 12, 1: 7, 2: 8 }, global: { 1: 12 }, note: 'chunk 05, trigger 58: before help_orei02' },
+  // worker 0261: chunk 06 at route state w261_preheri's spot, Dragonfly just beaten (script 29: stage flag 0 = 16, global 1 = 13
+  // in the state's RAM), pair (6, 7) as main's heri_taijou loads: main goes to heri_taijou, then sk_mituketa2
+  heli: { pos: [-1582.9, 0, 1359.1], face: [0, 1], pair: [6, 7], stage: { 0: 16, 1: 8, 2: 1 }, global: { 1: 13 }, note: 'chunk 06, Dragonfly beaten: heri_taijou, sk_mituketa2' },
   // chunk 07 (walk polygons x -1949..-1740), pair (6, 7) = main's Zone.load(128, 6, 7) after sk_mituketa2 (pc 6412).
   // Story: sk_mituketa2 done (global 1 = 20 at pc 6630, stage 0 = 18 from pc 5939); main waits for stage 0 >= 20, which
   // trigger 18 (-1948.8, -44, 1594.2; script 102) sets: he faces it
   chunk07: { pos: [-1798.3, 0, 1575.2], face: [-1, 0], pair: [6, 7], stage: { 0: 18 }, global: { 1: 20 }, note: 'chunk 07, before first_encounter' },
+  // worker 0263: ev0141's events, at the flags main tests. first_encounter: global 1 = 21, stage 0 = 20 (trigger 18 sets it; pc 6743 / 6804). rv_toujou: stage 0 = 24, global 1 = 22
+  // (first_encounter's pc 6893; e036's death sets the flag). wro_kaisetu: stage 1 = 32 (trigger 26), global 1 = 25, on r06_back's walk (-1039, 0, 956) (pc 10041)
+  encounter: { pos: [-1948.8, -44, 1594.2], face: [-1, 0], pair: [6, 7], stage: { 0: 20 }, global: { 1: 21 }, note: 'chunk 07, first_encounter' },
+  toujou: { pos: [-1753, -44, 1571], face: [-1, 0], pair: [6, 7], stage: { 0: 24 }, global: { 1: 22 }, note: 'chunk 07, e036 beaten: rv_toujou' },
+  wro: { pos: [-1039, 0, 956], face: [1, 0], pair: [6, 8], stage: { 0: 24, 1: 32 }, global: { 1: 25 }, note: 'market, WRO officer: wro_kaisetu' },
   // chunk 09 near the fire-glow wall (22, -40, 797) (worker 0213's fix), pair (8, 9) (area boxes 5 / 7). Story: the market
   // beats done (wro_kaisetu: stage 1 == 32, then global 1 = 26 at pc 10276); main waits for stage 0 == 36 (pc 10482)
   chunk09: { pos: [-8.3, -40, 779.2], face: [30.3, 17.8], pair: [8, 9], stage: { 0: 24, 1: 32 }, global: { 1: 26 }, note: 'chunk 09, the fire-glow wall' },
   // chunk 0b (file 11) before trigger 29 (415.2, -95.2, 1458.1; script 35: stage flag 0 = 36 -> main's boss beat through
   // its normal path), pair (9, 11) (area boxes 6 / 9 / 20 / 25). Same story flags as chunk09
   chunk0b: { pos: [303.1, -100, 1467.8], face: [1, 0], pair: [9, 11], stage: { 0: 24, 1: 32 }, global: { 1: 26 }, note: 'chunk 0b, before the boss trigger' },
+  // worker 0262, cutscene places (`cutscene`: not in test_warp_page; test_heri_kita_page plays from them). Spots and flags from the route states' RAM:
+  // r06_door2's flags, the market side of trigger 14 (script 87, -1330, 0, 1155; box z 1140..1170), facing it: walking in activates Dragonfly, stage flag 0 = 13, scene_save(2), heri_toujou
+  heritoujou: { pos: [-1330, 0, 1180], face: [0, -1], pair: [5, 6], stage: { 0: 12, 1: 8, 2: 1 }, global: { 1: 12 }, cutscene: true, note: 'chunk 06, before trigger 14: heri_toujou' },
+  // r06_heli's spot and flags: stage flag 0 = 13, the market; heri_dgsol comes on flag 0 = 14 (script 29 event 0x16's last leg)
+  heridgsol: { pos: [-1579, 0, 1240], face: [0, 1], pair: [6, 7], stage: { 0: 13, 1: 8, 2: 1 }, global: { 1: 13 }, cutscene: true, note: 'chunk 06 market, before heri_dgsol' },
+  // the boss's death (event 0x17: stage flag 0 = 40; global 1 = 29 from main's boss block): heri_lasted, kita_ev0145, the results
+  herilasted: { pos: [588.7, -100, 1456.5], face: [1, 0], pair: [10, 11], stage: { 0: 40, 1: 32, 2: 3 }, global: { 1: 29 }, cutscene: true, note: 'chunk 0b arena, boss dead: heri_lasted, kita_ev0145' },
   // the boss: stage flag 0 = 36 + global flag 19 = 1 (worker 0231's recipe, as test_boss_page): main takes its boss block's
   // restart path (Zone.load(128, 10, 11), Zone.boss(true), battle()). In the game that path leaves Vincent where he was
   // (T w235_move: pinned at the save's spot), so the aid puts him in the arena (chunk 0b, file 11), facing btbox5. On the page
@@ -78,6 +97,7 @@ export function applyWarp(name, sys) {
   // 3. Vincent: the clean on-foot state of a respawn, then the spot and the walk-mesh search (on the floor)
   const c = sys.ctrl;
   c.reset();
+  if (sys.follow.clearDeath) sys.follow.clearDeath();    // as checkpoint.js's respawn: FUN_00328368's death bits
   if (!w.spawn) {
     c.pos = { x: w.pos[0], y: w.pos[1], z: w.pos[2] };
     c.heading = Math.atan2(w.face[0], w.face[1]);

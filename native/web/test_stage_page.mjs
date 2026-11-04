@@ -27,13 +27,18 @@ try {
 const port = await new Promise(r => { const s = net.createServer().listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => r(p)); }); });
 const srv = spawn('python3', ['-I', '-m', 'http.server', String(port), '--bind', '127.0.0.1', '--directory', here], { stdio: 'ignore' });
 const browser = await chromium.launch({ args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
-async function open(q = '') {
+async function open(q = '', base = 'intro=0&') {
   const pg = await browser.newPage({ viewport: { width: 960, height: 540 } });
+  // every follow.battleReset, from before the first game frame (the first battle() runs in the stage's first frames)
+  await pg.addInitScript(() => { let v; window.__resets = []; window.__handBacks = 0;
+    Object.defineProperty(window, '__play', { configurable: true, get: () => v, set: (x) => { v = x; const b = x.follow.battleReset, h = x.follow.battleHandBack;
+      x.follow.battleReset = function (...a) { window.__resets.push(x.stage ? x.stage.rt.frameNo : -1); return b.apply(this, a); };
+      x.follow.battleHandBack = function (...a) { window.__handBacks++; return h.apply(this, a); }; } }); });
   const errs = [], warns = [];
   pg.on('console', m => { if (m.type() === 'error') errs.push(m.text()); if (m.type() === 'warning') warns.push(m.text()); });
   pg.on('pageerror', e => errs.push(e.message));
   for (let i = 0; ; i++) {
-    try { await pg.goto(`http://127.0.0.1:${port}/play.html?intro=0&sound=0&enemydmg=0${q}`, { waitUntil: 'load' }); break; }
+    try { await pg.goto(`http://127.0.0.1:${port}/play.html?${base}sound=0&enemydmg=0${q}`, { waitUntil: 'load' }); break; }
     catch (e) { if (i > 20) throw e; await new Promise(r => setTimeout(r, 250)); }
   }
   await pg.waitForFunction(() => window.__play && window.__play.stats.ticks > 30, null, { timeout: 120000 });
@@ -91,6 +96,7 @@ async function beat(q) {
   ok(s.log.some(m => / zone 128,2,3$/.test(m)) && req.filter(x => x.startsWith('2,3')).length >= 2, 'load(128, 2, 3) -> FUN_002677a0(2, 3) twice', req.slice(0, 6).join(' | '));
   ok(s.g === '0:1 1:5', 'global flags after the beat (the game: 0 = 1, 1 = 5)', s.g);
   ok(s.battle, 'back in battle mode');
+  { const n = await pg.evaluate(() => window.__resets.length); ok(n >= 1, 'a later battle() resets the camera (FUN_00324e70 -> FUN_00329f68)', `follow.battleReset ${n} times`); }
   ok(!errs.length, 'no page errors', errs.slice(0, 3).join(' | '));
   await pg.close();
 }
@@ -105,6 +111,42 @@ async function lum(pg) {
     for (let i = 0; i < D.length; i += 4) { const v = (D[i] + D[i + 1] + D[i + 2]) / 3; s += v; if (v > m) m = v; }
     return { mean: s / (D.length / 4), max: m };
   }, b64);
+}
+// worker 0257: the opening's route (no ?intro=0): the stage runs alongside it, so main's first battle() reaches the camera reset. It leaves the camera alone (FUN_00324e70: DAT_0046e290 == 0)
+async function firstBattle() {
+  const { pg, errs } = await open('', '');
+  await pg.waitForFunction(() => window.__play.stage && window.__play.stage.rt.frameNo > 2, null, { timeout: 120000, polling: 100 });
+  await pg.keyboard.press('Enter'); await pg.waitForTimeout(300); await pg.keyboard.press('Space');   // the opening's pause, then Skip
+  const b = await pg.waitForFunction(() => window.__play.stage.battle, null, { timeout: 180000, polling: 100 }).then(() => true, () => false);
+  const s = await pg.evaluate(() => ({ n: window.__resets.length, hb: window.__handBacks, log: window.__play.stage.rt.log.filter(([, m]) => /^battle/.test(m)).map(x => x.join(' ')) }));
+  ok(b && s.hb > 0 && s.n === 0, 'the opening\'s route: the stage\'s first battle() hands back but does not reset the camera (play.js `first`)', JSON.stringify(s));
+  ok(!errs.length, 'no page errors', errs.slice(0, 3).join(' | '));
+  await pg.close();
+}
+// worker 0257: dead during an event: FUN_003de130 takes no pause input while the game over's count is up (FUN_003e0cb0), and none during the Restart's load
+async function deadInEvent() {
+  const { pg, errs } = await open('');
+  await pg.waitForFunction(() => window.__play.stage && window.__play.stage.rt.frameNo > 20, null, { timeout: 60000 });
+  await pg.evaluate(() => { const P = window.__play; P.enemyAI.eventFlags[0] = 2; P.enemyAI.eventFlags[63] = 6; });
+  await pg.waitForFunction(() => { const R = window.__play.stage.rt; return !R.battle && R.skippable() && R.vm.calls.includes('ev0101.rv_matiawase') && R.view; }, null, { timeout: 120000, polling: 100 });
+  await pg.evaluate(() => { window.__play.php.hp = 0; });
+  await pg.keyboard.press('Enter');                  // at once: HP 0, the page's count a frame later
+  ok(await pg.evaluate(() => !window.__play.stagePaused), 'Start in the kill\'s frame: no event pause');
+  await pg.waitForFunction(() => window.__play.gameOver.go.count > 0, null, { timeout: 20000, polling: 50 });
+  await pg.keyboard.press('Enter');
+  ok(await pg.evaluate(() => !window.__play.stagePaused), 'Start with the game over\'s count up: no event pause (FUN_003e0cb0)');
+  let menu = await pg.waitForFunction(() => { const g = window.__play.gameOver.go; return g.menu && g.menu.focus && g.menu.focus.id === 3; }, null, { timeout: 60000, polling: 100 }).then(() => true, () => false);
+  ok(menu, 'the game over goes on to its menu');
+  if (menu) {
+    // Start through the whole of the Restart's load (the hold is a few frames): it never takes the event pause, and the Restart goes on
+    await pg.evaluate(() => { const P = window.__play; window.__heldPause = 0; window.__startT = setInterval(() => { if (P.restart.pending && P.restart.count === 0) { window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Enter' })); } if (P.stagePaused) { window.__heldPause++; window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Enter' })); } }, 1); });
+    await pg.keyboard.press('Space');
+    const done = await pg.waitForFunction(() => window.__play.restart.count === 1, null, { timeout: 60000, polling: 50 }).then(() => true, () => false);
+    const held = await pg.evaluate(() => { clearInterval(window.__startT); return window.__heldPause; });
+    ok(done && held === 0 && await pg.evaluate(() => !window.__play.stagePaused), 'Start during the Restart\'s load: the Restart goes on, no event pause', `count ${done}, paused ${held} times`);
+  }
+  ok(!errs.length, 'no page errors', errs.slice(0, 3).join(' | '));
+  await pg.close();
 }
 // worker 0257: Start and ✕ in main's event; the fade under the menus; the faces' texture animation
 async function eventKeys() {
@@ -121,6 +163,16 @@ async function eventKeys() {
   await pg.waitForFunction(() => { const R = window.__play.stage.rt; return !R.battle && R.frameNo > 0 && R.skippable() && R.vm.calls.includes('ev0101.rv_matiawase') && R.view; }, null, { timeout: 120000 });
   await pg.waitForFunction(() => { const R = window.__play.stage.rt; return R.log.some(([, m]) => / voice|voice /.test(m)) || R.frameNo > 200; }, null, { timeout: 120000 });
   const before = await pg.evaluate(() => window.__play.stage.rt.frameNo);
+  // FUN_0054c308 reads the camera rendered: an item 300 from the event camera (spins, drawn) far from the follow camera; then 1000 from it: hidden past 800
+  if (await pg.evaluate(() => !!window.__items)) {
+    const it = await pg.evaluate(async () => { const P = window.__play, I = window.__items, o = I.list.find(x => (x.f28 & 1) && x.mdl), E = () => P.stage.rt.view.eye, wait = ms => new Promise(r => setTimeout(r, ms));
+      if (!o) return null;
+      const keep = o.pos; const at = d => { const e = E(); o.pos = [e[0] + d, e[1], e[2]]; };
+      at(300); await wait(150); const near = { hidden: o.mdl.hidden, follow: Math.hypot(o.pos[0] - P.follow.eye[0], o.pos[1] - P.follow.eye[1], o.pos[2] - P.follow.eye[2]) };
+      at(1000); await wait(150); const far = o.mdl.hidden; at(600); await wait(150); const mid = o.mdl.hidden; o.pos = keep; return { near, far, mid }; });
+    if (it) { ok(!it.near.hidden && it.far && !it.mid, 'items: hidden past 800 from the event camera (FUN_0054c308: radius 7 x 256 / (distance x tan(fov / 2)) < 3)', JSON.stringify(it)); }
+    else console.log('  (no active item for the distance check)');
+  }
   // Start: the event pause, not the battle menu
   await pg.keyboard.press('Enter');
   await pg.waitForFunction(() => window.__play.stagePaused, null, { timeout: 5000 }).catch(() => null);
@@ -166,6 +218,8 @@ async function eventKeys() {
 try {
   await beat('');
   await eventKeys();
+  await deadInEvent();
+  await firstBattle();
   await beat('&autoskip=1');
   // ?stage=0: no controller
   const o2 = await open('&stage=0');

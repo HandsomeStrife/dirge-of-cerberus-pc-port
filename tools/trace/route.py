@@ -113,6 +113,7 @@ def main():
     ap.add_argument("--hunt", type=int, default=-1, help="section-1 record: chase and shoot it, then walk onto its drop")
     ap.add_argument("--stop-item", default="", help="hex item id: end the run when the inventory holds one")
     ap.add_argument("--beats", action="store_true", help="skip events and answer the save box when they come up")
+    ap.add_argument("--watch", action="store_true", help="with --beats: leave events unskipped, end the run when the save box is answered (worker 0261)")
     ap.add_argument("--stop-flag", default="", help="F=V: end the run when stage flag F == V (a trigger fired)")
     ap.add_argument("--shots", default="", help="dir for a screenshot each time Vincent is stuck")
     a = ap.parse_args()
@@ -277,7 +278,12 @@ def main():
                     if t0 <= dt < t0 + 5: btn_ = (b,)
                 for k in (1, 2, 3): entry(f + k, 0, 0, btn_)
                 hist.clear(); continue
-            if evt["box"] is not None: evt["box"] = None
+            if evt["box"] is not None:
+                evt["box"] = None
+                if a.watch: status = "box"; break
+            if in_event(p) and a.watch:
+                for k in (1, 2, 3): entry(f + k, 0, 0, ())
+                hist.clear(); continue
             if in_event(p):
                 if evt["t"] is None:
                     evt["t"] = f; print("f%d (%.0f,%.0f,%.0f) event mode" % (f, pos[0], pos[1], pos[2]), flush=True)

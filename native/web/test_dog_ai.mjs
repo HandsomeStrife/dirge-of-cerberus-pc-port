@@ -397,7 +397,7 @@ for (const [dx, dz, wantHits, rows] of [[0, 12, 2, [[1, 0, 0], [0, 1, 0], [0, 0,
     const { W, a, player } = leap();
     const y0 = a.pos[1], z0 = a.pos[2];
     W.t.setActorState(a, 0x80);
-    let top = y0, airAt = -1, downAt = -1, zLand = 0, ends = -1, stEnd = null, clipEnd = null, landSt = null, landClip = null;
+    let top = y0, airAt = -1, downAt = -1, zLand = 0, ends = -1, stEnd = null, clipEnd = null, flagsEnd = null, landSt = null, landClip = null;
     for (let i = 0; i < 120; i++) {
       W.tick(1.2, player.pos, player.pos);
       if (a.pos[1] < top) top = a.pos[1];
@@ -405,7 +405,7 @@ for (const [dx, dz, wantHits, rows] of [[0, 12, 2, [[1, 0, 0], [0, 1, 0], [0, 0,
       if (airAt >= 0 && airAt === i - 1) ok(!(a.C.f1c0 & 0x200), 'in the air: C+0x1c0 bit 0x200 clear');
       if (airAt >= 0 && downAt < 0 && a.B.state === 0) { downAt = i; zLand = a.pos[2]; }
       if (ends < 0 && W.events.includes(`attack end ${a.id}`)) ends = i;
-      if (ends >= 0 && stEnd === null && i > ends) { stEnd = a.astate; clipEnd = a.C.clip; }
+      if (ends >= 0 && stEnd === null && i > ends) { stEnd = a.astate; clipEnd = a.C.clip; flagsEnd = a.C.flags; }
       if (stEnd === 8 && landSt === null && a.astate !== 8) landSt = a.astate;
       if (landSt !== null && landClip === null && i > 0 && a.C.motion.cls === 0x21 && a.C.clip === 'jp4') landClip = a.C.clip;
     }
@@ -418,6 +418,7 @@ for (const [dx, dz, wantHits, rows] of [[0, 12, 2, [[1, 0, 0], [0, 1, 0], [0, 0,
     ok(flew > 75 && flew < 90, `op 9 forward ${flew.toFixed(1)} u by the landing (100 u/s x 0.88 s, the body's acceleration first)`);
     ok(ends > 0 && a.C.wk === 0, `attack leave: C+0xcc ${a.C.wk}`);
     ok(stEnd === 8 && clipEnd === 'jp3', `the attack ends in the air (${ends} / landing ${downAt}): actor state ${stEnd} (8), clip ${clipEnd} (jp3, motion 0x22)`);
+    ok(flagsEnd === 3, `the fall's request flags ${flagsEnd} (3: FUN_00599820 FUN_003456c0(1.0, row, 0x19, 3, 0))`);
     ok(landSt === 2 && landClip === 'jp4', `on the ground: actor state ${landSt} (2, FUN_00538aa0), clip ${landClip} (jp4, motion 0x21)`);
     ok(a.astate === 2 && a.C.motion.cls === 3 && a.C.clip === 'st_a', `after the landing: state ${a.astate}, motion ${a.C.motion.cls} (3), ${a.C.clip} (st_a)`);
     W.t.setActorState(a, 0x82);
@@ -431,6 +432,63 @@ for (const [dx, dz, wantHits, rows] of [[0, 12, 2, [[1, 0, 0], [0, 1, 0], [0, 0,
     const z1 = a.pos[2];
     for (let i = 0; i < 20; i++) W.tick(1.2, player.pos, player.pos);
     ok(Math.abs(a.pos[2] - z1) < 2.0, `no drift after the attack: ${(a.pos[2] - z1).toFixed(2)} u`);
+  }
+  {
+    // killed in state 8 (the attack over, still in the air): FUN_0034f178 cases 9 / 0xb enter mode 0xc, so mover 0xb doesn't stop the fall; the corpse lands
+    const { W, a, player } = leap();
+    const y0 = a.pos[1];
+    W.t.setActorState(a, 0x80);
+    let i = 0;
+    for (; i < 120 && a.astate !== 8; i++) W.tick(1.2, player.pos, player.pos);
+    ok(a.astate === 8 && a.B.state === 2 && y0 - a.pos[1] > 0.05, `in the air in state 8 on frame ${i}: state ${a.astate}, body ${a.B.state}, ${(y0 - a.pos[1]).toFixed(2)} u up`);
+    const killY = a.pos[1], kx = a.pos[0], kz = a.pos[2];
+    a.hp = 1;
+    W.t.hitEnemy(a, { damage: 10, kind: 0, dir: [0, 0, 1], shooter: 0x16, f148: 2, hit: 0, f120: 0x800 }, a.pos.slice());
+    ok(a.hp === 0 && a.astate === 7 && a.C.mover === 0xb && a.C.mm === 0xc, `killed in the air: hp ${a.hp}, state ${a.astate} (7), mover 0x${a.C.mover.toString(16)}, mode 0x${a.C.mm.toString(16)}`);
+    const v0 = a.C.slide.v;
+    W.tick(1.2, player.pos, player.pos);
+    ok(a.C.want[2] === 1 && a.C.wk === v0, `the slide goes through C+0xc0 / C+0xcc in the air (FUN_0034af98): dir z ${a.C.want[2]}, speed ${a.C.wk} (${v0})`);
+    for (let k = 0; k < 40; k++) W.tick(1.2, player.pos, player.pos);
+    ok(a.B.state === 0 && (a.C.f1c0 & 0x200), `the corpse lands: body state ${a.B.state}, C+0x1c0 bit 0x200 ${a.C.f1c0 & 0x200}`);
+    ok(a.pos[1] > killY && Math.abs(a.pos[1] - y0) < 1.0, `at ground height ${a.pos[1].toFixed(2)} (${y0.toFixed(2)})`);
+    ok(a.astate === 7, `still dead after the landing: state ${a.astate}`);
+    const moved = Math.hypot(a.pos[0] - kx, a.pos[2] - kz);
+    const x1 = a.pos[0], z1 = a.pos[2];
+    for (let k = 0; k < 40; k++) W.tick(1.2, player.pos, player.pos);
+    ok(moved > 0 && moved < 40 && a.C.slide.v === 0 && Math.hypot(a.pos[0] - x1, a.pos[2] - z1) < 2, `the slide ends: ${moved.toFixed(1)} u after the kill, then ${Math.hypot(a.pos[0] - x1, a.pos[2] - z1).toFixed(2)} u`);
+  }
+  {
+    // killed during the attack itself, in the air: leaving the attack motion (FUN_0059e938) stops the mover, the body still falls and lands
+    const { W, a, player } = leap();
+    const y0 = a.pos[1];
+    W.t.setActorState(a, 0x80);
+    for (let i = 0; i < 120 && !(a.B && a.B.state === 2 && a.B.t > a.B.rise); i++) W.tick(1.2, player.pos, player.pos);
+    a.hp = 1;
+    W.t.hitEnemy(a, { damage: 10, kind: 0, dir: [0, 0, 1], shooter: 0x16, f148: 2, hit: 0, f120: 0x800 }, a.pos.slice());
+    for (let k = 0; k < 60; k++) W.tick(1.2, player.pos, player.pos);
+    ok(a.astate === 7 && a.B.state === 0 && Math.abs(a.pos[1] - y0) < 1.0, `killed in the attack: state ${a.astate}, body ${a.B.state}, at ${a.pos[1].toFixed(2)} (${y0.toFixed(2)})`);
+  }
+  {
+    // state 8 at the top of the leap, killed there: frame by frame, the mode-0xc body alone moves it (no flat step on top) and the slide's speed runs down
+    const { W, a, player } = leap();
+    const y0 = a.pos[1];
+    W.t.setActorState(a, 0x80);
+    for (let i = 0; i < 120 && !(a.B && a.B.state === 2 && a.B.t > a.B.rise); i++) W.tick(1.2, player.pos, player.pos);
+    W.t.setActorState(a, 8);
+    a.hp = 1;
+    W.t.hitEnemy(a, { damage: 10, kind: 0, dir: [0, 0, 1], shooter: 0x16, f148: 2, hit: 0, f120: 0x800 }, a.pos.slice());
+    const { v, dv } = a.C.slide;
+    let frames = 0, worst = 0, speeds = true, last = a.pos.slice();
+    for (; frames < 80 && a.B.state === 2; frames++) {
+      const want = v - frames * dv * 1.2;
+      W.tick(1.2, player.pos, player.pos);
+      if (a.B.state === 2 && Math.abs(a.C.wk - Math.max(want, 0)) > 1e-3) speeds = false;
+      if (a.B.state === 2) worst = Math.max(worst, Math.hypot(a.pos[0] - last[0], a.pos[2] - last[2]) - Math.hypot(a.B.vel[0], a.B.vel[2]) * 1.2);
+      last = a.pos.slice();
+    }
+    ok(frames > 10 && a.B.state === 0 && Math.abs(a.pos[1] - y0) < 1.0, `killed at the top: lands after ${frames} frames at ${a.pos[1].toFixed(2)} (${y0.toFixed(2)})`);
+    ok(speeds, 'in the air C+0xcc runs down by the slide\'s deceleration x step (FUN_003516a0)');
+    ok(worst < 0.01, `in the air each step is the body's velocity x step (worst excess ${worst.toFixed(3)} u)`);
   }
   {
     const T8 = data.attacks['8'];

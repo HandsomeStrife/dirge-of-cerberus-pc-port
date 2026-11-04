@@ -91,7 +91,7 @@ def triggers(d):
             script=struct.unpack_from('<h', d, r + 0xa0)[0],
             flags=SE.u32(d, r + 0xa4), shape=d[r + 0xaa],
             # +0xa8: the parent area (FUN_00547f50 -> FUN_0053b920 / FUN_0054c550); -1 = none. Read for the camera's box objects (worker 0257)
-            area=struct.unpack_from('<h', d, r + 0xa8)[0]))
+            area=struct.unpack_from('<h', d, r + 0xa8)[0], b0=d[r + 0xb0]))
     # resolved activations / wakes for the save (stage_events.activations: difficulty 1, flag0 = 0;
     # informational: the page runs the scripts themselves in enemy_ai.js's VM)
     nscr = len(SE.scripts(d))

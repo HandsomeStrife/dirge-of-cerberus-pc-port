@@ -1,5 +1,6 @@
 // The Restart invariant on the real play.html (worker 0254; checkpoint.js 'The Restart invariant', notes/checkpoint-research.md):
-// the pause's Restart and the game over's Restart end in the same state, and that state depends on the record alone.
+// the pause's Restart and the game over's Restart end in the same state apart from DAT_0046e248 (gil here; FUN_00321480, FUN_00320848), and
+// otherwise that state depends on the record alone.
 //   1. no record: both zero the section stats and totals (FUN_0030f3d8 -> FUN_0031dae8); the clocks stay; a Zone.exit pending goes.
 //   2. a scene_save's record, spoiled afterwards, Restart through the pause: rounds, inventory, selection, gil, taken bits, section
 //      stats and totals are the record's, the mark is its stat 14, the clocks stay (T w254), the HUD shows the record's (main's
@@ -46,6 +47,12 @@ try {
   const until = (fn, arg, t = 60000) => pg.waitForFunction(fn, arg, { timeout: t });
   const ticks = async n => { const t0 = await pg.evaluate(() => window.__play.stats.ticks); await until(t => window.__play.stats.ticks >= t, t0 + n); };
   // what the user does: Start, Restart, OK. noCount: the frame's restart isn't awaited
+  const call = async (cls, name, desc, args) => pg.evaluate(async ([cls, name, desc, args]) => {
+    const P = window.__play, vm0 = P.stage.rt.vm, { EventVM } = await import('./event_vm.js');
+    const vm = new EventVM({ classes: vm0.classes }, vm0.natives), hit = vm.findMethod(cls, name, desc);
+    if (hit.m.access & 0x100) { vm0.natives[hit.cls + '.' + name + desc](vm, args); return; }
+    vm.start(cls, name, desc, args); vm.run(1e7);
+  }, [cls, name, desc, args]);
   const pauseRestart = async (wait = true) => {
     const n0 = await pg.evaluate(() => window.__play.restart.count);
     await pg.keyboard.press('Enter');
@@ -68,7 +75,7 @@ try {
   };
   const state = () => pg.evaluate(() => {
     const P = window.__play, S = P.results.stats, I = window.__items, inv = I.inventory, A = inv.A;
-    return { loaded: A.loaded, inv: A.inv, sum: A.sum, count: inv.count(0x62300000), gil: inv.gil, slot0: inv.slots[0].join(), sel: inv.sel, selId: inv.selId, taken: [...I.taken].sort((a, b) => a - b).join(),
+    return { loaded: A.loaded, inv: A.inv, sum: A.sum, count: inv.count(0x62300000), gil: inv.gil, earned: inv.gilEarned, slot0: inv.slots[0].join(), sel: inv.sel, selId: inv.selId, taken: [...I.taken].sort((a, b) => a - b).join(),
       kills: S.sect[0], shots: S.sect[1], start: S.start, end: S.end, koStart: S.koStart, total0: S.total[0], s14: S.sect[14], mark: S.mark };
   });
   // stats moved, clocks noted (all of it must not survive the Restart except the clocks)
@@ -77,21 +84,33 @@ try {
     S.add(0, 100); S.add(1, 100); S.start = 77; S.total[0] = 55;
     return { play: S.playSec, ko: S.ko };
   });
+  // +8, +0x28, +0x2c of DAT_0046e248: the page has no writer of +0x2c (the EXP exchange), so a test sets it
+  const spoilGil = () => pg.evaluate(() => { const v = window.__items.inventory; v.gil = 700; v.gilBase = 999; v.gilEarned = 33; });
+  // a real kill: one of Vincent's shots through FUN_0055c7f8 (hitEnemy -> enemyHP -> enemyDeath), as test_dog_page
+  const killRec = rec => pg.evaluate(k => { const W = window.__play.enemyAI, a = W.actors.find(x => x.rec === k);
+    if (!a) return { none: W.actors.map(x => x.rec).join() };
+    W.t.hitEnemy(a, { damage: 9999, kind: 0, dir: [0, 0, -1], shooter: W.player.id, f148: 0, hit: 0, f120: 0x800 }, a.pos.slice());
+    return { hp: a.hp, bit: W.deadBits.has(k) }; }, rec);
+  const deadState = recs => pg.evaluate(rs => { const P = window.__play, W = P.enemyAI;
+    return rs.map(k => ({ k, hp: W.objects.get(k + 22).hp, active: W.actors.some(a => a.rec === k), body: P.enemies.actors.some(a => a.rec === k), bit: W.deadBits.has(k) })); }, recs);
   const spoilItems = () => pg.evaluate(() => {
     const I = window.__items, inv = I.inventory, A = inv.A;
     A.loaded = 7; A.sum = 7; A.inv = 64; inv.gil = 999; inv.slots[0] = [0x69300000, 5]; inv.setSel(0); I.taken.add(33);
   });
 
   { // 1. no record: both paths
-    const c0 = await spoilStats();
+    const c0 = await spoilStats(); await spoilGil();
     await pauseRestart();
     let s = await state(); const c1 = await pg.evaluate(() => ({ play: window.__play.results.stats.playSec, ko: window.__play.results.stats.ko }));
     ok(s.kills === 0 && s.shots === 0 && s.start === 0 && s.total0 === 0, `no record, pause: stats and totals 0 (FUN_0030f3d8; T w254: kills ${s.kills}, start ${s.start}, total ${s.total0})`);
     ok(c1.play >= c0.play && c1.ko === c0.ko, `no record, pause: the clocks stay (${c0.play} -> ${c1.play} s, KOs ${c1.ko})`);
     ok(s.s14 === 1, `no record, pause: stat 14 = 1 again (T reload0: ${s.s14})`);
-    await spoilStats();
+    ok(s.gil === 0 && s.earned === 0, `no record, pause: gil 0, +0x2c 0 (FUN_00247508:333 clears bit 0xd, FUN_00320848 zeroes; gil ${s.gil}, +0x2c ${s.earned})`);
+    await spoilStats(); await spoilGil();
     await gameOverRestart();
     const s2 = await state();
+    ok(s2.gil === 33 && s2.earned === 33, `no record, game over: gil = +0x2c (FUN_00320848 with bit 0xd; gil ${s2.gil}, +0x2c ${s2.earned})`);
+    await pg.evaluate(() => { window.__items.inventory.gilEarned = 0; });
     ok(s2.kills === 0 && s2.shots === 0 && s2.start === 0 && s2.total0 === 0 && s2.s14 === 1, `no record, game over: the same (kills ${s2.kills}, start ${s2.start}, total ${s2.total0}, stat 14 ${s2.s14})`);
     ok(await pg.evaluate(() => window.__play.results.stats.ko) === c0.ko + 1, 'no record, game over: its own KO counted, not rewound');
   }
@@ -108,6 +127,9 @@ try {
     ok(t.t > t0 + 20 && Math.abs(t.z - z0) > 1, `after it the game runs and W walks him (${t.t - t0} frames, ${(t.z - z0).toFixed(2)} u)`);
   }
   await load();   // no-record Restarts put main back at its start: the save's route needs the page's own
+  // killed in play, before main's event (peace: FUN_0055c7f8 deals nothing while FUN_00325b40 is set)
+  const killed1 = await killRec(45);
+  ok(killed1.hp === 0 && killed1.bit, `a soldier killed through the damage path: 45 HP ${killed1.hp}, dead bit ${killed1.bit} (FUN_0055cac8 -> FUN_0031e060; actors ${killed1.none || ''})`);
   // 2. the record: both Potions used (slot 0 empty, no selection), 3 rounds in the magazine, 40 in all, some gil and a taken bit
   await pg.evaluate(() => { window.__play.php.hp = 300; }); await ticks(3);
   await pg.keyboard.press('KeyE'); await ticks(3);
@@ -121,22 +143,35 @@ try {
    
   });
   await until(() => { const P = window.__play; return P.stage && P.stage.rt.log.some(([, m]) => m === 'scene_save 1') && !!P.restart.record; }, null, 120000);
+  const recDead = await pg.evaluate(() => window.__play.restart.record.dead.slice().sort((a, b) => a - b).join());
+  ok(/(^|,)41,42,43(,|$)/.test(recDead) && recDead.split(',').includes('45'), `the record's dead words: ${recDead} (T w254's record: 41, 42, 43, 111, 113, 114)`);
   const atSave = await state();
   ok(atSave.slot0 === '-1,0' && atSave.sel === -1 && atSave.loaded === 3 && atSave.count === 40 && atSave.gil === 7, `at the save: slot 0 ${atSave.slot0}, selection ${atSave.sel}, rounds ${atSave.loaded} of ${atSave.count}, gil ${atSave.gil}`);
   await until(() => window.__play.stage.battle && !window.__play.pause.active, null, 60000);
-  const same = (a, b) => JSON.stringify({ ...a, mark: 0 }) === JSON.stringify({ ...b, mark: 0 });
+  const same = (a, b) => JSON.stringify({ ...a, mark: 0, gil: 0, earned: 0 }) === JSON.stringify({ ...b, mark: 0, gil: 0, earned: 0 });   // gil is the one field the kind decides (FUN_00321480)
   const spoilAll = async () => {
     const c = await spoilStats(); await spoilItems();
+    await pg.evaluate(() => { const P = window.__play; window.__items.inventory.gilEarned = 33; P.php.hp = 300;
+      const W = P.enemyAI; W.eventFlags[33] = 9;   // a stage flag set after the record: it must go
+      // every frame until the hand-back: who the world activates (T w242 / w254: 44-49 not active after the record reload)
+      window.__woke = new Set(); const t0 = P.restart.count, w = () => { const A = P.enemyAI; if (P.restart.count > t0) for (const a of A.actors) window.__woke.add(a.rec); if (P.restart.count === t0 || !P.ctrl || Math.abs(P.ctrl.pos.x + 889.2) > 1) requestAnimationFrame(w); }; w(); });
     await pg.evaluate(() => { window.__play.results.stats.mark = -1; window.__voiceStops = 0; const v = window.__play.voices; if (v && !v.__spied) { v.__spied = true; const f = v.stopAll.bind(v); v.stopAll = () => { window.__voiceStops++; f(); }; }
       window.__oldPlaced = window.__play.amb.placed; });
     return c;
   };
-  const checkRecord = async (how, c0) => {
+  const checkRecord = async (how, c0, gilWant, rd = atSave, wantFlags = true) => {
     const s = await state(), c1 = await pg.evaluate(() => ({ play: window.__play.results.stats.playSec, ko: window.__play.results.stats.ko }));
     ok(s.loaded === 3 && s.count === 40 && s.sum === 3, `${how}: the record's rounds: magazine ${s.loaded}, count ${s.count} (T w254: 3 / 40 after 7 / 100 at the Restart)`);
-    ok(s.gil === 7 && s.slot0 === '-1,0' && s.sel === -1 && s.selId === atSave.selId, `${how}: gil ${s.gil}, slot 0 ${s.slot0}, selection ${s.sel}`);
-    ok(s.taken === atSave.taken && !s.taken.split(',').includes('33'), `${how}: the taken bits ${s.taken}`);
-    ok(s.kills === atSave.kills && s.shots === atSave.shots && s.start === atSave.start && s.total0 === atSave.total0, `${how}: the record's section stats (kills ${s.kills} = ${atSave.kills}, start ${s.start}, total ${s.total0}; T w254: 103 -> 3, 77 -> 11, 55 -> 0)`);
+    ok(s.gil === gilWant, `${how}: gil ${s.gil} (want ${gilWant}: FUN_00321480, +0x2c ${s.earned})`);
+    ok(s.slot0 === '-1,0' && s.sel === -1 && s.selId === atSave.selId, `${how}: slot 0 ${s.slot0}, selection ${s.sel}`);
+    await until(() => (window.__play.enemyAI.eventFlags[9] | 0) === 1, null, 20000).catch(() => {});
+    const hf = await pg.evaluate(() => { const P = window.__play, W = P.enemyAI, R = P.restart.record; return { hp: P.php.hp, g18: P.stage.globalFlags[18], f0: W.eventFlags[0], f33: W.eventFlags[33] | 0, f9: W.eventFlags[9] | 0, rec: { ...R.sflags }, stageFlags: Object.fromEntries(Object.entries(R.sflags).map(([k]) => [k, W.eventFlags[k]])) }; });
+    ok(hf.hp === 780, `${how}: HP ${hf.hp} (T w242: 780, FUN_00319798's scratch is dropped)`);
+    ok(hf.g18 === 0, `${how}: global 18 cleared (${hf.g18}; T w242)`);
+    // T w254's route flags. 63 is the tests' stand-in for the trigger, and scripts move it after the reload: left out
+    ok(hf.f33 === 0 && [0, 1, 2, 46].every(k => hf.rec[k] === hf.stageFlags[k]) && hf.f9 === 1, `${how}: stage flags = the record's + 9 = 1 (record ${JSON.stringify(hf.rec)}, now ${JSON.stringify(hf.stageFlags)}, 9 = ${hf.f9}, flag set after the save ${hf.f33})`);
+    ok(s.taken === rd.taken && !s.taken.split(',').includes('33'), `${how}: the taken bits ${s.taken}`);
+    ok(s.kills === rd.kills && s.shots === rd.shots && s.start === rd.start && s.total0 === rd.total0, `${how}: the record's section stats (kills ${s.kills} = ${rd.kills}, start ${s.start}, total ${s.total0}; T w254: 103 -> 3, 77 -> 11, 55 -> 0)`);
     ok(s.mark === s.s14, `${how}: the mark = the record's stat 14 (${s.mark}; FUN_003fda68)`);
     ok(c1.play >= c0.play, `${how}: the play clock not rewound (${c0.play} -> ${c1.play}; T w254)`);
     const a = await pg.evaluate(() => { const P = window.__play; return { placedNew: P.amb.placed ? P.amb.placed !== window.__oldPlaced : null, stops: window.__voiceStops, hasV: !!P.voices,
@@ -144,6 +179,11 @@ try {
     ok(a.placedNew !== false, `${how}: the placed sounds are new objects (FUN_00548788; ${a.placedNew})`);
     ok(!a.hasV || a.stops >= 1, `${how}: the voice channels freed (FUN_003ea5f0; stopAll x ${a.stops})`);
     ok(a.bodies.length === 0, `${how}: no body without its active actor (${a.bodies}; actors ${a.recs}; T w254: 0, 62, 63 have bodies, 41-49 / 66 none)`);
+    const ds = await deadState([41, 45]);
+    ok(ds.every(d => d.hp === 0 && !d.active && !d.body && d.bit), `${how}: killed stays dead: ${JSON.stringify(ds)} (FUN_0031d4d8, FUN_00547ce0 -> FUN_00317420(st, 0))`);
+    await until(() => Math.abs(window.__play.ctrl.pos.x + 889.2) < 1, null, 60000).catch(() => {});
+    const woke = await pg.evaluate(() => [...window.__woke].filter(k => k >= 41 && k <= 49).join());
+    ok(woke === '', `${how}: 41-49 not woken before the hand-back (${woke}; areaHold, T w242)`);
     return s;
   };
   // main's second battle(): FUN_00324e70 -> the HUD refresh
@@ -151,29 +191,81 @@ try {
     await until(() => { const P = window.__play; return P.stage.rt.log.filter(([, m]) => m === 'battle 0' || /^battle \d/.test(m)).length >= 1 && P.stage.battle && Math.abs(P.ctrl.pos.x + 889.2) < 1; }, null, 90000);
     await until(() => window.__play.gameHud.state.find(6, 0x1b).text.length === 0, null, 20000).catch(() => {});
     const h = await pg.evaluate(() => { const st = window.__play.gameHud.state; return { name: st.find(6, 0x1b).text.length, count: JSON.stringify(st.find(6, 0x1c).text) }; });
+    const nb = await pg.evaluate(() => { const P = window.__play; return P.enemyAI.actors.filter(w => w.rec < 200 && !P.enemies.actors.some(a => a.rec === w.rec)).map(w => w.rec); });
+    ok(nb.length === 0, `${how}: every active actor has its body again (missing: ${nb})`);
     ok(h.name === 0 && h.count === '[16]', `${how}: the HUD refreshed at main's battle(): no item (name ${h.name}, count ${h.count}; FUN_00339590 bit 3)`);
   };
   let viaPause;
   { const c0 = await spoilAll();
     await pauseRestart();
-    viaPause = await checkRecord('record, pause', c0);
+    viaPause = await checkRecord('record, pause', c0, 7);
     await hudCheck('record, pause');
     const m = await pg.evaluate(() => window.__play.stage.rt.log.filter(([, s]) => /^music|^area/.test(s)).map(([, s]) => s).join());
     ok(/bgm_001/.test(m), `record, pause: main's flag-18 branch asks for its music (${m})`);
   }
   { const c0 = await spoilAll();
     await gameOverRestart();
-    const viaOver = await checkRecord('record, game over', c0);
-    ok(same(viaPause, viaOver), 'the two Restarts end in the same state');
+    const viaOver = await checkRecord('record, game over', c0, 7 + 33);
+    ok(viaOver.earned === 33 && viaPause.earned === 0, `+0x2c: kept by the game over (${viaOver.earned}), the record's by the pause (${viaPause.earned})`);
+    ok(same(viaPause, viaOver), 'apart from gil the two Restarts end in the same state');
     await hudCheck('record, game over');
   }
+  { // the area that holds them switched on: the dead stay off (FUN_00559748 refuses), reviewer's case
+    await pg.evaluate(() => { const W = window.__play.enemyAI; W.areaSwitch(105, true); W.areaSwitch(2, true); });
+    await ticks(3);
+    const ds = await deadState([41, 45, 47]);
+    ok(ds[0].hp === 0 && !ds[0].active && ds[1].hp === 0 && !ds[1].active, `the area on: 41 and 45 stay off (${JSON.stringify(ds.slice(0, 2))})`);
+    ok(ds[2].hp > 0 && ds[2].active, `the area on: living 47 comes on, so the switch did run (${JSON.stringify(ds[2])})`);
+  }
+  { // a second checkpoint: the later record replaces the first (main calls scene_save(2) at pc 5136; here the native, the same call)
+    const killed2 = await killRec(46);
+    ok(killed2.hp === 0, `46 killed before the second save (${killed2.hp}; ${killed2.none || ''})`);
+    await pg.evaluate(() => { const I = window.__items, inv = I.inventory, A = inv.A; A.loaded = 5; A.sum = 5; A.inv = 50 - inv.other; inv.gil = 21; inv.gilEarned = 4; I.taken.add(23); });
+    await call('fake/KerberosZone', 'scene_save', '(I)V', [2]);
+    const r2 = await pg.evaluate(() => { const R = window.__play.restart.record, v = window.__items.inventory; return { n: R.n, dead: R.dead.includes(46), base: v.gilBase, earned: v.gilEarned }; });
+    ok(r2.n === 2 && r2.dead && r2.base === 21 && r2.earned === 0, `scene_save(2): record ${r2.n}, 46 in it ${r2.dead}, +0x28 = gil ${r2.base}, +0x2c = 0 (${r2.earned}; FUN_00321480's write)`);
+    const at2 = await state();
+    await spoilStats(); await spoilItems();
+    await pauseRestart();
+    const s = await state(), ds = await deadState([41, 45, 46]);
+    ok(s.loaded === 5 && s.count === 50 && s.gil === 21 && s.taken === at2.taken && s.kills === at2.kills, `second record, pause: its rounds ${s.loaded} / ${s.count}, gil ${s.gil}, taken ${s.taken}, kills ${s.kills} (${at2.kills}), not the first record's`);
+    ok(ds.every(d => d.hp === 0 && !d.active && !d.body), `second record: the dead of both saves stay dead (${JSON.stringify(ds)})`);
+    ok(await pg.evaluate(() => window.__play.php.hp === 780 && window.__play.restart.record.n === 2), 'second record: HP 780, record 2 still the one');
+    // main's setVisibleAll hid everything: the reload's objects are visible (play.js allVisible)
+    await call('fake/KerberosActor', 'setVisibleAll', '(IZ)V', [0, 0]);
+    const hid = await pg.evaluate(() => ({ v: window.__play.vin.eventHidden, i: window.__itemsView.hideAll }));
+    ok(hid.v === true && hid.i === true, 'setVisibleAll(0, false) hides Vincent and the items');
+    await pauseRestart();
+    const vis = await pg.evaluate(() => ({ v: window.__play.vin.eventHidden, i: window.__itemsView.hideAll }));
+    ok(vis.v === false && vis.i === false, `Restart: Vincent and the items visible again (eventHidden ${vis.v}, hideAll ${vis.i})`);
+  }
+  { // a Phoenix Down armed, then Restart: the status goes with the reload, and the slot is the record's
+    await pg.evaluate(() => { const inv = window.__items.inventory; inv.slots[0] = [0x69300004, 3]; inv.setSel(0); });
+    await pg.keyboard.press('KeyE');
+    await until(() => window.__play.php.s64 === 8);
+    await pauseRestart();
+    const a = await pg.evaluate(() => { const P = window.__play, v = window.__items.inventory; return { s64: P.php.s64, hp: P.php.hp, slot0: v.slots[0].join() }; });
+    ok(a.s64 === 0 && a.hp === 780 && a.slot0 === '-1,0', `Phoenix Down armed, pause Restart: status ${a.s64}, HP ${a.hp}, slot 0 the record's (${a.slot0})`);
+    await pg.evaluate(() => { const P = window.__play; P.php.hp = 0; P.ctrl.death([1, 0, 0], 0x20209, 0x20901f); });
+    await until(() => window.__play.gameOver.go.w4c === 1, null, 30000).catch(() => {});
+    ok(await pg.evaluate(() => window.__play.gameOver.go.w4c === 1 && window.__play.php.hp === 0), 'then a death is the game over, no revive');
+    await until(() => { const m = window.__play.gameOver.go.menu; return m && m.focus && m.focus.id === 3; });
+    await pg.waitForTimeout(300);
+    const n0 = await pg.evaluate(() => window.__play.restart.count);
+    await pg.keyboard.press('Space');
+    await until(n => window.__play.restart.count === n + 1, n0);
+    ok(await pg.evaluate(() => window.__play.php.hp === 780 && window.__play.php.s64 === 0 && !window.__play.gameOver.go.active), 'and its Restart: HP 780, status 0, no game over');
+    // used up: fired by the kill, the revive's status 1 running, then Restart
+    await pg.evaluate(() => { const inv = window.__items.inventory; inv.slots[0] = [0x69300004, 3]; inv.setSel(0); });
+    await pg.keyboard.press('KeyE');
+    await until(() => window.__play.php.s64 === 8);
+    await pg.evaluate(() => { const P = window.__play; P.php.hp = 0; P.ctrl.death([1, 0, 0], 0x20209, 0x20901f); });
+    await until(() => window.__play.gameOver.go.wm === 2 && window.__play.php.hp === 780 && window.__play.php.s64 === 1, null, 60000);
+    await pauseRestart();
+    const b = await pg.evaluate(() => { const P = window.__play; return { s64: P.php.s64, hp: P.php.hp, st: P.ctrl.P.state, slot0: window.__items.inventory.slots[0].join() }; });
+    ok(b.s64 === 0 && b.hp === 780 && b.slot0 === '-1,0', `Phoenix Down revived him, pause Restart: status ${b.s64}, HP ${b.hp}, state ${b.st}, slot 0 ${b.slot0}`);
+  }
   { // 4. the level end's last half second (main: endSection, displayStageInfo(2), sleep 500, Zone.exit)
-    const call = async (cls, name, desc, args) => pg.evaluate(async ([cls, name, desc, args]) => {
-      const P = window.__play, vm0 = P.stage.rt.vm, { EventVM } = await import('./event_vm.js');
-      const vm = new EventVM({ classes: vm0.classes }, vm0.natives), hit = vm.findMethod(cls, name, desc);
-      if (hit.m.access & 0x100) { vm0.natives[hit.cls + '.' + name + desc](vm, args); return; }
-      vm.start(cls, name, desc, args); vm.run(1e7);
-    }, [cls, name, desc, args]);
     await call('fake/KerberosIntermission', 'endSection', '()V', []);
     await call('fake/KerberosEvent', 'displayStageInfo', '(I)V', [2]);
     const e0 = await pg.evaluate(() => { const R = window.__play.results; return { mark: R.stats.mark, total0: R.stats.total[0] }; });
@@ -195,6 +287,78 @@ try {
     ok(await pg.evaluate(() => !window.__play.pause.active), 'Enter after Zone.exit: the pause does not open');
   }
   ok(errs.length === 0, 'no page errors' + (errs.length ? ': ' + errs.slice(0, 3).join(' | ') : ''));
+  { // 7. record 3's reload (T w254 r07_beat): flag 9 = 9 takes main past Zone.event, and it is event mode anyway, from the teardown until battle2(3000):
+    // area asj_035, Zone 1 0, bgm_278, sk_mituketa2, Zone 6 7, battle2; no FUN_0037e048; Vincent ends at (-1762, 0, 1578)
+    await load();
+    // one synchronous step: main must not run on these flags before the reload (it would clear 18 and save again)
+    await pg.evaluate(() => { const P = window.__play, W = P.enemyAI, G = P.stage.globalFlags, g0 = G.slice(), f0 = { ...W.eventFlags }, F = W.eventFlags;
+      for (const k of Object.keys(F)) delete F[k];
+      for (const [k, v] of [[0, 18], [1, 8], [2, 1], [9, 9], [15, 1], [16, 1], [26, 1], [42, 1], [43, 1], [44, 1], [45, 1], [46, 1], [47, 1], [50, 1], [63, 1]]) F[k] = v;
+      G.fill(0); for (const [k, v] of [[0, 1], [1, 18], [18, 1], [30, 1], [55, 1], [56, 7], [58, 2]]) G[k] = v;
+      const vm = P.stage.rt.vm; vm.natives['fake/KerberosZone.scene_save(I)V'](vm, [3]);
+      for (const k of Object.keys(F)) delete F[k]; Object.assign(F, f0); G.set(g0); });
+    ok(await pg.evaluate(() => window.__play.restart.record.n === 3), 'record 3 taken with T\'s flags');
+    await pauseRestart();
+    const m0 = await pg.evaluate(() => { const P = window.__play; return { battle: P.stage.rt.battle, skip: P.stage.rt.skippable(), hud: P.gameHud.state.find ? 1 : 0, ai: !!P.stageGs && P.stageGs.has ? P.stageGs.has(6) : null }; });
+    ok(m0.battle === false, `record 3: event mode from the reload's first frame (battle ${m0.battle}; T: bit 37 clear from f328)`);
+    await until(() => window.__play.stage.rt.vm.calls.includes('ev0101.sk_mituketa2'), null, 60000);
+    await ticks(120);
+    const mid = await pg.evaluate(() => { const P = window.__play, r = P.stage.rt; return { battle: r.battle, skip: r.skippable(), view: !!(r.view), vin: P.vin.body.visible, pauseBlocked: !P.pause.active, log: r.log.map(([, m]) => m), t0: P.enemyAI.S.now }; });
+    ok(mid.battle === false && mid.skip === true, `record 3, in sk_mituketa2: still event mode, Skip offered (battle ${mid.battle}, skippable ${mid.skip})`);
+    ok(mid.view, 'record 3, in sk_mituketa2: the event camera, not the follow camera');
+    ok(!mid.log.some(m => /^event /.test(m)), `record 3: no Zone.event on the way, as T (${mid.log.filter(m => /^event /.test(m))})`);
+    const order = ['area asj_035', 'zone 128,1,0', 'bgm_278'];
+    const at = order.map(o => mid.log.findIndex(m => m.includes(o)));
+    ok(at.every(i => i >= 0) && at[0] < at[1] && at[1] < at[2], `record 3: T's order: ${order} (${at}; ${mid.log.filter(m => /^(area|zone|music)/.test(m)).join(' | ')})`);
+    console.log('record 3 mid: vin visible', mid.vin, 'log', mid.log.slice(0, 18).join(' | ').slice(0, 500));
+    await pg.screenshot({ path: process.env.W254_SHOT || '/dev/null' }).catch(() => {});
+    const t1 = await pg.evaluate(() => window.__play.enemyAI.S.now); await ticks(30);
+    ok(await pg.evaluate(t => window.__play.enemyAI.S.now === t, t1), `record 3: the world waits in the event (manager clock ${t1})`);
+    await until(() => window.__play.stage.rt.battle === true, null, 180000).catch(() => {});
+    const end = await pg.evaluate(() => { const P = window.__play, r = P.stage.rt, p = P.ctrl.pos; return { battle: r.battle, x: p.x, y: p.y, z: p.z, log: r.log.map(([, m]) => m).filter(m => /^(zone|battle)/.test(m)), pair: P.light && P.light.stream.pair }; });
+    ok(end.battle && Math.hypot(end.x + 1762.5, end.z - 1577.7) < 2, `record 3: battle with Vincent at (${end.x.toFixed(1)}, ${end.y.toFixed(1)}, ${end.z.toFixed(1)}) (T r07_walk: -1762.5, 0, 1577.7)`);
+    ok(end.log.some(m => m.includes('zone 128,6,7') || m.includes('zone 6,7')), `record 3: Zone 6 7 before the battle (${end.log.join(' | ').slice(0, 200)})`);
+  }
+  { // 6. with the opening on: the hand-off, the sounds it leaves, a key, a record Restart (no opening), a no-record Restart (the opening again)
+    for (let i = 0; ; i++) {
+      try { await pg.goto(`http://127.0.0.1:${port}/play.html?enemydmg=0`, { waitUntil: 'load' }); break; }
+      catch (e) { if (i > 20) throw e; await new Promise(r => setTimeout(r, 250)); }
+    }
+    await pg.waitForFunction(() => { const P = window.__play; return P && P.intro && P.intro.active && P.sound && P.sound() && window.__items; }, null, { timeout: 180000 });
+    const skip = async () => {
+      await until(() => window.__play.intro.active && window.__play.intro.rt.frameNo > 60, null, 120000);
+      await pg.keyboard.press('Enter');
+      await until(() => window.__play.intro.paused);
+      await pg.waitForTimeout(200);
+      await pg.keyboard.press('Space');
+      await until(() => !window.__play.intro.active, null, 180000);
+      await until(() => window.__play.stats.ticks > 5 && !window.__play.restart.pending, null, 60000);
+    };
+    ok(await pg.evaluate(() => window.__play.sound().event === true), 'the opening: the load-time start is off');
+    await skip();
+    const h = await pg.evaluate(() => window.__play.sound());
+    ok(h.event === false && h.on === false, `after the hand-off the opening's gate is closed (event ${h.event}, on ${h.on})`);
+    await pg.evaluate(() => { const s = window.__play.soundStop; s(); });
+    await pg.keyboard.press('KeyK');
+    await pg.waitForTimeout(600);
+    const k = await pg.evaluate(() => window.__play.sound());
+    ok(k.music === null && k.area === null, `stopped sounds, then a key: nothing restarts (music ${k.music}, area ${k.area}; was bgm_001 / asj_036)`);
+    // the no-record Restart replays the opening, silent until its own sounds
+    await pauseRestart(true);
+    const r = await pg.evaluate(() => ({ active: window.__play.intro.active, s: window.__play.sound() }));
+    ok(r.active && r.s.on && r.s.event, `no record: the opening again, the gate open (active ${r.active}, on ${r.s.on}, event ${r.s.event})`);
+    await skip();
+    // a record: no opening, the gate stays closed, main's own sounds
+    await pg.evaluate(() => { const W = window.__play.enemyAI; W.eventFlags[0] = 2; W.eventFlags[1] = 5; W.eventFlags[2] = 7; W.eventFlags[46] = 1; W.eventFlags[63] = 6; });
+    await until(() => { const P = window.__play; return P.stage && P.stage.rt.log.some(([, m]) => m === 'scene_save 1') && !!P.restart.record; }, null, 180000);
+    await until(() => window.__play.stage.battle && !window.__play.pause.active, null, 60000);
+    await pauseRestart(); await until(() => (window.__play.enemyAI.eventFlags[9] | 0) === 1, null, 20000).catch(() => {});
+    const q = await pg.evaluate(() => ({ active: window.__play.intro.active, s: window.__play.sound(), hp: window.__play.php.hp, g18: window.__play.stage.globalFlags[18], f9: window.__play.enemyAI.eventFlags[9] | 0 }));
+    ok(!q.active && q.s.on === false && q.s.event === false, `record, opening on: no opening, no stale gate (active ${q.active}, on ${q.s.on}, event ${q.s.event})`);
+    ok(q.hp === 780 && q.g18 === 0 && q.f9 === 1, `record, opening on: HP ${q.hp}, global 18 ${q.g18}, stage 9 ${q.f9}`);
+    await until(() => window.__play.sound().music === 'bgm_001', null, 30000).catch(() => {});
+    ok(await pg.evaluate(() => window.__play.sound().music === 'bgm_001'), 'record, opening on: main starts its music (' + JSON.stringify(await pg.evaluate(() => window.__play.sound())) + ')');
+  }
   await pg.close();
 } finally {
   await browser.close(); srv.kill();

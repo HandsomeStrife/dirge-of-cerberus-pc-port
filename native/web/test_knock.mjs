@@ -80,7 +80,7 @@ for (const [name, hitF, flags, k, draws, jump] of [['w255_knock_run', 100, 8, 0,
   const file = path.join(process.env.TRACE_OUT ?? path.join(here, '../../tools/trace/out'), name + '.jsonl');
   if (!existsSync(file)) { console.log('SKIP trace part: no ' + file); continue; }
   const R = readFileSync(file, 'utf8').trim().split('\n').slice(1).map(l => JSON.parse(l)).map(r => ({
-    f: r.frame, st: parseInt(r.p_state.slice(8, 10), 16), clip: r.motion, x: r.matrix[3][0], y: r.matrix[3][1], z: r.matrix[3][2], gs: r.ground_speed, face: r.matrix[2] }));
+    f: r.frame, st: parseInt(r.p_state.slice(8, 10), 16), stance: parseInt(r.p_state.slice(10, 12), 16) & 3, clip: r.motion, x: r.matrix[3][0], y: r.matrix[3][1], z: r.matrix[3][2], gs: r.ground_speed, face: r.matrix[2] }));
   const at = f => R.find(r => r.f === f), r0 = at(hitF - 1);
   const { S, c, go } = rig([r0.x, r0.y, r0.z], [r0.face[0], 0, r0.face[2]], 0);
   // the launch's T = 2 d / (v + 0.5) from the trace's first frames
@@ -91,11 +91,16 @@ for (const [name, hitF, flags, k, draws, jump] of [['w255_knock_run', 100, 8, 0,
   S.hp = 730;
   const hit = c.hitReact({ flags, dir: u, aliveBefore: true, deadNow: false });
   ok(hit === 'knock', `${name}: a live hit, flags ${flags}: ${hit}`);
-  const badSt = [], badClip = []; let maxY = 0, maxXZ = 0, lastF = 0;
+  const badSt = [], badClip = [], badStance = []; let maxY = 0, maxXZ = 0, maxFace = 0, maxFaceF = 0, lastF = 0, mv9T = null, mv9P = null;
   for (const r of R.filter(r => r.f >= hitF)) {
     if (r.f > hitF) fr(c, go, S);
+    const dFace = Math.abs(Math.atan2(Math.sin(c.heading - Math.atan2(r.face[0], r.face[2])), Math.cos(c.heading - Math.atan2(r.face[0], r.face[2]))));
+    if (dFace > maxFace) { maxFace = dFace; maxFaceF = r.f; }
+    if (r.f > hitF + 5 && r.st === 0x11 && mv9T === null && r.gs >= 59) mv9T = r.f;
+    if (r.f > hitF + 5 && c.P.state === 0x11 && mv9P === null && c.C.groundSpeed >= 59) mv9P = r.f;
     const key = c.jump.clock ? c.jump.clock.clip : null, name2 = c.jump.head ? (key === 'idle' ? 'h_st' : key) : null;
     if (c.P.state !== r.st) badSt.push(`${r.f}: ${c.P.state.toString(16)} / ${r.st.toString(16)}`);
+    if ((c.P.stance ?? 0) !== r.stance) badStance.push(`${r.f}: ${c.P.stance ?? 0} / ${r.stance}`);
     if (name2 && name2 !== r.clip && !/^h_st/.test(r.clip)) badClip.push(`${r.f}: ${name2} / ${r.clip}`);
     maxY = Math.max(maxY, Math.abs(c.pos.y - r.y)); maxXZ = Math.max(maxXZ, Math.hypot(c.pos.x - r.x, c.pos.z - r.z));
     lastF = r.f;
@@ -103,7 +108,11 @@ for (const [name, hitF, flags, k, draws, jump] of [['w255_knock_run', 100, 8, 0,
   // (w255_knock_run: state 0x10 one frame early, and so each change after it: FUN_00359050's ground point moves under him in the game, the page's gy stays at the take-off: L. w255_knock_air: class 0x35's random clip rate plays at 1.0: L)
   ok(badSt.length <= 3, `${name}: player state per record to ${lastF} (${badSt.length} off: ${badSt.slice(0, 5).join(' | ') || 'none'})`);
   ok(badClip.length <= 3, `${name}: head clip per record (${badClip.length} off: ${badClip.slice(0, 5).join(' | ') || 'none'})`);
-  console.log(`     ${name}: largest error y ${maxY.toFixed(2)}, xz ${maxXZ.toFixed(2)}`);
+  ok(badStance.length <= 3, `${name}: stance per record, P+0x100 bits 40-41 (${badStance.length} off: ${badStance.slice(0, 5).join(' | ') || 'none'})`);
+  console.log(`     ${name}: largest error y ${maxY.toFixed(2)}, xz ${maxXZ.toFixed(2)}, facing ${maxFace.toFixed(3)} rad at ${maxFaceF}, mover 9 at 60 u/s: T ${mv9T}, page ${mv9P}`);
+  ok(maxFace < 0.02, `${name}: FUN_005618d0's turn stands (FUN_00578748 returns in 0xf / 0x10 / 0x11): facing within 0.02 rad, largest ${maxFace.toFixed(3)}`);
+  ok(mv9P === mv9T, `${name}: FUN_0059cbe8's mover 9 at class 0x35's first update: 60 u/s at record ${mv9P} (T ${mv9T})`);
+  ok(maxXZ < 3, `${name}: path within 3 u (${maxXZ.toFixed(2)})`);
   ok(S.hp === 730 && !c.jump.motion && c.P.state === 2, `${name}: on his feet, control back`);
 }
 const AT = [-1070.912, -146.066, -1105.614], FACE = [0.912, 0, -0.409];
@@ -119,12 +128,14 @@ const AT = [-1070.912, -146.066, -1105.614], FACE = [0.912, 0, -0.409];
     const draws = [0.5, 0.979128, 0.5]; c.rng = () => draws.shift() ?? 0.5;
     c.step(IDLE(STICK)); c.pos = { x: r0.x, y: r0.y, z: r0.z };
     S.hp = 730; c.hitReact({ flags: 8, dir: u, aliveBefore: true, deadNow: false });
-    let roll = null, back = null, zAt = 0;
+    let roll = null, back = null, zAt = 0; const faceBy = { 0xf: [0, 0], 0x10: [0, 0], 0x11: [0, 0] };
     for (const r of R.filter(r => r.f > 100 && r.f <= 240)) {
       fr(c, go, S, IDLE(STICK));
+      if (faceBy[r.st] && c.P.state === r.st) { const a = c.heading - Math.atan2(r.face[0], r.face[2]); faceBy[r.st][0]++; faceBy[r.st][1] = Math.max(faceBy[r.st][1], Math.abs(Math.atan2(Math.sin(a), Math.cos(a)))); }
       if (!roll && c.P.state === 2) { roll = r.f; ok(c.jump.motion && c.jump.clock.clip === 'c_rev_r', `the stick in state 0x11: state 2 in record ${r.f} (T 189, a frame early from 0x10's L), clip ${c.jump.clock.clip} (T c_rev_r)`); zAt = c.pos.z; }
       if (roll && !back && !c.jump.motion) { back = r.f; ok(Math.abs(Math.abs(c.pos.z - zAt) - 3.09) < 0.6, `the roll moves him ${Math.abs(c.pos.z - zAt).toFixed(2)} u along his side (T 3.09)`); }
     }
+    for (const st of [0xf, 0x10, 0x11]) ok(faceBy[st][0] > 0 && faceBy[st][1] < 0.02, `the stick held in state 0x${st.toString(16)}: no turn or move from FUN_00578748 (${faceBy[st][0]} records, facing within ${faceBy[st][1].toFixed(3)} rad of T)`);
     ok(roll && Math.abs(roll - 189) <= 1, `the roll at ${roll} (T 189)`);
     ok(back && Math.abs(back - 224) <= 2, `the class ends at ${back} (T 223-224)`);
     ok(c.C.groundSpeed > 5, `he walks on with the stick (${c.C.groundSpeed.toFixed(1)} u/s)`);
@@ -141,6 +152,61 @@ const AT = [-1070.912, -146.066, -1105.614], FACE = [0.912, 0, -0.409];
   ok(Math.abs(n - 34) <= 1, `the stick is back after ${n} frames (T 34)`);
   let w = 0; while (w++ < 60 && c.C.groundSpeed < 5) fr(c, go, S, IDLE({ x: 1, z: 0, stick: 1 }));
   ok(c.C.groundSpeed >= 5, `with the stick he walks out of it (${c.C.groundSpeed.toFixed(1)} u/s after ${w} frames)`);
+}
+// a second hit while he lies in state 0x11, as traced (TRACE_HIT="100:8:50:-1,0;175:<flags>:<dmg>:-1,0"; the stub runs in FUN_00334590 case 2: before the world mode's own step and his)
+for (const [name, flags, dead, s64] of [['w255_lying_kill2', 2, true, 8], ['w255_lying_kill4', 4, true, 8], ['w255_lying_kill0', 0, true, 8], ['w255_lying_big', 4, false, 0], ['w255_lying_nostatus', 2, true, 0]]) {
+  const file = path.join(process.env.TRACE_OUT ?? path.join(here, '../../tools/trace/out'), name + '.jsonl');
+  if (!existsSync(file)) { console.log('SKIP trace part: no ' + file); continue; }
+  const R = readFileSync(file, 'utf8').trim().split('\n').slice(1).map(l => JSON.parse(l)).map(r => ({
+    f: r.frame, st: parseInt(r.p_state.slice(8, 10), 16), stance: parseInt(r.p_state.slice(10, 12), 16) & 3, clip: r.motion, x: r.matrix[3][0], y: r.matrix[3][1], z: r.matrix[3][2], gs: r.ground_speed, hp: r.p_hp, face: r.matrix[2] }));
+  const at = f => R.find(r => r.f === f), r0 = at(174);
+  const { S, c, go } = rig([r0.x, r0.y, r0.z], [r0.face[0], 0, r0.face[2]], s64);
+  c.step(IDLE()); c.cSnap = null; S.hp = 730;
+  c.hitReact({ flags: 8, dir: [-1, 0, 0], aliveBefore: true, deadNow: false });
+  let g = 0; while (c.P.state !== 0x11 && g++ < 400) fr(c, go, S);
+  for (let i = 0; i < 14; i++) fr(c, go, S);                // (T: state 0x11 from 160, the hit at 175)
+  c.cSnap = null;                                           // (the stub's hit is in the frame's start, not a redo)
+  c.pos = { x: r0.x, y: r0.y, z: r0.z }; c.prev = { ...c.pos }; c.locate(); c.pos = { x: r0.x, y: r0.y, z: r0.z };   // (where T lies: the rig's first flight starts elsewhere)
+  const p0 = { ...c.pos };
+  ok(c.P.state === 0x11 && c.P.stance === 2 && c.jump.motion && c.jump.motion.knock, `${name}: lying: state 0x${c.P.state.toString(16)}, stance ${c.P.stance} (T ${r0.stance})`);
+  if (dead) S.hp = 0; else S.hp = 680;
+  const hit = c.hitReact({ flags, dir: [-1, 0, 0], aliveBefore: true, deadNow: dead });
+  fr(c, go, S);
+  const badSt = [], badStance = []; let maxXZ = 0;
+  for (const r of R.filter(r => r.f >= 175 && r.f < 500)) {
+    if (r.f > 175) fr(c, go, S);
+    if (c.P.state !== r.st) badSt.push(`${r.f}: ${c.P.state.toString(16)} / ${r.st.toString(16)}`);
+    if ((c.P.stance ?? 0) !== r.stance) badStance.push(`${r.f}: ${c.P.stance ?? 0} / ${r.stance}`);
+    maxXZ = Math.max(maxXZ, Math.hypot(c.pos.x - p0.x - (r.x - r0.x), c.pos.z - p0.z - (r.z - r0.z)));   // (from the second hit: the first flight is w255_knock_run's)
+  }
+  ok(badSt.length === 0, `${name}: flags ${flags} (${hit}): player state per record to 499 (${badSt.length} off: ${badSt.slice(0, 5).join(' | ') || 'none'})`);
+  ok(badStance.length === 0, `${name}: stance per record (${badStance.length} off: ${badStance.slice(0, 5).join(' | ') || 'none'})`);
+  console.log(`     ${name}: largest error xz ${maxXZ.toFixed(2)}`);
+  ok(maxXZ < 1, `${name}: path within 1 u`);
+  if (!dead || s64) ok(S.hp === at(499).hp, `${name}: HP ${S.hp} (T ${at(499).hp})`);
+  else ok(go.w4c === 1 && c.P.state === 7, `${name}: no status: GAME OVER (w4c ${go.w4c}), the corpse stays in state ${c.P.state}`);
+}
+{ // the classes by FUN_005394d8 / jumptable 0x589e70 (every old state that had none: a hard lock at HP 0)
+  for (const old of [0xf, 0x10, 0x11, 0x16]) {
+    ok(JC.stateMotion(old, 7, false, 2) === 0xd && JC.stateMotion(old, 7, false, 0) === 0xb, `old 0x${old.toString(16)} -> 7: stance 2 0xd, stance 0 0xb`);
+    ok(JC.stateMotion(old, 0x18) === 0x3f, `old 0x${old.toString(16)} -> 0x18: class 0x3f`);
+  }
+}
+{ // FUN_005738d0 at 0xf / 0x10: FUN_00576548 and FUN_005747f8(P, 2); at 7 only FUN_00576548. The stick lock: W in class 0x37's first 40 ticks moves nothing
+  const wpn = () => ({ n: 0, P: { m29c: 3 }, holsterCore() { this.n++; }, drawn: () => false, isAiming: () => false, enterFoot() {}, camJump() {} });
+  const a = rig(AT, FACE, 0); a.c.weapon = wpn();
+  a.c.step(IDLE()); a.c.cSnap = null; a.S.hp = 400;
+  a.c.hitReact({ flags: 8, dir: [-1, 0, 0] });
+  ok(a.c.weapon.n === 1 && a.c.weapon.P.m29c === 2, `knocked down: holster ${a.c.weapon.n}, m29c ${a.c.weapon.P.m29c}`);
+  let g = 0; while (a.c.P.state !== 2 && g++ < 400) fr(a.c, a.go, a.S);
+  ok(a.c.jump.motion && a.c.jump.motion.id === 0x37 && a.c.jump.motion.lock, 'the get-up: the stick is locked');
+  const p0 = { ...a.c.pos }; for (let i = 0; i < 10; i++) fr(a.c, a.go, a.S, IDLE({ x: 1, z: 0, stick: 1 }));
+  ok(Math.hypot(a.c.pos.x - p0.x, a.c.pos.z - p0.z) < 0.01, `the stick in the lock moves nothing (${Math.hypot(a.c.pos.x - p0.x, a.c.pos.z - p0.z).toFixed(3)} u)`);
+  ok(!a.c.C.slide, 'FUN_00539570 alive, event 0x3a: FUN_003533e0: no mover left at the get-up');
+  const b = rig(AT, FACE, 0); b.c.weapon = wpn();
+  b.c.step(IDLE()); b.c.cSnap = null; b.S.hp = 0;
+  b.c.hitReact({ flags: 2, dir: [-1, 0, 0], aliveBefore: true, deadNow: true });
+  ok(b.c.P.state === 7 && b.c.weapon.n === 1 && b.c.weapon.P.m29c === 3, `killed: holster ${b.c.weapon.n}, m29c stays ${b.c.weapon.P.m29c}`);
 }
 { // ✕ in class 0x3a's first 8 ticks: FUN_005763b8: the jump
   const { S, c, go } = rig(AT, FACE, 0);
@@ -208,7 +274,7 @@ const AT = [-1070.912, -146.066, -1105.614], FACE = [0.912, 0, -0.409];
 { // a corpse off a ledge: FUN_00538780 at the death class's done event, off the ground: state 0xf / 0x10, class 0x33 / 0x1b, landing, settled (decomp; no trace)
   const { S, c, go } = rig(AT, FACE);
   c.step(IDLE()); c.cSnap = null; S.hp = 0; c.hitReact({ flags: 2, dir: [-1, 0, 0], deadNow: true });
-  ok(c.P.state === 7, 'state 7');
+  ok(c.P.state === 7 && c.P.stance === 2, `state 7, stance ${c.P.stance}`);
   const m0 = JC.stateEvent(7, 0xb, false, false, true, true), m1 = JC.stateEvent(7, 0xb, false, false, true, false);
   ok(m0 === 0x10 && m1 === 0xf, `FUN_00538780 off the ground: ahead 0x${m0.toString(16)}, else 0x${m1.toString(16)}`);
   ok(JC.stateEvent(7, 0xb, true, false, true, true) === 0, 'on the ground: 0');
@@ -216,6 +282,7 @@ const AT = [-1070.912, -146.066, -1105.614], FACE = [0.912, 0, -0.409];
   c.onGround = false;                                      // the death class's done event with no floor under him
   const st = c.jump.event(c, 0xb);
   ok((st === 0xf || st === 0x10) && c.jump.motion.knock, `the event off the ground: state 0x${st.toString(16)}, class 0x${c.jump.motion.id.toString(16)}`);
+  ok(c.P.stance === 0, `FUN_005392b8 / FUN_00539390: stance 0 in the fall (${c.P.stance})`);
   ok(!c.P.settled, 'not settled yet');
   c.startFall(0);
   let n = 0;

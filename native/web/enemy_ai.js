@@ -513,6 +513,9 @@ export function createEnemyAI(opts) {
   // activated (+0x144(1)) unless its flags +0xa4 have bit 17 (0x20000); those wait for a script's
   // cmd 0x108 (manager 0x3d lookup). L: an inactive trigger runs no volume test (FUN_005517a8).
   for (const o of triggers) o.active = !((o.t.flags >>> 17) & 1);
+  // FUN_005503e8 case 3 (+0xaa): +0x40 bit 2 with flags bit 3 (✕ can choose it), +0xe0 from record +0xb0 bit 0 (FUN_0057c698). Cases 0 / 8 the same bit (worker 0257: T r06_door2 trigger 12 +0x40 0x105)
+  // FUN_005503e8: +0x40 bit 2 with flags bit 3 on shape 3, bit 3 or 4 on shapes 0 / 8; +0x4f = 1 on shape 3, 2 on shapes 0 / 8 (FUN_00544960's pick). +0xd0's bits 16-19 start at 0xf (FUN_00550228): r0 = -1 until a ray writes it
+  for (const o of triggers) { const s = o.t.shape, fl = o.t.flags; o.use = s === 3 ? !!(fl & 8) : (s === 0 || s === 8) && !!(fl & 0x18); o.f4f = s === 3 ? 1 : 2; o.face = -1; o.e0 = s === 3 && (o.t.b0 & 1) ? 1 : 0; }
   // GUESS: trigger object id = 't' + index (manager +0x7b0 table, cmd 0x3d, not read; scripts only pass it on).
   // -1 once the trigger is deleted (FUN_0053e1e0: +0x7b0[k] = 0xffff; `slot`).
   const trigObj = k => triggers[k] ? slot(triggers[k].id) : -1;
@@ -522,6 +525,9 @@ export function createEnemyAI(opts) {
   // the world's own copy: manager cmd 0xb writes it (FUN_003ff658; worker 0212); the caller's object stays as given
   const EVFLAGS = { ...(opts.eventFlags ?? SAVE_EVENT_FLAGS) };
   const deadRecs = new Set(opts.deadRecs ?? []);
+  // DAT_0046e228 +0x290's words at +4 (FUN_0031e060 sets, FUN_0031e160 reads): the records FUN_00547ce0 zeroes at a stage load. In a
+  // scene_save's record (FUN_0031d4d8), so they outlive a Restart from it; T w254: 41, 42, 43, 111, 113, 114 kept through the reload
+  const deadBits = new Set(deadRecs);
   const onActivate = opts.onActivate || (() => {});
   const onDeactivate = opts.onDeactivate || (() => {});
   const activated = [];         // records activated this frame (tick clears it)
@@ -782,6 +788,11 @@ export function createEnemyAI(opts) {
       }
       if (cmd === 0xa6) return +(DIFF === 2);                  // FUN_00242c28() == 2
       if (cmd === 0xa7) return +(DIFF === 3);                  // FUN_00242c28() == 3
+      // FUN_00545b20 cases 0x50 .. 0x53: the chunk's node animations (chunk_anim.js; worker 0257)
+      if (cmd === 0x50) { if (opts.chunkAnims) opts.chunkAnims.start(r[0], r[1], r[2]); return 0; }
+      if (cmd === 0x51) { if (opts.chunkAnims) opts.chunkAnims.stop(r[0], r[1]); return 0; }
+      if (cmd === 0x52) { if (opts.chunkAnims) opts.chunkAnims.pose(r[2] | 0, r[0], r[1]); return 0; }
+      if (cmd === 0x53) { if (opts.chunkAnims) opts.chunkAnims.pause(r[0], r[1]); return 0; }
       if (cmd === 0x2f) { if ((r[0] >>> 0) < 0x100) mshort[r[0]] = r[1]; return 0; }   // FUN_00545b20 case 0x2f
       if (cmd === 0x30) return (r[0] >>> 0) < 0x100 ? mshort[r[0]] : 0;                 // case 0x30
       // worker 0231 (notes/boss-research.md): case 0x6e: r0 < 0x12 -> FUN_003b58e0(HUD DAT_00471380, r0, r1, r2, r3) (a
@@ -846,6 +857,20 @@ export function createEnemyAI(opts) {
         }
         return 0;
       }
+      // FUN_00545b20 case 0xab -> FUN_0053da98 (worker 0257): manager +0x260 on the screen and a clear probe 3 ray from the camera (CAM+0x90, FUN_00326200) to 0.1 short of it.
+      // FUN_0053d9f0 -> FUN_0040d7f0(display): FUN_0040d778's clip test (display +0x3c0: x, y x scrz / 1024, RAM 0.29294; z x 1.00007 - 2.00007, w = z), then the screen point (+0x380: scrz, 1.5 scrz, 2037, 2048;
+      // mode +0x2dc = 2, RAM: x - 2048 + 224, y - 2048 + 256) inside 0 <= x < 512, 0 <= y < 448. L: probe 3's objects as probe 6's on the page (the same +0x38 bits on all of them); the map = opts.los (its GUESS)
+      if (cmd === 0xab) {
+        if (!opts.viewCam) { warnOnce('enemy_ai: manager cmd 0xab: no opts.viewCam (the camera): false'); return 0; }
+        if (!mgr260) return 0;
+        const c = opts.viewCam(), v = c.toView(mgr260), scrz = f(224 / f(Math.tan(f(c.fov * 0.008726647)))), w = v[2], z = f(f(w * 1.00007) - 2.00007), k = f(scrz / 1024);
+        const X = f(v[0] * k), Y = f(v[1] * k), aw = Math.abs(w);
+        if (X > aw || X < -aw || Y > aw || Y < -aw || z > aw || z < -aw) return 0;
+        const sx = f(f(f(scrz * v[0]) / w) + 2037) - 2048 + 224, sy = f(f(f(f(scrz * 1.5) * v[1]) / w) + 2048) - 2048 + 256;
+        if (!(sx >= 0 && sx < 512 && sy >= 0 && sy < 448)) return 0;
+        const eye = c.eye, d = sub3(mgr260.slice(0, 3), eye), l = len3(d), s = 0.1 < l ? f(l - 0.1) : 0.1, end = [0, 1, 2].map(j => f(eye[j] + f(f(d[j] / l) * s)));
+        return +!(los(eye, end) || cameraObjects(eye, end));
+      }
       // GUESS: other manager commands are skipped (return 0, the script goes on)
       warnOnce(`enemy_ai: manager cmd 0x${cmd.toString(16)} not translated (skipped)`);
       return 0;
@@ -904,6 +929,7 @@ export function createEnemyAI(opts) {
         events.push(`motion ${t.id} ${nm}`);
         return 0;
       }
+      case 0x100: return t.id;                                 // FUN_0054cd70 case 0x100: +0x20, the object's own id (worker 0257: the doors' scripts mail themselves)
       case 0x101:                                              // FUN_0054cd70: queue message r1 to object r0
         if (r[1] >= 0 && objects.get(r[0]) && !(objects.get(r[0]).flags28 & 0x80000))
           mailbox.push({ to: r[0], n: r[1], from: t.id });
@@ -941,6 +967,13 @@ export function createEnemyAI(opts) {
       // 0x107 has no index check in the game: r0 >= 2 reads the short at object +0x3c + 2 x r0 (r0 2 / 3 = +0x40 / +0x42,
       // the object's +0x40 flags), r0 < 0 below +0x3c. The page returns 0 there (L: no z128 script sends 0x107 at all).
       case 0x107: return t.t3c && (r[0] >>> 0) < 2 ? t.t3c[r[0]] : 0;
+      // the box trigger class vt 0x58fd90 (shape 3), FUN_0057ca68: its door state +0xe0 (worker 0257): 0 shut, 2 opening, 1 open, 3 closing; 0x168 / 0x169 post the request (r0 = the delay)
+      case 0x168: if (t.t && t.t.shape === 3 && (t.e0 === 0 || t.e0 === 3)) postManager(10, t.id, r[0]); return 0;
+      case 0x169: if (t.t && t.t.shape === 3 && (t.e0 === 1 || t.e0 === 2)) postManager(0xb, t.id, r[0]); return 0;
+      case 0x17c: return +(t.e0 === 1 || t.e0 === 2);        // FUN_0057c650
+      case 0x17d: return +(t.e0 === 0 || t.e0 === 3);        // FUN_0057c660
+      case 0x17e: return +(t.e0 === 2 || t.e0 === 3);        // FUN_0057c688
+      case 0x18d: t.use = !!r[0]; return 0;                  // FUN_0054cd70 case 0x18d: +0x40 bit 2 (✕ takes it)
       case 0x104: if (r[0] < 8) { t.vars[r[0]] = r[1]; t.flags28 |= 0x4000; } return 0;
       case 0x105: return t.vars[r[0]];
       case 0x143: if (t.kind === 'actor') cmd143(t, r); return 0;
@@ -1098,6 +1131,7 @@ export function createEnemyAI(opts) {
         if (t.kind === 'record' && data.records[t.rec]) {
           t.hp = data.records[t.rec].hp ?? 100;                               // FUN_00316948(s, 1): +0x20 = +4
           t.flags28 &= ~2;
+          deadBits.add(t.rec);                                                // FUN_0055cff8: FUN_0031e060(+0x100, 1)
           events.push(`revive rec ${t.rec}`);
           postManager(6, t.id);
         } else if (t.kind === 'actor') warnOnce('enemy_ai: cmd 0x14a on an active actor (FUN_0055cff8 with a body) not translated');
@@ -2793,7 +2827,7 @@ export function createEnemyAI(opts) {
       setMotion(a, (C.f808 & 4) ? 4 : 8);
     }
   }
-  // Motion 0x22 (the fall, FUN_00599820; jump_core.js FallMotion, T on Vincent): phase 0 row 0x19 flags 0x83; blend 6 after an attack motion, FUN_00340bb8(C, 1, -1) after 0x16, 6-0xa,
+  // Motion 0x22 (the fall, FUN_00599820; jump_core.js FallMotion, T on Vincent): phase 0 row 0x19 flags 3; blend 6 after an attack motion, FUN_00340bb8(C, 1, -1) after 0x16, 6-0xa,
   // 0x30, 3, 0x12, 0x1c, 0x1d, else none; phase 2 on the ground -> done: FUN_00341af0 -> state 8's vt+0x1c FUN_00538aa0(0x22): dead 7 (dead actors don't reach this), else 2 (3 with the gun bit).
   // The state's vt+0x24 then gives motion 0x21. NOT TRACED on an actor: no trace has a dog in the air.
   function loco22(a, m) {
@@ -2803,7 +2837,7 @@ export function createEnemyAI(opts) {
       if (p >= 0x1000 && p < 0x1080) blendSet(a, 1, 6);
       else if (p === 0x16 || (p >= 6 && p <= 0xa) || p === 0x30 || p === 3 || p === 0x12 || p === 0x1c || p === 0x1d) blendSet(a, 1, -1);
       else blendSet(a, 0, -1);
-      request(a, 0x19, 0x83);
+      request(a, 0x19, 3);
       m.phase = 2;
     } else if (m.phase === 2 && (C.f1c0 & 0x200)) {
       m.done |= 1;
@@ -4029,6 +4063,8 @@ export function createEnemyAI(opts) {
     const hit = playerFilter(b) ? playerPartTest(b) : null;
     // worker 0209: a gimmick nearer than Vincent ends the bullet there (props.js; FUN_005442d8's closest solid hit)
     const ph = opts.props ? opts.props.bulletTest(b) : null;
+    const dh = doorBullet(b);                                                 // worker 0257: a shut door's box
+    if (dh && (!hit || dh.dist < hit.dist) && (!ph || dh.dist < ph.dist)) { shotVolumes(b, dh.dist); b.hitPoint = dh.point; runEvent(dh.o, 0x12, [b.shooter ?? 0, 0, b.shooter ?? -1, 0]); return 1; }
     if (ph && (!hit || ph.dist < hit.dist)) { shotVolumes(b, ph.dist); b.hitPoint = ph.point; return opts.props.bulletHit(ph, b); }
     shotVolumes(b, hit ? hit.dist : FLT_MAX);
     if (hit) b.hitPoint = hit.point;                                          // +0xd0 = +0xf0 = +0x110 = the hit
@@ -4342,6 +4378,8 @@ export function createEnemyAI(opts) {
     }
     // worker 0209: the gimmicks (props.js: filter FUN_00584f40, cylinder FUN_00584408); the closest solid hit wins
     const ph = opts.props ? opts.props.bulletTest(b) : null;
+    const dh = doorBullet(b);                                                 // worker 0257: a shut door's box
+    if (dh && (!best || dh.dist < best.dist) && (!ph || dh.dist < ph.dist)) { shotVolumes(b, dh.dist); runEvent(dh.o, 0x12, [b.shooter ?? 0, 0, b.shooter ?? -1, 0]); return 1; }
     if (ph && (!best || ph.dist < best.dist)) { shotVolumes(b, ph.dist); return opts.props.bulletHit(ph, b); }
     shotVolumes(b, best ? best.dist : FLT_MAX);
     if (!best) return 0;
@@ -4689,6 +4727,7 @@ export function createEnemyAI(opts) {
   // burst. T: w193_fxhits f871 (#67 killed by Vincent's second shot; w200_4800 call log: the jal at 0x55ce58).
   // items.js spawns it with the item.
   function enemyDeath(a) {
+    if (!(a.flags28 & 0x20) && a.rec != null) deadBits.add(a.rec);             // FUN_0055cac8: FUN_0031e060(+0x100, 1), skipped by +0x28 bit 5 (LAB_0055cf1c)
     runEvent(a, 0x17);
     if (a.ai) { setMode(a.ai, 0); setActionLayer(a.ai, 0); setCombatLayer(a.ai, 0); }
     events.push(`dead ${a.id}`);
@@ -4747,6 +4786,8 @@ export function createEnemyAI(opts) {
       } else if (e.code === -10) postManager(9, e.id);
       else if (e.code === -2) postManager(0x16, e.id);                        // case 0xd1 (cmd 0x113's period)
       else if (e.code === -4) postManager(0x17, e.id);                        // worker 0259: case 0xcf (cmd 0x114's next step)
+      else if (e.code === -5) { o.e0 = 1; runEvent(o, 0x51); }                // worker 0257: vt+0x294 FUN_0057c7e8: open. FUN_0054add0 only with a script event 0x54 (none on z128's doors)
+      else if (e.code === -6) { o.e0 = 0; runEvent(o, 0x53); }                // vt+0x2a4 FUN_0057c920: shut
       else warnOnce(`enemy_ai: delayed code ${e.code} (FUN_0053f040) not translated`);
     }
   }
@@ -4864,11 +4905,17 @@ export function createEnemyAI(opts) {
       // FUN_0054a720(target) (C+0x30). A flinch / death slide (movers 9 / 0xb) also runs in mode 0xc in the
       // game (FUN_0034f178 cases 9 / 0xb only enter 0xc); the page keeps their flat step below (GUESS, see slide).
       bodyOf(a);
-      const t = C.tgt, sliding = !!s && (C.mover === 9 || C.mover === 0xb);
+      const t = C.tgt, sliding = !!s && (C.mover === 9 || C.mover === 0xb), air = sliding && a.B.state === 2;
+      // A slide in the air (killed in state 8): the game's own path, FUN_003516a0 / FUN_00351550 -> FUN_0034af98 (C+0xc0, C+0xcc; below 0.01 FUN_0034b110) and the mode-0xc body falls and lands.
+      if (air) { C.want = s.dir.slice(); C.wk = C.mover === 0xb && !(s.v >= 0.01) ? 0 : s.v; }
       const r = PM.approachFrame(a, t && t.pos ? t.pos : null, step, walkBody, warnOnce, sliding, navOf(a));
       if (r === 'done') events.push(`approach end ${a.id}`);
       else if (r === 'nav end') events.push(`nav end ${a.id}`);
-      if (!sliding) return;
+      if (air) {
+        s.v = f(s.v - f(s.dv * step));
+        if (s.v < 0) { s.v = 0; if (C.mover === 9) { C.mover = 0; C.slide = null; C.wk = 0; } }
+      }
+      if (!sliding || air) return;
     } else if (PM.moveStart(C), C.mover === 1 || C.mm || C.s214 === 5) {
       if (PM.bodyFrame(a, data.paths, step, PM.MOVE_DT, warnOnce) === 'done') {
         events.push(`path end ${a.id}`);
@@ -4982,7 +5029,7 @@ export function createEnemyAI(opts) {
     for (const o of attackObjs.slice()) if (attackObjUpdate(o, step)) attackObjs.splice(attackObjs.indexOf(o), 1);
     // worker 0209: the explosions (object type 7, vt+0x214 FUN_0057e638; props.js). GUESS: after the bullets and attack
     // objects (the FUN_005810e8 list order of type 7 is not read)
-    if (opts.props) opts.props.update(step);
+    if (opts.props) { opts.props.nodeBoxes(opts.chunkAnims); opts.props.update(step); }
     // worker 0224: the items (vt+0x214 FUN_0057ff80; items.js). L: in the same object lists, after the explosions
     if (opts.items) opts.items.update(step);
     // 3. bodies: turn (FUN_0034ea18 -> FUN_0034de50), then the motion state (may spawn bullets).
@@ -5154,7 +5201,7 @@ export function createEnemyAI(opts) {
   function cameraObjects(a, b) {
     let best = null, bd = Infinity;
     for (const o of boxes) {
-      if (!o.boxOn || !o.active) continue;
+      if (!o.boxOn || !o.active || o.e0 === 1) continue;                      // FUN_0057c698(1): +0x38 &= 0xfe04, bit 6 off while open (T w257_door2 f440)
       const t = o.t, s = xform(t.inv, a), e = xform(t.inv, b);
       const c = clipSeg(e, s, t.lo, t.hi);
       if (c.face === -1) continue;
@@ -5165,6 +5212,54 @@ export function createEnemyAI(opts) {
     }
     const ph = opts.props && opts.props.cameraProbe ? opts.props.cameraProbe(a, b) : null;
     return ph && ph.d < bd ? ph : best;
+  }
+  // ✕ on a trigger (worker 0257). The map update's choice M+0x10ac: FUN_005513c8 (vt+0x154) for shapes 0 / 3 / 8: +0x40 bit 2, not opening or closing (vt+0xec, FUN_0057c688). Flags bit 4 with the origin in the box (FUN_005507a0): chosen,
+  // +0xd0 as it was. Else flags bit 3: a ray of 7 along the facing hits the box: its first face (FUN_00550918), for shape 3 a z face (4, 5) only; it goes in +0xd0's bits 16-19. FUN_00544960: the lower +0x4f, then the nearer (FUN_0054a888).
+  function gimmickChoose(origin, dir) {
+    let best = null, bd = Infinity;
+    for (const o of triggers) {
+      const t = o.t;
+      if (!o.active || !o.use || o.e0 === 2 || o.e0 === 3) continue;
+      const s = xform(t.inv, origin);
+      if (!((t.flags & 0x10) && inBox(s, t.lo, t.hi))) {
+        if (!(t.flags & 8)) continue;
+        const e = xform(t.inv, [origin[0] + dir[0] * 7, origin[1] + dir[1] * 7, origin[2] + dir[2] * 7]);
+        const face = clipSeg(e, s, t.lo, t.hi).face;
+        if (face === -1 || (t.shape === 3 && face !== 4 && face !== 5)) continue;
+        o.face = face;
+      }
+      const d = len3(sub3(origin, t.m[3].slice(0, 3)));
+      if (!best || o.f4f < best.f4f || (o.f4f === best.f4f && d <= bd)) { bd = d; best = o; }
+    }
+    return best ? { o: best, face: best.face } : null;
+  }
+  // FUN_00544200 -> vt+0x15c FUN_005516f0: event 0x11 with r0 = +0xd0's bits 16-19, signed
+  function gimmickUse(c) { runEvent(c.o, 0x11, [c.face, 0]); }
+  // Vincent against a shut door: GUESS: the stop as a distance from the box's z faces (notes/fidelity-audit.md 'Vincent and shut doors'; FUN_005451d0 probe 4 -> FUN_0054c628 not translated): T r06_door, r06_door2 and
+  // w257_door2 all stop at z 1134.10, 5.00 from trigger 12's face, whatever the approach. (mx, mz) with what would go past that removed.
+  const DOOR_STOP = 5;
+  function doorWall(p, mx, mz) {
+    for (const o of boxes) {
+      if (!o.boxOn || !o.active || o.e0 === 1) continue;
+      const t = o.t, l = xform(t.inv, [p[0] + mx, p[1], p[2] + mz]);
+      if (l[1] < t.lo[1] - 1 || l[1] > t.hi[1] + 1) continue;
+      if (l[0] < t.lo[0] - DOOR_STOP || l[0] > t.hi[0] + DOOR_STOP || l[2] < t.lo[2] - DOOR_STOP || l[2] > t.hi[2] + DOOR_STOP) continue;
+      const fr0 = xform(t.inv, p), side = fr0[2] < (t.lo[2] + t.hi[2]) / 2 ? t.lo[2] - DOOR_STOP : t.hi[2] + DOOR_STOP, dz = side - l[2];
+      mx += t.m[2][0] * dz; mz += t.m[2][2] * dz;
+    }
+    return [mx, mz];
+  }
+  // FUN_005442d8 on a door box: +0x38 bit 0 (0x1db, not while open), solid (+0x28 bit 8 clear): vt+0x17c, vt+0x1b4 FUN_0057ca10 = event 0x12, FUN_0054ff50 (the hit's effect: not translated)
+  function doorBullet(b) {
+    let best = null;
+    for (const o of boxes) {
+      if (!o.boxOn || !o.active || o.e0 === 1 || o.shot) continue;
+      const t = o.t, s = xform(t.inv, b.prev), e = xform(t.inv, b.pos), c = clipSeg(e, s, t.lo, t.hi);
+      if (c.face === -1) continue;
+      const point = xform(t.m, c.p2), dist = f(len3(sub3(b.prev, point)));
+      if (!best || dist < best.dist) best = { o, point, dist };
+    }
+    return best;
   }
   function areaSwitch(k, on) {
     for (const o of boxes) if (o.t.area === k) o.boxOn = on;
@@ -5288,6 +5383,13 @@ export function createEnemyAI(opts) {
       if (e.type === 7) { runEvent(o, 3); objects.get(e.id).flags28 &= ~0x100000; }
       else if (e.type === 8) runEvent(o, 4);
       else if (e.type === 0xd) runEvent(o, 1, [e.arg, 0]);                     // case 0xe: event 1 (timer index, 0) (FUN_0053e868)
+      else if (e.type === 10) {                                                // case 0xb: vt+0x28c FUN_0057c728 (worker 0257): state 2, event 0x50, code -5 after the delay
+        if (o.e0 === 3) delayedDrop(o.id, -6);
+        if (o.e0 === 0 || o.e0 === 3) { o.e0 = 2; runEvent(o, 0x50); delayedPost(o.id, -5, Math.max(e.arg | 0, 0)); }
+      } else if (e.type === 0xb) {                                             // case 0xc: vt+0x29c FUN_0057c850: state 3, event 0x52, code -6 after the delay
+        if (o.e0 === 2) delayedDrop(o.id, -5);
+        if (o.e0 === 1 || o.e0 === 2) { o.e0 = 3; runEvent(o, 0x52); delayedPost(o.id, -6, Math.max(e.arg | 0, 0)); }
+      }
       else if (e.type === 0xf) runEvent(o, 0x13);                              // case 0x10: event 0x13, no args (0x4ef400)
       else if (e.type === 0x10) runEvent(o, 0x14, [e.arg, 0]);                 // case 0x11: event 0x14 (path node, 0) (worker 0228)
       else if (e.type === 0x11) runEvent(o, 0x26);                             // case 0x12: event 0x26, no args (the node is dropped)
@@ -5335,9 +5437,9 @@ export function createEnemyAI(opts) {
   // page (enemies.js partPose) or a test; the part test needs it. playerShot(muzzle, aim, W): Vincent
   // fired, now; queueShot: the same at this frame's player slot inside the next tick (the page).
   // postManager: worker 0243 (FUN_0053fbe8: items.js posts the item use's request 0x1c)
-  const world = { S, actors, triggers, bullets, attackObjs, objects, addActor, tick, runEvent, postManager, delayedPost, delayedDrop, recById, events, activated, setActive, stageLoad, scheduleHandOff, handOffs, delayed,
+  const world = { deadBits, S, actors, triggers, bullets, attackObjs, objects, addActor, tick, runEvent, postManager, delayedPost, delayedDrop, recById, events, activated, setActive, stageLoad, scheduleHandOff, handOffs, delayed,
                   event23,                                // worker 0235: FUN_005459d8 (script event 0x23 to every object)
-                  stageInit, loadPass, areaSwitch, cameraObjects,                    // worker 0240: FUN_0053ca50(mgr, 1) (0x22 then 0x23); FUN_005453b0's loop alone
+                  stageInit, loadPass, areaSwitch, cameraObjects, gimmickChoose, gimmickUse, doorWall, doorBullet, triggers, mshort,                    // worker 0240: FUN_0053ca50(mgr, 1) (0x22 then 0x23); FUN_005453b0's loop alone
                   stageObj: STAGE_OBJ,                    // worker 0237: the stage object (type 0xc, script 0 on z128)
                   timerList,                              // script-timer list (FUN_0053e6e8; tests)
                   playerShot, queueShot, lockTargets, pushOut, boneWorld: opts.boneWorld || null,
@@ -5360,6 +5462,7 @@ export function createEnemyAI(opts) {
                   blast: { filter: blastFilter, actor: blastActor, player: blastPlayer }, player: P, dead, rng, sound: (n, p, r) => sound(n, p, r), seName, roomRay: opts.roomRay || null,
                   difficulty: DIFF, warnOnce: m => warnOnce(m) };
   // the section-15 gimmicks join this world's objects (props.js attach; again for the Restart's new world)
+  if (opts.chunkAnims) opts.chunkAnims.reset();                              // worker 0257: the stage reload: the nodes back in their files, list empty
   if (opts.props) opts.props.attach(world);
   if (opts.items) opts.items.attach(world);                // worker 0224: the item pickups (items.js)
   return world;

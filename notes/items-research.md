@@ -181,3 +181,4 @@ ELF); it maps an item id to an effect id (0x69300000 -> 0x82400) for a caller no
 - Drop life timers and the fade, the object rays, area activation, key items (bits 9 / 10), weapon items (bit 1).
 - The items' draw path (VU1 program, lighting): GUESS unlit, texture x c / 128.
 - Restart: the inventory and taken bits are kept across a Restart (L: the save data block is not reloaded on the page).
+- **Killed lying (T w255_lying_*):** record 175 state 7, stance 2, class 0xd, P+0x118 bit 0x100 and C+0x564 bit 0x20 at once; 176 state 0x16 with a status, else state 7 for good, corpse still (w4c 1). Live flags 4: state 0x18, class 0x3f, 26 frames, 5.5 u. FUN_00343160's loop reruns when a class sets C+0x564 bit 0x80 (0x38, 0x39, 0x3a). Class timers sum toward zero: 60 < t on the 51st update. FUN_00538780's air branch is reached only by the class's done event: a natural fall of 55 u lands long before class 0xb's 216 frames.

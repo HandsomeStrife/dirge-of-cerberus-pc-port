@@ -59,11 +59,12 @@ export async function setupItemsView({ root, items }) {
   function upd(o, b) {
     const M = o.mdl;
     if (!M) return;
-    b.visible = !M.hidden && !o.gone;
+    b.visible = !M.hidden && !o.gone && !view.hideAll;   // hideAll: setVisibleAll (FUN_00408900; worker 0261)
     place(M, b);
     const k = (M.col || 0) / 128;
     for (const m of b.userData.mats) m.color.setRGB(k, k, k);
   }
   sync();
-  return { sync, meshes };
+  const view = { sync, meshes, hideAll: false };
+  return view;
 }

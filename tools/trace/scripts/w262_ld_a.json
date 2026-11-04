@@ -1,0 +1,1 @@
+{"name": "w262_ld_a", "frames": 1000, "log_from": 0, "doc": "worker 0262: r0b_fight, TRACE_POKE=a06338=9133ba28 (stage flag 0 = 40, as the boss death event 0x17 sets), no input: heri_lasted unskipped, windows chained by TRACE_SAVE. TRACE_FIELDSET=event.", "events": []}

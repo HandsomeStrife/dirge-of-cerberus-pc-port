@@ -167,6 +167,16 @@ def run(script_path, out_dir, state, scratch, timeout_s):
     if clog:
         wp = p.read32(calllog.CLOG_CTRL + 8)
         craw = p.read_block(cstart, max(8, wp - cstart)) if wp > cstart else b""
+    # TRACE_SAVE=<path.p2s> (worker 0262): a PINE save state after the run, for a long unskipped event in windows (a few frames after the log's end)
+    save = os.environ.get("TRACE_SAVE")
+    if save:
+        import glob, shutil
+        snaps = os.path.join(TRACE_DIR, "cfg", "PCSX2", "sstates", "*")
+        before = set(glob.glob(snaps))
+        p._call(struct.pack("<BB", 9, 9))       # PINE SaveState, slot 9
+        time.sleep(4)
+        new = sorted(set(glob.glob(snaps)) - before) or sorted(glob.glob(snaps), key=os.path.getmtime)[-1:]
+        shutil.move(new[-1], save)
     systemctl("stop", UNIT)
 
     os.makedirs(out_dir, exist_ok=True)

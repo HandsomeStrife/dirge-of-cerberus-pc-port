@@ -171,3 +171,6 @@ the stuck detector (< 3 u in 40 frames) fired. x -1009.5 + 7 = -1002.5 and -872.
 - Decode the RAM walk-polygon layout (cid loader under FUN_00266ae0) for teleports (above). Seen so far: 32-byte
   records, word 0 low nibble = vertex count, u16 +4 = flags (0x80 on some deck polygons), u16 vertex indices at
   +8.., neighbour pointers at +0x10 + 4 * edge.
+
+**Boss arena (worker 0259, 2026-11-04):** `r0b_fight` (parent r0b_save, no global flag 19: Vincent really moves, unlike r0b_boss2) and `r0b_box4` (walked into btbox4 at (734, -100, 1461), f273). Boss brain 0x9a75c0 on this path; notes/boss-research.md 'The walked arena'.
+

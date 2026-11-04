@@ -1092,6 +1092,8 @@ else {
     W.tick(1.0, null, null);
     ok(a.kind === 'actor' && at && a.hp === data.records[41].hp && v0 === 0 && a.vars[3] === 1,
        `respawn: record 41 ${a.kind} at ${a.pos && a.pos.map(v => v.toFixed(2))} (locator 3 ${L.slice(12, 15).map(v => v.toFixed(2))}), HP ${a.hp} (${data.records[41].hp}); event 0x21 var3 ${v0} -> ${a.vars[3]} (0 -> 1)`);
+    { const { W: Wb } = mk(); const ob = Wb.objects.get(45 + 22), had = Wb.deadBits.has(45); ob.script = 9995; Wb.runEvent(ob, 2);
+      ok(!had && Wb.deadBits.has(45), `respawn of a living record: FUN_0055cff8 sets its dead word (${had} -> ${Wb.deadBits.has(45)}), so a record made now zeroes it (FUN_0031e060; T w254: 113, 114 in the record)`); }
     // without 0x14a the dead record stays off (FUN_00559748: status dead)
     const { W: W2 } = mk();
     const o2 = W2.objects.get(41 + 22); o2.script = 9995;

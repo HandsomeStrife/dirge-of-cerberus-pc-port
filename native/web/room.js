@@ -327,6 +327,49 @@ export function showChunks(root, loaded, hidden = null, occl = null) {
   }
 }
 
+// ---- Node moves (worker 0257; chunk_anim.js): the export keeps a moved node's chains in the node's own space (T: door vertices about 0), so its ranges ([chunk, first, count,
+// group, tree node, moved node]) go through the node's matrix at load and as it moves: p' = p . M, normals and the back-face planes with it. File values are kept per range.
+export function createRoomNodes(root) {
+  const cache = new Map();
+  const ranges = (chunk, node) => {
+    const k = chunk + ':' + node;
+    if (cache.has(k)) return cache.get(k);
+    const out = [], seen = new Set();
+    for (const m of root.children) {
+      const u = m.userData, g = m.geometry;
+      if (!u.chunks || seen.has(g)) continue;
+      seen.add(g);
+      for (const r of u.chunks) if (r[0] === chunk && r[5] === node) out.push({ g, first: r[1], count: r[2], rest: null });
+    }
+    cache.set(k, out);
+    return out;
+  };
+  function move(chunk, node, M) {
+    const T = M[3], R = M;
+    const dir = (x, y, z) => [x * R[0][0] + y * R[1][0] + z * R[2][0], x * R[0][1] + y * R[1][1] + z * R[2][1], x * R[0][2] + y * R[1][2] + z * R[2][2]];
+    const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    for (const r of ranges(chunk, node)) {
+      const a = r.g.attributes, N = a.normal, C = a.cullP, D = a.cullD;
+      if (!r.rest) {
+        r.rest = new Float32Array(r.count * 11);
+        for (let i = 0; i < r.count; i++) { const v = r.first + i, o = i * 11;
+          r.rest.set([a.position.getX(v), a.position.getY(v), a.position.getZ(v), N ? N.getX(v) : 0, N ? N.getY(v) : 0, N ? N.getZ(v) : 0, C ? C.getX(v) : 0, C ? C.getY(v) : 0, C ? C.getZ(v) : 0, C ? C.getW(v) : 0, D ? D.getX(v) : 0], o); }
+      }
+      for (let i = 0; i < r.count; i++) {
+        const v = r.first + i, o = i * 11, q = r.rest, p = dir(q[o], q[o + 1], q[o + 2]);
+        a.position.setXYZ(v, p[0] + T[0], p[1] + T[1], p[2] + T[2]);
+        const n = dir(q[o + 3], q[o + 4], q[o + 5]);
+        if (N) N.setXYZ(v, n[0], n[1], n[2]);
+        if (D) D.setX(v, q[o + 10] + dot(n, T));
+        if (C && (q[o + 6] || q[o + 7] || q[o + 8])) { const c = dir(q[o + 6], q[o + 7], q[o + 8]); C.setXYZW(v, c[0], c[1], c[2], q[o + 9] + dot(c, T)); }   // a zero normal ('always' / 'never' facing) keeps its d
+      }
+      a.position.data.needsUpdate = true;
+      if (C) C.data.needsUpdate = true;
+    }
+  }
+  return { move, ranges };
+}
+
 // ---- Scrolling UVs (worker 0226; native/assets/models/bmd_uvanim.py, notes/room-blend-streaming.md
 // "Scrolling UVs"). Each chunk's animation file scrolls the UVs of some chains (z128: the fire glow ff88,
 // the sky ff35, ff34, ff4a). FUN_00248110 -> FUN_00265350 -> FUN_00263e90 per loaded slot ->

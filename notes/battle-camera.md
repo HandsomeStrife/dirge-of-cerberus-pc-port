@@ -88,4 +88,17 @@ never fire the pre-probes (0 of 5471 updates); w257_wall_look / w257_wall_aim at
 on the ladder, full yaw sweeps looking down (pitch -0.94) and up (+0.87). Open loop, 492 frames: eye 1.6e-2 (f1100, CAM+0x1c0 at distance 37.7), look point 1.0e-3, yaw 1.7e-5, pitch 5e-7;
 one frame-by-frame look: no frame above 0.05 u. The page's pre-probes moved 0 of 496 updates, and the game's look point agrees, so **no trace has yet caught them firing**: the firing
 branches are checked by test_camera_preprobes's hand cases and the asm only. Eye and yaw are over test_cam_traces's open limits (1e-2, 1e-5), so it is not in the default list.
+**Run-time checks:** DAT_0046b2fc = 2 and the stage object in grid cell 0 in all 58 route states. **Class 3 boxes (vt 0x591890):** FUN_00584408 is the vt+0x17c of all four gimmick classes; shape 0 half-sizes the type's +0x18 (y + fRam0046ef60 = 3 only with +0x110 set: none for class 3) and calls FUN_0025a8f0. r06_door2 is the case: 1.69 against RAM's 1.54 with them, 34.7 without. They move with a room node (FUN_005877e8): 'The doors' below.
 (A first take had the stick already held at log_from: the game's yaw ramp was 11 steps in, the replay's 0, a constant 0.402 rad and 26 u of eye error. Trace artefact, not a page defect.)
+
+## The doors (worker 0257, 2026-11-04)
+
+✕ (FUN_00333150 -> FUN_00544200 -> vt+0x15c FUN_005516f0) on the trigger chosen by FUN_005513c8 (a ray of 7 along the facing, flags bit 3, +0x40 bit 2, not opening or closing; shape 3: the first face hit must be z) runs
+script event 0x11 with r0 = the face. Script 149: flag 0 < 13, manager short 78 == 1 -> 0x101(self, 1 for face 4, 0 for face 5) -> next frame event 2 -> var 0 = that side, 0x168(15) -> manager type 10 -> vt+0x28c FUN_0057c728:
++0xe0 = 2, event 0x50 (cmds 0x51 .. 0x50: chunk 6, animation 6 or 8), code -5 after 15 -> vt+0x294 FUN_0057c7e8: +0xe0 = 1, +0x38 = 0, event 0x51. Closing: 0x169 -> FUN_0057c850, state 3, event 0x52, code -6 -> FUN_0057c920.
+
+Animations: FUN_0026c198 writes the node's matrix (position x 10, y and z negated; degrees, y and z negated), time += 0.6 a frame, stopped when no curve runs. FUN_005877e8: the class 3 box = record +0x50 x the node, read at the object update, so 2 frames behind the time.
+The room keeps a moved node's chains in the node's space, so the page used to draw these doors at the origin: now they go through the node (room.js createRoomNodes).
+
+**T w257_door2** (w217_r06_door3's pad from r06_door2, TRACE_RAW; replays in test_doors): ✕ f426, state 2 f427, time 0.6 f427 .. 6.0 f436, box moves from f429, state 1 and +0x38 0 at f440, Vincent through by f445. All equal frame by frame; box worst 3e-4 u;
+camera through the doorway f440 to f456 worst eye 1e-3 u. From about f458 the save box holds the game's camera base, 2.7 u behind this replay, which has no box: not a door matter, not checked on the page.

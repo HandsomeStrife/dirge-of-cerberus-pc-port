@@ -69,6 +69,67 @@ def records(d, tys):
     return out
 
 
+def cam_boxes(d, tys):
+    """Class 3 gimmicks (FUN_00548348 case 3, object type 0xf, vt 0x591890), all shape 0, no model, no script: what the camera's probe 6
+    needs (FUN_00584408 -> FUN_0025a8f0): the record's matrix, the type's size, the parent area."""
+    o, n, s = SE.sections(d)[15]
+    out = []
+    for k in range(n):
+        r = d[o + k * s:o + (k + 1) * s]
+        ti = struct.unpack_from('<i', r, 0x40)[0]
+        ty = tys[ti] if 0 <= ti < len(tys) else None
+        if not ty or ty['cls'] != 3:
+            continue
+        if ty['shape'] != 0 or struct.unpack_from('<h', r, 0x44)[0] != -1 or struct.unpack_from('<I', r, 0x48)[0] != 0:
+            raise ValueError('class 3 record %d is not the plain box the page translates' % k)
+        out.append(dict(rec=k, m=[[round(x, 6) for x in struct.unpack_from('<4f', r, 16 * i)] for i in range(4)],
+                        size=ty['size'], area=struct.unpack_from('<h', r, 0x4c)[0],
+                        chunk=struct.unpack_from('<h', d, SE.sections(d)[14][0] + ti * SEC14_STRIDE + 0x28)[0],
+                        node=struct.unpack_from('<h', d, SE.sections(d)[14][0] + ti * SEC14_STRIDE + 0x2a)[0],
+                        rec50=[[round(x, 6) for x in struct.unpack_from('<4f', r, 0x50 + 16 * i)] for i in range(4)],
+                        type=dict(flags=ty['flags'], mat=ty['mat'], hp=ty['hp'], div_b=ty['div_b'], div_e=ty['div_e'], shape=ty['shape'])))
+    return out
+
+
+def chunk_anims(stage_dir, nchunks=13):
+    """Each chunk's animations with position / rotation tracks (FUN_0026c198; the UV ones are bmd_uvanim.py's): the curves, the moved nodes' file matrices and their index in
+    the BMD's tree (bmd_occl.py order, the room's ranges). chunk_anim.js."""
+    sys.path.insert(0, HERE)
+    from bmd_uvanim import read_curve, _u32, _s16
+    from bmd_occl import tree as bmd_tree
+    from export_bmd_textured import find_bmd_payload
+    out = []
+    for c in range(nchunks):
+        an = open(os.path.join(stage_dir, '0680%02x10.bin' % c), 'rb').read()
+        bm = open(os.path.join(stage_dir, '0680%02x12.bin' % c), 'rb').read()
+        pay = find_bmd_payload(bm)
+        nodes, _ = bmd_tree(bm, pay)
+        tree_of = {x['off']: i for i, x in enumerate(nodes)}
+        ntab = pay + _u32(bm, pay + 0x1c)
+        anims, rest, tree = [], {}, {}
+        for i in range(_u32(an, 0)):
+            a = _u32(an, 4 + 4 * i)
+            ntr, fl, _x, h3 = struct.unpack_from('<4h', an, a)
+            tr, cu = _u32(an, a + 8), _u32(an, a + 0xc)
+            rows = []
+            for k in range(ntr):
+                e = _u32(an, tr + 4 * k)
+                node = _s16(an, e + 0x10)
+                pos, rot = [_s16(an, e + o) for o in (0x14, 0x16, 0x18)], [_s16(an, e + o) for o in (0x1a, 0x1c, 0x1e)]
+                if node < 0 or (min(pos) < 0 and min(rot) < 0):
+                    continue
+                cur = lambda ix: [[round(v, 6) for v in key] for key in read_curve(an, _u32(an, cu + 4 * ix))] if ix >= 0 else []
+                rows.append(dict(node=node, pos=[cur(x) for x in pos], rot=[cur(x) for x in rot]))
+                off = _u32(bm, ntab + 4 * node)
+                rest[node] = [[round(x, 6) for x in struct.unpack_from('<3f', bm, pay + off + 16 * r)] for r in range(4)]
+                tree[node] = tree_of.get(off, -1)
+            if rows:
+                anims.append(dict(index=i, flags=fl, h3=h3, tracks=rows))
+        if anims:
+            out.append(dict(chunk=c, rest=rest, tree=tree, anims=anims))
+    return out
+
+
 def main():
     stage, out = sys.argv[1], sys.argv[2]
     os.makedirs(out, exist_ok=True)
@@ -79,7 +140,7 @@ def main():
     recs = records(d, tys)
     used = sorted({r['type'] for r in recs})
     res = dict(format='props-1', stage=os.path.basename(stage),
-               types={str(i): tys[i] for i in used}, records=recs)
+               types={str(i): tys[i] for i in used}, records=recs, camBoxes=cam_boxes(d, tys), chunkAnims=chunk_anims(os.path.dirname(stage)))
     with open(os.path.join(out, 'props.json'), 'w') as f:
         json.dump(res, f, separators=(',', ':'))
     print('wrote %s/props.json: %d records (%s), types %s' % (

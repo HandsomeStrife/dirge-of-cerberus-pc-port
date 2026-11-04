@@ -33,21 +33,41 @@ async function json(path) {
   return r.json();
 }
 
-// everything resident before the event starts (the page's loads are at once: event_rt.js 'event loads')
-export async function loadEventActors(dir = DIR) {
+// The index at once; a model and its motion packs load when an event asks (worker 0261: the library is hundreds of MB, an event uses a few): Actor.load_l / loadmotion_l hold
+// their handle until they're in (event_actor_rt.js), as the game's loads take time; `preload` { models: { name: [files] } } = before the first frame (the opening's, whose timing is traced with no waits).
+// trim(keep): a model no slot uses goes (the game's unloads: battle()'s FUN_00376c80 frees them)
+export async function loadEventActors(dir = DIR, { preload = null } = {}) {
   const index = await json(dir + 'actors.json');
   const models = {};
+  const pack = (M, n) => {
+    const P = M.packs[n];
+    if (!P) return Promise.resolve();
+    return P.ready ??= fetch(dir + P.info.file).then(r => { if (!r.ok) throw new Error(`${P.info.file}: HTTP ${r.status}`); return r.arrayBuffer(); }).then(b => { P.buf = b; });
+  };
   for (const [m, info] of Object.entries(index.models)) {
-    const [gltf, side] = await Promise.all([new GLTFLoader().loadAsync(dir + info.glb), json(dir + info.side)]);
     const packs = {};
-    for (const [n, p] of Object.entries(info.packs)) {
-      const r = await fetch(dir + p.file);
-      if (!r.ok) throw new Error(`${p.file}: HTTP ${r.status}`);
-      packs[n] = { info: p, buf: await r.arrayBuffer() };
-    }
-    models[m] = { info, gltf, side, packs, tad: info.texanim ? await loadTexAnimImages(dir, info.texanim) : null };
+    for (const [n, p] of Object.entries(info.packs)) packs[n] = { info: p, buf: null, ready: null };
+    models[m] = { info, gltf: null, side: null, packs, tad: null, ready: null };
   }
-  return { index, models };
+  const ensure = (m) => {
+    const M = models[m];
+    if (!M) return Promise.resolve();
+    return M.ready ??= Promise.all([new GLTFLoader().loadAsync(dir + M.info.glb), json(dir + M.info.side), M.info.texanim ? loadTexAnimImages(dir, M.info.texanim) : null, ...(M.info.resident || []).map(n => pack(M, n))])
+      .then(([gltf, side, tad]) => { M.gltf = gltf; M.side = side; M.tad = tad; })
+      .catch(e => { M.failed = true; console.warn(`event actors: ${m} not loaded: ${e.message}`); });
+  };
+  const ensurePack = (m, n) => (models[m] ? pack(models[m], n).catch(e => { console.warn(`event actors: ${m} pack ${n} not loaded: ${e.message}`); }) : Promise.resolve());
+  const trim = (keep) => {
+    for (const [m, M] of Object.entries(models)) {
+      for (const P of Object.values(M.packs)) if (!keep.includes(m)) { P.buf = null; P.ready = null; }
+      if (keep.includes(m) || !M.gltf) continue;
+      M.gltf.scene.traverse(o => { if (o.isMesh) { o.geometry.dispose(); if (o.material.map) o.material.map.dispose(); o.material.dispose(); } });
+      M.gltf = null; M.side = null; M.tad = null; M.ready = null;
+    }
+  };
+  const lib = { index, models, ensure, ensurePack, trim };
+  if (preload) await Promise.all(Object.entries(preload.models).map(async ([m, files]) => { await ensure(m); if (models[m]) await Promise.all(files.map(n => pack(models[m], n))); }));
+  return lib;
 }
 
 // a texture's RGBA texels (row 0 = texel row 0: the glb / PNG images are not flipped, flipY false)
@@ -148,7 +168,6 @@ export function createEventActorView({ root, lib, rt, litPatch, light, weapon = 
   const mat = new THREE.Matrix4();
 
   function spawn(a) {
-    if (a.lent) return null;                    // a battle actor: the gameplay object draws its own model (stage_controller.js)
     if (a.model === 'weapon') {                 // loadVincentWeapon_l (event_actor_rt.js): the gun mesh, no skeleton
       const g = weapon && weapon();
       if (!g) { warnOnce('weapon', `event actor ${a.id}: Vincent's weapon model not available (left out)`); return null; }
@@ -160,6 +179,7 @@ export function createEventActorView({ root, lib, rt, litPatch, light, weapon = 
     }
     const M = lib.models[a.model];
     if (!M) { warnOnce('model ' + a.model, `event actor ${a.id}: model ${a.model} not exported (left out)`); return null; }
+    if (!M.gltf) { if (lib.ensure) lib.ensure(a.model); return null; }          // not in yet: next frame (a slot without its handle's wait)
     const scn = cloneSkinned(M.gltf.scene);
     const prims = [];
     scn.traverse(o => {
@@ -215,6 +235,7 @@ export function createEventActorView({ root, lib, rt, litPatch, light, weapon = 
     }
     for (const n of fs.slice(v.files.length)) {
       const p = v.model.packs[n];
+      if (p && !p.buf) { if (lib.ensurePack) lib.ensurePack(v.a.model, n); return; }   // in order: this one's next frame
       if (p) v.pose.addLocalPose(p.info, p.buf);
       else warnOnce('pack ' + v.a.model + n, `event actor ${v.a.id} (${v.a.model}): motion file ${n} not exported for this model`);
       v.files.push(n);
@@ -243,12 +264,41 @@ export function createEventActorView({ root, lib, rt, litPatch, light, weapon = 
     }
   }
 
+  // MP+0x180 (hide_model_l): FUN_005b2ef8 skips the smd list entries whose bit is set. The glb's corners are per triangle in
+  // draw order, so a primitive's index gives each triangle's number; the sidecar's groups name their block (worker 0261)
+  function applyMask(v) {
+    const mask = v.a.partMask;
+    if (mask === (v.mask || 0)) return;
+    v.mask = mask;
+    const info = v.model.info, tb = [];
+    for (const g of v.model.side.groups) {
+      const b = (info.blocks || []).indexOf(g.name.slice(g.name.indexOf('@') + 1, g.name.lastIndexOf('.')));
+      if (b < 0) warnOnce('block ' + g.name, `event actor ${v.a.id} (${v.a.model}): group ${g.name}: no smd list entry (not hidden)`);
+      for (let k = 0; k < g.triangles; k++) tb.push(b);
+    }
+    for (const o of v.prims) {
+      const src = o.userData.fullGeometry || (o.userData.fullGeometry = o.geometry);
+      if (!mask) { if (o.geometry !== src) { o.geometry.dispose(); o.geometry = src; } continue; }
+      const I = src.index.array, keep = [];
+      for (let i = 0; i < I.length; i += 3) { const b = tb[Math.floor(I[i] / 3)]; if (b < 0 || !((mask >>> b) & 1)) keep.push(I[i], I[i + 1], I[i + 2]); }
+      if (o.geometry !== src) o.geometry.dispose();
+      const g2 = new THREE.BufferGeometry();                             // the attributes are shared, only the index is the actor's
+      for (const k of Object.keys(src.attributes)) g2.setAttribute(k, src.attributes[k]);
+      g2.setIndex(keep);
+      o.geometry = g2;
+    }
+  }
+
   // one game frame's pose (event_actor_rt draw step: before the advance)
   function pose(a) {
+    // a battle actor (stage_controller.js getbattleactor): the slot holds the object's own MP. The page keeps two bodies, so until the event
+    // gives it a clip the gameplay body stands for it; from then on the slot's body poses (worker 0262)
+    if (a.lent && !a.mp.clip) return;
     let v = bodies.get(a);
-    if (!v) { v = spawn(a); bodies.set(a, v); }
+    if (!v) { v = spawn(a); bodies.set(a, v); if (a.lent) a.lent.show(false); }
     if (!v || v.weapon) return;
     syncPacks(v);
+    applyMask(v);
     const mp = a.mp;
     if (mp.clip && v.pose.lp.clips[mp.clip]) v.pose.poseLocal(mp.clip, mp.frame, null, 0, 1);
   }

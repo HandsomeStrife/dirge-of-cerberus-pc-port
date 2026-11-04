@@ -14,6 +14,7 @@
 
 import { EventVM, block } from './event_vm.js';
 import { soundNatives, sendEventSe, skipSound } from './event_sound.js';
+import { LOAD_CMD } from './event_actor_rt.js';
 
 const f32 = Math.fround;
 
@@ -32,6 +33,42 @@ export function buildSpline(ts, vs, eps) {
     dt[n - 1] = f32(ts[n - 1] - ts[n - 2]); dv[n - 1] = f32(vs[n - 1] - vs[n - 2]);
   }
   return { n, t: ts.map(f32), v: vs.map(f32), dt, dv, eps };
+}
+
+// FUN_00373908 group 4 (a camera file's type 10 channel, roll in degrees): the up point's 3 splines, one key per distinct
+// time of the eye, aim and roll keys (sorted, FUN_00373810). At each: f = (aim - eye) normalised; |f.xz| > 0.01:
+// row 0 = (Y x f) normalised, row 1 = f x (Y x f); else row 1 = (f x X) normalised, row 0 = (f x X) x f. Then the raw vector through
+// the inverse of the frame (FUN_002610e0), the z rotation by -roll wrapped to +-180 (FUN_002599f8) and the frame
+// (FUN_00261334 x 3); up point = eye + (that x -1) normalised
+export function rollUpSplines(ch, rollKeys, eps) {
+  const seen = new Set(), times = [];
+  const add = (t) => { const x = f32(t); if (!seen.has(x)) { seen.add(x); times.push(x); } };
+  for (let i = 0; i < 6; i++) if (ch[i]) for (const t of ch[i].t) add(t);
+  for (const k of rollKeys) add(k[0]);
+  times.sort((a, b) => a - b);
+  const rs = buildSpline(rollKeys.map(k => k[0]), rollKeys.map(k => k[1]), eps);
+  const crs = (a, b) => [f32(f32(a[1] * b[2]) - f32(a[2] * b[1])), f32(f32(a[2] * b[0]) - f32(a[0] * b[2])), f32(f32(a[0] * b[1]) - f32(a[1] * b[0]))];
+  const nrm = (v) => { const r = f32(1 / Math.sqrt(f32(f32(f32(v[0] * v[0]) + f32(v[1] * v[1])) + f32(v[2] * v[2])))); return v.map(c => f32(c * r)); };
+  const out = [[], [], []];
+  for (const t of times) {
+    const e = [0, 1, 2].map(k => evalSpline(t, ch[k])), a = [3, 4, 5].map(k => evalSpline(t, ch[k]));
+    const fw = nrm([f32(a[0] - e[0]), f32(a[1] - e[1]), f32(a[2] - e[2])]);
+    // L: a one-key spline at its own key: FUN_00261a90 reads the float past the key; T w261_heri_a (camera file 33): roll = the key
+    let deg = f32(-(rs.n === 1 ? rs.v[0] : evalSpline(t, rs)));
+    if (deg < -180) deg = f32(deg + 360); else if (180 < deg) deg = f32(deg - 360);
+    // the game normalises only the stored row: the next cross takes the raw vector (0x373f50), so the other row keeps that length
+    let r0, r1, v;
+    if (0.01 < Math.sqrt(f32(f32(fw[0] * fw[0]) + f32(fw[2] * fw[2])))) { const raw = crs([0, 1, 0], fw); r0 = nrm(raw); r1 = crs(fw, raw); v = r1; }
+    else { const raw = crs(fw, [1, 0, 0]); r1 = nrm(raw); r0 = crs(raw, fw); v = raw; }
+    const dot = (p, q) => f32(f32(f32(p[0] * q[0]) + f32(p[1] * q[1])) + f32(p[2] * q[2]));
+    const rad = f32(deg * 0.017453294), sn = f32(Math.sin(rad)), cs = f32(Math.cos(rad));
+    // v through FUN_002610e0's inverse (transposed rows: x = row 0 . v, y = row 1 . v, z = f . v), FUN_002599f8's z rotation, the rows (FUN_00261334 x 3)
+    const a0 = dot(r0, v), a1 = dot(r1, v), a2 = dot(fw, v);
+    const b0 = f32(f32(cs * a0) - f32(sn * a1)), b1 = f32(f32(sn * a0) + f32(cs * a1));
+    const u = nrm([0, 1, 2].map(k => f32(-f32(f32(f32(b0 * r0[k]) + f32(b1 * r1[k])) + f32(a2 * fw[k])))));
+    for (let k = 0; k < 3; k++) out[k].push(f32(u[k] + e[k]));
+  }
+  for (let k = 0; k < 3; k++) ch[6 + k] = buildSpline(times, out[k], eps);
 }
 
 export function evalSpline(x, s) {
@@ -108,7 +145,10 @@ export class EventRuntime {
     for (const c of this.slots.slice()) {                                // FUN_00377c68's slot loop
       let fin = false;
       if (c.type === 0x1c) fin = this.skip !== 0 || this.clock >= c.until;   // case 0x1c: timer (Skip ends it)
+      else if (c.type === LOAD_CMD) fin = c.done;                        // page only (EventActors.loading)
       else if (c.type === 7) fin = this.camMove(c);                      // case 7: FUN_003779d0
+      else if (c.type === 0x22) fin = this.actors ? this.actors.chain(c, this) : true;   // case 0x22: FUN_00382768 (setmotionChain; worker 0263)
+      else if (c.type === 0xc) fin = this.actors ? this.actors.walk(c, this) : true;     // case 0xc: an actor's walk (worker 0263)
       if (fin) this.slots.splice(this.slots.indexOf(c), 1);
     }
     if (this.windows) this.windows.frame(this);                          // the event windows' state (event_window.js)
@@ -277,9 +317,11 @@ export class EventRuntime {
         let lo = f.channels[0] && f.channels[0].keys.length ? f32(f.channels[0].keys[0][0]) : 0, hi = lo;
         for (const k of f.channels) {
           for (const [t] of k.keys) { const x = f32(t); if (x < lo) lo = x; if (hi < x) hi = x; }
-          if (k.type === 10) { R.warn('event: camera file channel type 10 (FUN_00373908 group 4) not translated'); continue; }
           if (k.type >= 0 && k.type < 10) ch[k.type] = buildSpline(k.keys.map(x => x[0]), k.keys.map(x => x[1]), R.eps);
         }
+        // FUN_00374720: a type 10 channel: the file's types 6-8 are ignored and the up point comes from it, after the other channels
+        const roll = f.channels.find(k => k.type === 10);
+        if (roll) { ch[6] = ch[7] = ch[8] = null; rollUpSplines(ch, roll.keys, R.eps); }
         if (ch.slice(0, 9).some(x => !x)) R.warn('event: camera file ' + n + ' lacks a channel');
         c.spl = ch; c.keys = null; c.tmin = lo; c.tmax = hi;
         return 0;

@@ -25,7 +25,7 @@ from export_bmd_textured import find_bmd_payload, decode_packets, EXTRACT
 from export_bmd_bound import emit_group, tex_png_for, packet_tris, _norm
 from bmd_env import read_env, fog_directive
 from bmd_chains import packet_chains, chain_headers, raw_chain_ids
-from bmd_uvanim import chunk_uv_tracks
+from bmd_uvanim import chunk_uv_tracks, moved_node_chains
 from bmd_occl import tree as bmd_tree, occluders as bmd_occluders
 from room_overlap import PlaneIndex
 
@@ -477,6 +477,11 @@ def main():
                                 'quads': [round(v, 4) for q in quads_ for c in q for v in c]})
         except ValueError as x:
             print('warning: occl %s: %s; no occluder culling in this chunk' % (cid, x), file=sys.stderr)
+        # the chains of the nodes a chunk animation moves (door / gate nodes): 6th field of the ranges, the BMD node table's index (room.js createRoomNodes; chunk_anim.js)
+        chain_door = {}
+        if os.path.exists(anp):
+            for node_, c_ in moved_node_chains(open(anp, 'rb').read(), buf, pay, lambda o: rid.get(o + 0xb0)):
+                chain_door[c_] = node_
         groups = defaultdict(list); final = {}; not_applied = set()
         for i in range(n):
             if (cid, i) in EXCLUDE_PACKETS:
@@ -610,12 +615,12 @@ def main():
             # room_occl.js)
             runs = []
             for i in idxs:
-                vg = vis_group(hdrs.get(chain[i])); nd = chain_node.get(chain[i], -1)
-                if runs and runs[-1][0] == (vg, nd):
+                vg = vis_group(hdrs.get(chain[i])); nd = chain_node.get(chain[i], -1); dn = chain_door.get(chain[i], -1)
+                if runs and runs[-1][0] == (vg, nd, dn):
                     runs[-1][1].append(i)
                 else:
-                    runs.append(((vg, nd), [i]))
-            for (vg, nd), ridx in runs:
+                    runs.append(((vg, nd, dn), [i]))
+            for (vg, nd, dn), ridx in runs:
                 tg = []; cg = []; eg = []
                 flat, ntri = build_flat_kept(packets, ridx, under if key.endswith(UNDER_SUFFIX) else kept,
                                              tg, lambda i: chain_gtrack.get(chain[i], -1), cg,
@@ -624,10 +629,10 @@ def main():
                     continue
                 r = ranges_by[key]
                 first = len(flat_by[key]) // 12
-                if r and r[-1][0] == ci and r[-1][3] == vg and r[-1][4] == nd and r[-1][1] + r[-1][2] == first:
+                if r and r[-1][0] == ci and r[-1][3] == vg and r[-1][4] == nd and r[-1][5:] == ([dn] if dn >= 0 else []) and r[-1][1] + r[-1][2] == first:
                     r[-1][2] += len(flat) // 12
                 else:
-                    r.append([ci, first, len(flat) // 12, vg, nd])
+                    r.append([ci, first, len(flat) // 12, vg, nd] + ([dn] if dn >= 0 else []))
                 flat_by[key].extend(flat); ntri_by[key] += ntri; npk_by[key] += len(ridx)
                 uvt_by[key].extend(tg)
                 cul_by[key].extend(cg)

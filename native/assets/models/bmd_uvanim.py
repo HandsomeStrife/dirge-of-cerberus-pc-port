@@ -90,3 +90,29 @@ def chunk_uv_tracks(an, bm, pay, chain_of_obj, warn):
                     warn.append('chain %d: scrolled by two tracks; the later one wins (as the game\'s write order)' % c)
                 chain_track[c] = ti
     return anims, tracks, chain_track
+
+
+def moved_node_chains(an, bm, pay, chain_of_obj):
+    """(node, chain index) for every node with a position or rotation track in a chunk's animation file (FUN_0026c198; chunk_anim.js): the door and gate nodes."""
+    out = []; seen = set()
+    ntab = pay + _u32(bm, pay + 0x1c); mtab = pay + _u32(bm, pay + 0x14)
+    for i in range(_u32(an, 0)):
+        a = _u32(an, 4 + 4 * i)
+        ntr = _s16(an, a); tr = _u32(an, a + 8)
+        for k in range(ntr):
+            e = _u32(an, tr + 4 * k); node = _s16(an, e + 0x10)
+            pos = [_s16(an, e + o) for o in (0x14, 0x16, 0x18)]; rot = [_s16(an, e + o) for o in (0x1a, 0x1c, 0x1e)]
+            if node < 0 or node in seen or (min(pos) < 0 and min(rot) < 0):
+                continue
+            seen.add(node)
+            n = pay + _u32(bm, ntab + 4 * node)
+            mi = struct.unpack_from('<H', bm, n + 0xc4)[0]; cnt = _u32(bm, n + 0xc8)
+            if cnt <= 0:
+                continue
+            lst = pay + _u32(bm, pay + _u32(bm, mtab + 4 * mi) + 8)
+            for j in range(cnt):
+                c = chain_of_obj(pay + _u32(bm, lst + 4 * j))
+                if c is not None:
+                    out.append((node, c))
+    return out
+

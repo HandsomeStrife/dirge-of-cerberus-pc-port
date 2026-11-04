@@ -10,8 +10,7 @@
 import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
-// The default stand-in runs here, as for a player: Skip at main's wait before roji02_01, the same point as ?autoskip=1 (worker
-// 0257; the old stand-in pressed it inside the event, mid camera-0 move, which overwrote main's rescue Camera.set).
+// Worker 0261: roji02_01 plays by default (stage_controller.js PLAYS); no Skip in it, so main's rescue Camera.set stands.
 import { spawn, execSync } from 'node:child_process';
 import net from 'node:net';
 import path from 'node:path';

@@ -12,6 +12,8 @@
 // Order inside a frame: an SE asked for on frame f is sent by FUN_003e9ed0 on frame f + 1 (audio.js SoundEmitters);
 // `frame()` (called once per event frame, before the VM window) sends last frame's requests.
 
+import { block } from './event_vm.js';
+
 const f32 = Math.fround;
 
 // FUN_003eacb8(pi / 4): the voice channel's L / R gains (short)(cos / sin(pi / 4) x 4096) = 2896; FUN_003eb330 mixes
@@ -65,14 +67,27 @@ export class VoicePlayer {
         // decoder's offset (changeMusicVol does not reach them)
         this.out = ctx.createGain(); this.out.gain.value = 0x7fff / 32768; this.out.connect(ctx.destination);
       }
-      const src = ctx.createBufferSource(), g = ctx.createGain();
-      src.buffer = buf; g.gain.value = VOICE_GAIN;
-      // mono block x gain into L and R: a mono buffer feeds both speakers equally
-      src.connect(g); g.connect(this.out); src.start(ctx.currentTime);
-      const rec = { name, src };
-      this.playing.push(rec);
-      src.onended = () => { this.playing = this.playing.filter((x) => x !== rec); };
+      this.start({ name, buf }, 0);
     });
+  }
+  // one channel's source from `off` seconds in; mono block x gain into L and R: a mono buffer feeds both speakers equally
+  start(rec, off) {
+    const ctx = this.au.ctx, src = ctx.createBufferSource(), g = ctx.createGain();
+    src.buffer = rec.buf; g.gain.value = VOICE_GAIN;
+    src.connect(g); g.connect(this.out); src.start(ctx.currentTime, off);
+    rec.src = src; rec.t0 = ctx.currentTime - off;
+    if (!this.playing.includes(rec)) this.playing.push(rec);
+    src.onended = () => { this.playing = this.playing.filter((x) => x !== rec); };
+    if (this.paused) this.hold(rec);
+  }
+  hold(rec) { rec.off = this.au.ctx.currentTime - rec.t0; rec.src.onended = null; try { rec.src.stop(); } catch (e) { /* not started */ } }
+  // the event pause: FUN_003ea9f0 sets a loaded channel's +0x1c bit 0x8000 (FUN_003ed000 stops decoding it), FUN_003eaa78 clears it: a voice goes on
+  // where it stopped (worker 0261). A source can't pause: stopped at its offset, a new one from there
+  pause(on) {
+    if (on === !!this.paused) return;
+    this.paused = on;
+    if (!this.au || !this.au.ctx) return;
+    for (const rec of this.playing) { if (on) this.hold(rec); else this.start(rec, rec.off); }
   }
   // FUN_003ea3d0 -> FUN_003ea2c0 per channel: the file (+0x4) and the stream (+0x8) freed: playing voices stop and a
   // later playVoice finds no channel (nothing plays until a new loadVoice2)
@@ -95,6 +110,10 @@ export function soundNatives(R, o = {}) {
   const streamed = (name) => { const f = o.bgmRow ? o.bgmRow(name) : null; if (f == null) warnOnce('event: no sdb flags for ' + name + ' (bgm.json): FUN_003eb930 taken false'); return rowStreamed(f); };
   R.sePending = [];
   return {
+    // loadSoundEffectEx_l(a, b, c) (FUN_003a0be8 -> FUN_00378d40: command 0x10 -> FUN_003825e8): the event's SE bank (worker 0263). Not exported: its names (asj_154 .., asj_334 ..) have no row, so sendEventSe leaves them silent
+    'fake/KerberosSound.loadSoundEffectEx_l(III)I': () => { warnOnce('event: loadSoundEffectEx_l (FUN_003825e8, the event SE bank) not exported: the event\'s own SEs (asj_154 .., asj_334 ..) are silent'); return 0; },
+    // unsetSoundEffect (FUN_0039ff08 -> FUN_003e90d0): stops a looping SE slot; those are the event bank's above, so nothing is playing
+    'fake/KerberosSound.unsetSoundEffect(Ljava/lang/String;)V': () => {},
     // setVoiceBufferType (FUN_003a0ac8 -> FUN_0037fc88(ev, n, 1)): waits for the voice loads to settle (FUN_00400ee8)
     // and re-sizes the voice buffers; the page's buffers are per voice, so nothing changes (loads are at once)
     'fake/KerberosSound.setVoiceBufferType(I)V': (vm, [n]) => { log('voicebuf ' + n); },
@@ -107,12 +126,27 @@ export function soundNatives(R, o = {}) {
       R.slots = R.slots.filter((c) => c.h !== h);
       const v = get('voices'); if (v) v.load(name.slice(0, 7)); else warnOnce('event: no voice player: voices left out');
       log('loadvoice ' + name);
+      R.voiceHeld ??= new Map(); R.voiceHeld.set(name.slice(0, 7), Infinity);   // the channel holds it from the load (below)
       return h;
     },
     // playVoice (FUN_003a0900): FUN_003eaf10(pi / 4, name, 0) (no skip test of its own)
     'fake/KerberosSound.playVoice(Ljava/lang/String;)V': (vm, [s]) => {
       const name = str(s); log('voice ' + name);
       const v = get('voices'); if (v) v.play(name.slice(0, 7));
+      // the channel is freed when its stream ends: row +0x14 ms after the play (FUN_003ed000; data.voiceMs: tools/audio/voice.py's rows)
+      const ms = R.data.voiceMs && R.data.voiceMs[name.slice(0, 7)];
+      if (R.voiceHeld && R.voiceHeld.has(name.slice(0, 7))) { if (ms == null) warnOnce('event: voice ' + name + ': no length (data.voiceMs): waitVoiceFinish does not wait'); R.voiceHeld.set(name.slice(0, 7), ms == null ? 0 : (R.clock + ms) >>> 0); }
+    },
+    // waitVoiceFinish (FUN_003a09b8): polls while +0x156c == 0, the abort bit is clear and FUN_003eaea8(name): a voice channel (DAT_004f7c3c x 6)
+    // holds that name (worker 0261). isVoicePlaying (FUN_003a0a38): 0 under Skip, else FUN_003eaea8
+    'fake/KerberosSound.waitVoiceFinish(Ljava/lang/String;)V': (vm, [s]) => {
+      const name = str(s).slice(0, 7), held = () => R.voiceHeld && R.voiceHeld.has(name) && R.clock < R.voiceHeld.get(name);
+      return block(() => R.skip !== 0 || !held(), () => { if (R.voiceHeld && !held()) R.voiceHeld.delete(name); });
+    },
+    'fake/KerberosSound.isVoicePlaying(Ljava/lang/String;)Z': (vm, [s]) => {
+      if (R.skip !== 0) return 0;
+      const name = str(s).slice(0, 7);
+      return R.voiceHeld && R.voiceHeld.has(name) && R.clock < R.voiceHeld.get(name) ? 1 : 0;
     },
     // setSoundEffect2_l(name, x1, y1, z1, x2, y2, z2, at, vol, release) (FUN_0039ff68), skip 0 only:
     //   at == 0: position = the first active event camera's eye (FUN_0037cc30 / FUN_0037cd18), direction aim - eye;

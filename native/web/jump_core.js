@@ -58,7 +58,7 @@ export const SLOT = {
   0xbc: 'h_jp0_a', 0xbd: 'h_jp1_a', 0xbe: 'h_jp2_a', 0xbf: 'h_jp3_a', 0xc0: 'h_jp4_a', 0xc1: 'h_jp_f',
   0x3e: 'c_std',                                          // the standing hit (motion class 0x3f, FUN_0059df28)
   // the death (class 0xb, FUN_00595a60: rows 0x2a-0x2f by hit side); every one of those rows holds the same clip
-  // in z128 (save RAM C+0x7fc). (The corpse class 0xd's rows 0x36-0x3b hold c_sq_fa0; that class never runs here.)
+  // in z128 (save RAM C+0x7fc). (The corpse class 0xd's rows 0x36-0x3b hold c_sq_fa0; only a kill while lying, stance 2, runs that class.)
   0x2a: 'c_st_fa0', 0x2b: 'c_st_fa0', 0x2c: 'c_st_fa0', 0x2d: 'c_st_fa0', 0x2e: 'c_st_fa0', 0x2f: 'c_st_fa0',
 };
 // slots that are empty in z128's slot table (C+0x7fc in the save state): FUN_003455e8 says no.
@@ -163,8 +163,14 @@ export function stateEvent(st, ev, ground, b44, dead = false, ahead = false) {
 // Worker 0255: to 0x16 from any old state: jumptable 0x589e70[0x16] = 0x537b84 (li v0, 0x3e). Read: state 7's slot FUN_00538940 ->
 // 0x58a5e0[0x16] = 0x538994 (jal FUN_00537aa0); states 2 / 3 / 8 / 9 / 0xf / 0x10 / 0x11 / 0x18's slots have no case 0x16: their defaults
 // reach FUN_00537aa0. From 0x16 (FUN_00539ac0 -> FUN_00537aa0) to 2: 3.
-export function stateMotion(old, st, moving = false) {
+// Worker 0255: to 7 from 0xf / 0x10 / 0x11 / 0x16: their defaults (FUN_005392e0 / FUN_005393d0 / FUN_005394d8 / FUN_00539ac0) -> jumptable[7] = 0x537af4: by P+0x100 bits 40-41:
+// 1 -> 0xc (not reached: FUN_00539570's C+0x664 is 0 on the page), 2 -> 0xd, else 0xb. To the hit 0x18 from them: jumptable[0x18]: 0x3f. T w255_lying_kill2 / 4 / 0, w255_lying_big.
+export function stateMotion(old, st, moving = false, stance = 0) {
   if (st === REVIVE_STATE) return 0x3e;
+  if (old === 0xf || old === 0x10 || old === 0x11 || old === REVIVE_STATE) {
+    if (st === DEAD_STATE) return stance === 2 ? 0xd : 0xb;
+    if (st === HIT_STATE) return 0x3f;
+  }
   // the knock-down (worker 0255): to 0xf from any state: 0x33 (FUN_005392e0 / jumptable 0x537b64). To 0x10: from 0xf FUN_005392e0: 0x38, else
   // jumptable 0x537b6c: 0x1b. To 0x11: from 0xf 0x35 (FUN_005392e0), from 0x10 0x3a (FUN_005393d0).
   if (st === 0xf) return 0x33;
@@ -640,9 +646,12 @@ export class HitMotion {
 // playerHitSide via player.js setHitSide); the bullet path never writes it: 0 from the save RAM (0xa000a00).
 const DEATH_ROW = [0x2b, 0x2b, 0x2a, 0x2c, 0x2d, 0x2e, 0x2f];        // DAT_005a3990
 export class DeathMotion {
-  constructor(side = 0) { this.id = 0xb; this.phase = 0; this.t = 0; this.done = false; this.next = null; this.side = side; this.freeze = false; this.rootMotion = false; }
+  constructor(side = 0, id = 0xb) { this.id = id; this.phase = 0; this.t = 0; this.done = false; this.next = null; this.side = side; this.freeze = false; this.rootMotion = false; }
   update(io) {
     const out = [];
+    // class 0xd FUN_00595ea8 (killed lying, stance 2; rows DAT_005a39f0 hold c_sq_fa0, c_fl_1 stays the head clip in T). GUESS: done and event 0xd on its first update
+    // (T w255_lying_kill2 record 175: P+0x118 bit 0x100 and C+0x564 bit 0x20 rise with the kill; the class's own code needs a second update, not decoded; notes/fidelity-audit.md)
+    if (this.id === 0xd) { this.done = true; this.next = 0xd; return out; }
     if (this.phase === 0) {
       if (io.C) io.C.rotMode = 0;                         // FUN_00353418: C+0x214 = 0 (no turn)
       out.push(req(DEATH_ROW[this.side & 0xf], { now: true, loop: false, blend: 0 }));
@@ -681,6 +690,9 @@ export class ReviveMotion {
 // requests its row, phase 1 ends and names the next class, which runs unless the state handler changed the state.
 // L: FUN_003456c0's random rates (c_bl_0 0.5-1.2, c_bl_1 0.8-1.0) play at 1.0; FUN_005ae618(MP, 2 / 3) and the cues (0x46 / 0x48, 0x49 / 0x4a, 0x4d),
 // the pad's vibration FUN_002573c8 are not on the page.
+// (its timers sum as the EE FPU does, toward zero (chop): class 0x3a's 60 < t comes on its 51st update, T w255_knock_run 160-211, w255_phoenix_air 857-908)
+// FUN_003533e0: FUN_0034d870(C, 0), FUN_00352a60(C), C+0x300 = 0: the mover goes and the commanded speed C+0xcc with it
+export const stopMove = C => { C.slide = null; C.spd = 0; C.groundSpeed = 0; };
 class KnockMotion {
   constructor(id, prev) { this.id = id; this.prev = prev; this.phase = 0; this.t = 0; this.done = false; this.next = null; this.freeze = false; this.knock = true; this.lock = false; }
   update(io) {
@@ -705,7 +717,7 @@ class KnockMotion {
       case 0x38:                                          // FUN_0059d4c0: row 0xad, at its end 0x3a on the ground, else 0x39
         if (first) { out.push(req(0xad, { now: true, blend: JUMP.blend591 })); this.t = 0; return out; }
         if (io.clipEnded) return end(io.ground ? 0x3a : 0x39);
-        this.t = f32(this.t + JUMP.STEP);
+        this.t = chop(this.t + JUMP.STEP);
         return out;
       case 0x39:                                          // FUN_0059d788: row 0xaf; the ground ends it: class 0x3a
         if (first) { out.push(req(0xaf, { now: true, loop: true, blend: JUMP.blend591 })); return out; }
@@ -715,24 +727,21 @@ class KnockMotion {
         if (first) { const r = req(0xb0, { now: true }); r.frame = 1; out.push(r); this.t = JUMP.STEP; this.tech = true; return out; }
         if (this.tech && 8.0 <= this.t) this.tech = false;
         if (io.rem < 62.0) this.rollOk = true;
-        // alive: the event comes one frame after the dead run's class 0x36 starts (T w255_knock_run 160-211 = 51, w255_phoenix_air's 0x36 at 907; FUN_00343160's order isn't decoded)
-        if (io.clipEnded || 60.0 < this.t) { if (!io.dead && !this.waited) { this.waited = true; return out; } return end(0x36); }
-        this.t = f32(this.t + JUMP.STEP);
+        if (io.clipEnded || 60.0 < this.t) return end(0x36);
+        this.t = chop(this.t + JUMP.STEP);
         return out;
-      case 0x35:                                          // FUN_0059cbe8: FUN_003533e0, mover 9 back 15 u in 30 ticks (Jump.enter), row 0xac; at its end class 0x36
-        if (first) { out.push(req(0xac, { now: true })); this.t = 0; this.tech = true; return out; }
+      case 0x35:                                          // FUN_0059cbe8: phase 0: FUN_003533e0, mover 9 back 15 u in 30 ticks (T w255_knock_air: 60 u/s at record 141), row 0xac; at its end class 0x36
+        if (first) { if (io.C) stopMove(io.C); if (io.ctrl) io.ctrl.knockBack(); out.push(req(0xac, { now: true })); this.t = 0; this.tech = true; return out; }
         if (this.tech && 8.0 <= this.t) this.tech = false;
         if (io.rem < 62.0) this.rollOk = true;
-        if (io.clipEnded) { if (!io.dead && !this.waited) { this.waited = true; return out; } return end(0x36); }
-        this.t = f32(this.t + JUMP.STEP);
+        if (io.clipEnded) return end(0x36);
+        this.t = chop(this.t + JUMP.STEP);
         return out;
       case 0x37:                                          // FUN_0059d0f8: row 0xb1 (h_rev_0; rows 0xe3 / 0xe4 by FUN_00345060 = 0 here, T), cue 0x52. Past 40 ticks
         // C+0x564 &= ~0x4000000 (the stick is his again: FUN_00333150 LAB_00333b08, player.js stickInput) and C+0x1d8 > 0 ends it. L: FUN_003419e0(C, 1): the crouch
         // bits of those 40 ticks on (rows 0x1b, 0x20): the page has no crouch. T w255_knock_run: 66 frames, clip end.
         // The roll: FUN_00345060 = P+0x100 bits 42-43 (FUN_0055ba30, player.js knockInput) 1 / 2: rows 0xe3 / 0xe4, FUN_003472c0(C, 1): the clip's root moves him (T w255_knock_hold 189-223).
         if (first) {
-          // L: where mover 10 ends isn't decoded (FUN_003515e8 never ends itself; T: 0 u/s by now, the stick's move takes over at 224): the page drops it here
-          if (io.C) io.C.slide = null;
           const side = io.side ?? 0;
           out.push(req(side === 1 ? 0xe3 : side === 2 ? 0xe4 : 0xb1, { now: true, blend: JUMP.blend591 }));
           if (side && io.C) { io.C.slide = { dir: { x: 0, y: 0, z: 0 }, v: 0, dv: 0, end: 0, mover: 0xb }; this.rootMotion = true; }
@@ -741,12 +750,12 @@ class KnockMotion {
         if (io.clipEnded) return end(3);
         if (this.lock && 40.0 < this.t) this.lock = false;
         else if (!this.lock && 0.0 < io.groundSpeed) return end(3);
-        this.t = f32(this.t + JUMP.STEP);
+        this.t = chop(this.t + JUMP.STEP);
         return out;
       case 0x36:                                          // FUN_0059cee8: FUN_003533e0, timer 10 (-= step while > 0), then done (the row asked again is the one playing: L)
-        if (first) { if (io.C) io.C.slide = null; this.t = f32(10.0 - JUMP.STEP); return out; }
+        if (first) { if (io.C) stopMove(io.C); this.t = chop(10.0 - JUMP.STEP); return out; }
         if (!(0.0 < this.t)) { this.done = true; this.next = null; return out; }
-        this.t = f32(this.t - JUMP.STEP);
+        this.t = chop(this.t - JUMP.STEP);
         return out;
     }
     return out;
@@ -814,9 +823,19 @@ export class Jump {
     const P = ctrl.P, old = P.state;
     if (st === old) return false;
     const prev = this.motionId(ctrl);
-    const m = stateMotion(old, st, ctrl.C.groundSpeed !== 0);   // C+0x1d8
+    const m = stateMotion(old, st, ctrl.C.groundSpeed !== 0, P.stance ?? 0);   // C+0x1d8
     // FUN_005738d0 (vt+0x2fc, the state's enter): 7, 0xf, 0x10: FUN_00576548(P, 0): the gun goes away (T: weapon state 14 / 15 at every kill and knock-down)
-    if ((st === DEAD_STATE || st === 0xf || st === 0x10) && ctrl.weapon && ctrl.weapon.holsterCore) ctrl.weapon.holsterCore(ctrl.onGround, ctrl);
+    if ((st === DEAD_STATE || st === 0xf || st === 0x10) && ctrl.weapon && ctrl.weapon.holsterCore) {
+      ctrl.weapon.holsterCore(ctrl.onGround, ctrl);
+      if (st !== DEAD_STATE && ctrl.weapon.P) ctrl.weapon.P.m29c = 2;   // FUN_005747f8(P, 2): 0xf / 0x10 only
+    }
+    // The enter slots (+0xc). 0xf / 0x10 FUN_005392b8 / FUN_00539390: stance 0. 0x11 FUN_00539458: stance 2 (0 only with FUN_00317a98 alive: a status item the page doesn't have: L; T w255_knock_run 160).
+    // From 0x11 to 2 / 3, FUN_00537e70 / FUN_005380a0: stance 0: FUN_0055b8e0 runs the enter before FUN_005641c0, so their class 0x37 test still sees 0x3a (T 211). 7 and 0x16: player.js.
+    if (ctrl.setStance) {
+      if (st === 0xf || st === 0x10) ctrl.setStance(0);
+      else if (st === 0x11) ctrl.setStance(2);
+      else if (old === 0x11 && (st === 2 || st === 3)) ctrl.setStance(0);
+    }
     if (st === REVIVE_STATE) ctrl.P.settled = false;      // FUN_00334590 reads it once; (0x539aa8 at the leave: no reader in between on the page)
     enterState(P, st);
     if (m === 0x21) {
@@ -828,9 +847,9 @@ export class Jump {
     } else if (m === 0x3f) {
       this.motion = new HitMotion();                      // phase 0 runs in this frame's motion update
       this.events.push({ frame: ctrl.frames, ev: 'hit', state: st });
-    } else if (m === 0xb) {
+    } else if (m === 0xb || m === 0xd) {
       // the death: phase 0 runs in this frame's motion update (FUN_005641c0 -> FUN_00341780(C, 0xb))
-      this.motion = new DeathMotion(ctrl.C.hitSide ?? 0);
+      this.motion = new DeathMotion(ctrl.C.hitSide ?? 0, m);
       this.events.push({ frame: ctrl.frames, ev: 'death', state: st });
     } else if (m === 0x3e) {
       this.motion = new ReviveMotion();                   // phase 0 runs in this frame's motion update
@@ -838,7 +857,6 @@ export class Jump {
     } else if (m === 0x33 || m === 0x1b || m === 0x38 || m === 0x3a || m === 0x35 || m === 0x37) {
       this.motion = new KnockMotion(m, prev);             // the knock-down (phase 0 in this frame's motion update)
       this.events.push({ frame: ctrl.frames, ev: 'knock', state: st });
-      if (m === 0x35) ctrl.knockBack();                   // FUN_0059cbe8's mover 9
     } else if (m === 3 || m === 5 || m === 8 || m === 9) {
       if (this.motion) this.events.push({ frame: ctrl.frames, ev: 'loco', next: m });
       this.motion = null;
@@ -877,7 +895,9 @@ export class Jump {
       st = ST.FALL;
     }
     // state 0x11's FUN_00539570: dead, event 0x36: P+0x118 |= 0x100 (FUN_00334590 case 5 waits for it), FUN_003533e0 (T w255_phoenix_air record 917)
-    if (old === 0x11 && ev === 0x36 && ctrl.hpZero && ctrl.hpZero()) { ctrl.P.settled = true; ctrl.C.slide = null; }
+    if (old === 0x11 && ev === 0x36 && ctrl.hpZero && ctrl.hpZero()) { ctrl.P.settled = true; stopMove(ctrl.C); }
+    // alive, events 0x3a / 0x35: FUN_003533e0 (C+0x564 bit 0x800 is clear on the page): mover 10 / 9 ends here
+    if (old === 0x11 && (ev === 0x3a || ev === 0x35) && !(ctrl.hpZero && ctrl.hpZero())) stopMove(ctrl.C);
     if (!st || !this.enter(ctrl, st)) return 0;
     if (st === 2 || st === 3) {
       // the enter slot (+0xc) of state 2 / 3, FUN_00537e70 / FUN_005380a0: FUN_0032a0f8(CAM, 0, 0)
@@ -927,6 +947,7 @@ export class Jump {
                    headClip: this.clock ? this.clock.clip : null, headBlending: this.clock ? this.clock.blending() : false };
       if (opts.usable) io.usable = opts.usable;
       io.C = ctrl.C;                                      // the death class's FUN_00353418 (C+0x214)
+      io.ctrl = ctrl;                                     // class 0x35's mover 9 (player.js knockBack)
       io.dead = !!(ctrl.hpZero && ctrl.hpZero());
       io.side = ctrl.P.revSide ?? 0;
       io.rem = this.clock && this.clock.frames[this.clock.clip] !== undefined ? 2 * this.clock.frames[this.clock.clip] - Math.trunc(f32(2 * this.clock.frame)) : 1e9;   // FUN_00342f50
@@ -939,8 +960,8 @@ export class Jump {
         const m = this.motion, st = (m instanceof DeathMotion && m.held) ? 0 : this.event(ctrl, m.id);
         if (st) {
           // the state changed: FUN_00343160 drops the class's own next motion (lVar13 = 0)
-          // the next class asks its row in the same frame after 0x38 / 0x39 / 0x3a, in the next after 0x33 / 0x34 / 0x35 (T w255_phoenix_air 857 / 800-801, w255_knock_air 140-141,
-          // 227-228, w255_knock_run 211; why they differ isn't decoded)
+          // 0x38 / 0x39 / 0x3a set C+0x564 bit 0x80 at their end (FUN_0059d4c0, FUN_0059d788, FUN_0059dae8): FUN_00343160's loop runs the next class in this frame;
+          // 0x33 / 0x34 / 0x35 don't: it runs in the next (T w255_phoenix_air 857 / 800-801, w255_knock_air 140-141, 227-228, w255_knock_run 211)
           if (this.motion instanceof KnockMotion && (m.id === 0x38 || m.id === 0x39 || m.id === 0x3a)) reqs.push(...this.motion.update(io));
         } else if (m instanceof AirFireMotion) {
           // FUN_00538aa0 answers 0x4e with 0 while airborne; the class returns 0x22: the fall class
@@ -951,6 +972,7 @@ export class Jump {
           if (m.next === 3 && m.rootMotion) ctrl.C.slide = null;   // leave 0x59d078: FUN_003472c0(C, 0)
           this.motion = m.next == null ? (m.held = true, m) : m.next === 3 ? null : new KnockMotion(m.next, m.id);
           if (m.next == null) { m.done = false; m.phase = 2; }
+          else if (this.motion && (m.id === 0x38 || m.id === 0x39 || m.id === 0x3a)) reqs.push(...this.motion.update(io));   // bit 0x80, as above
         } else if (m instanceof ReviveMotion) {
           this.motion = null;                             // FUN_0059dd48 returns class 3 when the state handler changed nothing
         } else if (m instanceof LandMotion) {
@@ -958,13 +980,14 @@ export class Jump {
           this.motion = null;                             // back to the locomotion clips (class 3 / 6 / 8 / 9)
         } else if (m instanceof DeathMotion) {
           // state 7 answers 0 (FUN_00538780). The class returns next motion 0xd (the corpse class FUN_00595ea8, c_sq_fa0),
-          // but in the game it never starts: T w181_death_aim_b, the done event at f1004 sets C+0x564 bit 0x20 and it
+          // but from class 0xb it never starts (0xd itself runs only for a kill while lying, jumptable 0x589e70[7]): T w181_death_aim_b, the done event at f1004 sets C+0x564 bit 0x20 and it
           // stays set to f1647 (FUN_00341780 would clear it), the head layer holds c_st_fa0 at 128.
           // GUESS: no next motion; the death class stays, done, and the clip holds its last frame (why FUN_00343160
           // doesn't switch is not decoded; notes/fidelity-audit.md "Vincent at HP 0")
           // T w255_phoenix: P+0x118 bit 0x100 rises with this done event (record 1004): FUN_00538780's corpse-settled bit,
           // which FUN_00334590 case 5 waits for; state 0x16's leave FUN_00539aa8 clears it (Jump.enter)
           if (!m.held) { m.held = true; ctrl.P.settled = true; this.events.push({ frame: ctrl.frames, ev: 'death done' }); }
+          if (m.id === 0xd) stopMove(ctrl.C);             // FUN_00538780, event 0xd (T w255_lying_nostatus: the corpse lies still)
         }
       }
     } else if (!opts.action && onFoot(ctrl.P.state) && !ctrl.onGround) {

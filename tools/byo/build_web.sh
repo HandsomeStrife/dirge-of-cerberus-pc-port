@@ -186,10 +186,8 @@ if [ $have_extract -eq 0 ]; then
   grep -q ' fail=0$' "$LOGS/kel_unpack.log" || fail "kel_unpack reported failures (see $LOGS/kel_unpack.log)"
   (cd "$KEL.tmp" && find . -name '*.at3' ! -path ./data/zone/z128/sound/bgm_001.at3 ! -path ./data/zone/z128/sound/bgm_012.at3 \
     ! -path ./data/zone/z128/sound/bgm_013.at3 ! -path ./data/zone/z128/sound/bgm_014.at3 ! -path ./data/zone/z128/sound/bgm_018.at3 ! -path ./data/zone/z128/sound/bgm_274.at3 -delete)
-  # .at2: only the opening event's voices (tools/audio/voice.py; worker 0222)
-  (cd "$KEL.tmp" && find . -name '*.at2' ! -path ./data/event/scene/ev0100/sound/10109vn.at2 \
-    ! -path ./data/event/scene/ev0100/sound/10109v2.at2 ! -path ./data/event/scene/ev0100/sound/10110sk.at2 \
-    ! -path ./data/event/scene/ev0100/sound/10201vn.at2 -delete)
+  # .at2: ev0100's voices (tools/audio/voice.py --names picks the played events'; disc.py INPUTS checks those)
+  (cd "$KEL.tmp" && find . -name '*.at2' ! -path './data/event/scene/ev0100/sound/*' -delete)
   $PY "$BYO/disc.py" verify "$KEL.tmp/noPath" || fail "the unpacked files do not match the supported disc"
   date -u +%Y-%m-%dT%H:%M:%SZ > "$KEL.tmp/.byo-extract"
   rm -rf "$KEL"
@@ -374,7 +372,7 @@ run stage $PY export_web_stage.py --elf "$ELF" --nopath "$NOPATH" -o "$DATA/even
 tail -n 1 "$LOGS/stage.log" | sed "s#$REPO/##" | cut -c1-160
 
 step "the opening event's actors (models + event motion files) -> data/event/actors (event_actors.js)"
-run event_actors $PY export_web_event_actors.py --event "$DATA/event/ev0100_scr001.json" -o "$DATA/event/actors"
+run event_actors $PY export_web_event_actors.py --event "$DATA/event/ev0100_scr001.json" --stage "$DATA/event/ev0100_stage.json" -o "$DATA/event/actors"
 [ -s "$DATA/event/actors/actors.json" ] || fail "data/event/actors/actors.json missing (log: $LOGS/event_actors.log)"
 tail -n 1 "$LOGS/event_actors.log" | sed "s#$REPO/##" | cut -c1-160
 

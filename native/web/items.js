@@ -74,6 +74,8 @@ export class Inventory {
   // entries: [id, count] in slot order (FUN_0031e658: +0x34 + 12 k); ammo: aim_core Ammo (its inv holds AMMO_ID's count
   // less AMMO_OTHER_LOADED)
   constructor(table, start = START_INVENTORY, gil = START_GIL) {
+    // DAT_0046e248 +8 = gil; +0x28 = gil at the last scene_save, +0x2c = the EXP exchange's (FUN_00321148, not on the page; FUN_00321480 / FUN_00320848 read them)
+    this.gilBase = 0; this.gilEarned = 0;
     this.table = table; this.slots = start.map(e => e.slice()); this.gil = gil; this.ammo = null; this.other = AMMO_OTHER_LOADED;
     // worker 0243: the selection (+0 / +0xc / +0x10, FUN_0031f3c8) and the slot pool's free list (FUN_0036e6b0 pushes a
     // freed slot at its head, FUN_0036e2a8 takes the head: the last freed slot is reused first). An empty slot is [-1, 0].
@@ -243,9 +245,16 @@ export function createItems({ data, effect = null, warn = console.warn, ground =
   // rec (worker 0242, checkpoint.js sceneSave): a mid-level checkpoint's record. Its status block (+0x100) carries the
   // inventory and DAT_0046e228's entries (+0x1c0, 4 x 0x34: the taken words at +0x24, FUN_0031e0e0; FUN_0031d4d8 writes
   // them), so FUN_00400778's FUN_0030f688(stage, 2, rec + 0x100) brings back both as they were at the scene_save
-  function restart(rec = null) {
+  // pause: the Restart came through the pause (mode bit 0xe, FUN_004012c0 case 0xf). The game over's keeps +0 .. +0x18 and +0x2c:
+  //   FUN_00321480: bit 0xd without 0xe: gil = record +0x28 + current +0x2c; else the whole block is read.
+  //   FUN_00320848(0) (no record): FUN_00247508 clears 0xd first for the pause only: gil 0, else gil = +0x2c. +0x28 = 0 either way.
+  // The page has no EXP or level, so gil is what differs here. A hand-off (not a stage reload) comes as pause = false: gil = +0x2c.
+  function restart(rec = null, pause = false) {
     if (rec && rec.inventory) {
-      inventory.slots = rec.inventory.slots.map(e => e.slice()); inventory.gil = rec.inventory.gil; inventory.other = rec.inventory.other;
+      const ri = rec.inventory;
+      if (pause) { inventory.gil = ri.gil; inventory.gilBase = ri.gilBase ?? ri.gil; inventory.gilEarned = ri.gilEarned ?? 0; }
+      else { inventory.gilBase = ri.gilBase ?? ri.gil; inventory.gil = Math.min(inventory.gilBase + inventory.gilEarned, GIL_MAX); }
+      inventory.slots = ri.slots.map(e => e.slice()); inventory.other = ri.other;
       // worker 0243: the selection and the slot pool (L: an older record without them keeps the save's)
       inventory.sel = rec.inventory.sel ?? START_SEL; inventory.last = rec.inventory.last ?? START_LAST;
       inventory.selId = rec.inventory.selId ?? START_LAST; inventory.freed = (rec.inventory.freed || []).slice();
@@ -254,7 +263,9 @@ export function createItems({ data, effect = null, warn = console.warn, ground =
       if (A && am) { A.loaded = am.loaded; A.sum = am.loaded; A.inv = am.count - inventory.other; }
       return;
     }
-    inventory.slots = RESTART_INVENTORY.map(e => e.slice()); inventory.gil = RESTART_GIL; inventory.other = RESTART_OTHER_LOADED;
+    if (pause) inventory.gilEarned = RESTART_GIL;
+    inventory.gil = inventory.gilEarned; inventory.gilBase = 0;
+    inventory.slots = RESTART_INVENTORY.map(e => e.slice()); inventory.other = RESTART_OTHER_LOADED;
     // GUESS: the Restart's selection = the save's (slot 0, 0x69300000; the reload state's inventory header was not read;
     // notes/fidelity-audit.md 'Item selection after a Restart')
     inventory.sel = START_SEL; inventory.last = START_LAST; inventory.selId = START_LAST; inventory.freed = [];

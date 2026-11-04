@@ -267,9 +267,13 @@ export function ladderAction({ airgrab = AIRGRAB } = {}) {
   // MISSING: only ladder boxes are chosen. In FUN_00333150 any chosen gimmick with +0xd4 set eats ✕
   // (e.g. type 8, FUN_00576428), so beside a non-ladder gimmick the game may not jump where the page does
   // (notes/fidelity-audit.md "Non-ladder gimmicks taking ✕").
-  let gimmick = null;
+  let gimmick = null, other = null, doors = null;   // other: a chosen non-ladder trigger (worker 0257; doors = play.js: enemy_ai gimmickChoose / gimmickUse)
   function choose(ctx) {
     const c = ctx.ctrl, st = c.P ? c.P.state : (c.onGround ? 2 : 8);
+    if (doors) {
+      if (st >= 2 && st <= 5) { const o = origin(c.pos); other = doors.choose([o.x, o.y, o.z], [Math.sin(c.heading), 0, Math.cos(c.heading)]); }
+      else if (c.speed > 0) other = null;
+    }
     if (!ladders) { gimmick = null; return; }
     if (st < 2 || st > 5) { if (c.speed > 0) gimmick = null; return; }
     gimmick = null;
@@ -288,6 +292,7 @@ export function ladderAction({ airgrab = AIRGRAB } = {}) {
     get camState() { return ph ? PHASE_STATE[ph.kind] : undefined; },
     get ladder() { return L && L.id; },
     get gimmick() { return gimmick && gimmick.from; },
+    set doors(d) { doors = d; },
     ate: false,         // ✕ taken by a chosen trigger that didn't mount (player.js: no jump)
     canEnter(ctx) {
       if (warpTo !== null && ladders) {
@@ -306,16 +311,20 @@ export function ladderAction({ airgrab = AIRGRAB } = {}) {
       // P+0x118 bit 0x40000 (FUN_005771c8), FUN_00326068(5) on the per-frame choice (FUN_0053b500).
       let take = false;
       const st = ctx.ctrl.P ? ctx.ctrl.P.state : (ctx.ctrl.onGround ? 2 : 8);
-      if (ctx.input.pressed?.has(KEY) && st >= 2 && st <= 5 && gimmick) {
+      // FUN_005771c8: C+0x564 bit 0x4000 refuses (the get-up, the revive class, a reload: aim.js c564)
+      const c564 = ctx.ctrl.weaponHook?.c564 ? ctx.ctrl.weaponHook.c564() : 0;
+      if (ctx.input.pressed?.has(KEY) && st >= 2 && st <= 5 && gimmick && !(c564 & 0x4000)) {
         this.ate = true;
         if (inBox(gimmick.b, origin(ctx.ctrl.pos)) && ctx.anim?.has('c_ld_u') && ctx.anim.has('c_ld_d')) {
           pending = { l: gimmick.l, from: gimmick.from };
           take = true;
         }
       }
+      // worker 0257: FUN_00333150 -> FUN_00544200 -> FUN_005516f0 on any other chosen trigger (types 0 / 3 / 8): it takes ✕, event 0x11; the ladder boxes have no such choice here
+      if (doors && !this.ate && ctx.input.pressed?.has(KEY) && st >= 2 && st <= 5 && other && !(c564 & 0x4000)) { this.ate = true; doors.use(other); }
       // OPTION airgrab: in an air state, the choice rule on this frame's pose (the game has no air
       // choice; FUN_0055abd8 limits it to states 2..5) picks the ladder, and ✕ grabs it.
-      if (airgrab && !take && ctx.input.pressed?.has(KEY) && airState(st) && ladders &&
+      if (airgrab && !take && ctx.input.pressed?.has(KEY) && airState(st) && !(c564 & 0x4000) && ladders &&
           ctx.anim?.has('c_ld_u') && ctx.anim.has('c_ld_d')) {
         // OPTION airgrab: the bottom box's footprint and facing test, its height extended up the
         // ladder face to the face top (the box covers only the bottom ~17 units; mid-air at the

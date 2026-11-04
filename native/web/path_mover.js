@@ -605,7 +605,7 @@ export function moveStart(C) { C.f1c0 = (C.f1c0 & 0xffe3fbff) >>> 0; }
 // FUN_00352a60), the move (mode 0xc), then the turn (FUN_0034de50: turn mode 5). tpos = the target's position
 // or null; walk = the walk-mesh step. sliding = a slide mover (9 / 0xb) runs: in the game its FUN_0034f178
 // case only enters mode 0xc too, but the page keeps the slides' flat step (enemy_ai slide GUESS), so the
-// mode-0xc body step is skipped then. Returns 'done' on the frame mover 3 ends (no listener event for it).
+// mode-0xc body step is skipped then, except in the air (body state 2: the slide has no flat step there, enemy_ai moverUpdate). Returns 'done' on the frame mover 3 ends (no listener event for it).
 export function approachFrame(a, tpos, step, walk, warn = () => {}, sliding = false, nav = null) {
   const C = a.C;
   if (C.f1c0 & 0x20) return null;
@@ -624,7 +624,7 @@ export function approachFrame(a, tpos, step, walk, warn = () => {}, sliding = fa
     }
   } else if (C.mover === 8) rootTick(a, step);                              // FUN_0034f8c0 case 8: FUN_00351418
   moveStart(C);
-  if (C.mm === 0xc && !sliding) mode0xc(a, step, walk, warn);
+  if (C.mm === 0xc && (!sliding || a.B.state === 2)) mode0xc(a, step, walk, warn);
   if (C.s214 === 5) turnMode5(a, step, warn);
   return ev;
 }

@@ -217,7 +217,7 @@ for (const n of ['l_ladder_jump_a', 'l_ladder_jump_b', 'l_ladder_jump_c']) run(n
   // ladder choice rule mounts. _b's inputs (✕ mid-air at the ladder face, f535) through the page's
   // step with the option on: the frames before the ✕ still match the game, the ✕ mounts (no
   // second jump). Then a mid-air ✕ away from every ladder is still the second jump.
-  const airgrabRun = (name, fx, pos = null) => {
+  const airgrabRun = (name, fx, pos = null, c564 = 0) => {
     const file = path.join(OUT, name + '.jsonl');
     if (!existsSync(file)) { console.log(`skip ${name} airgrab: no trace`); return null; }
     ran++;
@@ -239,6 +239,7 @@ for (const n of ['l_ladder_jump_a', 'l_ladder_jump_b', 'l_ladder_jump_c']) run(n
       const cross = (pad.buttons & CROSS) !== 0 && (prev & CROSS) === 0;
       prev = pad.buttons;
       const before = ctrl.P.state;
+      ctrl.weaponHook = c564 && d.frame === fx ? { c564: () => c564 } : null;
       ctrl.step({ x: w.x, z: w.z, stick: w.mag, run: false, keys: new Set(), pressed: new Set(cross ? ['Space'] : []), cross });
       if (d.frame < fx && ctrl.P.state !== stateOf(R[i + 1])) { stOff++; firstOff ??= d.frame; }
       if (d.frame === fx) at = { cross, before, active: ctrl.active?.name ?? null, phase: ctrl.active?.phase, jump: ctrl.jump.head?.clip ?? null, state: ctrl.P.state };
@@ -253,6 +254,9 @@ for (const n of ['l_ladder_jump_a', 'l_ladder_jump_b', 'l_ladder_jump_c']) run(n
          `airgrab: l_ladder_jump_b ✕ f535 mid-air (state ${r.at.before}) mounts: action ${r.at.active} (${r.at.phase}), state ${r.at.state}; ` +
          `before the ✕ state off ${r.stOff}${r.firstOff !== null ? ' first ' + r.firstOff : ''}; f555 ${r.end.active} ${r.end.phase} feet y ${r.end.pos.y.toFixed(2)}`);
     }
+    // C+0x564 bit 0x4000 on that ✕ (FUN_005771c8's gate, as on foot): no grab
+    const gated = airgrabRun('l_ladder_jump_b', 535, null, 0x4000);
+    if (gated) ok(gated.at.cross && gated.at.active === null, `airgrab: ✕ with C+0x564 bit 0x4000: no grab (action ${gated.at.active}, state ${gated.at.state.toString(16)})`);
     // the same inputs 60 units along -z (no ladder box near): the ✕ is the second jump (state 0x1f)
     const p = (() => { const f = path.join(OUT, 'l_ladder_jump_b.jsonl'); if (!existsSync(f)) return null;
                        const r0 = load(f).slice(1).find(d => d.frame >= 480).matrix[3]; return [r0[0], r0[1], r0[2]]; })();

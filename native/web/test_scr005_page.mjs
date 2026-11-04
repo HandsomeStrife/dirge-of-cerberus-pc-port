@@ -1,0 +1,61 @@
+// test_scr005_page.mjs -- class ev0143's events on the real play.html (worker 0261; notes/story-cutscenes.md): main takes each from its stage flag 1 sub-beat. The flags are
+// set here (page aid: triggers and kills set them in play); the event draws its actors, main comes back to battle, Vincent drawn.
+//   node native/web/test_scr005_page.mjs [event ...]  (needs playwright + data; network for the three.js CDN; sandbox off). SCR005_SHOT=<dir>: one screenshot per event at SCR005_AT ms.
+import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
+import { spawn, execSync } from 'node:child_process';
+import fs from 'node:fs';
+import net from 'node:net';
+import path from 'node:path';
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+let fail = 0;
+const ok = (c, m, info = '') => { console.log((c ? 'ok   ' : 'FAIL ') + m + (info ? '  (' + info + ')' : '')); if (!c) fail++; };
+const done = () => { console.log(fail ? `${fail} FAILED` : 'all ok'); process.exit(fail ? 1 : 0); };
+if (!fs.existsSync(path.join(here, 'data/event/actors/n034.glb'))) { console.log('SKIP: no data/event/actors/n034.glb'); done(); }
+let chromium;
+try { ({ chromium } = createRequire(path.join(execSync('npm root -g', { encoding: 'utf8' }).trim(), '/'))('playwright')); }
+catch { console.log('SKIP: playwright not installed (npm i -g playwright)'); done(); }
+const port = await new Promise(r => { const s = net.createServer().listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => r(p)); }); });
+const srv = spawn('python3', ['-I', '-m', 'http.server', String(port), '--bind', '127.0.0.1', '--directory', here], { stdio: 'ignore' });
+const browser = await chromium.launch({ args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
+// a page session: [warp, steps]; a step: [event, stage flags to set then (null: a trigger under the warp sets them), global 1, models drawn, subtitle?]
+const ALL = [
+  ['stairs', [['roji01_01', { 0: 2, 1: 4 }, 5, ['n033'], true]]],
+  ['stairs', [['heri_tobi', { 0: 4, 1: 7 }, 7, ['e023', 'g043'], false]]],
+  ['stairs', [['beast_ev01', { 0: 11, 1: 8 }, 7, ['n028', 'e030', 'n059'], false]]],
+  ['helpme', [['help_people01', null, 8, ['e030', 'e027'], true], ['help_orei01', { 1: 10 }, null, ['p000', 'n034'], true], ['beast_ev02', { 1: 11 }, null, ['n028', 'p000'], true]]],
+  ['citizens', [['help_orei02', { 1: 12, 39: 1, 40: 1, 41: 1 }, null, ['n023', 'n024', 'n026'], true]]],
+  ['market', [['help_orei04', { 0: 24, 1: 28, 32: 1, 33: 1, 34: 1 }, 25, ['n018', 'n042', 'p000'], false]]],
+  ['market', [['help_people03', { 0: 24, 1: 29 }, 25, ['n017', 'e027'], true]]],
+  ['market', [['help_orei03', { 0: 24, 1: 30, 30: 1 }, 25, ['p000'], true]]],
+];
+const want = process.argv.slice(2), SHOT = process.env.SCR005_SHOT, AT = +(process.env.SCR005_AT || 4000);
+for (const [warp, steps] of ALL.filter(x => !want.length || x[1].some(y => want.includes(y[0])))) {
+  const pg = await browser.newPage({ viewport: { width: 960, height: 540 } });
+  const errs = []; pg.on('pageerror', e => errs.push(e.message)); pg.on('console', m => { if (m.type() === 'error') errs.push(m.text()); });
+  try {
+    for (let i = 0; ; i++) { try { await pg.goto(`http://127.0.0.1:${port}/play.html?intro=0&sound=0&enemydmg=0&warp=${warp}`, { waitUntil: 'load' }); break; } catch (e) { if (i > 20) throw e; await new Promise(r => setTimeout(r, 250)); } }
+    await pg.waitForFunction(() => window.__play && window.__play.stats.ticks > 5 && window.__play.stage, null, { timeout: 240000 });
+    for (const [ev, flags, g1, models, sub] of steps) {
+      await pg.evaluate(([flags, g1, ev]) => { const P = window.__play, R = P.stage.rt; if (g1 != null) R.gflags[1] = g1; if (flags) for (const k in flags) P.enemyAI.eventFlags[k] = flags[k];
+        const E = window.__ev = { n: 0, shown: new Set(), win: 0, cam: 0, done: false }; const f = () => { if (window.__ev !== E) return; const w = R.vm.frames.some(F => F.m.name === ev);
+          if (w) { E.n++; for (const a of R.actors.slots) if (a.drawn && a.drawn.shown) E.shown.add(a.model); if (P.stageView.active) E.cam++; if (P.stageWin && P.stageWin.drawAll(performance.now()).length) E.win++; }
+          else if (E.n) E.done = true; requestAnimationFrame(f); }; requestAnimationFrame(f); }, [flags, g1, ev]);
+      await pg.waitForFunction(ev => window.__play.stage.rt.vm.frames.some(F => F.m.name === ev), ev, { timeout: 300000, polling: 100 });
+      if (SHOT) { fs.mkdirSync(SHOT, { recursive: true }); const t0 = await pg.evaluate(() => window.__play.stage.rt.clock); await pg.waitForFunction(t => window.__play.stage.rt.clock >= t, t0 + AT, { timeout: 120000, polling: 50 }).catch(() => {}); await pg.screenshot({ path: path.join(SHOT, ev + '.png') }); }
+      await pg.waitForFunction(() => window.__ev.done, null, { timeout: 300000, polling: 200 });
+      await pg.waitForFunction(() => window.__play.stage.rt.battle, null, { timeout: 120000, polling: 200 });
+      const s = await pg.evaluate(() => { const P = window.__play, R = P.stage.rt, E = window.__ev; return { n: E.n, cam: E.cam, win: E.win, shown: [...E.shown], skip: R.log.filter(x => /^skip /.test(x[1])).map(x => x[1]), vis: P.vin.body.visible, eh: !!P.vin.eventHidden }; });
+      ok(s.n > 20, `${ev}: ran`, `${s.n} samples, camera out in ${s.cam}`);
+      ok(!s.skip.length, `${ev}: no Skip`, s.skip.join());
+      ok(models.every(m => s.shown.includes(m)), `${ev}: draws ${models}`, s.shown.join());
+      if (sub) ok(s.win > 0, `${ev}: subtitles`);
+      ok(s.vis && !s.eh, `${ev}: Vincent drawn after it`);
+    }
+    ok(!errs.length, `${steps.map(x => x[0])}: no page errors`, errs.slice(0, 3).join(' | '));
+  } catch (e) { ok(false, steps[0][0] + ': exception', e.message.split('\n')[0]); }
+  await pg.close();
+}
+await browser.close(); srv.kill();
+done();

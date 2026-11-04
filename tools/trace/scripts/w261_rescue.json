@@ -1,0 +1,50 @@
+{
+"name": "w261_rescue",
+"frames": 2200,
+"log_from": 1300,
+"doc": "worker 0261: w229_rescue's inputs (TRACE_POKE=a06338=91379f02) with the event fieldset: roji02_01 unskipped. TRACE_FIELDSET=event TRACE_LOG_AT=A4000.",
+"events": [
+{
+"from": 1000,
+"to": 1004,
+"buttons": [
+"right"
+]
+},
+{
+"from": 1020,
+"to": 1024,
+"buttons": [
+"cross"
+]
+},
+{
+"from": 1080,
+"to": 1084,
+"buttons": [
+"left"
+]
+},
+{
+"from": 1100,
+"to": 1104,
+"buttons": [
+"cross"
+]
+},
+{
+"from": 1200,
+"to": 1204,
+"buttons": [
+"cross"
+]
+},
+{
+"from": 1300,
+"to": 1304,
+"buttons": [
+"cross"
+]
+}
+]
+}

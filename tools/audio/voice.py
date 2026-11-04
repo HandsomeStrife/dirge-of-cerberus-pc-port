@@ -67,7 +67,7 @@ def main():
     ap.add_argument('--event', type=int, default=100)
     ap.add_argument('--out', default='native/web/data/audio/voice')
     # the opening event's (ev0101.first_event: loadVoice2 / playVoice)
-    ap.add_argument('--names', nargs='*', default=['10109vn', '10109v2', '10110sk', '10201vn'])
+    ap.add_argument('--names', nargs='*', default=['10109vn', '10109v2', '10110sk', '10201vn', '10401sk', '10402sk', '10403az', '10404sk', '11001l1', '11002vn', '11003l1', '11004l1', '11005l2', '10301vn', '10302vn', '10701rv', '10702rv', '10703vn', '10704rv', '10705rv', '10406sk', '10408sk', '10409az', '10410wl', '10501az', '10502sk', '10503az', '10504sk', '10505az', '10506rv', '10507rv', '10508vn', '10509vn', '10510rv', '10511rv', '10512vn', '10513rv', '10514rv', '10515wh', '10516rv', '10517rv', '10518vn', '10519rv', '10520vn', '10521rv', '10522vn', '10523ct', '10524ct', '10525vn', '10526ct', '10527ct', '10528ct', '10529rv', '10530rv', '10601wr', '10602wr', '10603wr', '10604wr', '10605wr', '10606wr', '11801o1', '11802o2', '11803o3', '11804o4', '10901k1', '10902k1', '10903k1', '10607fm', '10608fm', '10609fm', '10616ri', '10617mm', '11102l3', '11103vn', '11104l3', '11604m3', '11608m4', '11611m5', '11907p1', '11908p3', '11909p2', '12001q1', '12002q2', '12003q3', '12004q1', '12005q2', '12006q3', '12023q1', '12024q1', '12029q6', '12031q7', '12032q7', '12033q4', '12034q4', '12035q5', '12036q5'])
     a = ap.parse_args()
     rows = sdb_rows(open(os.path.join(a.kel, 'noPath', '%08x.bin' % (0x06000000 | a.zone << 16 | 8)), 'rb').read())
     os.makedirs(a.out, exist_ok=True)

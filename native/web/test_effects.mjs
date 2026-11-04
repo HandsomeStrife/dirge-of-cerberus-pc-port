@@ -9,7 +9,7 @@
 import { readFileSync, existsSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createEffects, EffectRng, wallImpactId, parseFed, parseCore, _internals, screenClip } from './effects.js';
+import { createEffects, camera0, EffectRng, wallImpactId, parseFed, parseCore, _internals, screenClip } from './effects.js';
 import { createRoomOccl } from './room_occl.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -211,6 +211,20 @@ const ok = (what, cond, info = '') => { checks++; if (!cond) { fails++; console.
       fx.cellMask(27, true); fx.reset(); const back = !fx.cells().includes(27);
       ok('cellMask (cmds 0x54 / 0x55, the DAT_004e8700 half): a hidden cell culls its emitters (0x100), showing it again does not, reset restores the start mask', hid === 0x100 && shown === 0 && back, `${hid} ${shown} ${back}`);
     }
+    // FUN_002dacf8 / FUN_002da810 from the live fov: 73.5 is the RAM's constants; a narrower view culls more, a wider one less, and the fades and the sprites' screen follow
+    {
+      const c = camera0(73.5);
+      ok('camera0(73.5) = RAM: +0x250 1.33916 / 1.17177, +0x110 299.97235 / 449.95853', Math.abs(c.clip.cx - 1.3391622) < 2e-6 && Math.abs(c.clip.cy - 1.171767) < 2e-6 && Math.abs(c.proj.fx - 299.97235) < 2e-3 && Math.abs(c.proj.fy - 449.95853) < 3e-3, JSON.stringify([c.clip.cx, c.clip.cy, c.proj.fx, c.proj.fy]));
+      const c2 = camera0(36.75);
+      ok('camera0(36.75): scrz = 224 / tan(fov x 0.008726647)', Math.abs(c2.proj.fx - 224 / Math.tan(36.75 * 0.008726647)) < 1e-2 && Math.abs(c2.clip.cx - c2.proj.fx / 224) < 1e-5 && Math.abs(c2.clip.cy - c2.proj.fx / 256) < 1e-5 && Math.abs(c2.proj.fy - c2.proj.fx * 1.5) < 1e-2, JSON.stringify([c2.proj.fx, c2.clip.cy]));
+      const fx = mkStage(undefined), ems = fx.stageLoad(), V = viewOf(new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 1282.8, 56.8, 1024, 1]));
+      const culled = (fov) => { fx.end(V, fov); return { out: ems.filter(e => e.f0a & 0x80).length, alpha: ems.map(e => e.col[3]).join() }; };
+      const base = culled(null), same = culled(73.5), narrow = culled(20), wide = culled(150);
+      ok('the cull with fov 73.5 = no fov (the constants)', same.out === base.out && same.alpha === base.alpha, `${same.out} / ${base.out}`);
+      ok('a narrow view culls more emitters (0x80), a wide one fewer (+0x250 from the fov)', narrow.out > base.out && wide.out < base.out, `20: ${narrow.out}, 73.5: ${base.out}, 150: ${wide.out}`);
+      const shot = (fov) => { const g = createEffects({ fed, core, rng: new EffectRng(7), warn: () => {} }), v = viewOf(new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 30, 1])); g.begin(f(1.2)); g.spawn(0x43400, [0, 0, 0]); g.end(null, fov); for (let i = 0; i < 4; i++) { g.update(f(1.2)); } g.end(null, fov); return JSON.stringify(g.sprites(v).map(q => q.pts ?? q.s ?? q.v ?? q)); };
+      ok('the sprites\' projection (+0x110) follows the fov', shot(30) !== shot(73.5), 'same');
+    }
     // camera-0 models only with models0 (play.js: the stage engine): the impacts' floor model 0x45400 E20 does not match w206_floor
     {
       const fx = createEffects({ fed, core, rng: new EffectRng(7), warn: () => {} }), v = viewOf(new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 60, 1]));
@@ -240,6 +254,17 @@ const ok = (what, cond, info = '') => { checks++; if (!cond) { fails++; console.
       ok(`stage load (FUN_002e4e38): the RAM's emitter list in ${st208.length} states (76 emitters: FED, emitter, param record, position, order)`, same === st208.length, `${same}/${st208.length}`);
       ok(`emitter cull (FUN_002ea6a0): +0x0a's 0x100 / 0x80 / 0x200 bits equal RAM (${cullEq}/${cullN}; ${occl} occluder-culled 0x200 ${roomOccl ? 'compared' : 'not compared: no occl data'})`, cullEq === cullN && (!!roomOccl || !occl), `${cullEq}/${cullN}`);
       ok('emitter cull: the visible emitters\' alpha +0xbc equals RAM (the screen-size / distance fades)', !alphaBad, alphaBad.slice(0, 300));
+      // the screen-size fade reads +0x110 from the fov (FUN_002daae8): one first update per fov on a fresh manager, the same emitters' alpha moves with the view's width
+      {
+        let moved = 0, seen = 0;
+        for (const n of st208) {
+          const st = JSON.parse(readFileSync(join(out208, n), 'utf8')), v = viewOf(st.cam.view);
+          const al = (fov) => { const fx = mkStage(undefined), ems = fx.stageLoad(); fx.end(v, fov); return ems.map(e => (e.f0a & 0x380) ? null : e.col[3]); };
+          const a0 = al(null);
+          for (const fov of [172, 150, 110, 40, 12]) al(fov).forEach((x, i) => { if (x !== null && a0[i] !== null) { seen++; if (Math.abs(x - a0[i]) > 1e-4) moved++; } });
+        }
+        ok('the screen-size fade (+0x110 from the fov): emitters\' alpha moves with the view\'s width', moved > 0, `${moved} of ${seen}`);
+      }
       // the occluder test's corners (worker 0233; LAB_002ea898): a recording stand-in for the room volumes catches the 8
       // points the cull hands FUN_00269978; each set must be an emitter's param +0x40 box (x +-0.5) through its matrix with
       // row 3 = the +0x50 centre, in every box mode (0 included: not the clip test's DAT_0046d280 / DAT_004ee780)

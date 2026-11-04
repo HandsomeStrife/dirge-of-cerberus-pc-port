@@ -283,17 +283,34 @@ beats' records (n 2-5) not traced; the reload's frames before battle() (load / f
 
 ## The Restart invariant (worker 0254, 2026-11-04)
 
-**What a Restart leaves depends on the record alone, not on which Restart it was.** The pause's and the game over's differ only inside the
-stage loop FUN_004012c0: result 6 by default runs FUN_002574a0 and FUN_0031dbc8 (-> FUN_0031d9c0: 54 stats, +0, +4, +8 zeroed) for the game
-over; case 0xf runs FUN_00241990(0xe, 1) for the pause. Both then take FUN_00401b90 -> FUN_00400508 -> FUN_003ffbb8 (teardown: FUN_003e66d0,
-FUN_003ad5b0, FUN_003e9950 stream SE, FUN_003ea5f0 voices) and FUN_00247508 0x15 case 6 (FUN_003ea1d0(-1), FUN_003e62d0(-1), mode bit 0xd).
-Whatever FUN_0031dbc8 cleared is written over or cleared again below, so the two converge. The page has one `restart()` for both.
+**Corrected after review.** The first version of this section said a Restart's result depends on the record alone. That is false: T w254 had only driven the pause.
+What a Restart leaves depends on the record, and for the player header DAT_0046e248 also on which Restart it was. The stage loop FUN_004012c0: result 6 by default runs FUN_002574a0 and
+FUN_0031dbc8 (-> FUN_0031d9c0: 54 stats, +0, +4, +8 zeroed) for the game over; case 0xf runs FUN_00241990(0xe, 1) for the pause. Both then take FUN_00401b90 -> FUN_00400508 -> FUN_003ffbb8
+(teardown: FUN_003e66d0, FUN_003ad5b0, FUN_003e9950 stream SE, FUN_003ea5f0 voices) and FUN_00247508 0x15 case 6 (FUN_003ea1d0(-1), FUN_003e62d0(-1), mode bit 0xd). Readers of bits 0xd / 0xe: FUN_00247508,
+FUN_00320848, FUN_00320920, FUN_00321480, FUN_00400778 (both bits alike: the clocks), FUN_00402220 (bit 0xd). So the branch is FUN_00321480 and FUN_00320848; FUN_00320920 is on the FUN_00403a20 path, not traced here.
+
+| DAT_0046e248 | record, pause (bits 3, 0xd, 0xe) | record, game over (bits 3, 0xd) | no record, pause | no record, game over |
+|---|---|---|---|---|
+| path | FUN_00321480: the whole block | FUN_00321480's second branch | FUN_00247508:333 clears 0xd, 0xe; FUN_00320848(0) zeroes | :345 clears 0xd after FUN_0030f3d8, so FUN_00320848(0) sees it |
+| gil +8 | the record's | record +0x28 + current +0x2c | 0 | current +0x2c |
+| +0x28 | the record's | the record's | 0 | 0 |
+| +0x2c (the EXP exchange's, FUN_00321148) | the record's (0) | kept | 0 | kept |
+| EXP, level (+0 .. +0x18) | the record's | kept | 0 | kept |
+
+**T w254go** (result 6 poked into DAT_0047db88 in play, which takes the stage loop's game-over branch without the death and the menu; mode 0x2008 at reload0 confirms bit 0xd without 0xe):
+record taken with gil 500, +0 = 4, +0x10 = 5; then gil 700, +0x28 = 999, +0x2c = 33, +0 = 12, +0x10 = 17: **gil 533, +0x28 = 500, +0x2c = 33, +0 = 12, +0x10 = 17**. No record, the same pokes:
+**gil 33, +0x28 = 0, +0x2c = 33, +0 = 12, +0x10 = 17**. The T w254 pause runs read 0 for all of these, so they don't separate the record case; the pause columns are decoded, not traced with these fields moved.
+
+Dead words: FUN_0055cac8 and FUN_0055cff8 set FUN_0031e060(+0x100, 1), FUN_0031d4d8 restores them, FUN_00547ce0 -> FUN_0031e160 -> FUN_00317420(st, 0) zeroes HP, FUN_00559748 refuses to activate.
+T: the record's 41, 42, 43, 111, 113, 114 survive the pause reload (w254); in w254go bit 45 poked before the save stays and bit 46 poked after it goes. No record: all clear.
+
+Everything else ends the same on both paths:
 
 | | DAT_0046b0b8 == 0: a scene_save's record | DAT_0046b0b8 == 1: the stage start |
 |---|---|---|
 | path | mode bit 3 -> FUN_003ff0c0 -> FUN_00400778 -> FUN_0030f688(stage, 2, rec + 0x100) -> FUN_0030fff0 case 2 -> FUN_00311fa0(stream, 0) | FUN_0030f3d8 (bit 5 set, 0xd / 0xe clear); FUN_00400778 does not run (FUN_003ff0c0 with +0x1c4 != 0: index 0, no resume) |
-| gil | FUN_00321480: the record's | reset among FUN_00312650, FUN_00320848, FUN_003202e8, FUN_0031c2f8, FUN_00312558, FUN_00312408 (not split per function) |
-| inventory, selection | FUN_00320308 (DAT_0046e240), FUN_0031c390 (DAT_0046e218): the record's | the same list; the selection is a GUESS on the page (fidelity-audit) |
+| inventory, selection | FUN_00320308 (DAT_0046e240), FUN_0031c390 (DAT_0046e218): the record's | FUN_003202e8, FUN_0031c2f8; the selection is a GUESS on the page (fidelity-audit) |
+| dead words | the record's | 0 |
 | magazine, reserve | **the record's** (T: 3 / 40 after 7 / 100 at the Restart) | start values |
 | HP | not restored: FUN_00319798 reads it into a scratch that is dropped | start value |
 | section stats, totals, taken words | FUN_0031d4d8: the record's | FUN_0031dae8 (FUN_0031dac0, FUN_0031d9c0, FUN_0031d9f0): 0; stat 14 then returns to 1 (below) |
@@ -313,7 +330,7 @@ Whatever FUN_0031dbc8 cleared is written over or cleared again below, so the two
   So **the first battle() of a record reload does nothing and the next runs the pass**, which is what stage_controller.js already did.
   With T's flags (global {0: 1, 1: 5, 18: 1, 55: 7}, stage {0: 2, 1: 5, 2: 7, 46: 1}) the page gives the same order (test_checkpoint).
 - no record: r02_walkway with stats poked at f160, pause Restart at f200, reload at f453. reload0: start 0, stats and totals 0, area entries -1, mark 1, mode 0x20,
-  the clock running. **Zero, the same as the game over's** (w242_reload0, w201 reload0).
+  the clock running. Stats zero, the same as the game over's (w242_reload0, w201 reload0).
 - no record, stat 14: it is 0 at reload0 and 1 from r150. Call log: frames 505-508 setSectionStat(0x2a .. 0x2d, 0) = main pc 694-712, frame 519 FUN_0031d698(14, 1) via FUN_0031d6b8.
   The ELF has two calls of FUN_0031d6b8: 0x247ac4 (constant (14, 15), mode bit 10) and 0x3a541c (the native setSectionStat FUN_003a53e0).
   So a script calls it, but no method in ev0100's exported classes does: the only sites are main's four and ev0141.wro_kaisetu's (0x13, 1). **Not found after two attempts.**
@@ -323,3 +340,9 @@ Whatever FUN_0031dbc8 cleared is written over or cleared again below, so the two
 Corrections to the review: A1's magazine is restored too, it does not reset. H2's 'mark = stat 14 on every reload' holds on the record path only.
 H3: both sides were partly right and the page was already correct, no code change. notes/results-research.md's 'does not reset them' was wrong.
 FUN_00324e70's refresh on the HUD (B2) is decoded, not traced: T did not read the HUD's text across the second battle().
+
+**Record 3's reload (T w254 rec3: r07_beat, which holds record 3, pause Restart at f100; reload at f356).** Bit 37 of +0x1558 clears at the teardown (f328) and stays clear until main's first battle():
+main starts at reload + 391; asj_035 + 457, Zone 1 0 + 475, bgm_278 + 677, Zone 6 7 + 1962, FUN_00324e70 + 2177, stage init + 2193, battle2(3000) + 2195. **No FUN_0037e048 on the way, and no scene_save.**
+DAT_0046e290 and the manager are 0 at r1600, set at r2600: no stage object, so no HUD, no world. So a record's reload starts in event mode, whichever way main goes; flag 9 = 9 only skips the call that would have been redundant.
+main's branch at pc 6035: debug, or global 19 == 1, or global 18 == 1 -> pc 6041 (6054: flag 9 == 9 skips Zone.event), else pc 6227 (the first pass: Zone.event, scene_save). The page: stage_controller.js `this.battle = !o.globalFlags`, with enterEvent's bits and the HUD off as an L, since the page's world exists throughout. Ends at (-1762.5, 0, 1577.7).
+Frame timing inside the event is not compared; the page has no load time before main. Image: game frame at + 1200 next to the page's sk_mituketa2.

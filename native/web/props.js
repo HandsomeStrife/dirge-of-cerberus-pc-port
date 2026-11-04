@@ -56,11 +56,39 @@ export function insideCylinder(r, q, a, b) {
   return len3(sub3(sub3(q, a), mul3(u, t))) < r;
 }
 
+// FUN_0025a8f0(hit, n, a, b, half, M, 0): a segment against a box. Rejected by the bounding spheres; a and b into the box's rigid frame (FUN_002610e0,
+// FUN_0026135c), scaled to the unit box; VCLIP's flags: only faces a and b are on opposite sides of count; +1 faces z, y, x, then -1 faces z, y, x; each t <= the
+// best so far, the point inside the other faces; the point clamped (DAT_004992b0 / c0 = +-1), scaled back, through M; the normal through M's rotation
+export function boxRay(a, b, half, m) {
+  const c = m[3], mid = [0, 1, 2].map(j => f(f(a[j] + b[j]) * 0.5));
+  if (!(len3(sub3(mid, c)) <= f(len3(sub3(mid, a)) + len3(half)))) return null;
+  const local = p => { const v = sub3(p, c); return [0, 1, 2].map(i => f(f(f(f(v[0] * m[i][0]) + f(v[1] * m[i][1])) + f(v[2] * m[i][2])) / half[i])); };
+  const clip = p => { let r = 0; for (let i = 0; i < 3; i++) { if (p[i] > 1) r |= 1 << (2 * i); if (p[i] < -1) r |= 2 << (2 * i); } return r; };   // VCLIP, w = 1
+  const A = local(a), B = local(b), cross = clip(A) ^ clip(B);
+  if (!(cross & 0x3f)) return null;
+  const D = sub3(B, A);
+  let best = 1, P = null, N = null;
+  for (const s of [1, -1]) for (let i = 2; i >= 0; i--) {
+    const bit = 2 * i + (s < 0 ? 1 : 0);
+    if (!((cross >> bit) & 1) || !(0 < Math.abs(D[i]))) continue;
+    const t = f(f(s - A[i]) / D[i]);
+    if (!(t <= best)) continue;
+    const p = [0, 1, 2].map(j => f(A[j] + f(D[j] * t)));   // FUN_002611f4
+    if (clip(p) & ~(1 << bit) & 0x3f) continue;
+    P = p; N = [0, 0, 0]; N[i] = s; best = t;
+  }
+  if (!P) return null;
+  const q = P.map((v, i) => f(Math.max(-1, Math.min(1, v)) * half[i]));
+  return { point: [0, 1, 2].map(j => f(f(f(f(q[0] * m[0][j]) + f(q[1] * m[1][j])) + f(q[2] * m[2][j])) + c[j])),
+           normal: [0, 1, 2].map(j => f(f(f(N[0] * m[0][j]) + f(N[1] * m[1][j])) + f(N[2] * m[2][j]))) };
+}
+
 export function createProps({ data, weapons = [], effect = null, areas = null, warn = console.warn } = {}) {
   const warned = new Set();
   const warnOnce = m => { if (!warned.has(m)) { warned.add(m); warn(m); } };
   const types = data.types || {};
   const barrels = [];
+  const camBoxes = [];                   // class 3 gimmicks (vt 0x591890): cameraProbe's boxes (FUN_00548348 case 3)
   const explosions = [];
   let W = null;                          // the enemy AI world (attach)
   // manager +0x260 (cmd 0x10f / 0x40 write it, 0x2a / 0x2b / 4 read it) is the enemy AI world's one field (W.mgr260; worker 0212)
@@ -118,7 +146,11 @@ export function createProps({ data, weapons = [], effect = null, areas = null, w
 
   function attach(world) {
     W = world;
-    barrels.length = 0; explosions.length = 0; byRec.clear();
+    barrels.length = 0; explosions.length = 0; byRec.clear(); camBoxes.length = 0;
+    // no script, record +0x48 0: on with their area, or from the stage start without one (T: 22 records against route RAM, notes/battle-camera.md).
+    // Their matrix: nodeBoxes (FUN_005877e8)
+    if (!data.camBoxes) warnOnce('props: props.json has no camBoxes (re-export data/props, export_web_props.py): the class 3 boxes do not stop the camera');
+    for (const rec of data.camBoxes || []) camBoxes.push({ kind: PROP_KIND, id: 'c' + rec.rec, script: -1, vars: new Int16Array(8), t3c: new Int16Array(2), rec: rec.rec, m: rec.m, rest: rec.m, chunk: rec.chunk, node: rec.node, rec50: rec.rec50, type: rec.type, flags28: 1, hp: rec.type.hp, half: rec.size.map(v => f(v * 0.5)), area: rec.area, on: !parented(rec.area) });
     for (const rec of data.records || []) {
       const o = make(rec);
       flagBits(o);
@@ -134,7 +166,7 @@ export function createProps({ data, weapons = [], effect = null, areas = null, w
   // vt+0x14c = FUN_00584220: +0x144(on, 1) unless record +0x48 bit 2
   function vt14c(o, on) { if (!(o.f48 & 4)) activate(o, on, 1); }
   // FUN_0054ef68 (area k switched on / off) -> vt+0x14c on its children
-  function areaSwitch(k, on) { for (const o of barrels) if (!o.gone && o.area === k) vt14c(o, on); }
+  function areaSwitch(k, on) { for (const o of barrels) if (!o.gone && o.area === k) vt14c(o, on); for (const b of camBoxes) if (b.area === k) b.on = !!on; }
 
   // ---- manager commands (FUN_00545b20) the barrels' scripts send
   function mgr(o, cmd, r) {
@@ -194,6 +226,18 @@ export function createProps({ data, weapons = [], effect = null, areas = null, w
   // FUN_00584408 (vt+0x17c, mode 0), shape 2: the closed cylinder centre +- matrix row 1 x (h / 2) of radius r through
   // FUN_0025c0f8 (enemy_hit.js cylinderHit, the soldiers' too); the segment = the bullet's prev -> pos. The closest hit
   // (|prev - point|) of FUN_005442d8 among the barrels; enemy_ai compares it with the soldiers' / Vincent's.
+  // FUN_005877e8 (class 3's vt+0x214, the object update): an active box's matrix = record +0x50 x the node (FUN_00269530) while the chunk is loaded, else the record's
+  // (FUN_0054b770). Read from the node as last frame's FUN_00265350 left it, as the game's order (T w257_door2: the box 2 frames behind the anim's time)
+  function nodeBoxes(anims) {
+    if (!anims) return;
+    for (const o of camBoxes) {
+      if (!o.on) continue;
+      const N = anims.node(o.chunk, o.node);
+      if (!N) { o.m = o.rest; continue; }
+      const r = o.rec50, m = [0, 1, 2, 3].map(i => [0, 1, 2].map(j => f(r[i][0] * N[0][j] + r[i][1] * N[1][j] + r[i][2] * N[2][j] + (i === 3 ? N[3][j] : 0))));
+      o.m = m;
+    }
+  }
   function bulletTest(b) {
     let best = null;
     for (const o of barrels) {
@@ -207,16 +251,25 @@ export function createProps({ data, weapons = [], effect = null, areas = null, w
       const dist = len3(sub3(b.prev, c.point));
       if (!best || dist < best.dist) best = { o, point: c.point.map(f), dist };
     }
+    // class 3 (+0x38 0x47b: bit 0; vt+0x1ac FUN_00584f40, vt+0x17c FUN_00584408 shape 0, vt+0x1b4 FUN_00585000 as a barrel's): they stop the bullet; type flag bit 2 clear, so no damage
+    for (const o of camBoxes) {
+      if (!o.on || !bulletFilter(o, b)) continue;
+      const c = boxRay(b.prev, b.pos, o.half, o.m);
+      if (!c) continue;
+      const dist = len3(sub3(b.prev, c.point));
+      if (!best || dist < best.dist) best = { o, point: c.point, dist };
+    }
     return best;
   }
   // FUN_005449f0 probe 6 (the camera, player.js probe6): active barrels with +0x38 bit 6, vt+0x17c = FUN_00584408: shape 2 ->
-  // FUN_0025c0f8 on the cylinder (fRam0046ef60 only with +0x110 != 0: not a barrel's). The nearest to a: { point, normal }.
+  // FUN_0025c0f8 on the cylinder (both ends + fRam0046ef60: +0x110 is set on a barrel), then the class 3 boxes. The nearest to a: { point, normal }.
   // L: the normal = the end disc's axis or the side's radial, from the hit point (FUN_0025c0f8's branches give the same)
   function cameraProbe(a, b_) {
     let best = null;
     for (const o of barrels) {
       if (!(o.flags28 & 1) || o.gone || !(o.f38 & 0x40) || o.type.shape !== 2) continue;
-      const up = o.m[1].slice(0, 3), hh = f(o.h * 0.5);
+      // FUN_00584408 case 2: probe 6 with +0x110 set (RAM: every barrel) lengthens both ends by fRam0046ef60 = 3 (RAM)
+      const up = o.m[1].slice(0, 3), hh = f(f(o.h * 0.5) + 3);
       const A = add3(o.pos, mul3(up, hh)), B = add3(o.pos, mul3(up, f(-hh)));
       const c = cylinderHit(o.r, a, b_, A, B);
       if (!c) continue;
@@ -226,6 +279,13 @@ export function createProps({ data, weapons = [], effect = null, areas = null, w
       const onDisc = Math.abs(Math.abs(h) - hh) < 1e-3;
       const normal = onDisc ? mul3(up, h < 0 ? -1 : 1) : unit3(sub3(w, mul3(up, h)));
       best = { point: c.point.map(f), normal, d };
+    }
+    for (const o of camBoxes) {                        // FUN_00584408 shape 0 (+0x110 = 0: no margin): half the type's size, its matrix
+      if (!o.on) continue;
+      const c = boxRay(a, b_, o.half, o.m);
+      if (!c) continue;
+      const d = len3(sub3(a, c.point));
+      if (!best || d < best.d) best = { point: c.point, normal: c.normal, d };
     }
     return best;
   }
@@ -431,9 +491,9 @@ export function createProps({ data, weapons = [], effect = null, areas = null, w
   }
 
   return {
-    barrels, explosions, attach, areaSwitch, update, mgr, cmd, bulletTest, bulletHit, cameraProbe, lockTargets, deleted,
+    barrels, camBoxes, explosions, attach, areaSwitch, update, mgr, cmd, bulletTest, bulletHit, cameraProbe, nodeBoxes, lockTargets, deleted,
     id: k => (byRec.has(k) ? byRec.get(k).id : -1),
     get world() { return W; }, get mgr260() { return W ? W.mgr260 : null; },
-    t: { nearestOnCylinder, insideCylinder, gather, perTarget, explode, damage, bulletFilter, filter },
+    t: { boxRay, nearestOnCylinder, insideCylinder, gather, perTarget, explode, damage, bulletFilter, filter },
   };
 }

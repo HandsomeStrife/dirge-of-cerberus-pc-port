@@ -579,7 +579,8 @@ for _k, _a in enumerate(x for x in __import__("os").environ.get("TRACE_EVMP", ""
     _a = int(_a, 16)
     EVACTOR_FIELDS += [("mp%d_mat" % _k, None, _a + 0x10, "bytes:64", "D", "MP %#x +0x10 matrix" % _a),
                        ("mp%d_rate" % _k, None, _a + 0x40C, "f32", "D", "MP +0x40c rate"),
-                       ("mp%d_448" % _k, None, _a + 0x448, "u32", "D", "MP +0x448 head, +0x449 count")]
+                       ("mp%d_448" % _k, None, _a + 0x448, "u32", "D", "MP +0x448 head, +0x449 count"),
+                       ("mp%d_180" % _k, None, _a + 0x180, "bytes:8", "D", "MP +0x180 hidden smd list entries (FUN_0037aa20, worker 0261)")]
     EVACTOR_FIELDS += [("mp%d_l%d" % (_k, _l), None, _a + 0x200 + 0x30 * _l, "bytes:8", "D", "layer clip") for _l in range(8)]
     EVACTOR_FIELDS += [("mp%d_f%d" % (_k, _l), None, _a + 0x218 + 0x30 * _l, "f32", "D", "layer frame") for _l in range(8)]
 
@@ -714,6 +715,11 @@ elif __import__("os").environ.get("TRACE_FIELDSET") == "pose":
 if __import__("os").environ.get("TRACE_RNG"):
     FIELDS = FIELDS + [("rng_state", None, 0x4FBE00, "bytes:2496", "D", "DAT_004fbe00: MT state (624 u32)"),
                        ("rng_idx", None, 0x4FC7C0, "u32", "D", "DAT_004fc7c0: MT index")]
+
+# TRACE_RAW=name:hexaddr:nbytes,... (worker 0257): any absolute RAM block, for one state's own objects
+for _r in filter(None, __import__("os").environ.get("TRACE_RAW", "").split(",")):
+    _n, _a, _c = _r.split(":")
+    FIELDS = FIELDS + [(_n, None, int(_a, 16), "bytes:%d" % int(_c), "D", "TRACE_RAW")]
 
 # TRACE_SLOTS=1 (worker 0244): the chunk slot table DAT_004e4c60 (3 slots, stride 0x70: +0x54 chunk, +0x5c loaded;
 # area_stream.js) and the stream request DAT_0046bfb0..bc (current a / b, pending a / b)

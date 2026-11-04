@@ -76,17 +76,21 @@ def main():
             cams[n] = dict(file='%08x' % (0x0C000200 + (EVENT << 12) + n), hdr8=w2, channels=chans)
     eps = struct.unpack('<f', K.elf_bytes(a.elf, 0x46BE00, 4))[0]
     # the event windows' texts (worker 0248, as export_web_event.py `messages`, worker 0239): the 'MES_' string constants
-    # of the classes whose events the page plays (stage_controller.js PLAYS: rv_matiawase, class ev0101 = scr001), looked
-    # up in ev0100's message file 0c0641ca (FUN_003a6698; misses -> null). Widen PLAYED_CLASSES with PLAYS (and run
-    # tools/hygiene_text.py: the other events' texts hold runs that match ordinary words in the repo)
+    # of the event classes (worker 0261: all of them, Dan 2026-11-03: quoting the game's text is fine), looked up in ev0100's message
+    # file 0c0641ca (FUN_003a6698; misses -> null)
     import export_web_stageinfo as SI       # noqa: E402
-    PLAYED_CLASSES = ('ev0101',)
+    PLAYED_CLASSES = ('ev0101', 'ev0103', 'ev0141', 'ev0143', 'ev0145')
     keys = sorted({x[1] for c in classes.values() if c['name'] in PLAYED_CLASSES for x in c['cp']
                    if isinstance(x, list) and len(x) == 2 and isinstance(x[1], str) and x[1].startswith('MES_')})
     msgs = SI.messages(os.path.join(a.nopath, '%08x.bin' % (0x0C0001CA + (EVENT << 12))), a.elf,
                        SI.Elf(open(a.elf, 'rb').read()), keys)
+    # worker 0261: the voices' lengths (the zone's sdb row +0x14, ms; tools/audio/voice.py): waitVoiceFinish
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', '..', 'tools', 'audio'))
+    from bgm import sdb_rows                 # noqa: E402
+    rows = sdb_rows(open(os.path.join(a.nopath, '%08x.bin' % (0x06000000 | 128 << 16 | 8)), 'rb').read())
+    voice_ms = {n: r['end'] for n, r in rows.items() if r['flags'] & 2}
     out = dict(source='ev%04d scr000..scr%03d + the ELF event library; export_web_stage.py' % (EVENT, SCRIPTS[-1]),
-               main=main_cls, splineEps=eps, cameraFiles=cams, classes=classes, messages=msgs)
+               main=main_cls, splineEps=eps, cameraFiles=cams, classes=classes, messages=msgs, voiceMs=voice_ms)
     os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
     json.dump(out, open(a.out, 'w'), separators=(',', ':'))
     print('wrote %s: main class %s, %d classes, %d camera files (%d computed loads)' % (

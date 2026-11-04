@@ -109,9 +109,10 @@ const warned = new Set();
 const warnOnce = m => { if (!warned.has(m)) { warned.add(m); console.warn(m); } };
 
 // ---- The Restart invariant (worker 0254; notes/checkpoint-research.md 'The Restart invariant')
-// The game over's Restart and the pause's Restart differ in the stage loop only: FUN_004012c0 result 6 runs FUN_0031dbc8 for the
-// game over; case 0xf sets mode bit 0xe for the pause. Both then take FUN_00247508 0x15 case 6 (mode bit 0xd set) and what
-// survives depends on DAT_0046b0b8 (FUN_0023d598) alone, so the two paths end in the same state:
+// The game over's Restart and the pause's Restart differ in the stage loop: FUN_004012c0 result 6 runs FUN_0031dbc8 for the
+// game over; case 0xf sets mode bit 0xe for the pause. Both then take FUN_00247508 0x15 case 6 (mode bit 0xd set). What survives
+// depends on DAT_0046b0b8 (FUN_0023d598), except the player header DAT_0046e248, where bits 0xd / 0xe also decide: the game over
+// keeps EXP, level and +0x2c (FUN_00321480, FUN_00320848; items.js restart). Everything else ends the same on both paths:
 //   DAT_0046b0b8 == 0, a scene_save's record: mode bit 3, FUN_00400778 -> FUN_0030f688(stage, 2, rec + 0x100) -> FUN_0030fff0 case 2 ->
 //     FUN_00311fa0: gil, slot list, inventory and FUN_0031d4d8 (section stats, totals, taken words) are the record's, over
 //     whatever the game over cleared; FUN_003fda68: mark = the record's stat 14. HP alone is dropped (FUN_00319798's scratch).
@@ -139,6 +140,7 @@ export function sceneSave(n, s = {}) {
   const sf = {};
   for (const [k, v] of Object.entries(s.sflags || {})) if (+k >= 0 && +k < 64 && v) sf[k] = v & 0xff;   // FUN_003ff738: bytes 0..63
   const inv = s.inventory;
+  if (inv) { inv.gilBase = inv.gil; inv.gilEarned = 0; }   // FUN_00321480's write: +0x2c = 0, +0x28 = +8 (with FUN_00312630 == 0)
   return Object.freeze({
     stage: 0x80, n: n | 0, resume: 'main', event: 100,
     gflags: Uint8Array.from({ length: 64 }, (_, i) => (s.gflags ? s.gflags[i] | 0 : 0) & 0xff),
@@ -146,9 +148,10 @@ export function sceneSave(n, s = {}) {
     pair: Array.isArray(s.pair) ? s.pair.slice(0, 2) : null,
     hp: s.hp,
     // worker 0243: the inventory's selection (+0 / +0xc / +0x10) and slot pool are part of the same block
-    inventory: inv ? { slots: inv.slots.map(e => e.slice()), gil: inv.gil, other: inv.other, sel: inv.sel, last: inv.last, selId: inv.selId, freed: (inv.freed || []).slice(), ammo: inv.ammoState ? inv.ammoState() : null } : null,
+    inventory: inv ? { slots: inv.slots.map(e => e.slice()), gil: inv.gil, gilBase: inv.gil, gilEarned: 0, other: inv.other, sel: inv.sel, last: inv.last, selId: inv.selId, freed: (inv.freed || []).slice(), ammo: inv.ammoState ? inv.ammoState() : null } : null,
     taken: s.taken ? [...s.taken] : [],            // DAT_0046e228 +0x1c0 entries' taken words (FUN_0031e0e0)
     stats: s.stats ? s.stats.block() : null,       // DAT_0046e228 +0 .. +0x1c0 (FUN_0031d4d8; results.js)
+    dead: s.dead ? [...s.dead] : [],               // the same entries' dead words (FUN_0031e060 / FUN_0031e160; FUN_00547ce0 at the reload)
   });
 }
 
@@ -178,7 +181,7 @@ export function loadedPair(stream) {
 // main's battle() just after the opening finds no stage object yet (DAT_0046e290 == 0, T w240_init f2264): its
 // FUN_00324e70 sends nothing (stage_controller.js enterBattle's stage pass).
 export function initWorld(make, o) {
-  const W = make({ eventFlags: o.flags, deadRecs: [], now: 0, acc: 0, mgr20: 0, mgr24: 0 });
+  const W = make({ eventFlags: o.flags, deadRecs: o.deadRecs || [], now: 0, acc: 0, mgr20: 0, mgr24: 0 });
   if (W.stageInit) W.stageInit();
   else warnOnce('restart: enemy_ai has no stageInit (the stage init\'s 0x22 / 0x23 pass left out)');
   const c = o.clock || {};

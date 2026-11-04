@@ -107,7 +107,8 @@ while (!rt.done && n < 5000) {
     const d = a.drawn;
     if (d && lastM.has(a) && d.M !== lastM.get(a)) staleM++;
     if (d && lastM.has(a) && a.mp.M.some((x, i) => x !== d.M[i])) cutsSeen++;
-    if (d && d.shown && skinned.has(a.model) && !d.clip && (d.M[12] || d.M[13] || d.M[14])) bindShown.push(n + ':' + a.id);   // at the origin (no setpos yet) is off-screen, as in the game (T w218_act_a: 4 / 6 at 0,0,0)
+    if (d && d.shown && skinned.has(a.model) && a.files.length && !d.clip &&   // (a model's packs may be another event's: worker 0261)
+      (d.M[12] || d.M[13] || d.M[14])) bindShown.push(n + ':' + a.id);   // at the origin (no setpos yet) is off-screen, as in the game (T w218_act_a: 4 / 6 at 0,0,0)
     lastM.set(a, a.mp.M);
   }
   const g = id => { const a = A.get(id); return a ? [a.mp.clip, a.frameDrawn, a.mp.rate] : null; };

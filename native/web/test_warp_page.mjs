@@ -28,10 +28,10 @@ try {
 const { WARPS } = await import('./warp.js');
 
 // the chunk each place lies in (walk polygon file; hex 0b = 11)
-const CHUNK = { deck: 2, stairs: 2, dogs: 3, market: 6, chunk07: 7, chunk09: 9, chunk0b: 11, boss: 11 };
+const CHUNK = { deck: 2, stairs: 2, dogs: 3, market: 6, heli: 6, chunk07: 7, encounter: 7, toujou: 7, wro: 8, chunk09: 9, chunk0b: 11, boss: 11 };
 const only = process.env.WARP_ONLY ? process.env.WARP_ONLY.split(',') : null;
-const names = Object.keys(WARPS).filter(n => !only || only.includes(n));
-ok(Object.keys(CHUNK).every(n => WARPS[n]) && Object.keys(WARPS).every(n => n in CHUNK), `the warp names: ${Object.keys(WARPS).join(', ')}`);
+const names = Object.keys(WARPS).filter(n => (!only || only.includes(n)) && !WARPS[n].cutscene);   // cutscene places: test_heri_kita_page
+ok(Object.keys(CHUNK).every(n => WARPS[n]) && Object.keys(WARPS).every(n => n in CHUNK || WARPS[n].cutscene), `the warp names: ${Object.keys(WARPS).join(', ')}`);
 
 const png = buf => {                                           // 8-bit RGB / RGBA, non-interlaced (playwright screenshots)
   let o = 8, w = 0, h = 0, ct = 0; const idat = [];

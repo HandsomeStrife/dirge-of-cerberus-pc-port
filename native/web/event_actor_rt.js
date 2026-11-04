@@ -53,6 +53,25 @@ export function mul(A, B) {
   return o;
 }
 
+// FUN_00262de0: quaternion -> rows 0-2 (12 values; VU macro words at 0x262e24..: q*q, opmula / opmsub = (yz, zx, xy), q.xyz * w; rows vf13, vf14, vf15)
+export function quatRows(x, y, z, w) {
+  const m = (u, v) => f32(u * v), xx = m(x, x), yy = m(y, y), zz = m(z, z), yz = m(y, z), zx = m(z, x), xy = m(x, y), xw = m(x, w), yw = m(y, w), zw = m(z, w);
+  const d = (v) => f32(2 * f32(v));
+  return [f32(1 - d(yy + zz)), d(xy + zw), d(zx - yw), 0,
+    d(xy - zw), f32(1 - d(xx + zz)), d(yz + xw), 0,
+    d(zx + yw), d(yz - xw), f32(1 - d(xx + yy)), 0];
+}
+
+// FUN_00383d10(out, M, next): v = row 3 - next with y 0; row 0 = row 1 x v, row 2 = row 0 x row 1, row 1 = row 2 x row 0, each normalized (VU words at 0x383d10); row 3 kept
+export function lookRows(M, next) {
+  const cross = (a, b) => [f32(f32(a[1] * b[2]) - f32(b[1] * a[2])), f32(f32(a[2] * b[0]) - f32(b[2] * a[0])), f32(f32(a[0] * b[1]) - f32(b[0] * a[1]))];
+  const norm = (a) => { const q = f32(1 / f32(Math.sqrt(f32(f32(f32(a[0] * a[0]) + f32(a[1] * a[1])) + f32(a[2] * a[2]))))); return a.map(x => f32(x * q)); };
+  const v = [f32(M[12] - next[0]), 0, f32(M[14] - next[2])];
+  const r0 = cross([M[4], M[5], M[6]], v), r2 = cross(r0, [M[4], M[5], M[6]]), r1 = cross(r2, r0);
+  const a = norm(r0), b = norm(r1), c = norm(r2);
+  return [a[0], a[1], a[2], 0, b[0], b[1], b[2], 0, c[0], c[1], c[2], 0];
+}
+
 // ---- texture animations (worker 0248): the model's texanm.tad (export_web_event_actors.py texanims), the faces'
 // eyes / mouths. MP+0x400 = one 0x10 entry per animation, MP+0x404 the count:
 //   +1 on (bit 0)   +2 frames   +4 frame (f32)   +8 wait (f32)   +0xc / +0xe the wait range (s16)
@@ -108,6 +127,8 @@ export function texAnimAdvance(tex, rand) {
   }
 }
 
+export const LOAD_CMD = 0x7e;                         // page only: no such command type in FUN_00377c68
+
 export class EventActors {
   // clipFrames(model, n, clip) -> frame count of `clip` in event motion file n for that model, or null (no pack)
   // texAnims(model) -> the model's texanm animations (export_web_event_actors.py texanims), or null (worker 0248)
@@ -147,10 +168,20 @@ export class EventActors {
       mp: { clip: null, frame: 0, rate: 0.5, loop: false, count: 0, kids: [null, null, null, null], marker: [0, 0, 0, 0] },
       shown: true, frameDrawn: 0, clipDrawn: null,
       anim: null, animOn: false,                          // +0x10 the setanim name, +0xa8 bits 53 (start) / 54 (stop)
+      partMask: 0,                                        // MP+0x180 (hide_model_l)
     };
     a.mp.tex = texAnimSetup(this.texAnims(model));        // FUN_005a8850: MP+0x400 / +0x404 (worker 0248)
     this.slots.push(a);
     return a;
+  }
+
+  // a page load as a command: done when its promise is (event_rt.js / stage_controller.js frame: type LOAD_CMD)
+  loading(R, p) {
+    if (!p) return 0;
+    const h = R.cmd(LOAD_CMD, { done: false });
+    const c = R.slots[R.slots.length - 1];
+    p.then(() => { c.done = true; });
+    return h;
   }
 
   rig() { return this.lights ??= { dir: [[0, 0, 0], [0, 0, 0], [0, 0, 0]], col: [[0, 0, 0], [0, 0, 0], [0, 0, 0]], amb: [0, 0, 0] }; }
@@ -238,6 +269,43 @@ export class EventActors {
     }
   }
 
+  // case 0xc (FUN_00377c68; worker 0263): the walk. The clip once, +0xb0 = 0x86, bit 48 set; s = (clock - start) x speed; while s < L (or +0x156c == 2) row 3 = the line at s,
+  // rows 0-2 = FUN_00383d10 toward the line at s + 1; at the end the end clip (blend, bit 48 from the loop flag, flags 0x86 / 0x82)
+  walk(c, R) {
+    const a = this.get(c.id);
+    if (!a) return true;
+    if (c.clip) { a.code = c.clip; a.blend = c.blend; a.start = -1; c.clip = null; }
+    a.flags = 0x86; a.loop = true;
+    const el = R.clock < c.start ? 0 : (R.clock - c.start) >>> 0;
+    const s = f32(f32(el) * c.speed);
+    const at = (v) => { const t = c.L > 0 ? Math.min(f32(v / c.L), 1) : 1; return [0, 1, 2].map(k => f32(c.p[k] + f32(f32(c.q[k] - c.p[k]) * t))); };
+    if (s < c.L || R.skip === 2) {
+      const P = at(s);
+      a.M[12] = P[0]; a.M[13] = P[1]; a.M[14] = P[2];
+      const rows = lookRows(a.M, at(f32(s + 1)));
+      for (let i = 0; i < 12; i++) a.M[i] = rows[i];
+    }
+    if (s < c.L && R.skip !== 2) return false;
+    if (c.end) { a.blend = c.blend; a.code = c.end; a.loop = c.loop; a.flags = c.hold ? 0x86 : 0x82; a.start = -1; }
+    return true;
+  }
+
+  // case 0x22 (FUN_00382768), a slot command until true: first run waits for +0x34's command, +0x38 becomes an end time, FUN_0037af40 makes the request
+  // (+0xb4 = start frames x 2, bit 48 = loop, flags 0x86 / 0x82), +0x30 = the update count +0x10. Under Skip it ends at once unless started this update
+  chain(c, R) {
+    if (c.n === 0) {
+      if (c.prev > 0 && R.busy(c.prev)) return false;
+      c.until = (c.until + R.clock) >>> 0;
+      const a = this.get(c.id);
+      if (a) { a.code = c.name; a.loop = c.loop; a.flags = c.hold ? 0x86 : 0x82; a.blend = c.blend; a.start = c.startF * 2; }
+      c.at = R.frameNo;
+      c.n = 1;
+      this.log.push([R.frameNo, 'chain ' + c.id + ' ' + c.name]);
+    }
+    if (R.skip !== 0 && R.frameNo !== c.at) return true;
+    return c.until <= R.clock;
+  }
+
   // one game frame after the event update (FUN_00377c68): the MP draw (FUN_005a8e28), then FUN_003772c8
   step(pose) { this.draw(pose); this.update(); }
 
@@ -247,14 +315,17 @@ export class EventActors {
     const N = {
       // load_l(name, id, f) (FUN_0039e2f0 -> FUN_00379c68): command 9 (disc load) or, resident, FUN_00380370 at once.
       // The page's models are resident (preloaded): at once; the handle 0 is never busy (event_rt.js 'event loads')
-      'fake/KerberosActor.load_l(Ljava/lang/String;II)I': (vm, [name, id]) => { T.create(str(name), id); T.log.push([R.frameNo, 'load ' + name + ' ' + id]); return 0; },
+      // the handle is busy until the page has the model (event_actors.js loadEventActors: T.ensure; none = resident, as the tests)
+      'fake/KerberosActor.load_l(Ljava/lang/String;II)I': (vm, [name, id]) => { T.create(str(name), id); T.log.push([R.frameNo, 'load ' + name + ' ' + id]); return T.loading(R, T.ensure && T.ensure(str(name))); },
       // loadchr_static_l / loadchrs / unloadchr: character data loads (no actor); resident on the page
       'fake/KerberosActor.loadchr_static_l(Ljava/lang/String;Ljava/lang/String;I)I': () => 0,
       'fake/KerberosActor.loadchrs(I)I': () => 0,
       'fake/KerberosActor.unloadchr(Ljava/lang/String;)V': () => {},
       // loadmotion_l(id, n) (FUN_003a13a8 -> FUN_0037b368: command 0x12 -> FUN_00382220): event motion file
       // FUN_00250898(n, event) = 0x0c000400 + event x 0x1000 + n for the actor's MP; at once on the page
-      'fake/KerberosActor.loadmotion_l(II)I': (vm, [id, n]) => { const a = A(id); if (a && !a.files.includes(n)) a.files.push(n); T.log.push([R.frameNo, 'loadmotion ' + id + ' ' + n]); return 0; },
+      'fake/KerberosActor.loadmotion_l(II)I': (vm, [id, n]) => { const a = A(id); if (a && !a.files.includes(n)) a.files.push(n); T.log.push([R.frameNo, 'loadmotion ' + id + ' ' + n]); return T.loading(R, a && T.ensurePack && T.ensurePack(a.model, n)); },
+      // unload_residentmotion_l(name, n) (FUN_003a1410 -> FUN_0037b3b0: FUN_0030dac8 on the character's data, FUN_0030dc28): frees a character's resident motion file. Nothing on the page: the library stays (worker 0262)
+      'fake/KerberosActor.unload_residentmotion_l(Ljava/lang/String;I)V': () => {},
       'fake/KerberosActor.unloadmotion_l(II)I': (vm, [id, n]) => { const a = A(id); if (a) a.files = a.files.filter(x => x !== n); return 0; },
       // unload_l (FUN_0039eec0 -> FUN_0037e990: the character data); finalize_l (FUN_003a3410 -> FUN_00376c80: the slot)
       'fake/KerberosActor.unload_l(I)V': () => {},
@@ -313,6 +384,13 @@ export class EventActors {
       'fake/KerberosActor.loadVincentWeapon_l(I)V': (vm, [id]) => { T.create('weapon', id); T.log.push([R.frameNo, 'loadVincentWeapon ' + id]); },
       // setVisible_l (FUN_003a3478 -> FUN_0037ede8): +0xa8 bit 49; setClip_l (FUN_003a3518 -> FUN_0037ef08): bit 52
       'fake/KerberosActor.setVisible_l(IZ)V': (vm, [id, v]) => { const a = A(id); if (a) a.visible = !!v; },
+      // hide_model_l(id, n, b) (FUN_003a11d0 -> FUN_0037aa20(ev, id, n, -1, b)): MP+0x180 bit n set (b 0) / clear (b != 0);
+      // FUN_005b2ef8 skips the model's smd list entry n while its bit is set (worker 0261; event_actors.js applyMask)
+      'fake/KerberosActor.hide_model_l(IIZ)V': (vm, [id, n, b]) => {
+        const a = A(id); if (!a || a.lent) return;
+        const bit = (1 << (n & 31)) >>> 0;
+        a.partMask = (b ? (a.partMask & ~bit) : (a.partMask | bit)) >>> 0;
+      },
       'fake/KerberosActor.setClip_l(IZ)V': (vm, [id, v]) => { const a = A(id); if (a) a.clip = !!v; },
       // setmotionspeed_l (FUN_0039d1f0 -> FUN_0037be10): +0xdc
       'fake/KerberosActor.setmotionspeed_l(IF)V': (vm, [id, s]) => { const a = A(id); if (a) a.speed = f32(s); },
@@ -337,6 +415,27 @@ export class EventActors {
         const nm = str(name);
         a.code = nm; a.loop = false; a.flags = z ? 0x86 : 0x82; a.blend = msToFrames(ms);
       },
+      // move_l(x, y, z, clip, blendMs, id, speed, z1, hold, endClip, loop) (FUN_0039eef8 -> FUN_0037b5b0): command 0xc, a straight walk from the actor's position (+0x50).
+      // Knots 0, L; L = FUN_00383be0's distance (5 steps of 0.2 over the two points) x 0.1. z1 is not stored
+      'fake/KerberosActor.move_l(FFFLjava/lang/String;FIFZZLjava/lang/String;Z)I': (vm, [x, y, z, clip, blendMs, id, speed, z1, hold, end, loop]) => {
+        const a = A(id), p = a ? [a.M[12], a.M[13], a.M[14]] : [0, 0, 0];
+        const q = [f32(x), f32(y), f32(z)];
+        let L = 0, u = 0, pr = p;
+        for (let i = 0; i < 5; i++) { u = f32(u + 0.2); const n = [0, 1, 2].map(k => f32(p[k] + f32(f32(q[k] - p[k]) * u))); L = f32(L + f32(Math.hypot(pr[0] - n[0], pr[1] - n[1], pr[2] - n[2]))); pr = n; }
+        return R.cmd(0xc, { id, p, q, L: f32(L * f32(0.1)), speed: f32(speed), start: R.clock, clip: str(clip), end: end == null ? null : str(end), blend: msToFrames(blendMs), hold: !!hold, loop: !!loop });
+      },
+      // setmotion4_l(id, name, blendMs, startMs, durMs, loop, hold, prev) (KerberosActor.setmotionChain; FUN_0039f7a8 -> FUN_0037ae98): command 0x22
+      // {+0x20 id, +0x24 blend frames, +0x28 name, +0x30 start frames, +0x34 prev, +0x38 (int) durMs, +0x3c hold, +0x3d loop}; returns its handle
+      'fake/KerberosActor.setmotion4_l(ILjava/lang/String;FFFZZI)I': (vm, [id, name, blendMs, startMs, durMs, loop, hold, prev]) =>
+        R.cmd(0x22, { id, name: str(name), blend: msToFrames(blendMs), startF: msToFrames(startMs), prev: prev | 0, until: Math.trunc(f32(durMs)), hold: !!hold, loop: !!loop, n: 0 }),
+      // setqt_l(id, x, y, z, w) (FUN_0039f340 -> FUN_0037b9c8): FUN_00262de0 (quaternion -> rows, read from its VU words), rows 0-2 of the actor matrix; row 3 kept
+      'fake/KerberosActor.setqt_l(IFFFF)V': (vm, [id, x, y, z, w]) => {
+        const a = A(id); if (!a) return;
+        const q = quatRows(x, y, z, w);
+        for (let i = 0; i < 12; i++) a.M[i] = q[i];
+      },
+      // setshadow_l(id, b) (FUN_0039e250 -> FUN_0037ebe8): +0xa8 bit 51 (the page draws no event shadows: left out)
+      'fake/KerberosActor.setshadow_l(IZ)V': () => { T.warnOnce('setshadow', 'event actors: setshadow_l (FUN_0037ebe8, shadows) left out'); },
       // ---- fake/KerberosLight ----
       // set_directionvector_l(i, x, y, z) (FUN_003a5248): i < 3 -> FUN_0040cc40 (+0x630 + 0x10 i; FUN_004450f0 builds the
       // light matrix: rows -normalize(dir)); else FUN_00380210 (not translated: the shadow direction)
@@ -352,7 +451,8 @@ export class EventActors {
       'fake/KerberosLight.set_ambientcolor(III)V': (vm, [r, g, b]) => { T.rig().amb = [r, g, b].map(v => f32(f32(v) * f32(1 / 128))); },
       'fake/KerberosLight.set_shadowalpha(I)V': () => { T.warnOnce('shadowalpha', 'event lights: set_shadowalpha (shadows) left out'); },
       // reset (FUN_003a5200 -> FUN_00269a08): the area's env light again (not translated: the page keeps the event set)
-      'fake/KerberosLight.reset()V': () => { T.warnOnce('lreset', 'event lights: reset (FUN_00269a08) not translated'); },
+      // reset (FUN_003a5200 -> FUN_00269a08): the stage's own light record again, DAT_004fcaf8 bit 37 cleared: null = the env rig (worker 0263)
+      'fake/KerberosLight.reset()V': () => { T.lights = null; },
       // setLOD_l (FUN_0039e200 -> FUN_0037ec88): +0x1e4 (MP+0x44d); the page draws variant 0 (enemies.js VARIANT)
       'fake/KerberosActor.setLOD_l(II)V': (vm, [id, v]) => { const a = A(id); if (a) a.lod = (v >>> 0) > 3 ? -1 : v; },
     };

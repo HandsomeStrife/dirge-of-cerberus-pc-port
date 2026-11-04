@@ -1,0 +1,50 @@
+{
+"name": "w261_sk_b",
+"frames": 3300,
+"log_from": 2450,
+"doc": "worker 0261: from w261_preheri: heri_taijou unskipped, scene_save(3)'s box answered as w229_rescue (hold from f998), sk_mituketa2 unskipped. TRACE_FIELDSET=event TRACE_LOG_AT=AB000.",
+"events": [
+{
+"from": 1298,
+"to": 1303,
+"buttons": [
+"right"
+]
+},
+{
+"from": 1318,
+"to": 1323,
+"buttons": [
+"cross"
+]
+},
+{
+"from": 1378,
+"to": 1383,
+"buttons": [
+"left"
+]
+},
+{
+"from": 1398,
+"to": 1403,
+"buttons": [
+"cross"
+]
+},
+{
+"from": 1498,
+"to": 1503,
+"buttons": [
+"cross"
+]
+},
+{
+"from": 1598,
+"to": 1603,
+"buttons": [
+"cross"
+]
+}
+]
+}

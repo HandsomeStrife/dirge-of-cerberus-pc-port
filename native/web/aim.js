@@ -483,7 +483,7 @@ export async function setupAim({ ctrl, anim, motions, col, follow, output, vin, 
                if (b === 'r3') btn.r3Edge = true; if (b === 'circle') btn.circleEdge = true; if (b === 'r2') btn.r2Edge = true; },
     // per drawn frame: Vincent's fade (CAM+0x1e0 -> FUN_00342318)
     // GUESS: the fade is drawn as visible / hidden (the 16-frame partial alpha is left out).
-    render() { vin.body.visible = core.cam.fade > 0; },
+    render() { vin.body.visible = core.cam.fade > 0 && !vin.eventHidden; },   // eventHidden: main's events (play.js vinBattle, setVisibleAll)
     state: () => ({ st: core.P.st, T: core.P.T, drawn: core.P.drawn, ammo: core.ammo.hud(), view: core.cam.view, type: core.cam.type,
                     ramp: core.cam.ramp, fade: core.cam.fade, fov: core.cam.fov, offY: core.hud.offY, kind: core.r.kind,
                     phase: core.r.phase.slice(1, 4), aim: core.P.aim, quad: ctl.state().quad,

@@ -1,0 +1,50 @@
+{
+"name": "w261_skact_a",
+"frames": 2040,
+"log_from": 1622,
+"doc": "worker 0261: sk_mituketa2's actors. TRACE_FIELDSET=evactor TRACE_LOG_AT=A8000 TRACE_EVMP=14d4700,14d5480,14d5d80",
+"events": [
+{
+"from": 1298,
+"to": 1303,
+"buttons": [
+"right"
+]
+},
+{
+"from": 1318,
+"to": 1323,
+"buttons": [
+"cross"
+]
+},
+{
+"from": 1378,
+"to": 1383,
+"buttons": [
+"left"
+]
+},
+{
+"from": 1398,
+"to": 1403,
+"buttons": [
+"cross"
+]
+},
+{
+"from": 1498,
+"to": 1503,
+"buttons": [
+"cross"
+]
+},
+{
+"from": 1598,
+"to": 1603,
+"buttons": [
+"cross"
+]
+}
+]
+}

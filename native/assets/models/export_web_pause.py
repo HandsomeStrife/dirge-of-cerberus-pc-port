@@ -63,6 +63,8 @@ LAYOUTS = {'pause': 0x477678, 'yesno': 0x472ad8,
            'box_restart': 0x477a10, 'box_quit': 0x477a30, 'box_tempsave': 0x477a50,
            # the event window, box kind 4 (FUN_003b84a8 -> FUN_003b8598, param_7 0; worker 0239)
            'window4': 0x472c48,
+           # the choice box, box kind 27 (FUN_003b8e50 -> FUN_003b8ec8; worker 0263)
+           'window27': 0x472c98,
            # the event pause (FUN_003bfe28 param 1: Start during an event; language 2's rect override 0x51fc60[2] is 0)
            'eventpause': 0x4779c0}
 BOX_TEXTOFF_AT = 0x472f58                       # FUN_003b7f38: per language 2 shorts, OK / CANCEL text x (+0x60)

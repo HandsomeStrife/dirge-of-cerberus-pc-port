@@ -75,8 +75,7 @@ export function createIntro({ data, camera, output, canvas, zoneLoad = null, war
       const m = sound && sound.music && sound.music();
       if (m && m.setVolume) m.setVolume(on ? 0 : 0x7f);
       const v = sound && sound.voices && sound.voices();
-      // L: the voice channels' decode is paused in the game; the page mutes them (they run on underneath)
-      if (v && v.out) v.out.gain.value = on ? 0 : 0x7fff / 32768;
+      if (v && v.pause) v.pause(on);                                  // FUN_003ea9f0 / FUN_003eaa78 (worker 0261)
     },
     get skipped() { return rt.skip !== 0; },
     finish() {

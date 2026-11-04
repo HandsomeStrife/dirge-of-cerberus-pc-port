@@ -55,7 +55,7 @@
 // With no actions registered every code path is the game's locomotion.
 // ================================================================
 import * as THREE from 'three';
-import { Jump, FallMotion, stickMode, enterState, airState, moveAngle, HIT_STATE, DEAD_STATE, REVIVE_STATE } from './jump_core.js';
+import { Jump, FallMotion, stopMove, stickMode, enterState, airState, moveAngle, HIT_STATE, DEAD_STATE, REVIVE_STATE } from './jump_core.js';
 
 // ---------------------------------------------------------------- timing
 export const TICK = 1 / 50;                       // one PAL game frame (s): play.js's loop step
@@ -497,6 +497,8 @@ export class PlayerController {
     // state, not an on-foot state 2-5, so no walk move is written (the ladder's state
     // number isn't decoded; see notes/fidelity-audit.md). The stick ramp above still runs.
     const st = owned ? -1 : P.state;
+    // FUN_00578748 LAB_00578bec: states 7, 0xf, 0x10, 0x11 return before FUN_0034af98 / FUN_0034b638: the move and FUN_005618d0's turn stand
+    if (st === 7 || (st >= 0xf && st <= 0x11)) return;
     let spd = 0;
     if (st >= 2 && st <= 5) {
       const B = P.b299;
@@ -652,7 +654,8 @@ export class PlayerController {
     if (B.state === 0) {
       // case 0: move = body+0x40 x step -> FUN_00357d48 (collision.js navMove), which first adds the
       // actor push-out (pushIn: FUN_0035a440)
-      const [mx, mz] = this.pushIn(v.x * STEP, v.y * STEP, v.z * STEP);
+      let [mx, mz] = this.pushIn(v.x * STEP, v.y * STEP, v.z * STEP);
+      if (this.doorWall) [mx, mz] = this.doorWall([p.x, p.y, p.z], mx, mz);   // worker 0257: a shut door's box (play.js -> enemy_ai doorWall)
       const r = col.navMove(B.poly, p.x, p.y, p.z, mx, mz, false);
       this.hitWall = r[4];
       B.poly = r[3];
@@ -815,7 +818,8 @@ export class PlayerController {
     // 0x80-0xbf / 1 are not on the page)
     // The page's ladder action holds P.state at 9 (applyOwned), so it is tested before the air states: the game's ladder states 0xb-0xe are not air states
     // (FUN_0055aa88), they are FUN_0055a410's (below).
-    if (this.active) return this.ladderHit(deadNow);
+    // The ladder's 'fall' phase is the game's state 8 (FUN_0055a410 is false for it): the air branch below; knockDown ends the action.
+    if (this.active && this.active.phase !== 'fall') return this.ladderHit(deadNow);
     if (airState(st) || (above && P.jumpBits)) {
       if (f118 & 4) return 'none';
       // FUN_00561270(P, dir, 0, 0), alive with flags 4 / 8: FUN_005618d0(P, dir, 0, 2)
@@ -860,7 +864,7 @@ export class PlayerController {
   // roll-up; else the bits 0. T w255_knock_hold: stick held, record 189 state 2, c_rev_r, 3.1 u along the side, control back at 224.
   knockInput(cross) {
     const P = this.P, m = this.jump.motion;
-    if (m && m.tech && cross && this.onGround) { this.C.slide = null; this.jump.takeOff(this, true, { force: true }); return; }
+    if (m && m.tech && cross && this.onGround) { this.C.slide = null; this.jump.takeOff(this, true, { force: true }); this.setStance(0); return; }   // (state 8 / 0x20's enter FUN_005389a8 / FUN_0053a3f0)
     const S = this.stickW;
     if (!m || !m.rollOk || S.mag <= 0.3) { P.revSide = 0; return; }
     P.revSide = moveAngle(this.C.face, { x: S.x, z: S.z }) > 0 ? 2 : 1;
@@ -900,8 +904,8 @@ export class PlayerController {
     C.slide = { dir: u, v, dv: f32(v / T), end: 0.5, mover: 10 };
     this.startFall(rise);
     C.rotMode = 4;
-    this.jump.enter(this, behind ? 0x10 : 0xf);
-    this.setStance(0);                            // FUN_005392b8 / FUN_00539390
+    if (this.active) { const a = this.active; this.active = null; a.exit(this.ctx); }   // (the ladder's fall: its state 8 is left for 0xf / 0x10)
+    this.jump.enter(this, behind ? 0x10 : 0xf);   // (FUN_005392b8 / FUN_00539390's stance 0: Jump.enter)
     P.t164 = now;
     return true;
   }
@@ -918,7 +922,7 @@ export class PlayerController {
   // 6) (status bit 6, FUN_0056b620): clear on the page (php.s64 0). Then FUN_0055b8e0(P, 7, 0, 0) unless P+0x118 has
   // 0x8000 / 0x10000; returns 1 when it did. Vincent's P+0x28 is 0x20901f (bit 0x20 clear): d = 12.
   death(dir, f118, f28) {
-    this.C.slide = null;                          // FUN_003533e0
+    stopMove(this.C);                          // FUN_003533e0
     const d = ((f28 & 4) && (f28 & 0x20)) ? 5.0 : 12.0;   // DAT_0046edac : 0x41400000
     if (!(f28 & 0x20) || (f28 & 0x20000)) this.deathSlide(d, 16.0, dir);
     return this.enterDead(f118);
@@ -956,7 +960,7 @@ export class PlayerController {
   // FUN_00560d80's FUN_003533e0 and FUN_0055b8e0(P, 0x16, 0, 0) (P+0x118 bits 0x800 / 0x10000 clear), whose enter FUN_00539a10:
   // FUN_00565bd0(P, 0), FUN_00565d78(P, 0) (worker 0255; T w255_phoenix record 1005)
   revive() {
-    this.C.slide = null; this.C.groundSpeed = 0;   // FUN_003533e0 (the death's mover 0xb goes)
+    stopMove(this.C);                          // FUN_003533e0 (the death's mover 0xb goes)
     if (!this.jump.enter(this, REVIVE_STATE)) return false;
     this.setStance(0);
     return true;

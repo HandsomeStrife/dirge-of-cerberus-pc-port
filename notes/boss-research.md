@@ -331,3 +331,21 @@ drop model g058 (404 at the boss's death: items.json lists it, data/items has no
   w0237_boss_gauge_game_vs_page.png.
 - test_boss_page no longer runs Zone.boss / event23 itself: it fails at "record 32 active" (the page's stage controller reaches
   Zone.boss(true), but nothing sends the 0x23 pass on that route; in the game it is the stage init's).
+
+## The walked arena: states 4 and 6 against the game (worker 0259, 2026-11-04)
+
+**Why w235_move stayed pinned:** r0b_boss2 pokes global flag 19 (restart path). Replaying the save with no poke (route `r0b_fight`, parent r0b_save, then its event) gives a Vincent who really moves; he walks into btbox4 with route.py waypoints (`r0b_box4`: (589, -100, 1456), (660, -100, 1460), (735, -100, 1460), reached at f233). **The brain's address differs on this path: 0x9a75c0** (not 0x8da900): find it as the word 0xaa3508 in eeMemory, brain = that address - 0x18 (r0b_boss2: 0x8da918, r0b_box4: 0x9a75d8). TRACE_BOSS_BRAIN=8da900 here reads unrelated bytes.
+
+Traces (gitignored; no input, HP 9999, TRACE_FIELDSET=enemy TRACE_ERECS=32 TRACE_BOSS_BRAIN=9a75c0 TRACE_PPOS=1): w259_boss_box4 (f0-629), box4b (f830-1259), box4c (f1950-2339). A long enough run needs TRACE_LOG_AT b0000 / b6000.
+
+**T, state 4 (dive):** state 2 -> 4 at f855 (count 2, alternation 1, Vincent in btbox4); atk_sp1 f856; flight f927 (71 frames: head frame 0.6 per frame, FUN_00346108 reads 2 x frame >= 84); volume's hit on Vincent f944, 191 HP, knocked down; arrival f968 at (732.5, -100, 1406.8) = 60 u short of his (734.3, -100, 1466.7), his y; turn; state 2 at f994. Speed rises 12 / frame, falls 10 / frame. Timer 0 is re-stamped until he stands (c_fl_1, h_rev_0, then h_st f1107), state 3 at f1156: 49 frames = 59 ticks (FUN_00aa2bb8).
+
+**T, state 6 (homing volley):** state 2 -> 6 at f1955 (count 2, alternation 0); atk_sp3 f1956; 4 missiles at f2147 (191 frames: clip frame 228), slots 0, 1, 4, 5; clip end f2260 (304 frames: 183 frames at 0.6); turn; state 2 at f2286. Vincent loses 137 HP between f2182 and f2260.
+
+**Page vs T: no error in the brain.** test_boss_trace: every frame of all three traces matches (state, sub-state, count, moves, alternation, shots, timer 0, shot slots), with the game's own body position, arrival and his clip fed in; bit 8 (turn done) has no traced field, so the game's leaving the state stands for it. test_boss_dive_page on the page: flight start 71 (T 71), flight 42 (41), end (732.5, -100, 1406.7), volley 191 (191), clip end 305 (304), damage 191 (191), state 3 after he stands 51 (49) ticks.
+
+**Not compared:** which clips the knock-down starts with. T c_jp_fa0, c_fl_0 / 1; page c_st_bl0, c_bl_0, c_bl_ht0, c_fl_1: his facing and side differ between the two runs, because the page's collision is streamed and Vincent can't be teleported to x = 734, so the page's real hit happens at x = 620. The first part of the page test pins only the brain's target (harness). Knock-down with the same facing: open.
+
+**Seen once, not explained:** one early version of the page test (brain target held fixed through a second, natural dive) ended with a.pos NaN and `g.cells[...] is not iterable` page errors. It did not recur once the test stopped at the first dive's end and restored the real target. May be the pin alone; not reproduced, not ruled out as a page bug.
+
+**Still not traced:** states 7 (atk_sp2, low HP), 8 (stagger), 9 (beaten): they need damage on the boss; these runs have no shots. Moves: no fly in these three traces after the first (f0-55's arrival at btbox1).

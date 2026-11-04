@@ -1,0 +1,50 @@
+{
+"name": "w261_skact0",
+"frames": 1650,
+"log_from": 1640,
+"doc": "worker 0261: the slots' MP addresses in sk_mituketa2. TRACE_FIELDSET=evactor TRACE_LOG_AT=A8000.",
+"events": [
+{
+"from": 1298,
+"to": 1303,
+"buttons": [
+"right"
+]
+},
+{
+"from": 1318,
+"to": 1323,
+"buttons": [
+"cross"
+]
+},
+{
+"from": 1378,
+"to": 1383,
+"buttons": [
+"left"
+]
+},
+{
+"from": 1398,
+"to": 1403,
+"buttons": [
+"cross"
+]
+},
+{
+"from": 1498,
+"to": 1503,
+"buttons": [
+"cross"
+]
+},
+{
+"from": 1598,
+"to": 1603,
+"buttons": [
+"cross"
+]
+}
+]
+}

@@ -538,6 +538,14 @@ else {
       const lines = C.c.rt.log.filter(([, m]) => /^battle(:| \d)/.test(m)).map(([, m]) => m);
       ok(pass === 1 && lines[0] === 'battle: no stage object yet (FUN_00324e70: nothing)' && C.flag9 === 1,
         `record reload: the first battle() sends nothing, the second runs the stage pass once, stage flag 9 already 1 (T w254 f3132 / f3977): pass ${pass}, flag 9 ${C.flag9}`); }
+    // T w254 record 3: bit 37 clear from the teardown until main's first battle(), with no FUN_0037e048; the world waits, no HUD
+    { const bits = new Set(), hud = []; const F5 = { v: { ...rec.sflags } };
+      const gs = { set: k => bits.add(k), clear: k => bits.delete(k) };
+      const E = mk(F5, { globalFlags: Uint8Array.from(rec.gflags), settle: false, gameState: () => gs, hudControl: b => hud.push(b) });
+      ok(E.c.rt.battle === false && bits.has(6) && bits.has(2) && hud[0] === false, `record reload: event mode before main's first battle() (battle ${E.c.rt.battle}, bits ${[...bits]}, HUD ${hud})`);
+      ok(E.c.rt.skippable(), 'record reload: Skip is offered from the start (FUN_003dfd18: bit 37 clear)');
+      E.run(400);
+      ok(E.c.rt.battle === true && !bits.has(6) && !bits.has(2), `record reload: battle() ends it (battle ${E.c.rt.battle}, bits ${[...bits]})`); }
     // the music natives are heard on a record's reload (no opening to wait for)
     { const mus = []; const F4 = { v: { ...rec.sflags } };
       const D = mk(F4, { globalFlags: Uint8Array.from(rec.gflags), settle: false, music: () => ({ playMusic3: n => mus.push(n), changeMusicVol() {}, stopMusic() {} }) });

@@ -30,7 +30,8 @@ import { sendEventSe } from './event_sound.js';
 // worker 0248: the events the page plays out by default (their actors, cameras, sound and windows are drawn: play.js
 // stage view, event_actors.js); with opts.autoSkip 'unplayed' (play.js's default) the page's Skip stand-in is kept for
 // the others only. ?autoskip=1 (true) skips every event, ?autoskip=0 (false) none
-export const PLAYS = new Set(['ev0101.rv_matiawase']);
+// worker 0261 (notes/story-cutscenes.md): sk_mituketa2, heri_taijou (Skip in it takes main's branch past sk_mituketa2), roji02_01
+export const PLAYS = new Set(['ev0101.rv_matiawase', 'ev0103.heri_taijou', 'ev0101.sk_mituketa2', 'ev0143.roji02_01', 'ev0141.first_encounter', 'ev0141.rv_toujou', 'ev0141.wro_kaisetu', 'ev0143.roji01_01', 'ev0143.beast_ev01', 'ev0143.beast_ev02', 'ev0143.heri_tobi', 'ev0143.help_people01', 'ev0143.help_orei01', 'ev0143.help_orei02', 'ev0143.help_orei04', 'ev0143.help_people03', 'ev0143.help_orei03', 'ev0103.heri_toujou', 'ev0103.heri_dgsol', 'ev0103.heri_lastst', 'ev0103.heri_lasted', 'ev0145.kita_ev0145']);
 
 const f32 = Math.fround;
 
@@ -99,7 +100,17 @@ export class StageRuntime extends EventRuntime {
     // worker 0254: a record's reload has no opening (o.globalFlags: FUN_00400778 resumes main), so its sounds are heard
     this.beforeOpening = !o.globalFlags;
     this.skipMode = 0;                // +0x9860 (setSkipMode bits)
-    this.battle = true;               // +0x1558 bit 37. T: set in the save and at the hand-off (trace_w205_reload)
+    // +0x1558 bit 37. T: set in the save and at the hand-off (trace_w205_reload). A record's reload: clear from the teardown on, and main
+    // runs with it clear until its first battle(), with no FUN_0037e048 (T w254 record 3: f328 clear, battle2 at reload + 2177, no event call):
+    // past main's Zone.event (flag 9 = 9, pc 6054 and 6246) it is still event mode, Skip included (skippable)
+    this.battle = !o.globalFlags;
+    if (!this.battle) {
+      // L: the game has no stage object until the stage init (DAT_0046e290 0, no HUD, no manager: T r1600 against r2600), so nothing of the
+      // world runs; the page's world exists from the start, so it waits as in event mode (enterEvent's bits, cleared by enterBattle)
+      const gs = o.gameState && o.gameState();
+      if (gs) { gs.set(6); gs.set(2); }
+      if (o.hudControl) o.hudControl(false);
+    }
     this.running = true;              // +0x1558 bit 44: the event program runs (FUN_00374d08), set before main
     this.skipOff = false;             // DAT_004f3044 bit 0x2000 (FUN_003e0cc8 / FUN_003e0d00)
     // DAT_0046e290 != 0: the stage object (FUN_003245e8 builds it in the stage init). A new controller = a stage (re)load:
@@ -162,7 +173,27 @@ export class StageRuntime extends EventRuntime {
   // run in it yet, the same point as ?autoskip=1. Skip must come before an unplayed event starts: pressed inside it, a
   // camera move it queued (roji02_01's cam 0) ends after main's own Camera.set in the frame the event returns (FUN_00377c68:
   // the VM window, then the commands) and overwrites it. Main's code after a played event is not skipped (eventPlayed)
-  unplayedEvent() { return !this.playing() && !this.eventPlayed; }
+  // Worker 0261: nor when the event main calls next is a PLAYS event (Skip there would run its whole stretch skipped, and main's
+  // own branches on isSkip; main's wait before heri_taijou)
+  unplayedEvent() { return !this.playing() && !this.eventPlayed && !PLAYS.has(this.nextEvent()); }
+  // page only: the event class method main calls next, in code order (its invokestatic sites of the classes it loads)
+  nextEvent() {
+    const F = this.vm.frames[0]; if (!F) return null;
+    // inside an event, main's pc is already past its call: that event itself (heri_dgsol's wait is not 'before heri_taijou')
+    const E = this.vm.frames[1];
+    if (E && /^ev\d/.test(E.cls) && E.cls !== 'ev0100' && E.cls !== 'ev0148') return E.cls + '.' + E.m.name;
+    if (!this.mainCalls) {
+      const c = F.code, cp = F.cp, is = [];
+      for (let i = 0; i + 2 < c.length; i++) {
+        if (c[i] !== 0xb8) continue;
+        const r = cp[(c[i + 1] << 8) | c[i + 2]];
+        if (r && r[0] === 'ref' && /^ev\d/.test(r[1]) && r[1] !== 'ev0100' && r[1] !== 'ev0148') is.push([i, r[1] + '.' + r[2]]);
+      }
+      this.mainCalls = is;
+    }
+    const n = this.mainCalls.find(x => x[0] >= F.pc);
+    return n ? n[1] : null;
+  }
 
   frame(dtMs = 20) {
     this.frameNo++;
@@ -177,8 +208,11 @@ export class StageRuntime extends EventRuntime {
     for (const c of this.slots.slice()) {                                // FUN_00377c68's slot loop, slots in order
       let fin = false;
       if (c.type === 0x1c) fin = this.skip !== 0 || this.clock >= c.until;   // case 0x1c
+      else if (c.type === 0x7e) fin = c.done;                            // page only (event_actor_rt.js EventActors.loading)
       else if (c.type === 7) fin = this.camMove(c);                      // case 7: FUN_003779d0
       else if (c.type === 4) fin = this.zoneStep(c);                     // case 4: FUN_00381518
+      else if (c.type === 0x22) fin = this.actors.chain(c, this);        // case 0x22: FUN_00382768 (setmotionChain; worker 0263)
+      else if (c.type === 0xc) fin = this.actors.walk(c, this);          // case 0xc: an actor's walk (Actor.move; worker 0263)
       if (fin) {
         this.slots.splice(this.slots.indexOf(c), 1);
         if (c === this.zoneCmd) this.zoneCmd = null;
@@ -365,7 +399,7 @@ export class StageRuntime extends EventRuntime {
       },
       // setSkipMode (FUN_0039ea68): n < 2 waits for the load commands (FUN_003806a0); +0x9860 |= 1 << n
       'fake/KerberosEvent.setSkipMode(I)V': (vm, [n]) => {
-        const loading = () => R.slots.some(c => [2, 9, 0x12, 0x1a, 0x1b].includes(c.type));
+        const loading = () => R.slots.some(c => [2, 9, 0x12, 0x1a, 0x1b, 0x7e].includes(c.type));
         const set = () => { R.skipMode |= 1 << (n & 31); };
         if (n >>> 0 < 2 && loading()) return block(() => !loading(), set);
         set(); return undefined;
@@ -483,7 +517,8 @@ export class StageRuntime extends EventRuntime {
         const name = str(s), obj = o().battleObject && o().battleObject(name);
         log('getbattleactor ' + id + ' ' + name + (obj ? '' : ' (none)'));
         if (!obj) { R.warnOnce('stage: getbattleactor(' + name + '): no page object by that name (left out)'); return; }
-        const a = R.actors.create(name, id);
+        // the slot plays on the object's own model (MP): loadmotion_l / setmotion_l on this id pose it (heri_toujou's e_Heri, heri_dgsol's e_para_1..6; worker 0262)
+        const a = R.actors.create(obj.model || name, id);
         if (!a) return;
         a.M = obj.matrix().map(f32);
         a.lent = obj; obj.lend();
@@ -514,11 +549,31 @@ export class StageRuntime extends EventRuntime {
         if (a.lent) a.lent.release();
         log('finalize ' + id);
       },
+      // setVisibleAll (FUN_0039d118 -> FUN_00380048(ev, mode, b, 1)). Mode 0: every MP of the list DAT_005b3788: FUN_00408900(MP, b) ->
+      // FUN_005a85f8(MP, b ? 0 : 2) (+ its gun, FUN_002dbfc8). An event slot's own MP takes its slot's flag back in FUN_003772c8. Worker 0261
+      'fake/KerberosActor.setVisibleAll(IZ)V': (vm, [mode, v]) => {
+        log('setVisibleAll ' + mode + ' ' + v);
+        if (mode !== 0) { R.warnOnce('stage: setVisibleAll mode ' + mode + ' (FUN_00380048) left out'); return; }
+        if (o().allVisible) o().allVisible(!!v); else R.warnOnce('stage: setVisibleAll: no page hook');
+      },
+      // setVisibleModelGroup (FUN_0039dc88): b 0 FUN_00269368(n) sets, else FUN_002693a8(n) clears bit max(n - 1, 0) of DAT_004e8700,
+      // the script half of the hidden-cell mask (effects.js createVisMask; as stage script cmds 0x54 / 0x55). Worker 0261
+      'fake/KerberosZone.setVisibleModelGroup(IZ)V': (vm, [n, b]) => {
+        log('modelgroup ' + n + ' ' + b);
+        if (o().cellMask) o().cellMask(Math.max((n | 0) - 1, 0), !b); else R.warnOnce('stage: setVisibleModelGroup: no page hook');
+      },
+      // start_anim_l(a, chunk, b) (FUN_0039dbe0): FUN_00380c38 (the reload's list +0x9870), FUN_00269668(chunk, a, b) -> FUN_00268220: the
+      // chunk's animation a: time 0, playing, one-shot unless b. L: the animations not playing at load are not exported (bmd_uvanim.py)
+      'fake/KerberosZone.start_anim_l(IIZ)V': (vm, [a, c, b]) => { log('start_anim ' + a + ' chunk ' + c + ' ' + b); if (o().chunkAnim) o().chunkAnim(c, a, !!b); else R.warnOnce('stage: Zone.start_anim: no page hook'); },
+      // Event.stop (FUN_0039fca8): polls while (+0x1558 bits 40 / 39) are set and bit 33 is clear; bit 39 = the event pause, which
+      // the page holds by not running game frames (play.js); bit 40 has no writer on the page. Worker 0261
+      'fake/KerberosEvent.stop()V': () => {},
       // setVisible_l (FUN_003a3478 -> FUN_0037ede8): +0xa8 bit 49 (event_actor_rt.js); a lent model is the object's own
       'fake/KerberosActor.setVisible_l(IZ)V': (vm, [id, v]) => {
         const a = R.actors.get(id); if (!a) return;
         a.visible = !!v;
-        if (a.lent) a.lent.show(!!v);
+        // with a clip the slot's body draws the model (event_actors.js): the page's gameplay body stays hidden
+        if (a.lent) a.lent.show(!!v && !a.mp.clip);
       },
       'fake/KerberosCamera.setBattleCameraInterpolationTime(F)V': (vm, [t]) => { R.state.battleCamMs = f32(t); R.warnOnce('stage: setBattleCameraInterpolationTime not translated (the follow camera\'s blend from the event camera)'); },
     });
