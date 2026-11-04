@@ -71,7 +71,7 @@ the skipped beat in ~10 frames (its loads are at once); the game's 7 frames befo
 - Only the first beat is traced; later beats (chunks 6 / 7, 10 / 11, the bosses) need route states (worker 0217).
 
 ## Review fixes (2026-11-03, manager review)
-- Auto-skip is a GUESS (audit 'GUESS: auto-skip'): at the event's first wait (vm.pending), off with `?autoskip=0`.
+- Auto-skip is gone (worker 0262): every event main calls plays; Skip is the player's (play.js -> requestSkip).
 - skippable() includes the stage-info card's DAT_004f3044 bit 0x2000 (FUN_003fdb48 saves and sets it, FUN_003fdd58
   clears it unless it was set before); requestSkip calls event_rt.js's (guard, event sounds, windows; worker 0222).
 - Event mode and set_usercontrol(0) set bit 6 (the AI paused), as FUN_0037def0 does; peace / chaos keep FUN_003809a8's count.

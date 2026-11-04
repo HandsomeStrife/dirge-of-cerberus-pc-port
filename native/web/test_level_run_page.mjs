@@ -170,7 +170,7 @@ const SERVO = () => {
     const cl = v => Math.max(-140, Math.min(140, v));
     dispatchEvent(new MouseEvent('mousemove', { movementX: cl(V.signX * yaw / V.sens * 0.6), movementY: cl(V.signY * pitch / V.sens * 0.6) }));
     if (core.ammo.rounds() === 0) { if (performance.now() - V.last > 800) { V.last = performance.now(); dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyF' })); dispatchEvent(new KeyboardEvent('keyup', { code: 'KeyF' })); } return; }
-    V.on = !!(core.hud.flags & 0x12) || (Math.abs(yaw) < 0.05 && Math.abs(pitch) < 0.05);
+    V.on = !!(core.hud.flags & 0x12) || (core.hud.mode === 0 && Math.abs(yaw) < 0.05 && Math.abs(pitch) < 0.05);   // the HUD's on-target / locked flags (a shot on the aim point; rounds are the run's budget); they stay off with the gun away, so then the reticle on the chest draws it
     if (V.on) { btn('mousedown'); V.down = true; V.shots++; }
   };
   step();
@@ -197,7 +197,8 @@ function moveKeys(s, dx, dz) { const b = basis(s), L = Math.hypot(dx, dz) || 1; 
 
 // the current state
 let S = null;
-const read = async () => { S = await pg.evaluate(() => window.__botRead()); return S; };
+let seen147 = null;   // where soldier 147 was last seen alive (his drop is Cardkey 1)
+const read = async () => { S = await pg.evaluate(() => window.__botRead()); const m = S.actors.find(x => x.rec === 147 && x.hp > 0); if (m) seen147 = { pos: m.pos.slice(), alive: true }; else if (seen147) seen147.alive = false; return S; };
 const wait = ms => pg.waitForTimeout(ms);
 
 // ---- sittings
@@ -275,12 +276,12 @@ let lastHeal = 0;
 async function heal() { if (S.hp > 0 && S.hp < 350 && S.inv && S.inv.potion > 0 && Date.now() - lastHeal > 4000 && S.pstate !== 7) { lastHeal = Date.now(); log(`heal: E at HP ${S.hp}, potions ${S.inv.potion}`); await tap('KeyE'); } }
 
 // ---- fight: turn the view onto the nearest live enemy with a clear line and hold the gun on it
-let bigFoes = false;   // Dragonfly (e023, HP 30000 / 21600) and such: only on the goals that fight them
-const FOES = a => a.ai && a.hp > 0 && /^e/.test(a.type || '') && (bigFoes || a.hp < 5000);   // n0xx = townspeople: a player doesn't shoot them
+let bigFoes = null;   // Dragonfly (e023, HP 30000 / 21600), the boss (e024): only on the goals that fight them; e001 (HP 9999, chunk 07) is never a target, it ate a whole run's rounds
+const FOES = a => a.ai && a.hp > 0 && /^e/.test(a.type || '') && (a.hp < 5000 || (bigFoes && bigFoes.test(a.type)));   // n0xx = townspeople: a player doesn't shoot them
 const notTown = new Set();     // records we were told not to shoot: filled by the goal (townspeople)
 let ignoreUntil = new Map();
 const lineClear = (a, b) => { try { return !col.segment || !col.segment({ x: a[0], y: a[1], z: a[2] }, { x: b[0], y: b[1], z: b[2] }); } catch { return true; } };
-function pickFoe(range) { let best = null; for (const a of S.actors) { if (!FOES(a) || a.d > range || notTown.has(a.rec) || (ignoreUntil.get(a.rec) || 0) > Date.now()) continue;
+function pickFoe(range) { let best = null; for (const a of S.actors) { if (!FOES(a) || a.d > (bigFoes && bigFoes.test(a.type) ? range : Math.min(range, 110)) || notTown.has(a.rec) || (ignoreUntil.get(a.rec) || 0) > Date.now()) continue;
     const eyeP = [S.pos[0], S.pos[1] - 14, S.pos[2]], chest = [a.pos[0], a.pos[1] - 12, a.pos[2]]; if (!lineClear(eyeP, chest)) continue; if (!best || a.d < best.d) best = a; } return best; }
 function aimErr(tp) { const dx = tp[0] - S.eye[0], dy = tp[1] - S.eye[1], dz = tp[2] - S.eye[2], F = S.aimF || [S.at[0] - S.eye[0], S.at[1] - S.eye[1], S.at[2] - S.eye[2]];   // the reticle's ray from the eye
   let yaw = Math.atan2(dz, dx) - Math.atan2(F[2], F[0]); while (yaw > Math.PI) yaw -= 2 * Math.PI; while (yaw < -Math.PI) yaw += 2 * Math.PI;
@@ -366,9 +367,8 @@ goal('south', { to: [-1642, 0, -936], done: s => f0(11)(s) || key(s), near: 12 }
 goal('gate front', { to: [-1732, 0, -356], done: s => f0(11)(s) || key(s), near: 6 });          // r03_mid2: trigger 149 (x -1737; script 192) activates door trigger 150 on the way to the alcove
 // Cardkey 1. Trigger 149 activates record 150 (a soldier far south, -1700, -945); door trigger 150 opens once manager cmd 0xab sees that soldier (on screen, clear ray from the camera, decoded, worker 0257),
 // so a player who turns back down the alley gets the door; soldier 147 comes out and his drop is the key (nearItem walks onto it)
-const has147 = s => s.actors.some(a => a.rec === 147);
-goal('look back', { to: [-1732, 0, -366], look: [-1700.7, -12, -945], lookRec: 150, done: s => f0(11)(s) || key(s), hunt: 147, until: s => has147(s) || key(s), near: 5 });
-goal('alcove', { to: [-1702, 0, -407], look: [-1680, -12, -407], done: s => f0(11)(s) || key(s), hunt: 147, until: key, near: 6 });
+goal('look back', { to: [-1732, 0, -366], look: [-1700.7, -12, -945], lookRec: 150, done: s => f0(11)(s) || key(s), hunt: 147, until: s => (seen147 && !seen147.alive) || key(s), near: 5 });
+goal('drop', { toFn: () => seen147 ? [seen147.pos[0], 0, seen147.pos[2]] : null, done: s => f0(11)(s) || key(s), until: key, near: 4 });
 goal('gate1', { to: [-1732, 0, -356], face: [-1739, -351], done: f0(11), use: true, near: 6 });   // script 202 ev 0x11
 goal('east', { to: [-728, 0, -37], done: f0(11), near: 12 });
 goal('west', { to: [-1420, 0, 684], done: s => f0(13)(s) || key(s), near: 12 });
@@ -377,15 +377,15 @@ goal('gate2', { to: [-1302, 0, 842], face: [-1305, 851], done: f0(13), use: true
 goal('past gate2', { to: [-1368, -40, 1102], done: f0(13), near: 10 });
 goal('door', { to: [-1327, 0, 1134], face: [-1327.5, 1140], done: f0(13), use: true, near: 6 });   // trigger 12: ✕ facing the door
 goal('past door', { to: [-1328, 0, 1205], done: f0(13), until: f0(13), near: 8 });             // trigger 14: flag 0 = 13, heri_toujou
-goal('dragonfly', { to: [-1591, 0, 1364], done: f0(16), until: f0(16), fightOnly: true, near: 8 });   // in the open; a hit under HP 20000 starts timer 0 (script 29)
-goal('chunk07', { to: [-1753, -44, 1571], done: f0(20), until: f0(20), near: 8 });             // sk_mituketa2 moved him; trigger 18
-goal('e036', { to: [-1753, -44, 1571], done: f0(24), until: f0(24), fightOnly: true, near: 15 });
+goal('dragonfly', { to: [-1591, 0, 1364], done: f0(16), until: f0(16), fightOnly: true, big: /e023/, near: 8 });   // in the open; a hit under HP 20000 starts timer 0 (script 29)
+goal('chunk07', { to: [-1949, -44, 1594], done: f0(20), until: f0(20), near: 3 });             // sk_mituketa2 moved him; trigger 18
+goal('e036', { to: [-1830, -44, 1575], done: f0(24), until: f0(24), fightOnly: true, near: 15 });
 goal('box spot', { to: [-697.4, 0, 881.5], done: s => f0(36)(s) || key(s), near: 6 });         // r08_box
 goal('key3 box', { to: [-697.4, 0, 881.5], shoot: 72, done: s => f0(36)(s) || key(s), near: 8 });     // Cardkey 3 is in box prop 72 (-703, -6, 857.5); nearItem walks onto it
 goal('gate3', { to: [-510, 0, 802], face: [-478, 801], use: true, done: f0(36), near: 6 });    // script 211
 goal('chunk09', { to: [-80, -40, 606], done: f0(36), near: 12 });
 goal('chunk0b', { to: [407, -100, 1471], done: f0(36), until: f0(36), near: 8 });              // script 35
-goal('boss', { to: null, boss: true, done: s => s.exit });
+goal('boss', { to: null, boss: true, big: /e024/, done: s => s.exit });
 goal('results', { to: null, results: true });
 
 // ---- the run
@@ -423,9 +423,10 @@ try {
     const g = G[gi]; await read();
     if (g.done && g.done(S)) { gi++; continue; }
     log(`goal '${g.name}' from ${S.pos.map(Math.round)}, HP ${S.hp}, rounds ${S.loaded}/${S.inv && S.inv.ammo}, flag0 ${S.flags[0]}, key ${S.inv && S.inv.key}, slots ${S.slots.join('/')}`);
-    bigFoes = !!(g.fightOnly || g.boss);
+    bigFoes = g.big || null;
+    if (g.toFn) { g.to = g.toFn(); if (!g.to) { log(`goal '${g.name}': no spot`); gi++; continue; } log(`goal '${g.name}' spot ${g.to.map(Math.round)}, items near: ${JSON.stringify(S.items.filter(x => x.d < 120).map(x => [x.rec, Math.round(x.d), x.id]))}`); }
     if (g.to && !planTo(g.to)) { log(`no route to ${g.to}`); throw new Error('no route for ' + g.name); }
-    let huntLog = 0, recLog = 0; const startT = Date.now(); let usedN = 0, itemT = 0, keyAt = 0, shootT = 0;
+    let huntLog = 0, recLog = 0, huntT = 0; const startT = Date.now(); let usedN = 0, itemT = 0, keyAt = 0, shootT = 0;
     while (true) {
       await read();
       if (await systems()) { lastMove = { t: Date.now(), p: S.pos.slice(), tk: S.ticks }; if (S.restarts !== lastRestarts) break; continue; }
@@ -435,11 +436,19 @@ try {
       if (S.hp > 0 && S.hp < lastHp) {}
       await heal();
       if (g.results) { await read(); if (S.exit) { reached = 'exit'; break outer; } await wait(500); continue; }
-      if (g.done && g.done(S) && g.until) break;
+      if (g.until && g.until(S)) break;
       if (Date.now() - startT > 900000) { log(`goal '${g.name}': over 900 s, stopping the run`); await shot(`timeout_${g.name.replace(/\W+/g, '_')}`); throw new Error(`timeout on ${g.name}`); }
       // fights first
+      // out of rounds (the inventory's 36 = the other weapons' loaded rounds, aim_core): nothing to fire, walk to the nearest item whatever is around, as a player would
+      if (S.loaded === 0 && S.inv.ammo <= 36) { await servo(null); let b = null; for (const x of S.items) if (!skipItems.has(x.rec ?? x.pos.join()) && x.d < (g.fightOnly ? 200 : 60) && Math.abs(x.pos[1] - S.pos[1]) < 20 && (!b || x.d < b.d)) b = x;
+        if (b) { const m = moveKeys(S, b.pos[0] - S.pos[0], b.pos[2] - S.pos[2]); m.want.add('ShiftLeft'); await hold(m.want); await wait(60); wedge = { p: null, tk: 0 }; continue; } }
       // run and gun: the view stays on the foe, the keys keep walking the route; close or on a fight goal he stands (no route left to walk)
-      const foe = await fightStep(g.fightOnly || g.boss ? 400 : 110);
+      // out of rounds with nothing to fetch: keep walking the route past them (the Shop is MISSING on the page, wro_kaisetu's Supplies closes at once: no way to buy more)
+      const dry = S.loaded === 0 && S.inv.ammo <= 36 && !g.fightOnly && !g.boss;
+      const foe = dry ? null : await fightStep(g.fightOnly || g.boss ? 330 : 110);   // hits on Dragonfly land inside about 340 u (notes/route-states.md)
+      // a fight goal with nothing in line: walk to the nearest live foe (never the flyers: they come to him)
+      if (!foe && g.fightOnly && !g.big && Date.now() - huntT > 4000) { huntT = Date.now(); let b = null; for (const x of S.actors) if (FOES(x) && x.d < 220 && Math.abs(x.pos[1] - S.pos[1]) < 20 && (!b || x.d < b.d)) b = x;
+        if (b && route(S.pos, b.pos)) { g.to = [b.pos[0], b.pos[1], b.pos[2]]; planTo(g.to); log(`hunting ${b.rec} ${b.type} hp ${b.hp} d ${b.d.toFixed(0)} at ${b.pos.map(Math.round)}`); } }
       if (foe && (g.fightOnly || g.boss || foe.d < 25 || !g.to)) { await release(); lastMove = { t: Date.now(), p: S.pos.slice(), tk: S.ticks }; continue; }
       if (g.boss) { await wait(100); const r = S.actors.find(a => a.rec === 32); if (r) { const m = moveKeys(S, r.pos[0] - S.pos[0], r.pos[2] - S.pos[2]); } continue; }
       // a pickup near by
@@ -449,6 +458,8 @@ try {
       if (w === 'stuck') { log(`goal '${g.name}': stuck for good`); await shot(`stuckend_${g.name.replace(/\W+/g, '_')}`); throw new Error(`stuck on ${g.name} at ${S.pos.map(Math.round)}`); }
       if (w === 'arrived') {
         await release();
+        // a flyer's fight: pickups or the fight took him off the open spot (notes/route-states.md: the tent blocks hits): back to it
+        if (g.big && g.to && dist(S.pos, g.to) > 25 && Date.now() - huntT > 4000) { huntT = Date.now(); planTo(g.to); continue; }
         if (g.use && usedN === 0) keyAt = S.inv.key;
         if (g.use && usedN > 0 && S.inv.key < keyAt) { log(`'${g.name}': the key went (${keyAt} -> ${S.inv.key})`); break; }
         if (g.use && usedN < 6) { usedN++; const ft = g.face ? [g.face[0], 0, g.face[1]] : g.to; const q = moveKeys(S, ft[0] - S.pos[0], ft[2] - S.pos[2]); await hold(q.want); await wait(300); await release(); await tap('Space'); log(`✕ at '${g.name}' (${usedN}), key ${S.inv && S.inv.key}, flag0 ${S.flags[0]}`); await wait(1000); continue; }
@@ -459,12 +470,13 @@ try {
         if (g.shoot != null) { if (!shootT) { shootT = Date.now(); await pg.evaluate(r => { window.__botServo.prop = r; }, g.shoot); }
           if (Date.now() - shootT > 60000) { log(`'${g.name}': box still up after 60 s`); break; }
           await read(); if (key(S)) break; await wait(150); continue; }
+        if (g.until && Date.now() - (huntLog || 0) > 20000) { huntLog = Date.now(); log(`waiting at '${g.name}' ${S.pos.map(Math.round)}: flag0 ${S.flags[0]} key ${S.inv.key}; items ${S.items.filter(x => x.d < 200).length}; actors ${JSON.stringify(S.actors.filter(x => x.hp > 0 && /^e/.test(x.type || '')).slice(0, 10).map(x => [x.rec, x.type, x.hp, Math.round(x.d), x.mode]))}`); }
         if (g.until) { await wait(150); continue; }
         break;
       }
       await wait(30);
     }
-    if (S.restarts !== lastRestarts) { lastRestarts = S.restarts; stats.restarts++; lastHp = 780; log(`Restart #${S.restarts}: back at ${S.pos.map(Math.round)}, flag0 ${S.flags[0]}, g1 ${S.gflag1}`); await read(); gi = G.findIndex(q => !q.done || !q.done(S)); continue; }
+    if (S.restarts !== lastRestarts) { lastRestarts = S.restarts; stats.restarts++; seen147 = null; lastHp = 780; log(`Restart #${S.restarts}: back at ${S.pos.map(Math.round)}, flag0 ${S.flags[0]}, g1 ${S.gflag1}`); await read(); gi = G.findIndex(q => !q.done || !q.done(S)); continue; }
     log(`goal '${g.name}' done at ${S.pos.map(Math.round)} in ${((Date.now() - startT) / 1000).toFixed(0)} s, ticks ${S.ticks}`);
     if (UNTIL && g.name === UNTIL) { reached = g.name; break; }
     gi++;

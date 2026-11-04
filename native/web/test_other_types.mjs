@@ -56,6 +56,26 @@ const kill = (W, a) => W.t.hitEnemy(a, { damage: 9999, kind: 0, dir: [1, 0, 0], 
      `e036 woken: a bullet from #${ID(80)}, damage ${b && b.damage} (weapon 8: ${data.weapons[8].damage}), hit ${b && b.hit}`);
 }
 
+// 1c. worker 0264: chunk 07's pool, as trigger 18 starts it (72-74 up). Script 104 event 0x17 counts deaths and at two posts message 1 to 72-79; event 2 asks cmd 0x177 (FUN_005661e8: not active) and an idle record activates itself.
+// With 0x177 skipped no one came, the corpse count stopped at 3 and e036 (at the 8th corpse) never appeared: the level stopped here on the page (test_level_run_page)
+{
+  const { W } = world();
+  for (const k of [72, 73, 74]) W.setActive(W.objects.get(ID(k)), 1);
+  const on = k => !!(W.objects.get(ID(k)).flags28 & 1), pool = [75, 76, 77, 78, 79];
+  ok(pool.every(k => !on(k)), 'chunk 07: 75-79 idle while 72-74 stand');
+  ok(W.t.send(W.objects.get(ID(75)), -2, 0x177, [0, 0, 0, 0]) === 1 && W.t.send(W.objects.get(ID(72)), -2, 0x177, [0, 0, 0, 0]) === 0, 'cmd 0x177: an idle record 1, an active soldier 0');
+  kill(W, W.objects.get(ID(72))); for (let i = 0; i < 5; i++) W.tick(1.2, far, far);
+  kill(W, W.objects.get(ID(73))); for (let i = 0; i < 40; i++) W.tick(1.2, far, far);
+  const up = pool.filter(on);
+  ok(up.length > 0, `two dead: the pool comes (${up.join(' ')} active)`);
+  let killed = 2, seen80 = false;
+  for (let n = 0; n < 4000 && !seen80; n++) {
+    for (const k of [72, 73, 74, 75, 76, 77, 78, 79]) { const o = W.objects.get(ID(k)); if ((o.flags28 & 1) && o.kind === 'actor' && o.hp > 0) { kill(W, o); killed++; } }
+    W.tick(1.2, far, far); seen80 = on(80);
+  }
+  ok(seen80 && killed === 8, `the 8th corpse brings e036 (record 80 active ${seen80}, ${killed} killed)`);
+}
+
 // 2. the corpse chain on a soldier (record 72, e027, script 104 has an event 0x20): event 0x17 at death; fade at +300 ticks; off +
 // event 0x20 at +480 ticks (= 250 / 400 PAL frames at step 1.2)
 {

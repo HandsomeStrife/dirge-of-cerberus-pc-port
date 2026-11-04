@@ -28,7 +28,7 @@ for (const key of events) {
   for (const fill of [0, 1]) {
     const zf = new Array(64).fill(fill), warns = [];
     const A = new EventActors({ clipFrames, residentFiles, warn: (w) => warns.push(w) });
-    const R = new StageRuntime(data, { autoSkip: false, warn: () => {}, flags: () => zf, sound: {}, actors: A, viewMatrix: () => ({ eye: [0, 0, 0], fwd: [0, 0, 1], down: [0, 1, 0], fov: 70 }),
+    const R = new StageRuntime(data, { warn: () => {}, flags: () => zf, sound: {}, actors: A, viewMatrix: () => ({ eye: [0, 0, 0], fwd: [0, 0, 1], down: [0, 1, 0], fov: 70 }),
       // play.js battleObject's rule: an object only with an AI actor (enemy_ai buildsActor: AI_TYPES, NPC_TYPES); else no slot, no clip: left out, not bind pose (first_encounter's e_Shc, n112)
       battleObject: (n) => { const r = recs.find(x => x.tag === n); if (!r) return null; if (n !== 'p_Vin' && !(AI_TYPES.has(r.model) || NPC_TYPES.has(r.model))) return null; return { tag: n, model: n === 'p_Vin' ? 'p000' : r.model, matrix: () => [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1], lend() {}, show() {}, release() {}, place() {} }; } });
     // main's stand on p_Vin before the event: the slots an event gets from main (getbattleactor) by name

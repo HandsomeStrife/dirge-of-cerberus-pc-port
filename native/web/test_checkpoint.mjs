@@ -498,7 +498,7 @@ else {
     const F = { v: {} }; let rec = null;
     const A = mk(F, { onSceneSave: n => { rec = sceneSave(n, { gflags: A.c.globalFlags, sflags: F.v, pair: loadedPair(A.stream),
       hp: 500, inventory: { slots: [[0x69300000, 2]], gil: 7, other: 36 }, taken: new Set([22]) }); } });
-    A.run(30); F.v = { 0: 2, 63: 6 }; A.run(200);
+    A.run(30); F.v = { 0: 2, 63: 6 }; A.run(700);   // rv_matiawase plays out: no one presses Skip
     const nz = o => JSON.stringify(Object.fromEntries(Object.entries(o).filter(([, v]) => v)));
     ok(rec && rec.n === 1 && rec.resume === 'main' && rec.stage === 0x80 && rec.event === 100, `scene_save(1) -> the record (n ${rec && rec.n}, resume at main = the program's cmd 0xa, T index 13)`);
     const g = rec ? Object.fromEntries([...rec.gflags].map((v, i) => [i, v]).filter(([, v]) => v)) : {};
@@ -545,7 +545,13 @@ else {
       ok(E.c.rt.battle === false && bits.has(6) && bits.has(2) && bits.has(11) && hud[0] === false, `record reload: event mode before main's first battle() (battle ${E.c.rt.battle}, bits ${[...bits]}, HUD ${hud})`);
       ok(E.c.rt.skippable(), 'record reload: Skip is offered from the start (FUN_003dfd18: bit 37 clear)');
       E.run(400);
-      ok(E.c.rt.battle === true && !bits.has(6) && !bits.has(2) && !bits.has(11) && hud[hud.length - 1] === true, `record reload: main's usercontrol 1 and battle() end it (battle ${E.c.rt.battle}, bits ${[...bits]}, HUD ${hud})`); }
+      ok(E.c.rt.battle === true && !bits.has(6) && !bits.has(2) && !bits.has(11) && hud[hud.length - 1] === true, `record reload: main's usercontrol 1 and battle() end it (battle ${E.c.rt.battle}, bits ${[...bits]}, HUD ${hud})`);
+      // a route with no set_usercontrol (main pc 946 -> 1107, global 18 clear): the first battle() ends the hold, he isn't left without input; main's own set_usercontrol(0) stays
+      const hold = (calls) => { const b = new Set(), h = []; const g = { set: k => b.add(k), clear: k => b.delete(k) };
+        const R = mk({ v: {} }, { globalFlags: Uint8Array.from(rec.gflags), settle: false, gameState: () => g, hudControl: x => h.push(x) }).c.rt;
+        calls(R); R.enterBattle(0); return { b11: b.has(11), hud: h[h.length - 1], n: h.length }; };
+      const a1 = hold(() => {}); ok(!a1.b11 && a1.hud === true, `record reload: battle() with no set_usercontrol gives input and HUD back (bit 11 ${a1.b11}, HUD ${a1.hud})`);
+      const a0 = hold(R => R.vm.natives['fake/KerberosEvent.set_usercontrol(Z)V'](R.vm, [0])); ok(a0.b11 && a0.hud === false, `record reload: main's set_usercontrol(0) before battle() holds (bit 11 ${a0.b11}, HUD ${a0.hud})`); }
     // the music natives are heard on a record's reload (no opening to wait for)
     { const mus = []; const F4 = { v: { ...rec.sflags } };
       const D = mk(F4, { globalFlags: Uint8Array.from(rec.gflags), settle: false, music: () => ({ playMusic3: n => mus.push(n), changeMusicVol() {}, stopMusic() {} }) });

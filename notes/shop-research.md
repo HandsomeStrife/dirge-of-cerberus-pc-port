@@ -34,4 +34,4 @@ RAM (gssup): the list's +0x90 = 0 at the tabs, so no cursor bar there; in the li
 - The spinner's mode (FUN_003e2f98, FUN_003cbbc0): shop.js assumes up / down work as soon as the box opens, per FUN_003e3610 (mode 2). Not traced. Start inside the Shop: not decoded.
 - The Sell quantity limit in FUN_003c4b30 was translated but not traced.
 - Rations are usable items (flags 13, scripts 22 / 23): the exporter writes `scripts`; merging them into items.js was removed with the wiring.
-- pause.js `action` reads `f.nav4[a]` for a = 4 / 5, past the 4-entry array, so left / right on a pause or box button jumps to the button with order 0. Looks like a real bug on the page (FUN_003d8bc8's +0x6a / +0x6b); left alone, outside this job. shop.js works around it. Fix: `f.nav4[a - 2]` (test_pause stayed 94 / 94 with it).
+- Fixed (worker 0262): pause.js `action` read `f.nav4[a]` for a = 4 / 5, past the array; now `f.nav4[a - 2]` (FUN_003cbc38 param_3[2] / [3]).

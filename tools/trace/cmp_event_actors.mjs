@@ -21,7 +21,7 @@ const [cls, m] = ev.split('.'), M = data.classes[cls].methods.find(x => x.name =
 const lend = Object.fromEntries(opt('--lend').split(',').filter(Boolean).map(x => x.split('=')));
 const battleObject = n => (lend[n] ? { tag: n, model: lend[n], matrix: () => [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1], lend() {}, show() {}, release() {}, place() {} } : null);
 const ans = args.includes('--answers') ? answers(args[args.indexOf('--answers') + 1].split(',')) : null;   // worker 0263: a choice box's keys
-const R = new StageRuntime(data, { autoSkip: false, warn: () => {}, flags: () => zf, sound: {}, actors: A, battleObject, ...(ans ? { windows: ans.windows } : {}) });
+const R = new StageRuntime(data, { warn: () => {}, flags: () => zf, sound: {}, actors: A, battleObject, ...(ans ? { windows: ans.windows } : {}) });
 R.vm.start(cls, m, M.desc, M.desc === '()V' ? [] : [101, 102, 103].map(id => ({ f: { id } })));   // help_orei02's actors
 const page = [];
 for (let f = 0; f < 20000 && !R.vm.done; f++) {

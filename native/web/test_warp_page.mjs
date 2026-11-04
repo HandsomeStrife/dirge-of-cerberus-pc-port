@@ -25,10 +25,10 @@ try {
   const g = execSync('npm root -g', { encoding: 'utf8' }).trim();
   ({ chromium } = createRequire(path.join(g, '/'))('playwright'));
 } catch { console.log('SKIP: playwright not installed (npm i -g playwright)'); done(); }
-const { WARPS } = await import('./warp.js');
+const { WARPS, warpHelp } = await import('./warp.js');
 
 // the chunk each place lies in (walk polygon file; hex 0b = 11)
-const CHUNK = { deck: 2, stairs: 2, dogs: 3, market: 6, heli: 6, chunk07: 7, chunk09: 9, chunk0b: 11, boss: 11 };
+const CHUNK = { deck: 2, stairs: 2, dogs: 3, market: 6, chunk07: 7, chunk09: 9, chunk0b: 11, boss: 11 };
 const only = process.env.WARP_ONLY ? process.env.WARP_ONLY.split(',') : null;
 const names = Object.keys(WARPS).filter(n => (!only || only.includes(n)) && !WARPS[n].cutscene);   // cutscene places: test_heri_kita_page
 ok(Object.keys(CHUNK).every(n => WARPS[n]) && Object.keys(WARPS).every(n => n in CHUNK || WARPS[n].cutscene), `the warp names: ${Object.keys(WARPS).join(', ')}`);
@@ -50,13 +50,15 @@ const lit = ({ w, h, bpp, px }) => { let n = 0; for (let i = 0; i < w * h; i++) 
 
 const port = await new Promise(r => { const s = net.createServer().listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => r(p)); }); });
 const srv = spawn('python3', ['-I', '-m', 'http.server', String(port), '--bind', '127.0.0.1', '--directory', here], { stdio: 'ignore' });
-const browser = await chromium.launch({ args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
+let browser = null;                             // a fresh one per place: a place's memory doesn't carry to the next
 const OPTIONAL = new Set(['/game_state.js', '/stage_info.js']);
 async function open(query) {
+  browser = await chromium.launch({ args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
   const pg = await browser.newPage({ viewport: { width: 480, height: 360 } });
   const errs = [], info = [];
   pg.on('console', m => { if (m.type() === 'error') errs.push(m.text()); if (m.type() === 'info' || m.type() === 'warning') info.push(m.text()); });
   pg.on('pageerror', e => errs.push(e.message));
+  pg.on('crash', () => errs.push('the renderer crashed'));
   pg.on('response', r => { if (r.status() !== 404) return; const u = r.url().replace(/^http:..[^/]+/, ''); if (!OPTIONAL.has(u)) errs.push('404 ' + u); });
   for (let i = 0; ; i++) {
     try { await pg.goto(`http://127.0.0.1:${port}/play.html?sound=0&${query}`, { waitUntil: 'load' }); break; }
@@ -70,11 +72,11 @@ try {
     const { pg, errs } = await open(`warp=${name}`);
     const warped = await pg.waitForFunction(() => window.__play && window.__play.warp, null, { timeout: 240000 }).then(() => true).catch(() => false);
     ok(warped, `${name}: the warp ran`);
-    if (!warped) { await pg.close(); continue; }
+    if (!warped) { await browser.close(); continue; }
     // the chunk loads (area_stream progress), main's polls; boss: main's Zone.load(128, 10, 11) and Zone.boss(true)
     const t0 = await pg.evaluate(() => window.__play.warp.tick);
     await pg.waitForFunction(t0 => window.__play.stats.ticks > t0 + 90, t0, { timeout: 120000 }).catch(() => null);
-    if (name === 'boss') await pg.waitForFunction(() => window.__play.enemyAI.bossPlugin, null, { timeout: 30000 }).catch(() => null);
+    if (name === 'boss') await pg.waitForFunction(() => window.__play.enemyAI.bossPlugin, null, { timeout: 600000 }).catch(() => null);   // heri_lastst comes first
     const s = await pg.evaluate(({ name }) => {
       const P = window.__play, c = P.ctrl, f = P.enemyAI.eventFlags;
       return { pos: { ...c.pos }, onGround: c.onGround, poly: c.body.poly, gy: P.col.groundY(c.pos.x, c.pos.z, c.pos.y),
@@ -106,17 +108,17 @@ try {
     const L = lit(png(shot));
     ok(L > 0.35, `${name}: the room is drawn (${(L * 100).toFixed(0)}% of the frame not black)`);
     ok(errs.length === 0, `${name}: no console errors${errs.length ? ': ' + errs.slice(0, 3).join(' | ') : ''}`);
-    await pg.close();
+    await browser.close();
   }
   if (!only || only.includes('list')) {
     const { pg, errs, info } = await open('warp=list&intro=0');
     await pg.waitForFunction(() => window.__play && window.__play.stats.ticks > 60, null, { timeout: 240000 }).catch(() => null);
     const r = await pg.evaluate(() => ({ help: document.getElementById('hud') ? document.getElementById('hud').textContent : document.body.innerText, warp: window.__play.warp || null }));
-    ok(/\?warp=list\|deck\|stairs\|dogs\|market\|chunk07\|chunk09\|chunk0b\|boss/.test(r.help), `list: the help line names the warps`);
+    ok(r.help.includes(warpHelp()), `list: the help line names the warps`);
     ok(info.some(m => /^warp \(page aid\): deck = /.test(m)), 'list: the names on the console');
     ok(r.warp === null, 'list: no warp');
     ok(errs.length === 0, `list: no console errors${errs.length ? ': ' + errs.slice(0, 3).join(' | ') : ''}`);
-    await pg.close();
+    await browser.close();
   }
   // a name that is not a place, including what every object inherits (WARPS.constructor): warned and off, no throw in applyWarp
   if (!only || only.includes('unknown')) {
@@ -126,8 +128,8 @@ try {
       const r = await pg.evaluate(() => ({ warp: window.__play ? window.__play.warp || null : 'no page', ticks: window.__play ? window.__play.stats.ticks : -1 }));
       ok(r.warp === null && r.ticks > 60, `?warp=${bad}: no warp, the game runs (ticks ${r.ticks})`);
       ok(errs.length === 0, `?warp=${bad}: no console errors${errs.length ? ': ' + errs.slice(0, 3).join(' | ') : ''}`);
-      await pg.close();
+      await browser.close();
     }
   }
-} finally { await browser.close(); srv.kill(); }
+} finally { if (browser) await browser.close().catch(() => {}); srv.kill(); }
 done();

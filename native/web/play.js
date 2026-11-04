@@ -1332,7 +1332,7 @@ async function main() {
     // 44 / 66; event 0x23) at clock 0, the placement's clocks and frame, then 41-43 (stand-in) and 45-49 (GUESS (0201):
     // the save's states, wakeSave) as at record 10 (T w204_reload / w240_act)
     // worker 0242: after a scene_save the stage-start stand-ins (41-43's loadPass, wakeSave) are not run (RECORD_WAKE below)
-    enemyAI = initWorld(o => createEnemyAI({ ...aiOpts, ...o }), { flags, frame, clock, deadRecs: rec ? rec.dead : [], loadRecs: rec ? [] : enemies ? enemies.loadRecs || [] : [],
+    enemyAI = initWorld(o => createEnemyAI({ ...aiOpts, ...o }), { flags, frame, clock, reload: !!rec, deadRecs: rec ? rec.dead : [], loadRecs: rec ? [] : enemies ? enemies.loadRecs || [] : [],
       wake: rec ? null : w => wakeSave(w, AWAKE.filter(k => k !== 44 && k !== 66)) });
     if (window.__play) window.__play.enemyAI = enemyAI;
     return enemyAI;
@@ -1483,9 +1483,6 @@ async function main() {
       // scene_save(n) (FUN_0039c728 -> FUN_0023d690(0, n, 0)): the checkpoint record
       onSceneSave: n => { checkpointRec = sceneSave(n, { gflags: stage ? stage.globalFlags : null, sflags: enemyAI ? enemyAI.eventFlags : null,
         pair: loadedPair(light && light.stream), hp: php.hp, inventory: items ? items.inventory : null, taken: items ? items.taken : null, stats: stageRes ? stageRes.stats : null, dead: enemyAI ? enemyAI.deadBits : null }); },
-      // the auto-skip (a GUESS stand-in for the player): by default only for the events the page does not play yet
-      // (stage_controller.js PLAYS, worker 0248); ?autoskip=1 every event (an aid), ?autoskip=0 none
-      autoSkip: params.get('autoskip') === '1' ? true : params.get('autoskip') === '0' ? false : 'unplayed',
       openingDone: opening ? () => !intro : undefined, openingSkip: opening ? () => (introRt ? introRt.skip : 0) : undefined,
       flags: () => (enemyAI ? enemyAI.eventFlags : null),             // the current world's (a Restart replaces it)
       bossOverlay: on => { if (enemyAI && enemyAI.setBossPlugin) enemyAI.setBossPlugin(on); },   // worker 0231: Zone.boss (FUN_0037fe18)
@@ -1500,6 +1497,7 @@ async function main() {
         if (!stagePassWarned) { stagePassWarned = true; console.warn('stage: battle()\'s stage-load pass: the per-status loop (+0x28 bit 0x40 / status +0x60 bit 0 / +0x118 bit 0x400) and its tail (FUN_00325818, FUN_0055f338, FUN_0053d510, FUN_0053d590, FUN_0053c4c8) left out; event 0x23 sent'); }
         enemyAI.stageLoad([]);
       },
+      reloadPass: () => { if (enemyAI) enemyAI.stageLoad([]); },       // a record's reload: the stage init's 0x23 (stage_controller.js enterBattle)
       stream: () => (light ? light.stream : null),                     // area_stream.js: FUN_002677a0
       music: () => pauseSound.music,                                   // music.js GameMusic (worker 0215)
       area: () => ({ play: (n, v) => { if (areaSoundHook) areaSoundHook(n, v); }, stop: () => console.warn('stage: stopBgAreaSound not wired') }),
@@ -1536,7 +1534,8 @@ async function main() {
       // matrices; FUN_00383d10's row 2 does not depend on its sign)
       matrix: () => [-wa.face[2], 0, wa.face[0], 0, 0, -1, 0, 0, -wa.face[0], 0, -wa.face[2], 0, wa.pos[0], wa.pos[1], wa.pos[2], 1],
       // looked up per call: a body activated just before the lend may still be loading (worker 0262)
-      lend() {}, show(v) { const d = enemies && enemies.actors.find(a => a.rec === k); if (d && d.body) d.body.visible = v; }, release() { const d = enemies && enemies.actors.find(a => a.rec === k); if (d && d.body) d.body.visible = true; },
+      // FUN_0056a5e0 -> FUN_00344ec0(C, 1): the body stops (enemy_ai bodyUpdate) until the stage pass's FUN_0056a790
+      lend() { if (wa.C) wa.C.f564 |= 0x80000000; }, show(v) { const d = enemies && enemies.actors.find(a => a.rec === k); if (d && d.body) d.body.visible = v; }, release() { const d = enemies && enemies.actors.find(a => a.rec === k); if (d && d.body) d.body.visible = true; },
       // FUN_003157b0(status, 0): status +0x30 = the position, +0x40 = the facing (+0x50 = (0, -1, 0)); the actor's own copies follow (worker 0262)
       place(p, f) { wa.pos = [p[0], p[1], p[2]]; wa.face = [f[0], f[1], f[2]]; if (wa.C) wa.C.t2b0 = wa.pos.map((x, i) => Math.fround(x + wa.face[i])); },
     };

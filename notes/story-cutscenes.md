@@ -1,7 +1,7 @@
 # Story cutscenes: every event in ev0100 `main`, and how to make one play (worker 0261, 2026-11-04)
 
 The list, in the order the story reaches each event (main's code order; beats and places: notes/stage-controller.md 'Beats').
-"Plays" = in `PLAYS` (stage_controller.js) or played elsewhere. Everything else is auto-skipped (GUESS, audit 'GUESS: auto-skip').
+"Plays" = in `PLAYS` (stage_controller.js) or played elsewhere. Main calls nothing else: an event outside them is a console.error (StageVM.invoke). There is no auto-skip any more.
 Class = the export's name; scrNNN = the file's script (ev0100 scrNNN). pc = main's call site.
 
 | # | event | class | pc | runs when | plays? | story path it changes |
@@ -45,13 +45,13 @@ Do these per event, in this order; `heri_taijou` / `sk_mituketa2` / `roji02_01` 
    Voices: tools/audio/voice.py default `--names` + build_web.sh's keep list + disc.py. Subtitles and voice lengths are already all in the stage export.
 3. **Natives.** Translate with the citation; a native that can't be done now warns and is listed in fidelity-audit.
 4. **Skip branches and press points.** `PLAYS` in stage_controller.js. Check main's code around the event: what an unplayed event before it does to it
-   (`isSkip`), and `nextEvent` (auto-skip stops at main's wait when the next event plays).
+   (`isSkip`).
 5. **Trace it unskipped** from a walked state (notes/route-states.md), TRACE_FIELDSET=event (cameras, clock), then TRACE_FIELDSET=evactor with TRACE_EVMP (actors).
    `TRACE_LOG_AT` so the log fits: the error message says what fits; split long events into windows of the same run. Route skipped most events: replay the
    route's script up to its Start press, then no input. scene_save's box needs its answers: hold (+0x1558 bit 39) + 300 right, + 320 ✕, + 380 left, + 400 ✕, + 500 ✕, + 600 ✕.
 6. **Check:** `node tools/trace/cmp_event_cams.mjs CLS.METHOD TRACE --from F`: same shot count, errors per shot by event clock. Then actors. Then the page:
    `test_story_cutscenes_page.mjs` shows the shape (warp aid, what's drawn, Vincent hidden, position after), and one game-vs-page image.
-7. **Add it to** `PLAYS`, this table, test_story_cutscenes.mjs (a user's path through main), the audit, and turn its auto-skip off.
+7. **Add it to** `PLAYS`, this table, test_story_cutscenes.mjs (a user's path through main), and the audit.
 
 ## Decoded here (worker 0261)
 
@@ -143,6 +143,12 @@ Open:
 - **A hidden MP's frame stops in the game** (T w262_kmp_a: e048 stays at 178.2 from its setVisible(0)); the page's goes on. No visible effect in these events: kita_ev0145 restarts the clips with setmotion2 when it shows them again. Not changed (shared by every event).
 - Page tests start the beats from aids (`?warp=heritoujou`, `heridgsol`, `chunk0b`, `herilasted` + the trigger's event or a flag): not walked.
 - Left out with their warnings, as agreed: effects, chunk animations (start_anim in heri_lasted), focus blur, flash_in, cblur_in, setshadow_l, Effect.changeTargetActor, pad vibration, the event SE bank (loadSoundEffectEx_l).
+
+Review fixes (worker 0262, 2026-11-04):
+- **Auto-skip is gone.** Every event main calls is in `PLAYS` (first_event: `PLAYED_ELSEWHERE`); `requestSkip`, the player's Skip, stays. StageVM.invoke does console.error if main calls an event not in PLAYS, and plays it (a stuck stage is worse than a wrong one, and every page test fails on console errors); test_story_cutscenes 3d also reads main's call sites from the data. The tests that want a Skip have their own player (test_stage_controller `make`).
+- **Restart at the boss:** a record's reload sends 0x23 after main's first battle() (T w240_init), once, instead of before main with the plug-in off; see the audit row.
+- **A lent body stands** until the stage pass (FUN_00344ec0, FUN_00343160's first test, FUN_00558f68 -> FUN_0056a790).
+- pause.js left / right read nav4[2] / [3] (FUN_003cbc38 param_3[2] / [3]).
 
 ## scr003: first_encounter, rv_toujou, wro_kaisetu (worker 0263)
 

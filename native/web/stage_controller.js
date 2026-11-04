@@ -12,8 +12,7 @@
 // the main thread waits for the frame, so a polling loop in a script (main's `while (no flag) deb_jump()`) runs in the
 // frame's idle time, preempted, not blocked. StageVM.run takes a step budget per frame and goes on next frame.
 //
-// Skip (the path decoded; WHEN to skip is the page's GUESS: it chooses Skip in every event, at the event's first wait, as
-// a stand-in for the player; ?autoskip=0 (opts.autoSkip false) leaves the events to play out):
+// Skip (the path decoded; the player chooses it, play.js):
 //   FUN_003c0520 (the pause menu) offers Skip when FUN_003e0d00() == 0 (DAT_004f3044 bit 0x2000: enableSkip(0) sets
 //   it, FUN_003e0cc8; the stage title card FUN_003fdb48 too); choosing it: FUN_003c0110 -> FUN_003dfdc8: if
 //   FUN_003dfd18 (+0x1558 & 0x102000000000 == 0x100000000000: an event program runs, bit 44 from FUN_00374d08 /
@@ -27,11 +26,12 @@ import { EventVM, block } from './event_vm.js';
 import { EventActors } from './event_actor_rt.js';
 import { sendEventSe } from './event_sound.js';
 
-// worker 0248: the events the page plays out by default (their actors, cameras, sound and windows are drawn: play.js
-// stage view, event_actors.js); with opts.autoSkip 'unplayed' (play.js's default) the page's Skip stand-in is kept for
-// the others only. ?autoskip=1 (true) skips every event, ?autoskip=0 (false) none
+// worker 0248: the events the page plays out, every one main calls (StageVM.invoke's check; test_stage_controller reads main's call sites)
 // worker 0261 (notes/story-cutscenes.md): sk_mituketa2, heri_taijou (Skip in it takes main's branch past sk_mituketa2), roji02_01
 export const PLAYS = new Set(['ev0101.rv_matiawase', 'ev0103.heri_taijou', 'ev0101.sk_mituketa2', 'ev0143.roji02_01', 'ev0141.first_encounter', 'ev0141.rv_toujou', 'ev0141.wro_kaisetu', 'ev0143.roji01_01', 'ev0143.beast_ev01', 'ev0143.beast_ev02', 'ev0143.heri_tobi', 'ev0143.help_people01', 'ev0143.help_orei01', 'ev0143.help_orei02', 'ev0143.help_orei04', 'ev0143.help_people03', 'ev0143.help_orei03', 'ev0103.heri_toujou', 'ev0103.heri_dgsol', 'ev0103.heri_lastst', 'ev0103.heri_lasted', 'ev0145.kita_ev0145']);
+
+// main's own classes: their methods are main's helpers (kalm_ld ...), not events
+export const MAIN_CLASSES = ['ev0100', 'ev0148'];
 
 const f32 = Math.fround;
 
@@ -56,6 +56,9 @@ class StageVM extends EventVM {
   invoke(hit, cls, name, desc, args, self) {
     const key = cls + '.' + name + desc;
     if (this.played.has(key)) return { value: this.onPlayed ? this.onPlayed(key) : undefined };
+    // page only: no auto-skip any more, so an event main calls that isn't in PLAYS would run with no one having looked at it
+    const top = this.frames[this.frames.length - 1];
+    if (hit && top && MAIN_CLASSES.includes(top.cls) && /^ev\d{4}$/.test(hit.cls) && !MAIN_CLASSES.includes(hit.cls) && !PLAYS.has(hit.cls + '.' + name)) console.error(`stage: main calls ${hit.cls}.${name}, not in PLAYS (stage_controller.js)`);
     if (hit && !(hit.m.access & 0x100) && /^ev\d{4}$/.test(hit.cls) && !this.calls.includes(hit.cls + '.' + name)) this.calls.push(hit.cls + '.' + name);
     return super.invoke(hit, cls, name, desc, args, self);
   }
@@ -107,8 +110,9 @@ export class StageRuntime extends EventRuntime {
     if (!this.battle) {
       // L: the game has no stage object until the stage init (DAT_0046e290 0, no HUD, no manager: T r1600 against r2600), so nothing of the
       // world runs; the page's world exists from the start, so it waits as in event mode (enterEvent's bits, cleared by enterBattle).
-      // Bit 11: no Vincent to steer either (FUN_00331f08's gate), and main calls no set_usercontrol(0) on this path; each save's next
-      // battle() comes after main's set_usercontrol(1), which clears it (ev0100 main pc 1356, 5246, 6670, 8235, 10759)
+      // Bit 11: no Vincent to steer either (FUN_00331f08's gate), and main calls no set_usercontrol(0) on this path. It ends with main's
+      // set_usercontrol(1) (ev0100 main pc 1356, 5246, 6670, 8235, 10759) or, on any route without one (global 18 clear: pc 946 -> 1107), the first battle()
+      this.reloadHold = true;
       const gs = o.gameState && o.gameState();
       if (gs) { gs.set(6); gs.set(2); gs.set(11); }
       if (o.hudControl) o.hudControl(false);
@@ -119,9 +123,6 @@ export class StageRuntime extends EventRuntime {
     // not yet. T w240_init (a Restart's reload): main's battle() after first_event (f2264) comes before the stage init
     // (f2276-2278), so that battle's FUN_00324e70 finds none (worker 0240)
     this.stageObj = false;
-    this.eventPlayed = false;         // page only: a PLAYS event ran in this event-mode stretch (the auto-skip stand-in)
-    // true: every event (the tests' default), 'unplayed': not the PLAYS events (play.js), false: none
-    this.autoSkip = o.autoSkip === 'unplayed' ? 'unplayed' : o.autoSkip !== false;
     // DAT_0050db20 (stored XOR DAT_0046f608; kept plain here). A new controller = a stage (re)load: all 0. The clearing is
     // traced only (w210 start1704: 0 mid stage load); its writer is not decoded
     this.gflags = o.globalFlags || new Uint8Array(64);
@@ -169,34 +170,6 @@ export class StageRuntime extends EventRuntime {
     return true;
   }
 
-  // an event of PLAYS is running (its method is on the VM's stack)
-  playing() { return this.vm.frames.some(F => PLAYS.has(F.cls + '.' + F.m.name)); }
-  // 'unplayed': the first wait of an event-mode stretch (Zone.event ... battle()) with no PLAYS event on the stack and none
-  // run in it yet, the same point as ?autoskip=1. Skip must come before an unplayed event starts: pressed inside it, a
-  // camera move it queued (roji02_01's cam 0) ends after main's own Camera.set in the frame the event returns (FUN_00377c68:
-  // the VM window, then the commands) and overwrites it. Main's code after a played event is not skipped (eventPlayed)
-  // Worker 0261: nor when the event main calls next is a PLAYS event (Skip there would run its whole stretch skipped, and main's
-  // own branches on isSkip; main's wait before heri_taijou)
-  unplayedEvent() { return !this.playing() && !this.eventPlayed && !PLAYS.has(this.nextEvent()); }
-  // page only: the event class method main calls next, in code order (its invokestatic sites of the classes it loads)
-  nextEvent() {
-    const F = this.vm.frames[0]; if (!F) return null;
-    // inside an event, main's pc is already past its call: that event itself (heri_dgsol's wait is not 'before heri_taijou')
-    const E = this.vm.frames[1];
-    if (E && /^ev\d/.test(E.cls) && E.cls !== 'ev0100' && E.cls !== 'ev0148') return E.cls + '.' + E.m.name;
-    if (!this.mainCalls) {
-      const c = F.code, cp = F.cp, is = [];
-      for (let i = 0; i + 2 < c.length; i++) {
-        if (c[i] !== 0xb8) continue;
-        const r = cp[(c[i + 1] << 8) | c[i + 2]];
-        if (r && r[0] === 'ref' && /^ev\d/.test(r[1]) && r[1] !== 'ev0100' && r[1] !== 'ev0148') is.push([i, r[1] + '.' + r[2]]);
-      }
-      this.mainCalls = is;
-    }
-    const n = this.mainCalls.find(x => x[0] >= F.pc);
-    return n ? n[1] : null;
-  }
-
   frame(dtMs = 20) {
     this.frameNo++;
     if (this.log.length > 4000) this.log.splice(0, 2000);              // page memory: the log is for tests
@@ -204,7 +177,6 @@ export class StageRuntime extends EventRuntime {
     if (this.sePending && this.sePending.length) this.seSent = sendEventSe(this, this.sound && this.sound.audio ? this.sound.audio() : null);
     this.lentUpdate();                                                  // the statuses' update (main thread, before the VM window)
     if (!this.vm.done) this.vm.run();                                   // the VM thread's time this frame
-    if (this.playing()) this.eventPlayed = true;
     this.cardStep();
     this.clock = (this.clock + dtMs) >>> 0;                              // FUN_003798a0
     for (const c of this.slots.slice()) {                                // FUN_00377c68's slot loop, slots in order
@@ -227,12 +199,6 @@ export class StageRuntime extends EventRuntime {
       const f = this.fade; f.level = Math.fround(f.level + Math.fround(f.rate * 1.2));
       if (f.level <= 0) f.level = 0; else if (f.level >= 256) f.level = 256;
     }
-    // GUESS: the page chooses Skip for every event, once the menu would offer it and the event has reached a wait (its
-    // code up to there runs as unskipped). The player's own timing is not the game's code (w219_skip: ✕ 63 frames into
-    // rv_matiawase). It forces main's skip branches (heri_taijou -> no sk_mituketa2, heri_lasted -> no kita_ev0145) and
-    // a skipped event's timing; ?autoskip=0 (opts.autoSkip false) turns it off (notes/fidelity-audit.md 'GUESS: auto-skip').
-    // The pause menu runs after the event update, so +0x156c goes 1 -> 2 on the next frame (T w219_skip: f961 / f962)
-    if (this.autoSkip && this.skip === 0 && this.skippable() && !this.vm.done && this.vm.pending && (this.autoSkip === true || this.unplayedEvent())) this.requestSkip();
   }
 
   // FUN_003779d0: with +0x156c == 2 the key time is the move's end
@@ -275,6 +241,8 @@ export class StageRuntime extends EventRuntime {
       if (a.lent) { a.lent.release(); this.log.push([this.frameNo, 'battle actor ' + a.id + ' freed']); this.warnOnce('stage: an unnamed battle actor\'s object after battle() (FUN_003159b8 -> FUN_00408b30, a new model at its status place) is drawn by its own system again; where its status is then is not translated'); }
     }
     if (gs) { gs.clear(2); gs.clear(6); }
+    // L: the reload's hold ends here if main hasn't taken over: the stage init, with Vincent and the HUD, follows this battle (T w240_init)
+    if (this.reloadHold) { this.reloadHold = false; if (gs) gs.clear(11); if (this.o.hudControl) this.o.hudControl(true); }
     // FUN_00324e70(FUN_0037cee8() != 0): with DAT_004b8ac8 bit 5 clear (FUN_002419d8(5) == 0 in the z128 states;
     // player.js DAT_004B8AC8) its second branch runs: FUN_00319190 (each status takes the slot named after it), then
     // the camera reset FUN_00329f68 -> FUN_003285d0 (angles from render view 1's forward)
@@ -289,6 +257,9 @@ export class StageRuntime extends EventRuntime {
     if (!this.stageObj) this.log.push([this.frameNo, 'battle: no stage object yet (FUN_00324e70: nothing)']);
     else if (this.o.stagePass) this.o.stagePass();
     else this.warnOnce('stage: battle()\'s stage-load pass FUN_005453b0 (event 0x23) not wired');
+    // worker 0262: L: a record's reload: the page ran the stage init's 0x22 before main (checkpoint.js initWorld). Its 0x23 belongs here, after
+    // this battle (T w240_init): main's Zone.boss(true) has come by now, and the boss's mode 0x100 needs the plug-in
+    if (first && this.o.globalFlags) { if (this.o.reloadPass) this.o.reloadPass(); else this.warnOnce('stage: the reload\'s event 0x23 not wired'); }
     this.stageObj = true;             // the stage init follows that first battle (FUN_003245e8, T w240_init)
     if (this.o.cameraReset) this.o.cameraReset(this.view, first); else this.warnOnce('stage: battle()\'s camera reset (FUN_00329f68) not wired');
     this.warnOnce('stage: FUN_00324e70\'s player calls (FUN_00578548, FUN_00574928, FUN_0034b2c8, FUN_00331ab0 ...) left out');
@@ -316,7 +287,7 @@ export class StageRuntime extends EventRuntime {
     // GUESS: bone 1's offset is left out (the slot's motion is not posed on the page: its clip is not exported for the
     // stage); T w229_rescue_pos: x / z = setpos's floats exactly, so it is 0 there (notes/fidelity-audit.md)
     const pos = [M[12], M[13], M[14]], face = [f32(-M[8] / n), f32(-M[9] / n), f32(-M[10] / n)];
-    obj.place(pos, face);
+    if (!((obj.status60 | 0) & 0x20000)) obj.place(pos, face);          // FUN_00319190 / FUN_003159b8: status +0x60 bit 0x20000 (no writer found; never set on the page)
     obj.release();                                                      // its model is drawn by its own system again
     if (a.lent && a.lent.tag !== a.tag) this.warnOnce('stage: a slot lending ' + a.lent.tag + '\'s model was taken by ' + a.tag + ' (left out)');
     // FUN_00380858(MP) for p_Vin: DAT_0046e290 +0x50 = the model (the camera's player model; no page state)
@@ -351,7 +322,6 @@ export class StageRuntime extends EventRuntime {
     // FUN_00325b10(1): game-state bit 6, the AI paused (enemy_ai FUN_00365008); then FUN_00326018(2)
     if (gs) { gs.set(6); gs.set(2); }
     this.battle = false;
-    this.eventPlayed = this.playing();                                  // page only: the stand-in's stretch (unplayedEvent)
     this.log.push([this.frameNo, 'event ' + n]);
     if (this.o.onMode) this.o.onMode('event');
   }
@@ -379,7 +349,7 @@ export class StageRuntime extends EventRuntime {
       // set when off (FUN_00325b60(b == 0)), FUN_0037def0, FUN_00380a28, FUN_003edaa8 (left out)
       'fake/KerberosEvent.set_usercontrol(Z)V': (vm, [v]) => {
         const apply = () => {
-          R.state.usercontrol = v; log('usercontrol ' + v);
+          R.state.usercontrol = v; log('usercontrol ' + v); R.reloadHold = false;
           // FUN_00325b60(b == 0): bit 11; FUN_0037def0(ev, b == 0) -> FUN_00325b10: bit 6 (the AI paused while off)
           const g = gs(); if (g) { if (v) { g.clear(11); g.clear(6); } else { g.set(11); g.set(6); } }
           // FUN_003b01b0(DAT_00471380, b): the HUD's panels out / in (worker 0248: hud.js control; T w248_gs: no HUD in the event)
@@ -391,7 +361,7 @@ export class StageRuntime extends EventRuntime {
         apply(); return undefined;
       },
       // free_usercontrol (FUN_003a4768): FUN_00325b60(b != 0)
-      'fake/KerberosEvent.free_usercontrol(Z)V': (vm, [v]) => { const g = gs(); if (g) (v ? g.set(11) : g.clear(11)); log('free_usercontrol ' + v); },
+      'fake/KerberosEvent.free_usercontrol(Z)V': (vm, [v]) => { const g = gs(); if (g) (v ? g.set(11) : g.clear(11)); R.reloadHold = false; log('free_usercontrol ' + v); },
       // set_battlecontrol (FUN_0039c3a8 -> FUN_0037e588): FUN_00403470(b == 0, 1) (the HUD / weapon lock), then the
       // frame sync FUN_0037e4e0
       'fake/KerberosEvent.set_battlecontrol(Z)V': (vm, [v]) => {

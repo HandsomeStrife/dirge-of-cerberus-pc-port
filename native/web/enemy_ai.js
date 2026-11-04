@@ -791,6 +791,13 @@ export function createEnemyAI(opts) {
       if (cmd === 0x3a || cmd === 0x3f) return slot(r[0] + ID_BASE);   // object id of section-1 record r0 (manager +0x3b2; -1 after a delete)
       if (cmd === 0x3d) return trigObj(r[0]);                  // object id of section-8 trigger r0 (manager +0x7b0)
       if (cmd === 0xc) return EVFLAGS[r[0]] ?? 0;              // event flag r0 (FUN_003ff738)
+      // FUN_00545b20 cases 0x33 / 0x32 (the card gates' scripts 199, 202, 211, 221, 244; worker 0264): FUN_0031f0b0 the slot of item r0. 0x33: its count, no slot 0.
+      // 0x32: FUN_0031eb60 takes r1 of it, all of it when r1 < 0; returns the amount, no slot 0. Without these every gate read 0 keys and refused
+      if (cmd === 0x33 || cmd === 0x32) {
+        const inv = opts.items && opts.items.inventory; if (!inv) return 0;
+        const k = inv.find(r[0]); if (k < 0) return 0;
+        return cmd === 0x33 ? inv.countAt(k) : inv.remove(k, r[1] >= 0 ? r[1] : inv.countAt(k));
+      }
       // worker 0259: FUN_00545b20 case 0xa2: status of record r0 (FUN_00318bf8), its +0x20 (HP) == 0 -> 1
       if (cmd === 0xa2) { const q = objects.get(r[0] + ID_BASE); return +(!!q && q.hp === 0); }
       // worker 0259: case 4: FUN_003365e0(r0, manager +0x260) an effect at that point (FUN_003350c0 rotation +0x230 and r1's scale
@@ -997,6 +1004,8 @@ export function createEnemyAI(opts) {
         return 0;
       // FUN_005661e8 case 0x14c / 0x14d: set / clear actor +0x118 bit r0 (r0 < 0x20). Script 109 (record 45)
       // event 3 sets bit 28 (0x10000000: never pushed by FUN_00542ab8).
+      // FUN_005661e8 case 0x177: (+0x28 & 1) ^ 1 = not active (worker 0264). The soldier pools ask it before activating the next one (script 104 event 2: chunk 07's 75-79, then the corpse count -> e036); skipped it read 0 and no one came
+      case 0x177: return (t.flags28 & 1) ^ 1;
       case 0x14c: case 0x14d:
         if (!(t.kind === 'actor' || (t.kind === 'record' && buildsActor(data.records[t.rec])))) {
           warnOnce(`enemy_ai: object cmd 0x${cmd.toString(16)} to a non-actor not translated (skipped)`); return 0;
@@ -3037,6 +3046,7 @@ export function createEnemyAI(opts) {
   }
   function bodyUpdate(a, step) {
     const C = a.C, m = C.motion;
+    if (C.f564 & 0x80000000) return;                                          // FUN_00343160's first test: lent (FUN_00344ec0(C, 1)); FUN_0034ea18 is inside it
     C.nextMotion = 0;
     if (m) { C.inUpdate = true; try { motionUpdate(a, m, step); } finally { C.inUpdate = false; } }
     if (m && m.cls === 0x42) {
@@ -5274,7 +5284,7 @@ export function createEnemyAI(opts) {
         setAim(a, (bw && bw(PLAYER_AIM_BONE)) ? bw(PLAYER_AIM_BONE)[3].slice() : targetPoint(a.target === P && playerOld ? { pos: playerOld } : a.target));
       }
       a.C.f224 = 0;                                                           // FUN_0034de50: zero first; turn modes 5 / 6 write it
-      if (a.C.s214 === 6) { const old = a.face; a.face = turnBody(old, a.pos, a.C.t2b0, step); a.C.f224 = PM.turnRate(old, a.face, step); }
+      if (a.C.s214 === 6 && !(a.C.f564 & 0x80000000)) { const old = a.face; a.face = turnBody(old, a.pos, a.C.t2b0, step); a.C.f224 = PM.turnRate(old, a.face, step); }
       bodyUpdate(a, step);
       trackMoved(a);
     }
@@ -5323,7 +5333,7 @@ export function createEnemyAI(opts) {
     // next frame. T: k_lunge166 #66 MP+0x218 (r_atk_0): 23.999971 after 40 frames (round to nearest: 24.00001)
     for (const a of actors) {
       const h = a.C.mp, n = h && clipFrames(a, h.clip);
-      if (!h || h.frame == null || n == null) continue;
+      if (!h || h.frame == null || n == null || (a.C.f564 & 0x80000000)) continue;   // lent: the actor has no MP (FUN_0056a5e0: +0x180 = 0)
       h.frame = chop(h.frame + chop(chop((a.C.rate != null ? a.C.rate : 0.5) * 1.0) * step));
       if (h.loop) { if (n <= h.frame) h.frame = 0; }
       else if (n - 1 <= h.frame) h.frame = n - 1;
@@ -5355,7 +5365,8 @@ export function createEnemyAI(opts) {
   // 0x23 there): 41-43 and 45-49 are activated by their area switching on (FUN_0054ef68 -> vt+0x14c FUN_0055a0d8 ->
   // vt+0x144(1, 1)); play.js rebuildEnemies uses loadPass for 41-43 as the stand-in (GUESS row in notes/fidelity-audit.md).
   function stageLoad(recs) {
-    loadPass(recs);
+    // worker 0262: a lent object has +0x28 bit 0x40 (FUN_0056a5e0), so the loop reaches it: FUN_00558f68's tail, FUN_0056a790
+    loadPass([...recs, ...actors.filter(a => a.C && (a.C.f564 & 0x80000000)).map(a => a.rec)]);
     event23();                                                                // worker 0235: FUN_005453b0's end
   }
   function loadPass(recs) {
@@ -5371,6 +5382,7 @@ export function createEnemyAI(opts) {
       if (!was) setActive(t, 1, 1);                                             // +0x144 only when inactive (bVar1)
       const a = objects.get(k + ID_BASE);
       if (!a || a.kind !== 'actor' || !(a.flags28 & 1)) continue;
+      a.C.f564 &= 0x7fffffff;                                                   // FUN_0056a790 -> FUN_00344ec0(C, 0)
       a.C.speed = 0;                                                            // C+0x1d8
       a.C.f564 |= 0x20000000;
       a.C.f1c0 |= 0x200;
@@ -5488,11 +5500,11 @@ export function createEnemyAI(opts) {
   }
   if (data.records.length && data.records.every(r => r.area === undefined)) warnOnce('enemy_ai: ai.json records have no area (re-export data/enemies): the actors\' area switch is off');
 
-  function stageInit() {
+  function stageInit(send23 = true) {
     if (STAGE_OBJ) runEvent(STAGE_OBJ, 0x22);
     for (const o of [...objects.values()]) if (o.kind === 'record' || o.kind === 'actor') runEvent(o, 0x22);
     for (const o of triggers) runEvent(o, 0x22);
-    event23();
+    if (send23) event23();
   }
 
   // the opening event's hand-off (checkpoint.js): [{ rec, frame (S.frame of the tick it happens in), pos, face }]

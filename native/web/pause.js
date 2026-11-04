@@ -318,7 +318,7 @@ export class PauseScreen {
       return null;
     }
     if (a === 4 || a === 5) {                      // FUN_003cbc38: explicit neighbours only
-      const n = f.nav4[a];
+      const n = f.nav4[a - 2];                     // param_3[2] / [3] (nav4 starts at param_3[0])
       if (n === 0xff || ((n & 0x80) && kind === 0)) return null;
       const t = this.next(f, n & 0x7f, 0, true);
       if (t !== f) { this.setFocus(t); this.se = SE.cursor; this.seW = f; return { moved: t.id }; }

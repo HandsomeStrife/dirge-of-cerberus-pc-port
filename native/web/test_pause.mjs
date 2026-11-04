@@ -107,7 +107,13 @@ eq(f.action(3, 0), null, 'down at Quit (pad): stays');
 eq(f.action(3, 2), { moved: 3 }, 'down at Quit (keyboard): wraps to Restart');
 eq(f.action(2, 0), null, 'up at Restart (pad): stays');
 eq(f.action(4, 0), null, 'left: no neighbour');
-eq(f.action(0, 0), { event: 3 }, '✕ on Restart -> event id 3');
+// left / right read param_3[2] / [3] (FUN_003cbc38), nav4[2] / [3]; a = 4 used to read past the array and jump to order 0
+{ const n = new PauseScreen(D, { now: 0 }); n.update(200); n.action(3, 0); n.action(3, 0); eq(n.focus.id, 5, 'at Quit');
+  eq(n.action(4, 0), null, 'left at Quit stays (no jump to Restart)'); eq(n.focus.id, 5, 'still Quit'); eq(n.action(5, 0), null, 'right at Quit stays'); eq(n.focus.id, 5, 'still Quit'); }
+{ const b = new PauseFlow(D); b.start(0); b.frame(200); b.input(0, 300); b.frame(450); const box = b.box;
+  eq(box.focus.id, 7, 'the box opens on CANCEL');
+  b.input(4, 460); eq(box.focus.id, 6, 'left at CANCEL moves to OK'); b.input(4, 470); eq(box.focus.id, 6, 'left at OK stays');
+  b.input(5, 480); eq(box.focus.id, 7, 'right at OK moves to CANCEL (FUN_003cbc38)'); b.input(5, 490); eq(box.focus.id, 7, 'right at CANCEL stays'); }
 
 // ---- open / close timing (FUN_003d5110 / FUN_003d5340 / FUN_003d51c0)
 const o = new PauseScreen(D, { now: 1000 });

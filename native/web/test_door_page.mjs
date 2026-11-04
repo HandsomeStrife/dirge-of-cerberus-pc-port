@@ -30,7 +30,8 @@ try {
   const s0 = await place(-1328.3, 1134.1, 0, 0, -0.1);
   ok(s0.t === 0 && s0.poly, 'at the door, shut', JSON.stringify(s0));
   // MISSING: door walls (FUN_005451d0 -> FUN_0054c628; notes/fidelity-audit.md): W into the shut door doesn't stop at T's 1134.10. A short walk, as past the door ✕ on it didn't open here; back to the door for ✕
-  await pg.keyboard.down('KeyW'); await pg.waitForTimeout(500); await pg.keyboard.up('KeyW');
+  // Stops as soon as he's past: a further walk fires trigger 14, whose script sends 0x18d(0) to this door and sets flag 0 = 13 (notes/battle-camera.md), so ✕ no longer opens it
+  await pg.keyboard.down('KeyW'); await pg.waitForFunction(() => window.__play.ctrl.pos.z > 1134.2, null, { timeout: 30000, polling: 'raf' }); await pg.keyboard.up('KeyW');
   let s = await st();
   ok(s.e0 === 0 && s.z > 1134.2, `MISSING door wall: he walks past the game's stop at the shut door: z ${s.z.toFixed(2)} (T 1134.10)`);
   await place(-1328.3, 1134.1, 0, 0, -0.1);
@@ -46,7 +47,9 @@ try {
   ok(opened, '✕ facing the door: it opens (state 2, then 1)');
   const seq = await pg.evaluate(() => { const o = []; for (const [t, e] of window.__t) if (!o.length || o[o.length - 1][1] !== e) o.push([t, e]); return o; });
   const a = seq.find(x => x[1] === 2), b = seq.find(x => x[1] === 1);
-  ok(a && b && Math.abs(b[0] - a[0] - 13) <= 1, `state 2 -> 1 in ${a && b ? b[0] - a[0] : '?'} game frames (T 13)`, JSON.stringify(seq));
+  // sampled once per drawn frame, so on a slow box each change is only known between two samples: T's 13 must fall inside what they allow
+  const span = await pg.evaluate(() => { const T = window.__t, f2 = T.findIndex(x => x[1] === 2), f1 = T.findIndex(x => x[1] === 1); if (f2 < 1 || f1 < 1) return null; return { min: T[f1 - 1][0] - T[f2][0], max: T[f1][0] - T[f2 - 1][0] }; });
+  ok(span && span.min - 1 <= 13 && 13 <= span.max + 1, `state 2 -> 1 in ${span ? span.min + ' to ' + span.max : '?'} game frames (T 13)`, JSON.stringify(seq));
   const v1 = await vert();
   const moved = v0 && v1 && Math.hypot(v1[0] - v0[0], v1[2] - v0[2]);
   ok(moved > 3, `the door's vertices swung (${moved && moved.toFixed(2)} u)`, JSON.stringify(v1));

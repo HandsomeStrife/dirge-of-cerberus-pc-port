@@ -17,8 +17,15 @@ const data = JSON.parse(fs.readFileSync(path.join(HERE, 'data/event/ev0100_stage
 let base = HERE;
 if (MUT) {
   const SUB = {
-    nextevent: ['stage_controller.js', ' && !PLAYS.has(this.nextEvent())', ''],
     // worker 0262
+    reloadpass: ['stage_controller.js', 'if (first && this.o.globalFlags) {', 'if (false) {'],
+    reload23: ['enemy_ai.js', 'if (send23) event23();', 'event23();'],
+    lentgate: ['enemy_ai.js', 'if (C.f564 & 0x80000000) return;', ''],
+    lentturn: ['enemy_ai.js', 'a.C.s214 === 6 && !(a.C.f564 & 0x80000000)', 'a.C.s214 === 6'],
+    lentclear: ['enemy_ai.js', 'a.C.f564 &= 0x7fffffff;', ''],
+    lentpass: ['enemy_ai.js', 'loadPass([...recs, ...actors.filter(a => a.C && (a.C.f564 & 0x80000000)).map(a => a.rec)]);', 'loadPass(recs);'],
+    status60: ['stage_controller.js', 'if (!((obj.status60 | 0) & 0x20000)) obj.place(pos, face);', 'obj.place(pos, face);'],
+    loud: ['stage_controller.js', '&& !PLAYS.has(hit.cls + \'.\' + name)) console.error(', '&& false) console.error('],
     lentmodel: ['stage_controller.js', 'R.actors.create(obj.model || name, id)', 'R.actors.create(name, id)'],
     lentshow: ['stage_controller.js', 'a.lent.show(!!v && !a.mp.clip)', 'a.lent.show(!!v)'],
     plays0262: ['stage_controller.js', "'ev0103.heri_lasted', ", ''],
@@ -30,7 +37,6 @@ if (MUT) {
     gunbit: ['aim_core.js', "gameState.set(8);", ""],
     getpos: ['stage_controller.js', "return a ? a.M[12] : 0; }", "return 0; }"],
     battlecam: ['stage_controller.js', "i === 1 ? f32(v.eye[j] + v.fwd[j])", "i === 1 ? 0"],
-    frames1: ['stage_controller.js', "if (E && /^ev\\d/.test(E.cls)", "if (false && /^ev\\d/.test(E.cls)"],
     rollraw: ['event_rt.js', 'r1 = crs(fw, raw); v = r1;', 'r1 = crs(fw, r0); v = r1;'],
     voicepause: ['event_sound.js', 'if (on) this.hold(rec); else this.start(rec, rec.off);', ''],
     plays: ['stage_controller.js', "'ev0103.heri_taijou', ", ''],
@@ -72,7 +78,7 @@ if (MUT) {
   if (!s.includes(SUB[1])) throw new Error('mutant does not apply: ' + SUB[1]);
   fs.writeFileSync(p, s.replace(SUB[1], SUB[2]));
 }
-const { createStageController, PLAYS } = await import(pathToFileURL(path.join(base, 'stage_controller.js')));
+const { createStageController, PLAYS, PLAYED_ELSEWHERE, MAIN_CLASSES } = await import(pathToFileURL(path.join(base, 'stage_controller.js')));
 const { AreaStream } = await import(pathToFileURL(path.join(base, 'area_stream.js')));
 const { EventActors, quatRows } = await import(pathToFileURL(path.join(base, 'event_actor_rt.js')));
 const { createEventWindows, EventChoiceScreen } = await import(pathToFileURL(path.join(base, 'event_window.js')));
@@ -81,7 +87,7 @@ const { loadStageInfoData } = await import(pathToFileURL(path.join(base, 'stage_
 
 function make(v, globalFlags, extra = {}) {
   const stream = new AreaStream([], [6, 7]), warns = [];
-  const c = createStageController({ data, warn: m => warns.push(m), flags: () => v, stream: () => stream, autoSkip: 'unplayed', globalFlags,
+  const c = createStageController({ data, warn: m => warns.push(m), flags: () => v, stream: () => stream, globalFlags,
     actors: new EventActors({ warn: () => {} }), onSceneSave: () => {},
     battleObject: n => ({ tag: n, matrix: () => [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1], lend() {}, show() {}, release() {}, place() {} }), ...extra });
   const run = (n, stop) => { for (let f = 0; f < n && !c.done; f++) { stream.progress(); c.tick(20); if (stop && stop()) return true; } return false; };
@@ -148,20 +154,32 @@ const G = (o) => { const g = new Uint8Array(64); for (const k in o) g[k] = o[k];
   const u = [ch[6].v[0], ch[7].v[0], ch[8].v[0]], want = [-0.7809, -0.4998, 0.3748];
   ok(u.every((x, i) => Math.abs(x - want[i]) < 1e-3), 'pitched roll 45: ' + u + ' (want ' + want + ')');
 }
-// 3d. Inside an unplayed event main's pc is past its call: nextEvent = that event, so heri_dgsol does not count as 'before heri_taijou' and auto-skips
+// 3d. Every event main calls plays (no auto-skip any more): main's call sites in the data, and the loud check at the call itself
 {
-  const v = { 0: 14, 1: 8 }, S = make(v, G({ 0: 1, 1: 13 })), R = S.R;
-  let inside = null;
-  S.run(4000, () => { if (R.vm.frames.some(F => F.m.name === 'heri_dgsol')) inside ??= R.nextEvent(); return R.gflags[1] > 13 && R.battle; });
-  ok(inside === 'ev0103.heri_dgsol', 'nextEvent inside heri_dgsol: ' + inside);
-}
-// the rule itself, with an event taken out of PLAYS (everything in the class plays by now): it auto-skips at its first wait
-{
-  PLAYS.delete('ev0103.heri_dgsol');
-  const v = { 0: 14, 1: 8 }, S = make(v, G({ 0: 1, 1: 13 })), R = S.R;
-  S.run(1500, () => R.log.some(x => /^skip /.test(x[1])));
-  PLAYS.add('ev0103.heri_dgsol');
-  ok(R.log.some(x => /^skip ev0103\.heri_dgsol/.test(x[1])), 'an unplayed event inside: skipped at its first wait: ' + R.log.filter(x => /^skip/.test(x[1])).map(x => x[1]).join());
+  const hex = (c) => Uint8Array.from(c.match(/../g) || [], h => parseInt(h, 16));
+  const sites = new Set();
+  for (const k of MAIN_CLASSES) for (const m of data.classes[k].methods) {
+    if (!m.code) continue;
+    const c = hex(m.code), cp = data.classes[k].cp;
+    for (let i = 0; i + 2 < c.length; i++) {
+      if (c[i] !== 0xb8) continue;
+      const r = cp[(c[i + 1] << 8) | c[i + 2]];
+      if (r && r[0] === 'ref' && /^ev\d{4}$/.test(r[1]) && !MAIN_CLASSES.includes(r[1])) sites.add(r[1] + '.' + r[2]);
+    }
+  }
+  const out = [...sites].filter(e => !PLAYS.has(e) && !PLAYED_ELSEWHERE.some(p => p.startsWith(e + '(')));
+  ok(sites.size >= 10, 'main\'s event call sites read from the data: ' + [...sites].join());
+  ok(!out.length, 'every event main calls is in PLAYS or played elsewhere: missing ' + out.join());
+  const errs = [], was = console.error; console.error = (m) => errs.push(String(m));
+  try {
+    { const S = make({ 0: 14, 1: 8 }, G({ 0: 1, 1: 13 })); S.run(300, () => S.R.vm.frames.some(F => F.m.name === 'heri_dgsol')); ok(!errs.length, 'no complaint for an event in PLAYS: ' + errs.join()); }
+    PLAYS.delete('ev0103.heri_dgsol');
+    const S = make({ 0: 14, 1: 8 }, G({ 0: 1, 1: 13 })), R = S.R;
+    S.run(300, () => R.vm.frames.some(F => F.m.name === 'heri_dgsol'));
+    PLAYS.add('ev0103.heri_dgsol');
+    ok(errs.some(m => /main calls ev0103\.heri_dgsol, not in PLAYS/.test(m)), 'an event taken out of PLAYS: console.error at main\'s call: ' + errs.join());
+    ok(!R.log.some(x => /^skip /.test(x[1])), 'and nothing presses Skip for it');
+  } finally { console.error = was; }
 }
 // 3e. A player's Skip in heri_taijou (Start, cross): main's branch at pc 6355 goes past sk_mituketa2, chunks (6, 7), battle
 {
@@ -484,6 +502,81 @@ for (const [ev, flags, g1, extra] of [
     ok(R.requestSkip(), 'Skip offered in heri_lasted');
     T.run(4000, () => { for (const F of R.vm.frames) seen.add(F.m.name); return R.log.some(x => x[1] === 'endSection'); });
     ok(R.log.some(x => x[1] === 'endSection') && !seen.has('kita_ev0145'), 'Skip in heri_lasted: no kita_ev0145, the level still ends: ' + [...seen].join());
+  }
+}
+// 10. Worker 0262 (review): the real enemy_ai world behind the battle objects
+{
+  const { createEnemyAI } = await import(pathToFileURL(path.join(base, 'enemy_ai.js')));
+  const { initWorld } = await import(pathToFileURL(path.join(base, 'checkpoint.js')));
+  const ai = JSON.parse(fs.readFileSync(path.join(HERE, 'data/enemies/ai.json'), 'utf8'));
+  const player = () => ({ pos: [700, -100, 1460], face: [1, 0, 0], hp: 780, id: 0x16, f118: 0x20209, s64: 0 });
+  const bones = a => () => [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [a.pos[0], a.pos[1], a.pos[2], 1]];
+  const opts = { data: ai, player: player(), quiet: true, log: () => {}, rand: () => 0.5, boneWorld: bones };
+  // 10a. Restart at the boss (a scene_save(5) record): the stage init's 0x22 before main with the plug-in off, its 0x23 after main's first battle(),
+  // by then Zone.boss(true) has come: record 32 gets the overlay's brain (T w240_init's order)
+  {
+    const flags = { 0: 36, 1: 32, 2: 3 };
+    const W = initWorld(o => createEnemyAI({ ...opts, ...o }), { flags, frame: 0, clock: {}, reload: true, deadRecs: [], loadRecs: [] });
+    const before = W.objects.get(32 + 22);
+    ok(!(before.ai && before.ai.mode === 0x100), 'reload: no boss brain before main runs');
+    const S = make(flags, G({ 0: 1, 1: 26, 18: 1 }), { settle: false, bossOverlay: on => W.setBossPlugin(on), reloadPass: () => W.stageLoad([]), stagePass: () => W.stageLoad([]) });
+    S.run(8000, () => S.R.battle && S.R.stageObj);
+    ok(S.R.log.some(x => x[1] === 'scene_save 5') || S.R.vm.calls.includes('ev0103.heri_lastst'), 'reload: main resumed at the boss beat: ' + S.R.vm.calls.join());
+    const a = W.objects.get(32 + 22);
+    for (let i = 0; i < 30; i++) W.tick(1.2, [700, -100, 1460], [700, -100, 1460]);        // the frames after the battle(): its activation runs
+    ok(W.bossPlugin, 'reload: main took Zone.boss(true) before its battle()');
+    ok(a.kind === 'actor' && a.hp === 17000, `reload: record 32 active, HP 17000 (${a.kind} ${a.hp})`);
+    ok(a.ai && a.ai.mode === 0x100 && a.ai.boss, 'reload: record 32 has the boss brain, mode 0x100: ' + (a.ai ? a.ai.mode : 'no ai'));
+    const n23 = []; const W2 = initWorld(o => createEnemyAI({ ...opts, ...o, log: m => { if (/^event .* 35\b|0x23/.test(String(m))) n23.push(m); } }), { flags: { 0: 2 }, frame: 0, clock: {}, reload: true, deadRecs: [], loadRecs: [] });
+    ok(!W2.eventFlags[63], 'reload: event 0x23 not sent by initWorld (script 0 at flag 0 = 2 would set flag 63)');
+    W2.stageLoad([]);
+    ok(W2.eventFlags[63] === 1, 'reload: the pass sends it');
+    const W3 = initWorld(o => createEnemyAI({ ...opts, ...o }), { flags: { 0: 2 }, frame: 0, clock: {}, deadRecs: [], loadRecs: [] });
+    ok(W3.eventFlags[63] === 1, 'the stage start: initWorld still sends it');
+  }
+  // 10b. A lent body stands (FUN_0056a5e0 -> FUN_00344ec0(C, 1), FUN_00343160's first test) until the stage pass (FUN_00558f68 -> FUN_0056a790)
+  {
+    const pp = [-1579, 0, 1240];
+    const { rootTrack } = await import(pathToFileURL(path.join(base, 'enemy_hit.js')));
+    const side = JSON.parse(fs.readFileSync(path.join(HERE, 'data/enemies/e023.json'), 'utf8')), lpb = fs.readFileSync(path.join(HERE, 'data/enemies/e023_local.bin'));
+    const lpd = new Float32Array(lpb.buffer, lpb.byteOffset, lpb.length >> 2), tracks = {};
+    const rt = (m, c) => (m === 'e023' ? (tracks[c] ??= rootTrack(side.local_pose, lpd, side.clips[c], c)) : null);   // as test_heli.mjs
+    const mk = () => { const W = createEnemyAI({ ...opts, player: { ...player(), pos: pp.slice() }, eventFlags: { 0: 13, 1: 8 }, rootTrack: rt, effect: { spawn() {}, hit() {}, wall() {} } });
+      W.t.send(W.objects.get(53), -2, 0x108, [0, 0, 0, 0]); W.tick(1.2, pp, pp); W.runEvent(W.objects.get(53), 0x23); W.tick(1.2, pp, pp); W.tick(1.2, pp, pp); return W; };
+    const run = (W, n) => { let ev16 = 0; for (let i = 0; i < n; i++) { W.tick(1.2, pp, pp); ev16 += W.events.filter(e => /^event 53 script 29 ev 22 /.test(e)).length; } return ev16; };
+    const snap = x => JSON.stringify([x.pos, x.face, x.C.motion && x.C.motion.cls, x.C.motion && x.C.motion.phase, x.C.mp && x.C.mp.frame, x.C.mp && x.C.mp.clip]);
+    const W = mk(), a = W.objects.get(53);
+    ok(a.C.motion && a.C.motion.cls === 0x42, 'Dragonfly in its flight class 0x42');
+    const free = mk(), fa = free.objects.get(53), f0 = snap(fa);
+    // long enough for a leg to end: the free one's event 0x16 fires and its clip changes
+    const n16 = run(free, 1300);
+    ok(snap(fa) !== f0 && n16 >= 1, `not lent: it flies, event 0x16 fires ${n16} (the checks below can fail)`);
+    a.C.f564 |= 0x80000000;                                                  // what battleObject's lend() does (play.js)
+    const s0 = snap(a), n0 = run(W, 1300);
+    ok(snap(a) === s0, 'lent: no flight, no motion, no clip frame: ' + s0 + ' -> ' + snap(a));
+    ok(n0 === 0, `lent: its event 0x16 doesn't fire (${n0})`);
+    a.C.s214 = 6; a.C.t2b0 = [a.pos[0] + 10, a.pos[1], a.pos[2] + 10]; const face = a.face.join();
+    run(W, 5);
+    ok(a.face.join() === face, 'lent: no turn (FUN_0034ea18 is inside FUN_00343160)');
+    a.C.s214 = 0;
+    W.stageLoad([]);
+    ok(!(a.C.f564 & 0x80000000), 'the stage pass clears the bit (FUN_00558f68 -> FUN_0056a790)');
+    ok((a.C.f564 & 0x20000000) && (a.C.f1c0 & 0x200), 'and runs the tail: C+0x564 bit 0x20000000, C+0x1c0 bit 0x200');
+    const s1 = snap(a); run(W, 40);
+    ok(snap(a) !== s1, 'after the pass it runs again');
+  }
+  // 10c. The hand-back's place: FUN_00319190's status +0x60 bit 0x20000 test
+  {
+    for (const [v, want] of [[0, 1], [0x20000, 0]]) {
+      let placed = 0;
+      const obj = { tag: 'e_Heri', status60: v, matrix: () => [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1], lend() {}, show() {}, release() {}, place() { placed++; } };
+      const S = make({}, G({ 0: 1 }), { battleObject: () => obj });
+      S.R.running = true;
+      const A = { id: 90, tag: 'e_Heri', lent: obj, M: obj.matrix() };
+      S.R.actors.slots.push(A);
+      S.R.handBack(A);
+      ok(placed === want, `status +0x60 = ${v.toString(16)}: place ${placed} (${want})`);
+    }
   }
 }
 console.log((fails ? 'FAILED ' : 'ok ') + oks + ' / ' + (oks + fails) + (MUT ? ' (mutant ' + MUT + ')' : ''));

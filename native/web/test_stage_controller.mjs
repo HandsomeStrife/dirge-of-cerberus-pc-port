@@ -18,7 +18,6 @@ if (MUT) {
   const sub = {
     getflag: ["return f && n >>> 0 < 0x40 ? (f[n] ?? 0) & 0xff : 0;", "return 0;"],
     setflag: ["if (f && n >>> 0 < 0x40) { f[n] = v & 0xff;", "if (false) {"],
-    skip: ["if (this.autoSkip && this.skip === 0 && this.skippable()", "if (false && this.skippable()"],
     sleep: ["return block(() => R.skip !== 0 || (u !== 0", "return block(() => (u !== 0"],
     preempt: ["if (++n > this.budget) return 'preempted';", "if (++n > 5e6) throw new Error('step limit');"],
     opening: ["const a = !R.beforeOpening && o().area && o().area();", "const a = o().area && o().area();"],
@@ -37,9 +36,8 @@ if (MUT) {
     // worker 0240: the battle() before the stage init (no stage object yet) runs the pass too; or no pass at all
     stageobj: ["if (!this.stageObj) this.log.push(", "if (false) this.log.push("],
     nopass: ["else if (this.o.stagePass) this.o.stagePass();", "else if (false) this.o.stagePass();"],
-    // worker 0248: no event played (PLAYS empty); main's own waits skipped too (no unplayedEvent test)
+    // worker 0248: no event played (PLAYS empty); main's own waits skipped too
     plays: ["export const PLAYS = new Set([", "export const PLAYS = new Set([]), PLAYS_WAS = new Set(["],
-    mainskip: ["(this.autoSkip === true || this.unplayedEvent())", "(this.autoSkip === true || !this.playing())"],
     // worker 0257: set_usercontrol applied before the stream's wait (worker 0261: mutant latepress retired: roji02_01, its case, plays now)
     ucorder: ["if (s && s.busy) return block(() => !s.busy, apply);\n        apply(); return undefined;", "apply(); return s && s.busy ? block(() => !s.busy) : undefined;"],
     hud: ["if (o().hudControl) o().hudControl(!!v);", ""],
@@ -55,12 +53,14 @@ const { createStageController } = await import(modPath);
 const { AreaStream } = await import('./area_stream.js');
 
 let fails = 0, oks = 0;
+const loud = []; const logErr = console.error; console.error = (m, ...r) => { loud.push(String(m)); logErr(m, ...r); };   // StageVM.invoke's check: main calling an event not in PLAYS
 const ok = (c, m) => { if (c) oks++; else { fails++; console.log('FAIL ' + m); } };
 const dataPath = path.join(HERE, 'data/event/ev0100_stage.json');
 if (!fs.existsSync(dataPath)) { console.log('SKIP: no data/event/ev0100_stage.json (tools/byo/build_web.sh step stage)'); process.exit(0); }
 const data = JSON.parse(fs.readFileSync(dataPath, 'utf8'));
 
-function make(flagsRef, extra = {}) {
+// extra.player: a player who chooses Skip as soon as an event offers it (the Skip path's tests; this used to be the page's auto-skip)
+function make(flagsRef, { player = true, ...extra } = {}) {
   const stream = new AreaStream([], [1, 2]);
   const calls = [];
   const warns = [];
@@ -71,6 +71,7 @@ function make(flagsRef, extra = {}) {
     onSceneSave: (n) => calls.push(['scene_save', n]),
     ...extra,
   });
+  if (player) { const t = c.tick, R = c.rt; c.tick = (d) => { t(d); if (R.skip === 0 && R.skippable() && !R.vm.done && R.vm.pending) R.requestSkip(); }; }
   return { c, stream, calls, warns };
 }
 const run = (S, n, each) => { for (let f = 0; f < n && !S.c.done; f++) { if (each) each(f); S.stream.progress(); S.c.tick(20); } };
@@ -142,13 +143,13 @@ const gf = (c) => Object.fromEntries([...c.globalFlags].map((v, i) => [i, v]).fi
   S4.c.rt.skip = 2;
   ok(S4.c.rt.requestSkip() === false && S4.c.rt.skip === 2, 'requestSkip: event_rt.js guard (+0x156c != 0)');
 }
-// 1d. autoSkip off (?autoskip=0): rv_matiawase plays out (its sleeps run their time)
+// 1d. no Skip from the player: rv_matiawase plays out (its sleeps run their time)
 {
   const F = { v: { 2: 7, 46: 1 } };
-  const S5 = make(F, { autoSkip: false });
+  const S5 = make(F, { player: false });
   run(S5, 10); F.v[0] = 2; F.v[63] = 6;
   run(S5, 120);
-  ok(!S5.c.rt.log.some(([, m]) => m.startsWith('skip ')) && !S5.c.battle, 'autoskip off: no Skip, still in the event after 120 frames');
+  ok(!S5.c.rt.log.some(([, m]) => m.startsWith('skip ')) && !S5.c.battle, 'no Skip pressed: no skip, still in the event after 120 frames');
 }
 
 // 2b. deb_jump's help box (the x -1186 message): stage flag 2 == 7 and flag 46 < 1 -> peace, flag 46 = 1, global
@@ -331,22 +332,22 @@ const gf = (c) => Object.fromEntries([...c.globalFlags].map((v, i) => [i, v]).fi
   ok(m === 2, `later battles: one pass each (${m})`);
 }
 
-// 8. worker 0248: autoSkip 'unplayed' (play.js's default): rv_matiawase (PLAYS) plays out, main's code after it is not
-// skipped (its fadein 1500 runs), while autoSkip true still skips inside rv_matiawase
+// 8. worker 0248: rv_matiawase plays out, main's code after it is not skipped (its fadein 1500 runs); the player's Skip
+// goes in inside rv_matiawase
 {
   const F = { v: {} };
   const hudc = [];
-  const S = make(F, { autoSkip: 'unplayed', hudControl: (b) => hudc.push(b ? 1 : 0) });
+  const S = make(F, { player: false, hudControl: (b) => hudc.push(b ? 1 : 0) });
   run(S, 60); hudc.length = 0; F.v = { 0: 2, 63: 6 }; run(S, 700);
   ok(hudc.join('') === '01', 'set_usercontrol -> FUN_003b01b0(HUD, b): the HUD out at the event, in after it (T w248_gs: no HUD in the event): ' + hudc.join(''));
   const L = S.c.rt.log.map(([, m]) => m);
-  ok(S.c.rt.vm.calls.includes('ev0101.rv_matiawase') && !L.some(m => /^skip/.test(m)), "'unplayed': rv_matiawase plays, no Skip anywhere: " + L.filter(m => /^skip/.test(m)).join(' | '));
-  ok(L.includes('fadein 1500') && L.includes('fadeout 1000'), "'unplayed': the event's fadeout and main's fadein run unskipped");
-  ok(S.c.battle && L.includes('scene_save 1'), "'unplayed': the beat ends in battle with scene_save 1");
+  ok(S.c.rt.vm.calls.includes('ev0101.rv_matiawase') && !L.some(m => /^skip/.test(m)), "rv_matiawase plays, no Skip anywhere: " + L.filter(m => /^skip/.test(m)).join(' | '));
+  ok(L.includes('fadein 1500') && L.includes('fadeout 1000'), "the event's fadeout and main's fadein run unskipped");
+  ok(S.c.battle && L.includes('scene_save 1'), "the beat ends in battle with scene_save 1");
   const FT = { v: {} };
-  const T = make(FT, { autoSkip: true });
+  const T = make(FT);
   run(T, 60); FT.v = { 0: 2, 63: 6 }; run(T, 200);
-  ok(T.c.rt.log.some(([, m]) => /^skip ev0101\.rv_matiawase/.test(m)), 'autoSkip true: skipped inside rv_matiawase (the ?autoskip=1 aid)');
+  ok(T.c.rt.log.some(([, m]) => /^skip ev0101\.rv_matiawase/.test(m)), 'the player\'s Skip: skipped inside rv_matiawase');
 }
 
 // 9. worker 0257: the rescue beat: roji02_01 plays (worker 0261), its camera moves are over before main's Camera.set, and main's
@@ -354,7 +355,7 @@ const gf = (c) => Object.fromEntries([...c.globalFlags].map((v, i) => [i, v]).fi
 {
   const F = { v: {} }, views = [];
   const obj = (n) => ({ tag: n, matrix: () => [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1], lend() {}, show() {}, release() {}, place() {} });
-  const S = make(F, { autoSkip: 'unplayed', battleObject: obj, cameraReset: (v) => views.push(v ? { eye: v.eye.slice(), aim: v.aim.slice() } : null) });
+  const S = make(F, { player: false, battleObject: obj, cameraReset: (v) => views.push(v ? { eye: v.eye.slice(), aim: v.aim.slice() } : null) });
   run(S, 60); views.length = 0; F.v = { 0: 2, 1: 5, 63: 6 }; run(S, 1500);
   const L = S.c.rt.log.map(([, m]) => m);
   ok(S.c.rt.vm.calls.includes('ev0143.roji02_01'), 'rescue: roji02_01 ran');
@@ -366,7 +367,7 @@ const gf = (c) => Object.fromEntries([...c.globalFlags].map((v, i) => [i, v]).fi
 {
   const F = { v: {} }, firsts = [];
   const obj = (n) => ({ tag: n, matrix: () => [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1], lend() {}, show() {}, release() {}, place() {} });
-  const S = make(F, { autoSkip: 'unplayed', battleObject: obj, cameraReset: (v, first) => firsts.push(first) });
+  const S = make(F, { player: false, battleObject: obj, cameraReset: (v, first) => firsts.push(first) });
   run(S, 60); F.v = { 0: 2, 1: 5, 63: 6 }; run(S, 1500);
   ok(firsts.length >= 2 && firsts[0] === true && firsts.slice(1).every(x => x === false), `cameraReset's first: ${firsts.join()} (true once, the stage's first battle())`);
 }
@@ -386,5 +387,6 @@ const gf = (c) => Object.fromEntries([...c.globalFlags].map((v, i) => [i, v]).fi
   ok(n(R.vm, [1]) === undefined && !bits.has(11) && !bits.has(6) && hud.join() === 'false,true', 'stream idle: applied at once, no block');
 }
 
+ok(!loud.length, 'nothing main called was left out of PLAYS: ' + [...new Set(loud)].join(' | '));
 console.log((fails ? 'FAILED ' : 'ok ') + oks + ' / ' + (oks + fails) + (MUT ? ' (mutant ' + MUT + ')' : ''));
 process.exit(fails ? 1 : 0);

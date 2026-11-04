@@ -70,6 +70,15 @@ try {
   // an area's living soldiers on, their bodies attached: what a hide or a Restart has to deal with
   const bodiesOn = async () => { await handBack(); await pg.evaluate(() => { const W = window.__play.enemyAI; W.areaSwitch(105, true); W.areaSwitch(2, true); });
     await until(() => window.__play.enemies.actors.some(a => a.body)); };
+  // the HUD's panel 0 group (hud_core slidePanel): 3, 4 = going / gone out; W held for 60 ticks, what the user does
+  const hudSlide = () => pg.evaluate(() => { const st = window.__play.gameHud.state, t = st.slides[0]; return st.chain[t.slot === 'root' ? 0 : st.groupOf[t.slot]].slide[0]; });
+  const holdW = async () => { const at = () => pg.evaluate(() => { const p = window.__play.ctrl.pos; return [p.x, p.y, p.z, window.__play.stats.ticks]; }); const a = await at();
+    await pg.keyboard.down('KeyW'); await ticks(60); await pg.keyboard.up('KeyW'); const b = await at(); return { d: Math.hypot(b[0] - a[0], b[2] - a[2]), ticks: b[3] - a[3] }; };
+  const handedBack = async (name) => { await ticks(30);
+    const hb = await pg.evaluate(() => { const P = window.__play, g = P.gameState; return { b11: g.test(11), b6: g.test(6), log: P.stage.rt.log.slice(-8).map(([f, m]) => f + ' ' + m).join(' | '), where: P.stage.rt.vm.where() }; });
+    ok(hb.b11 === 0 && hb.b6 === 0, `${name}: after the hand-back bits 11 and 6 are clear (${hb.b11}, ${hb.b6})${hb.b11 || hb.b6 ? ': ' + hb.where + ': ' + hb.log : ''}`);
+    const s = await hudSlide(); ok(s < 3, `${name}: the HUD is back (FUN_003b01b0(1); slide state ${s})`);
+    const w = await holdW(); ok(w.d > 1, `${name}: W walks him again (${w.d.toFixed(2)} u)`); };
   const gameOverRestart = async () => {
     const n0 = await pg.evaluate(() => window.__play.restart.count);
     await pg.evaluate(() => { window.__play.php.hp = 0; });
@@ -205,6 +214,7 @@ try {
     await pauseRestart();
     viaPause = await checkRecord('record, pause', c0, 7);
     await hudCheck('record, pause');
+    await handedBack('record 1, pause');
     const m = await pg.evaluate(() => window.__play.stage.rt.log.filter(([, s]) => /^music|^area/.test(s)).map(([, s]) => s).join());
     ok(/bgm_001/.test(m), `record, pause: main's flag-18 branch asks for its music (${m})`);
   }
@@ -226,7 +236,8 @@ try {
     const killed2 = await killRec(46);
     ok(killed2.hp === 0, `46 killed before the second save (${killed2.hp}; ${killed2.none || ''})`);
     await pg.evaluate(() => { const I = window.__items, inv = I.inventory, A = inv.A; A.loaded = 5; A.sum = 5; A.inv = 50 - inv.other; inv.gil = 21; inv.gilEarned = 4; I.taken.add(23); });
-    await call('fake/KerberosZone', 'scene_save', '(I)V', [2]);
+    // as main does, global 18 = 1 first (pc 5130), in one synchronous step: main must not see it before the reload
+    await pg.evaluate(() => { const P = window.__play, G = P.stage.globalFlags, vm = P.stage.rt.vm; G[18] = 1; vm.natives['fake/KerberosZone.scene_save(I)V'](vm, [2]); G[18] = 0; });
     const r2 = await pg.evaluate(() => { const R = window.__play.restart.record, v = window.__items.inventory; return { n: R.n, dead: R.dead.includes(46), base: v.gilBase, earned: v.gilEarned }; });
     ok(r2.n === 2 && r2.dead && r2.base === 21 && r2.earned === 0, `scene_save(2): record ${r2.n}, 46 in it ${r2.dead}, +0x28 = gil ${r2.base}, +0x2c = 0 (${r2.earned}; FUN_00321480's write)`);
     const at2 = await state();
@@ -266,6 +277,7 @@ try {
     await until(n => window.__play.restart.count === n + 1, n0);
     ok(await pg.evaluate(() => window.__play.php.hp === 780 && window.__play.php.s64 === 0 && !window.__play.gameOver.go.active), 'and its Restart: HP 780, status 0, no game over');
     // used up: fired by the kill, the revive's status 1 running, then Restart
+    await handBack();
     await pg.evaluate(() => { const inv = window.__items.inventory; inv.slots[0] = [0x69300004, 3]; inv.setSel(0); });
     await pg.keyboard.press('KeyE');
     await until(() => window.__play.php.s64 === 8);
@@ -297,14 +309,6 @@ try {
     ok(await pg.evaluate(() => !window.__play.pause.active), 'Enter after Zone.exit: the pause does not open');
   }
   ok(errs.length === 0, 'no page errors' + (errs.length ? ': ' + errs.slice(0, 3).join(' | ') : ''));
-  // the HUD's panel 0 group (hud_core slidePanel): 3, 4 = going / gone out; W held for 60 ticks, what the user does
-  const hudSlide = () => pg.evaluate(() => { const st = window.__play.gameHud.state, t = st.slides[0]; return st.chain[t.slot === 'root' ? 0 : st.groupOf[t.slot]].slide[0]; });
-  const holdW = async () => { const at = () => pg.evaluate(() => { const p = window.__play.ctrl.pos; return [p.x, p.y, p.z, window.__play.stats.ticks]; }); const a = await at();
-    await pg.keyboard.down('KeyW'); await ticks(60); await pg.keyboard.up('KeyW'); const b = await at(); return { d: Math.hypot(b[0] - a[0], b[2] - a[2]), ticks: b[3] - a[3] }; };
-  const handedBack = async (name) => { await ticks(30);
-    ok(await pg.evaluate(() => window.__play.gameState.test(11) === 0 && window.__play.gameState.test(6) === 0), `${name}: after the hand-back bits 11 and 6 are clear`);
-    const s = await hudSlide(); ok(s < 3, `${name}: the HUD is back (FUN_003b01b0(1); slide state ${s})`);
-    const w = await holdW(); ok(w.d > 1, `${name}: W walks him again (${w.d.toFixed(2)} u)`); };
   { // 7. record 3's reload (T w254 r07_beat): flag 9 = 9 takes main past Zone.event, and it is event mode anyway, from the teardown until battle2(3000):
     // area asj_035, Zone 1 0, bgm_278, sk_mituketa2, Zone 6 7, battle2; no FUN_0037e048; Vincent ends at (-1762, 0, 1578)
     await load();

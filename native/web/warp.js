@@ -34,12 +34,12 @@ export const WARPS = {
   // < 36) is the market's townspeople beats on stage flag 1 (28 / 29 / 30 / 32 from triggers 33 / 64 / 65 / 26)
   market: { pos: [-1328.1, 0, 1205.5], face: [1, 0], pair: [6, 8], stage: { 0: 24 }, global: { 1: 25 }, note: 'chunk 06 market, townspeople beats' },
   // worker 0261: inside trigger 59 (script 17, event 0xd: soldiers 19-21 and n_helpMe 123 up, stage flag 1 = 8 -> help_people01), pair (4, 5); flags from r05_west's RAM
-  helpme: { pos: [-1415.8, 0, 697.6], face: [0, 1], pair: [4, 5], stage: { 0: 11, 1: 7, 2: 8 }, global: { 1: 8 }, note: 'chunk 05, trigger 59: help_people01' },
+  helpme: { cutscene: true, pos: [-1415.8, 0, 697.6], face: [0, 1], pair: [4, 5], stage: { 0: 11, 1: 7, 2: 8 }, global: { 1: 8 }, note: 'chunk 05, trigger 59: help_people01' },
   // worker 0261: chunk 05 by townspeople 120 .. 122 (they stand at about (-1950, 0, 300); trigger 58's script 31 wakes them: test_scr005_page runs its event), pair (4, 5)
-  citizens: { pos: [-1940, 0, 330], face: [0, -1], pair: [4, 5], stage: { 0: 12, 1: 7, 2: 8 }, global: { 1: 12 }, note: 'chunk 05, the townspeople: before help_orei02' },
+  citizens: { cutscene: true, pos: [-1940, 0, 330], face: [0, -1], pair: [4, 5], stage: { 0: 12, 1: 7, 2: 8 }, global: { 1: 12 }, note: 'chunk 05, the townspeople: before help_orei02' },
   // worker 0261: chunk 06 at route state w261_preheri's spot, Dragonfly just beaten (script 29: stage flag 0 = 16, global 1 = 13
   // in the state's RAM), pair (6, 7) as main's heri_taijou loads: main goes to heri_taijou, then sk_mituketa2
-  heli: { pos: [-1582.9, 0, 1359.1], face: [0, 1], pair: [6, 7], stage: { 0: 16, 1: 8, 2: 1 }, global: { 1: 13 }, note: 'chunk 06, Dragonfly beaten: heri_taijou, sk_mituketa2' },
+  heli: { cutscene: true, pos: [-1582.9, 0, 1359.1], face: [0, 1], pair: [6, 7], stage: { 0: 16, 1: 8, 2: 1 }, global: { 1: 13 }, note: 'chunk 06, Dragonfly beaten: heri_taijou, sk_mituketa2' },
   // chunk 07 (walk polygons x -1949..-1740), pair (6, 7) = main's Zone.load(128, 6, 7) after sk_mituketa2 (pc 6412).
   // Story: sk_mituketa2 done (global 1 = 20 at pc 6630, stage 0 = 18 from pc 5939); main waits for stage 0 >= 20, which
   // trigger 18 (-1948.8, -44, 1594.2; script 102) sets: he faces it

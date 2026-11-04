@@ -417,7 +417,7 @@ export class ShopBox {
   boxKey(a, now) {
     const { b, ev } = this.boxW;
     b.se = null;
-    if (a === 'left' || a === 'right') {           // FUN_003cbc38: +0x6a / +0x6b (pause.js's action reads past nav4 for these: notes/shop-research.md 'Open')
+    if (a === 'left' || a === 'right') {           // FUN_003cbc38: +0x6a / +0x6b
       const n = b.focus.nav4[a === 'left' ? 2 : 3];
       const t = n === 0xff ? null : b.next(b.focus, n & 0x7f, 0, true);
       if (t && t !== b.focus) { b.setFocus(t); this.se(SE.cursor); }

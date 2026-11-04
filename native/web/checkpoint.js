@@ -182,7 +182,7 @@ export function loadedPair(stream) {
 // FUN_00324e70 sends nothing (stage_controller.js enterBattle's stage pass).
 export function initWorld(make, o) {
   const W = make({ eventFlags: o.flags, deadRecs: o.deadRecs || [], now: 0, acc: 0, mgr20: 0, mgr24: 0 });
-  if (W.stageInit) W.stageInit();
+  if (W.stageInit) W.stageInit(!o.reload);          // o.reload (a record's): its 0x23 waits for main's first battle (stage_controller.js enterBattle)
   else warnOnce('restart: enemy_ai has no stageInit (the stage init\'s 0x22 / 0x23 pass left out)');
   const c = o.clock || {};
   W.S.now = c.now ?? 0; W.S.acc = c.acc ?? 0; W.S.mgr20 = c.mgr20 ?? 0; W.S.mgr24 = Math.fround(c.mgr24 ?? 0);

@@ -3,7 +3,7 @@
 // current world's stage flag 0 becomes 2 (script 88: the start deck cleared) the next beat runs: load(128, 2, 3) ->
 // area_stream.js request(2, 3), rv_matiawase, scene_save 1, back to battle. Worker 0248: rv_matiawase plays by default
 // (stage_controller.js PLAYS): its event camera is the render camera, p000 / p005 are drawn (stage_view.js), the
-// window MES_10201VN opens; ?autoskip=1 skips it through the game's Skip (the old aid). ?stage=0 leaves the controller out.
+// window MES_10201VN opens; Start, ✕ skips it through the game's Skip (eventSkip). ?stage=0 leaves the controller out.
 //   node native/web/test_stage_page.mjs (needs playwright + data; else SKIP; network for the three.js CDN)
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
@@ -84,8 +84,7 @@ async function beat(q) {
   const req = await pg.evaluate(() => window.__req);
   ok(s.calls.includes('ev0101.rv_matiawase'), 'rv_matiawase ran', s.calls);
   const ev = await pg.evaluate(() => { window.__evDone = true; const e = window.__ev; return { cam: e.cam, at: e.at || 0, shown: [...e.shown], win: e.win, occl: e.occl || 0, occlFar: e.occlFar || 0 }; });
-  if (q.includes('autoskip=1')) ok(s.log.some(m => / skip ev0101\.rv_matiawase/.test(m)), '?autoskip=1: skipped inside rv_matiawase (after Zone.event)');
-  else {
+  {
     ok(!s.log.some(m => / skip /.test(m)), 'default: rv_matiawase plays (no Skip in it or in main after it)', s.log.filter(m => / skip/.test(m)).join(' | '));
     ok(ev.cam > 20 && ev.at === ev.cam, 'the event camera (eye and forward) is the render camera while it runs (FUN_00379148)', JSON.stringify(ev));
     ok(ev.occl > 20 && ev.occlFar < 0.5, 'the occluder volumes come from that camera, not the follow camera (FUN_0026c878)', `max ${ev.occlFar.toFixed(3)} u`);
@@ -240,7 +239,6 @@ try {
   await eventFaces();
   await deadInEvent();
   await firstBattle();
-  await beat('&autoskip=1');
   // ?stage=0: no controller
   const o2 = await open('&stage=0');
   ok(await o2.pg.evaluate(() => window.__play.stage === null), '?stage=0: no stage controller');
