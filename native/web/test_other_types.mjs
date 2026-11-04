@@ -257,5 +257,24 @@ const enter = (W, player, k) => {
   W.t.hitEnemy(a, { damage: 31, kind: 0, dir: [0, 0, 1], shooter: 0x16, f148: 0, hit: 1, f120: 0x800 }, [1, 10, 0]);
   ok(a.hp === 0 && C.f590 === 5 && C.clip === 'm_stllf0', `the kill at x < 0 from area 1: area ${C.f590}, clip ${C.clip} (T m_stllf0)`);
 }
+// 7b. every row of the table 0x5a3b10 (FUN_00598950), and the death row 6 on: a fresh e036 per area, through hitEnemy
+{
+  const rows = data.stances['30'].motions;
+  // area, how FUN_0055d390 gets there (old area under bit 0x10000, side of the hit: dx > 0 is x < 0; area 1: a zone's nibble 0 with the bit clear), row
+  const T7 = [[1, null, 0, 0x25], [2, 4, -1, 0x24], [3, 2, -1, 0x26], [4, 1, -1, 0x27], [5, 1, 1, 0x28], [6, 5, 1, 0x29]];
+  for (const [area, old, dx, row] of T7) for (const kill of [false, true]) {
+    const { W } = world();
+    W.t.send(W.objects.get(ID(80)), -2, 0x108, [0, 0, 0, 0]); W.tick(1.2, far, far);
+    const a = W.objects.get(ID(80)), C = a.C;
+    W.runEvent(a, 0x13);
+    a.pos = [0, 0, 0]; a.face = [0, 0, 1]; a.hp = kill ? 4 : 200; a.f144 = -1000; C.motion = null;
+    const zones = data.zones[String(data.records[80].zones)];
+    a.f19c = zones[2]; a.part = 2;
+    if (old === null) C.f564 &= ~0x10000; else { C.f564 |= 0x10000; C.f590 = old; }
+    W.t.hitEnemy(a, { damage: 31, kind: 0, dir: [0, 0, 1], shooter: 0x16, f148: 0, hit: 1, f120: 0x800 }, [dx, 10, 0]);
+    const want = rows[kill ? row + 6 : row];
+    ok(C.f590 === area && want && C.clip === want, `area ${C.f590}: ${kill ? 'kill row' : 'flinch row'} 0x${(kill ? row + 6 : row).toString(16)} = ${want}, drawn ${C.clip}`);
+  }
+}
 console.log(fails ? `${fails} FAILED` : 'all ok');
 process.exit(fails ? 1 : 0);

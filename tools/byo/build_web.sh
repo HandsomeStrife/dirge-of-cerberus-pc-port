@@ -268,7 +268,7 @@ step "enemy e027 (z128 soldier): skinned glb per variant + r_gst idle -> data/en
 # r_gwk / r_grn (+ m_*): the walk / run rows 9 / 0x10 of the locomotion table (motion state 8, path walking);
 # r_sq_a / r_sq_f / m_sq_*: crouched aim / fire (brain mode 1's posture change, motions 0x78 / 0x7b);
 # r_atk_0 / m_atk: the attack tables' play-clip commands (zone sets 7 / 6, ai.json attacks)
-run enemy_e027 $PY export_web_enemy.py export --model e027 --out "$DATA/enemies" --clips r_gst,r_gst_lk,r_st_a,r_st_f,r_stlld0,r_stlaf0,r_stbf0,m_gst,m_st_a,m_st_f,m_stlld0,m_stlaf0,m_stbf0,r_sq_a,r_sq_f,m_sq_a,m_sq_f,r_atk_0,m_atk,r_gwk,r_grn,m_gwk,m_grn,r_para00,r_para10,r_para01,r_para11,r_para02,r_para12,r_para03,r_para13,m_sthd0,m_stbd0,m_stlad0,m_strad0,m_strld0,m_sthf0,m_straf0,m_stllf0,m_strlf0,r_sthd0,r_stbd0,r_stlad0,r_strad0,r_strld0,r_sthf0,r_straf0,r_stllf0,r_strlf0
+run enemy_e027 $PY export_web_enemy.py export --model e027 --out "$DATA/enemies" --clips r_gst,r_gst_lk,r_st_a,r_st_f,r_stlld0,r_stlaf0,r_stbf0,m_gst,m_st_a,m_st_f,m_stlld0,m_stlaf0,m_stbf0,r_sq_a,r_sq_f,m_sq_a,m_sq_f,r_atk_0,m_atk,r_gwk,r_grn,m_gwk,m_grn,r_para00,r_para10,r_para01,r_para11,r_para02,r_para12,r_para03,r_para13,m_sthd0,m_stbd0,m_stlad0,m_strad0,m_strld0,m_sthf0,m_straf0,m_stllf0,m_strlf0,r_sthd0,r_stbd0,r_stlad0,r_strad0,r_strld0,r_sthf0,r_straf0,r_stllf0,r_strlf0,r_stbl0,r_bl_0,r_bl_1,r_jp_dm0,r_fl_0,r_fl_1,r_rev_0,m_stbl0,m_bl_0,m_bl_1,m_jp_dm0,m_fl_0,m_fl_1,m_rev_0,m_bl_ht0,m_sqbf0,m_sqhf0,m_sqlaf0,m_sqllf0,m_sqraf0,m_sqrlf0,r_bl_ht0,r_sqbf0,r_sqhf0,r_sqlaf0,r_sqllf0,r_sqraf0,r_sqrlf0
 [ -s "$DATA/enemies/e027.glb" ] || fail "data/enemies/e027.glb missing after the enemy export (log: $LOGS/enemy_e027.log)"
 grep '^wrote' "$LOGS/enemy_e027.log" | sed "s#$REPO/##" | cut -c1-160
 echo "ok"
@@ -276,10 +276,10 @@ echo "ok"
 step "z128's other enemy types (stage section 1: e048, e030, e036, e023, e024, e001) -> data/enemies"
 # Same decode as e027; one idle clip each (GUESS which idle the game starts: enemies.js IDLE, notes/enemy-model.md),
 # e048 / e030: the clips of the motions enemy_ai.js requests (their stance rows and attack tables, ai.json model_clips)
-E048_CLIPS=r_gst,r_gst_lk,r_st_a,r_st_f,r_stlld0,r_stlaf0,r_stbf0,m_gst,m_gst_lk,m_st_a,m_st_f,m_stlld0,m_stlaf0,m_stbf0,r_sq_a,r_sq_f,m_sq_a,m_sq_f,m_atk,r_atk,m_gwk,m_grn,m_sthd0,m_stbd0,m_stlad0,m_strad0,m_strld0,m_sthf0,m_straf0,m_stllf0,m_strlf0,r_gwk,r_grn,r_sthd0,r_stbd0,r_stlad0,r_strad0,r_strld0,r_sthf0,r_straf0,r_stllf0,r_strlf0
-E030_CLIPS=st_a,look,stld0,stbf0,jp0,jp1,jp2,jp3,jp4,atk_0,atk_1,atk_2,atk_3,b_stp,st_btl,lhtn,rhtn,wk_a,rn_a,stbd0,sthf0,stlf0
+E048_CLIPS=r_gst,r_gst_lk,r_st_a,r_st_f,r_stlld0,r_stlaf0,r_stbf0,m_gst,m_gst_lk,m_st_a,m_st_f,m_stlld0,m_stlaf0,m_stbf0,r_sq_a,r_sq_f,m_sq_a,m_sq_f,m_atk,r_atk,m_gwk,m_grn,m_sthd0,m_stbd0,m_stlad0,m_strad0,m_strld0,m_sthf0,m_straf0,m_stllf0,m_strlf0,r_gwk,r_grn,r_sthd0,r_stbd0,r_stlad0,r_strad0,r_strld0,r_sthf0,r_straf0,r_stllf0,r_strlf0,r_stbl0,r_bl_0,r_bl_1,r_jp_dm0,r_fl_0,r_fl_1,r_rev_0,m_stbl0,m_bl_0,m_bl_1,m_jp_dm0,m_fl_0,m_fl_1,m_rev_0,m_bl_ht0,m_sqbf0,m_sqhf0,m_sqlaf0,m_sqllf0,m_sqraf0,m_sqrlf0,r_bl_ht0,r_sqbf0,r_sqhf0,r_sqlaf0,r_sqllf0,r_sqraf0,r_sqrlf0
+E030_CLIPS=st_a,look,stld0,stbf0,jp0,jp1,jp2,jp3,jp4,atk_0,atk_1,atk_2,atk_3,b_stp,st_btl,lhtn,rhtn,wk_a,rn_a,stbd0,sthf0,stlf0,stbl0,bl_0,bl_1,jm_dm0,fl_0,fl_1,rev_0,stbd0,bl_ht0
 # worker 0230: e036 runs the soldiers' AI (enemy_ai AI_TYPES): its stance-0x1e rows and attack clip (ai.json model_clips)
-E036_CLIPS=m_gst,m_gst_lk,m_st_a,m_st_f,m_stlld0,m_stbf0,m_stlaf0,m_sq_a,m_gwk,m_grn,m_atk_0,m_sthd0,m_stbd0,m_stlad0,m_strad0,m_strld0,m_sthf0,m_straf0,m_stllf0,m_strlf0
+E036_CLIPS=m_gst,m_gst_lk,m_st_a,m_st_f,m_stlld0,m_stbf0,m_stlaf0,m_sq_a,m_gwk,m_grn,m_atk_0,m_sthd0,m_stbd0,m_stlad0,m_strad0,m_strld0,m_sthf0,m_straf0,m_stllf0,m_strlf0,m_stbl0,m_bl_0,m_bl_1,m_jp_dm0,m_fl_0,m_fl_1,m_rev_0,m_bl_ht0,m_sqbf0,m_sqhf0,m_sqlaf0,m_sqllf0,m_sqraf0,m_sqrlf0
 # e001: its stance-0x10 rows and attack clip (m001 0765004b; ai.json model_clips)
 E001_CLIPS=a_st,a_atk_1,a_stlld0,a_dead,a_wk,a_rn,n_ude,a_lhtn,a_rhtn,a_sthd0,a_stbd0,a_stlad0,a_strad0,a_strld0
 # worker 0259: e023's flight clips (script 29 / 180 cmd 0x19b, motion class 0x42; bone 1 carries the world path; notes/other-types.md)

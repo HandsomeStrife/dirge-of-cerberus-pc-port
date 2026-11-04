@@ -434,61 +434,35 @@ for (const [dx, dz, wantHits, rows] of [[0, 12, 2, [[1, 0, 0], [0, 1, 0], [0, 0,
     ok(Math.abs(a.pos[2] - z1) < 2.0, `no drift after the attack: ${(a.pos[2] - z1).toFixed(2)} u`);
   }
   {
-    // killed in state 8 (the attack over, still in the air): FUN_0034f178 cases 9 / 0xb enter mode 0xc, so mover 0xb doesn't stop the fall; the corpse lands
+    // killed in state 8 (the attack over, still in the air): worker 0259: FUN_00565480 flags 2 off the ground, dead -> FUN_00561270 = FUN_005618d0(a, dir, 0, 0) (the earlier expectation here, mover 0xb, was
+    // react's stand-in for that branch). State 0xf / 0x10, mover 10, the body falls and lands, state 0x11, held. T on a soldier: w259_hit_poly f360; no trace on a dog.
     const { W, a, player } = leap();
     const y0 = a.pos[1];
     W.t.setActorState(a, 0x80);
     let i = 0;
     for (; i < 120 && a.astate !== 8; i++) W.tick(1.2, player.pos, player.pos);
     ok(a.astate === 8 && a.B.state === 2 && y0 - a.pos[1] > 0.05, `in the air in state 8 on frame ${i}: state ${a.astate}, body ${a.B.state}, ${(y0 - a.pos[1]).toFixed(2)} u up`);
-    const killY = a.pos[1], kx = a.pos[0], kz = a.pos[2];
+    const killY = a.pos[1];
     a.hp = 1;
     W.t.hitEnemy(a, { damage: 10, kind: 0, dir: [0, 0, 1], shooter: 0x16, f148: 2, hit: 0, f120: 0x800 }, a.pos.slice());
-    ok(a.hp === 0 && a.astate === 7 && a.C.mover === 0xb && a.C.mm === 0xc, `killed in the air: hp ${a.hp}, state ${a.astate} (7), mover 0x${a.C.mover.toString(16)}, mode 0x${a.C.mm.toString(16)}`);
-    const v0 = a.C.slide.v;
-    W.tick(1.2, player.pos, player.pos);
-    ok(a.C.want[2] === 1 && a.C.wk === v0, `the slide goes through C+0xc0 / C+0xcc in the air (FUN_0034af98): dir z ${a.C.want[2]}, speed ${a.C.wk} (${v0})`);
-    for (let k = 0; k < 40; k++) W.tick(1.2, player.pos, player.pos);
+    ok(a.hp === 0 && (a.astate === 0xf || a.astate === 0x10) && a.C.mover === 10, `killed in the air: hp ${a.hp}, state ${a.astate.toString(16)} (0xf / 0x10), mover ${a.C.mover} (10)`);
+    for (let k = 0; k < 120; k++) W.tick(1.2, player.pos, player.pos);
     ok(a.B.state === 0 && (a.C.f1c0 & 0x200), `the corpse lands: body state ${a.B.state}, C+0x1c0 bit 0x200 ${a.C.f1c0 & 0x200}`);
-    ok(a.pos[1] > killY && Math.abs(a.pos[1] - y0) < 1.0, `at ground height ${a.pos[1].toFixed(2)} (${y0.toFixed(2)})`);
-    ok(a.astate === 7, `still dead after the landing: state ${a.astate}`);
-    const moved = Math.hypot(a.pos[0] - kx, a.pos[2] - kz);
-    const x1 = a.pos[0], z1 = a.pos[2];
-    for (let k = 0; k < 40; k++) W.tick(1.2, player.pos, player.pos);
-    ok(moved > 0 && moved < 40 && a.C.slide.v === 0 && Math.hypot(a.pos[0] - x1, a.pos[2] - z1) < 2, `the slide ends: ${moved.toFixed(1)} u after the kill, then ${Math.hypot(a.pos[0] - x1, a.pos[2] - z1).toFixed(2)} u`);
+    ok(a.pos[1] > killY - 25 && Math.abs(a.pos[1] - y0) < 1.0, `at ground height ${a.pos[1].toFixed(2)} (${y0.toFixed(2)})`);
+    ok(a.astate === 0x11, `still dead after the landing, held in state 0x11: ${a.astate.toString(16)}`);
   }
   {
-    // killed during the attack itself, in the air: leaving the attack motion (FUN_0059e938) stops the mover, the body still falls and lands
+    // killed during the attack itself, in the air: leaving the attack motion (FUN_0059e938) stops the mover, the knock-down's mover takes over, it lands
     const { W, a, player } = leap();
     const y0 = a.pos[1];
     W.t.setActorState(a, 0x80);
     for (let i = 0; i < 120 && !(a.B && a.B.state === 2 && a.B.t > a.B.rise); i++) W.tick(1.2, player.pos, player.pos);
     a.hp = 1;
+    a.C.f568 |= 0x1000;                                                       // mid-swing: FUN_005618d0 sets mover 10, then FUN_0055b8e0 -> FUN_0059e938 -> FUN_003533e0 stops it (order: worker 0259)
     W.t.hitEnemy(a, { damage: 10, kind: 0, dir: [0, 0, 1], shooter: 0x16, f148: 2, hit: 0, f120: 0x800 }, a.pos.slice());
-    for (let k = 0; k < 60; k++) W.tick(1.2, player.pos, player.pos);
-    ok(a.astate === 7 && a.B.state === 0 && Math.abs(a.pos[1] - y0) < 1.0, `killed in the attack: state ${a.astate}, body ${a.B.state}, at ${a.pos[1].toFixed(2)} (${y0.toFixed(2)})`);
-  }
-  {
-    // state 8 at the top of the leap, killed there: frame by frame, the mode-0xc body alone moves it (no flat step on top) and the slide's speed runs down
-    const { W, a, player } = leap();
-    const y0 = a.pos[1];
-    W.t.setActorState(a, 0x80);
-    for (let i = 0; i < 120 && !(a.B && a.B.state === 2 && a.B.t > a.B.rise); i++) W.tick(1.2, player.pos, player.pos);
-    W.t.setActorState(a, 8);
-    a.hp = 1;
-    W.t.hitEnemy(a, { damage: 10, kind: 0, dir: [0, 0, 1], shooter: 0x16, f148: 2, hit: 0, f120: 0x800 }, a.pos.slice());
-    const { v, dv } = a.C.slide;
-    let frames = 0, worst = 0, speeds = true, last = a.pos.slice();
-    for (; frames < 80 && a.B.state === 2; frames++) {
-      const want = v - frames * dv * 1.2;
-      W.tick(1.2, player.pos, player.pos);
-      if (a.B.state === 2 && Math.abs(a.C.wk - Math.max(want, 0)) > 1e-3) speeds = false;
-      if (a.B.state === 2) worst = Math.max(worst, Math.hypot(a.pos[0] - last[0], a.pos[2] - last[2]) - Math.hypot(a.B.vel[0], a.B.vel[2]) * 1.2);
-      last = a.pos.slice();
-    }
-    ok(frames > 10 && a.B.state === 0 && Math.abs(a.pos[1] - y0) < 1.0, `killed at the top: lands after ${frames} frames at ${a.pos[1].toFixed(2)} (${y0.toFixed(2)})`);
-    ok(speeds, 'in the air C+0xcc runs down by the slide\'s deceleration x step (FUN_003516a0)');
-    ok(worst < 0.01, `in the air each step is the body's velocity x step (worst excess ${worst.toFixed(3)} u)`);
+    ok(a.C.mover === 0 && (a.astate === 0xf || a.astate === 0x10), `killed mid-swing: the attack class's leave stops mover 10: mover ${a.C.mover}, state ${a.astate.toString(16)}`);
+    for (let k = 0; k < 120; k++) W.tick(1.2, player.pos, player.pos);
+    ok(a.astate === 0x11 && a.B.state === 0 && Math.abs(a.pos[1] - y0) < 1.0, `killed in the attack: state ${a.astate.toString(16)}, body ${a.B.state}, at ${a.pos[1].toFixed(2)} (${y0.toFixed(2)})`);
   }
   {
     const T8 = data.attacks['8'];

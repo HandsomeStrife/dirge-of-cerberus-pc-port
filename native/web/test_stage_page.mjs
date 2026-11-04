@@ -152,14 +152,7 @@ async function deadInEvent() {
 async function eventKeys() {
   const { pg, errs } = await open('');
   await pg.waitForFunction(() => window.__play.stage && window.__play.stage.rt.frameNo > 20, null, { timeout: 60000 });
-  await pg.evaluate(() => { const P = window.__play; P.enemyAI.eventFlags[0] = 2; P.enemyAI.eventFlags[63] = 6;
-    window.__tad = new Set(); window.__seen = new Map();
-    const f = () => { const R = P.stage.rt;
-      for (const a of R.actors.slots) if (a.drawn && a.drawn.tex && a.drawn.tex.length) { const k = a.model + ':' + JSON.stringify(a.drawn.tex); window.__tad.add(k); }
-      const g = P.root.getObjectByName('event actors');
-      if (g) g.traverse(o => { const t = o.material && o.material.map; if (t && t.isDataTexture && t.image && t.image.data) { const d = t.image.data; let h = 0; for (let i = 0; i < d.length; i += 64) h = (h * 31 + d[i]) | 0; const S = window.__seen.get(t) || new Set(); S.add(h); window.__seen.set(t, S); } });
-      requestAnimationFrame(f); };
-    requestAnimationFrame(f); });
+  await pg.evaluate(() => { const P = window.__play; P.enemyAI.eventFlags[0] = 2; P.enemyAI.eventFlags[63] = 6; });
   await pg.waitForFunction(() => { const R = window.__play.stage.rt; return !R.battle && R.frameNo > 0 && R.skippable() && R.vm.calls.includes('ev0101.rv_matiawase') && R.view; }, null, { timeout: 120000 });
   await pg.waitForFunction(() => { const R = window.__play.stage.rt; return R.log.some(([, m]) => / voice|voice /.test(m)) || R.frameNo > 200; }, null, { timeout: 120000 });
   const before = await pg.evaluate(() => window.__play.stage.rt.frameNo);
@@ -197,11 +190,36 @@ async function eventKeys() {
   await pg.keyboard.press('Space');
   await pg.waitForTimeout(150);
   ok(await pg.evaluate(() => window.__play.stage.rt.skip === 0 && !window.__play.stagePaused), '✕ without the pause: no Skip');
-  // the faces change on the page (a DataTexture of the texanm targets gets more than one content)
-  const faces = await pg.evaluate(async () => { const t0 = performance.now(); while (performance.now() - t0 < 15000) { let m = 0; for (const S of window.__seen.values()) m = Math.max(m, S.size); if (m > 1) return { m, keys: window.__tad.size }; await new Promise(r => setTimeout(r, 200)); }
-    let m = 0; for (const S of window.__seen.values()) m = Math.max(m, S.size); return { m, keys: window.__tad.size }; });
-  ok(faces.m > 1, 'the faces change: the texanm target\'s texture gets new pixels (FUN_00259058 copies)', JSON.stringify(faces));
-  // Start, then ✕: Skip
+  ok(!errs.length, 'no page errors', errs.slice(0, 3).join(' | '));
+  await pg.close();
+  await eventSkip();
+}
+// the faces change on the page (a DataTexture of the texanm targets gets more than one content). In its own event: rv_matiawase is too short to be sure of a blink
+// (p000's first, event frames 2-18, comes before its body appears ~41 frames in, then @_eye waits 128-512 frames); first_encounter runs 2170 frames with faces on screen
+async function eventFaces() {
+  const { pg, errs } = await open('&warp=encounter');
+  await pg.waitForFunction(() => window.__play && window.__play.stage && window.__play.stage.rt, null, { timeout: 240000 });
+  await pg.evaluate(() => { const P = window.__play; window.__seen = new Map(); window.__inEv = 0; window.__moves = 0;
+    const f = () => { const R = P.stage.rt;
+      if (R.vm.frames.some(F => F.m.name === 'first_encounter')) window.__inEv++;
+      const g = P.root.getObjectByName('event actors');
+      if (g) g.traverse(o => { const t = o.material && o.material.map; if (t && t.isDataTexture && t.image && t.image.data) { const d = t.image.data; let h = 0; for (let i = 0; i < d.length; i += 64) h = (h * 31 + d[i]) | 0; const S = window.__seen.get(t) || { h: null, moves: 0 }; if (S.h !== null && S.h !== h) { S.moves++; window.__moves = Math.max(window.__moves, S.moves); } S.h = h; window.__seen.set(t, S); } });
+      requestAnimationFrame(f); };
+    requestAnimationFrame(f); });
+  // two changes of one texture: the first apply alone (base -> first key) is not an animation
+  await pg.waitForFunction(() => { const R = window.__play.stage.rt; return window.__moves > 1 || (window.__inEv > 0 && R.gflags[1] >= 22 && R.battle); }, null, { timeout: 500000, polling: 200 }).catch(() => null);
+  const faces = await pg.evaluate(() => { const R = window.__play.stage.rt; return { moves: window.__moves, textures: window.__seen.size, inEv: window.__inEv, g1: R.gflags[1] }; });
+  ok(faces.inEv > 0, 'first_encounter ran for the faces check', JSON.stringify(faces));
+  ok(faces.moves > 1, 'the faces change: one texanm target\'s texture gets new pixels twice in the event (FUN_00259058 copies)', JSON.stringify(faces));
+  ok(!errs.length, 'no page errors', errs.slice(0, 3).join(' | '));
+  await pg.close();
+}
+// Start, then ✕: Skip, on a fresh page (the checks above can outlast the 354-frame event)
+async function eventSkip() {
+  const { pg, errs } = await open('');
+  await pg.waitForFunction(() => window.__play.stage && window.__play.stage.rt.frameNo > 20, null, { timeout: 60000 });
+  await pg.evaluate(() => { const P = window.__play; P.enemyAI.eventFlags[0] = 2; P.enemyAI.eventFlags[63] = 6; });
+  await pg.waitForFunction(() => { const R = window.__play.stage.rt; return !R.battle && R.frameNo > 0 && R.skippable() && R.vm.calls.includes('ev0101.rv_matiawase') && R.view; }, null, { timeout: 120000 });
   await pg.keyboard.press('Enter');
   await pg.waitForFunction(() => window.__play.stagePaused, null, { timeout: 5000 }).catch(() => null);
   await pg.keyboard.press('Space');
@@ -216,8 +234,10 @@ async function eventKeys() {
   await pg.close();
 }
 try {
+  if (process.env.STAGE_ONLY) { await (process.env.STAGE_ONLY === 'faces' ? eventFaces() : eventSkip()); await browser.close(); srv.kill(); done(); }   // one check alone (its mutant runs)
   await beat('');
   await eventKeys();
+  await eventFaces();
   await deadInEvent();
   await firstBattle();
   await beat('&autoskip=1');

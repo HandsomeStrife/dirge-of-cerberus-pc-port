@@ -65,6 +65,11 @@ try {
     await pg.keyboard.press('Space');
     await until(n => window.__play.restart.count === n + 1 && !window.__play.pause.active, n0);
   };
+  // main's hand-back after a record's reload: until then no input reaches him (bit 11)
+  const handBack = () => until(() => { const P = window.__play; return P.stage.rt.battle && P.gameState.test(11) === 0; }, null, 180000);
+  // an area's living soldiers on, their bodies attached: what a hide or a Restart has to deal with
+  const bodiesOn = async () => { await handBack(); await pg.evaluate(() => { const W = window.__play.enemyAI; W.areaSwitch(105, true); W.areaSwitch(2, true); });
+    await until(() => window.__play.enemies.actors.some(a => a.body)); };
   const gameOverRestart = async () => {
     const n0 = await pg.evaluate(() => window.__play.restart.count);
     await pg.evaluate(() => { window.__play.php.hp = 0; });
@@ -232,14 +237,19 @@ try {
     ok(ds.every(d => d.hp === 0 && !d.active && !d.body), `second record: the dead of both saves stay dead (${JSON.stringify(ds)})`);
     ok(await pg.evaluate(() => window.__play.php.hp === 780 && window.__play.restart.record.n === 2), 'second record: HP 780, record 2 still the one');
     // main's setVisibleAll hid everything: the reload's objects are visible (play.js allVisible)
+    await bodiesOn();
     await call('fake/KerberosActor', 'setVisibleAll', '(IZ)V', [0, 0]);
-    const hid = await pg.evaluate(() => ({ v: window.__play.vin.eventHidden, i: window.__itemsView.hideAll }));
-    ok(hid.v === true && hid.i === true, 'setVisibleAll(0, false) hides Vincent and the items');
+    const hid = await pg.evaluate(() => { const A = window.__play.enemies.actors.filter(a => a.body); return { v: window.__play.vin.eventHidden, i: window.__itemsView.hideAll, b: A.length, shown: A.filter(a => a.body.visible).length }; });
+    ok(hid.v === true && hid.i === true && hid.b > 0 && hid.shown === 0, `setVisibleAll(0, false) hides Vincent, the items and the ${hid.b} enemy bodies`);
     await pauseRestart();
     const vis = await pg.evaluate(() => ({ v: window.__play.vin.eventHidden, i: window.__itemsView.hideAll }));
     ok(vis.v === false && vis.i === false, `Restart: Vincent and the items visible again (eventHidden ${vis.v}, hideAll ${vis.i})`);
+    await bodiesOn();
+    const bv = await pg.evaluate(() => { const A = window.__play.enemies.actors.filter(a => a.body); return { n: A.length, hidden: A.filter(a => !a.body.visible).length }; });
+    ok(bv.n > 0 && bv.hidden === 0, `record Restart: the rebuilt enemy bodies are visible (swapBodies removes the old; ${bv.n} bodies, ${bv.hidden} hidden)`);
   }
   { // a Phoenix Down armed, then Restart: the status goes with the reload, and the slot is the record's
+    await handBack();
     await pg.evaluate(() => { const inv = window.__items.inventory; inv.slots[0] = [0x69300004, 3]; inv.setSel(0); });
     await pg.keyboard.press('KeyE');
     await until(() => window.__play.php.s64 === 8);
@@ -287,6 +297,14 @@ try {
     ok(await pg.evaluate(() => !window.__play.pause.active), 'Enter after Zone.exit: the pause does not open');
   }
   ok(errs.length === 0, 'no page errors' + (errs.length ? ': ' + errs.slice(0, 3).join(' | ') : ''));
+  // the HUD's panel 0 group (hud_core slidePanel): 3, 4 = going / gone out; W held for 60 ticks, what the user does
+  const hudSlide = () => pg.evaluate(() => { const st = window.__play.gameHud.state, t = st.slides[0]; return st.chain[t.slot === 'root' ? 0 : st.groupOf[t.slot]].slide[0]; });
+  const holdW = async () => { const at = () => pg.evaluate(() => { const p = window.__play.ctrl.pos; return [p.x, p.y, p.z, window.__play.stats.ticks]; }); const a = await at();
+    await pg.keyboard.down('KeyW'); await ticks(60); await pg.keyboard.up('KeyW'); const b = await at(); return { d: Math.hypot(b[0] - a[0], b[2] - a[2]), ticks: b[3] - a[3] }; };
+  const handedBack = async (name) => { await ticks(30);
+    ok(await pg.evaluate(() => window.__play.gameState.test(11) === 0 && window.__play.gameState.test(6) === 0), `${name}: after the hand-back bits 11 and 6 are clear`);
+    const s = await hudSlide(); ok(s < 3, `${name}: the HUD is back (FUN_003b01b0(1); slide state ${s})`);
+    const w = await holdW(); ok(w.d > 1, `${name}: W walks him again (${w.d.toFixed(2)} u)`); };
   { // 7. record 3's reload (T w254 r07_beat): flag 9 = 9 takes main past Zone.event, and it is event mode anyway, from the teardown until battle2(3000):
     // area asj_035, Zone 1 0, bgm_278, sk_mituketa2, Zone 6 7, battle2; no FUN_0037e048; Vincent ends at (-1762, 0, 1578)
     await load();
@@ -299,8 +317,9 @@ try {
       for (const k of Object.keys(F)) delete F[k]; Object.assign(F, f0); G.set(g0); });
     ok(await pg.evaluate(() => window.__play.restart.record.n === 3), 'record 3 taken with T\'s flags');
     await pauseRestart();
-    const m0 = await pg.evaluate(() => { const P = window.__play; return { battle: P.stage.rt.battle, skip: P.stage.rt.skippable(), hud: P.gameHud.state.find ? 1 : 0, ai: !!P.stageGs && P.stageGs.has ? P.stageGs.has(6) : null }; });
+    const m0 = await pg.evaluate(() => { const P = window.__play; return { battle: P.stage.rt.battle, skip: P.stage.rt.skippable(), ai: P.gameState.test(6), input: P.gameState.test(11) }; });
     ok(m0.battle === false, `record 3: event mode from the reload's first frame (battle ${m0.battle}; T: bit 37 clear from f328)`);
+    ok(m0.ai === 1 && m0.input === 1, `record 3: from the first frame the AI waits and no input reaches him (bit 6 ${m0.ai}, bit 11 ${m0.input}; T r1600: no stage object)`);
     await until(() => window.__play.stage.rt.vm.calls.includes('ev0101.sk_mituketa2'), null, 60000);
     await ticks(120);
     const mid = await pg.evaluate(() => { const P = window.__play, r = P.stage.rt; return { battle: r.battle, skip: r.skippable(), view: !!(r.view), vin: P.vin.body.visible, pauseBlocked: !P.pause.active, log: r.log.map(([, m]) => m), t0: P.enemyAI.S.now }; });
@@ -312,12 +331,31 @@ try {
     ok(at.every(i => i >= 0) && at[0] < at[1] && at[1] < at[2], `record 3: T's order: ${order} (${at}; ${mid.log.filter(m => /^(area|zone|music)/.test(m)).join(' | ')})`);
     console.log('record 3 mid: vin visible', mid.vin, 'log', mid.log.slice(0, 18).join(' | ').slice(0, 500));
     await pg.screenshot({ path: process.env.W254_SHOT || '/dev/null' }).catch(() => {});
+    ok(await hudSlide() >= 3, `record 3, in the event: no HUD, the panels are out (slide state ${await hudSlide()}; T r1600)`);
+    const held = await holdW();
+    ok(held.d < 0.01, `record 3: W held through the event does not move him (${held.d.toFixed(2)} u over ${held.ticks} ticks; bit 11)`);
     const t1 = await pg.evaluate(() => window.__play.enemyAI.S.now); await ticks(30);
     ok(await pg.evaluate(t => window.__play.enemyAI.S.now === t, t1), `record 3: the world waits in the event (manager clock ${t1})`);
     await until(() => window.__play.stage.rt.battle === true, null, 180000).catch(() => {});
     const end = await pg.evaluate(() => { const P = window.__play, r = P.stage.rt, p = P.ctrl.pos; return { battle: r.battle, x: p.x, y: p.y, z: p.z, log: r.log.map(([, m]) => m).filter(m => /^(zone|battle)/.test(m)), pair: P.light && P.light.stream.pair }; });
     ok(end.battle && Math.hypot(end.x + 1762.5, end.z - 1577.7) < 2, `record 3: battle with Vincent at (${end.x.toFixed(1)}, ${end.y.toFixed(1)}, ${end.z.toFixed(1)}) (T r07_walk: -1762.5, 0, 1577.7)`);
     ok(end.log.some(m => m.includes('zone 128,6,7') || m.includes('zone 6,7')), `record 3: Zone 6 7 before the battle (${end.log.join(' | ').slice(0, 200)})`);
+    await handedBack('record 3');
+  }
+  { // 8. record 2's reload, not stranded: main pc 5005 (flag 0 == 13, global 1 < 13, global 18 == 1) -> 5154 heri_toujou -> 5246 usercontrol 1 -> 5266 battle. The flags are the branch's, not a walked state
+    await load();
+    await pg.evaluate(() => { const P = window.__play, W = P.enemyAI, G = P.stage.globalFlags, g0 = G.slice(), f0 = { ...W.eventFlags }, F = W.eventFlags;
+      for (const k of Object.keys(F)) delete F[k];
+      for (const [k, v] of [[0, 13], [2, 1], [46, 1], [63, 1]]) F[k] = v;
+      G.fill(0); for (const [k, v] of [[0, 1], [1, 12], [18, 1]]) G[k] = v;
+      const vm = P.stage.rt.vm; vm.natives['fake/KerberosZone.scene_save(I)V'](vm, [2]);
+      for (const k of Object.keys(F)) delete F[k]; Object.assign(F, f0); G.set(g0); });
+    await pauseRestart();
+    ok(await pg.evaluate(() => window.__play.gameState.test(11) === 1 && !window.__play.stage.rt.battle), 'record 2: the reload starts with no input, in event mode');
+    await until(() => window.__play.stage.rt.battle === true, null, 180000).catch(() => {});
+    const e2 = await pg.evaluate(() => { const r = window.__play.stage.rt, L = r.log.map(([, m]) => m); return { battle: r.battle, calls: r.vm.calls.includes('ev0103.heri_toujou'), uc: L.indexOf('usercontrol 1') }; });
+    ok(e2.battle && e2.calls && e2.uc >= 0, `record 2: main takes pc 5154 to usercontrol 1 and battle (battle ${e2.battle}, heri_toujou ${e2.calls}, usercontrol at log ${e2.uc})`);
+    await handedBack('record 2');
   }
   { // 6. with the opening on: the hand-off, the sounds it leaves, a key, a record Restart (no opening), a no-record Restart (the opening again)
     for (let i = 0; ; i++) {

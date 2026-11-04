@@ -38,6 +38,17 @@ const near = (a, b, e) => Math.abs(a - b) <= e;
   const w = []; ok(!FM.flyTo(C2, [10, 0, 0], m => w.push(m)) && w.length === 1, 'no profile / speed bits: warned, no move');
   const C3 = { pos: [0, 0, 0], f1c0: 1, f1c4: 0, spd: 20 };
   FM.flyTo(C3, [10, 0, 0]); ok(near(C3.dur, 0.5, 1e-6), 'constant speed: duration = length / C+0x1d4');
+  // two dives at the same spot (FUN_0034bd10 case 1 returns 0 under 0.001 u -> FUN_0034d870(C, 0)): already there is arrived, no snap, no NaN
+  const C4 = { pos: [0, -100, 0], f1c0: 2, f1c4: 0, f1e0: 360, f1e4: 1800, f1e8: 300, spd: 0 };
+  FM.flyTo(C4, [100, -100, 0]); for (let i = 0; i < 1000 && C4.mm === 1; i++) FM.step(C4, 1 / 60);
+  const dive2 = FM.flyTo(C4, [100, -100, 0]);
+  ok(!dive2 && C4.mm === 0 && (C4.f1c4 & 4) && !(C4.f1c4 & 1) && C4.vel === 0, `the second dive to the same point: arrived at once (mode ${C4.mm}, +0x1c4 ${C4.f1c4})`);
+  for (let i = 0; i < 5; i++) FM.step(C4, 1 / 60);
+  ok(C4.pos.every(Number.isFinite) && near(C4.pos[0], 100, 1e-4), `and the body stays put: ${C4.pos}`);
+  const C5 = { pos: [5, 0, 0], p120: [50, 0, 0], mm: 1, f1c4: 1 };
+  ok(FM.arrive(C5, 0) === 1 && C5.pos[0] === 5 && C5.mm === 0 && (C5.f1c4 & 4), 'FUN_0034d870(C, 0): mode 0 and bit 2 without the snap');
+  const C6 = { pos: [5, 0, 0], p120: [50, 0, 0], mm: 1, f1c4: 1 };
+  ok(FM.arrive(C6, 1) === 1 && C6.pos[0] === 50, 'FUN_0034d870(C, 1): the snap');
 }
 
 // ---------------------------------------------------------------- enemy_ai.js + data

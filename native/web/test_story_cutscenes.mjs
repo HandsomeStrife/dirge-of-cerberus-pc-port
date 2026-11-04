@@ -1,6 +1,6 @@
 // test_story_cutscenes.mjs -- main's story events that play out (worker 0261; notes/story-cutscenes.md).
 //   node --import ./native/web/test_hooks.mjs native/web/test_story_cutscenes.mjs
-// Needs data/event/ev0100_stage.json. MUTATE=getpos|battlecam|nextevent|frames1|plays|roll|rollsign|rollraw|voicepause|hide|visall|group runs one mutant of the modules in a scratch copy.
+// Needs data/event/ev0100_stage.json. MUTATE=walkskip|walkmiss|chainskip|boxlock|boxlockopen|circlecross|boxleft|boxright|boxnopage|winkind|getpos|battlecam|nextevent|frames1|plays|roll|rollsign|rollraw|voicepause|hide|visall|group runs one mutant of the modules in a scratch copy.
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -23,6 +23,11 @@ if (MUT) {
     lentshow: ['stage_controller.js', 'a.lent.show(!!v && !a.mp.clip)', 'a.lent.show(!!v)'],
     plays0262: ['stage_controller.js', "'ev0103.heri_lasted', ", ''],
     playsht: ['stage_controller.js', "'ev0103.heri_toujou', ", ''],
+    skipload: ['event_actor_rt.js', "return R.skip !== 0 && (R.skipMode & 2) ? 0 : T.loading(", "return T.loading("],
+    loadhold: ['event_actor_rt.js', "T.loading(R, T.ensure && T.ensure(str(name)))", "0"],
+    motionhold: ['event_actor_rt.js', "Promise.all([T.ensure(a.model), T.ensurePack(a.model, n)])", "T.ensure(a.model)"],
+    lentensure: ['stage_controller.js', "if (R.actors.ensure && obj.model) R.actors.ensure(obj.model);", ""],
+    gunbit: ['aim_core.js', "gameState.set(8);", ""],
     getpos: ['stage_controller.js', "return a ? a.M[12] : 0; }", "return 0; }"],
     battlecam: ['stage_controller.js', "i === 1 ? f32(v.eye[j] + v.fwd[j])", "i === 1 ? 0"],
     frames1: ['stage_controller.js', "if (E && /^ev\\d/.test(E.cls)", "if (false && /^ev\\d/.test(E.cls)"],
@@ -43,6 +48,16 @@ if (MUT) {
     qt: ['event_actor_rt.js', 'd(xy + zw), d(zx - yw), 0,', 'd(xy - zw), d(zx - yw), 0,'],
     choiceskip: ['event_window.js', '[1, 0x18, 0x1b, 0x3b].includes(k) ? 2', '[1, 0x18, 0x3b].includes(k) ? 2'],
     choicestate: ['event_window.js', 'e.state === 3 ? 2 : e.state === 4 ? 3 : 0', 'e.state === 3 ? 3 : e.state === 4 ? 2 : 0'],
+    walkskip: ['event_actor_rt.js', 'if (s < c.L && R.skip !== 2) return false;', 'if (s < c.L) return false;'],
+    walkmiss: ['event_actor_rt.js', 'if (!a) return false;                                              // FUN_0037a600', 'if (!a) return true;                                              // FUN_0037a600'],
+    chainskip: ['event_actor_rt.js', 'if (R.skip !== 0 && R.frameNo !== c.at) return true;', ''],
+    boxlock: ['event_window.js', 'if (this.flags & 2) return false;              // FUN_003de568', 'if (false) return false;              // FUN_003de568'],
+    boxlockopen: ['event_window.js', 'if (this.flags & 2) return false;              // FUN_003de568', 'if (this.flags & 0x32) return false;              // FUN_003de568'],
+    circlecross: ['event_window.js', "this.result = a === 'cross' ? 3 : 4;", 'this.result = 3;'],
+    boxleft: ['event_window.js', 'if (was !== 0) this.cursor = Math.max(was - page, 0);', ''],
+    boxright: ['event_window.js', 'else if (was !== n - 1) this.cursor = Math.min(was + page, n - 1);', ''],
+    boxnopage: ['event_window.js', 'if (this.noPage) return true;', ''],
+    winkind: ['event_window.js', 'e.id = c.id; e.box = rec; e.state = 0; e.kind = c.kind;\n        if (R.skip !== 0) W.hide(rec);                            // FUN_003b7118(box, 1)', 'e.id = c.id; e.box = rec; e.state = 0;\n        if (R.skip !== 0) W.hide(rec);                            // FUN_003b7118(box, 1)'],
     choicewrap: ['event_window.js', 'was + 1 >= n ? 0 : was + 1', 'was + 1 >= n ? was : was + 1'],
     choicesel: ['event_window.js', 'this.cursor = sel < 0 ? 0 : Math.min(sel, this.rows.length - 1);', 'this.cursor = 0;'],
     choicegrow: ['event_window.js', 'l.ry = s16(l.ry + d); l.y = s16(l.y + d); this.resize(l, l.w, s16(l.h - d));', ''],
@@ -60,7 +75,7 @@ if (MUT) {
 const { createStageController, PLAYS } = await import(pathToFileURL(path.join(base, 'stage_controller.js')));
 const { AreaStream } = await import(pathToFileURL(path.join(base, 'area_stream.js')));
 const { EventActors, quatRows } = await import(pathToFileURL(path.join(base, 'event_actor_rt.js')));
-const { createEventWindows } = await import(pathToFileURL(path.join(base, 'event_window.js')));
+const { createEventWindows, EventChoiceScreen } = await import(pathToFileURL(path.join(base, 'event_window.js')));
 const { loadPauseData } = await import(pathToFileURL(path.join(base, 'pause.js')));
 const { loadStageInfoData } = await import(pathToFileURL(path.join(base, 'stage_info.js')));
 
@@ -139,7 +154,14 @@ const G = (o) => { const g = new Uint8Array(64); for (const k in o) g[k] = o[k];
   let inside = null;
   S.run(4000, () => { if (R.vm.frames.some(F => F.m.name === 'heri_dgsol')) inside ??= R.nextEvent(); return R.gflags[1] > 13 && R.battle; });
   ok(inside === 'ev0103.heri_dgsol', 'nextEvent inside heri_dgsol: ' + inside);
-  if (!PLAYS.has('ev0103.heri_dgsol')) ok(R.log.some(x => /^skip ev0103\.heri_dgsol/.test(x[1])), 'heri_dgsol auto-skipped at its first wait: ' + R.log.filter(x => /^skip/.test(x[1])).map(x => x[1]).join());
+}
+// the rule itself, with an event taken out of PLAYS (everything in the class plays by now): it auto-skips at its first wait
+{
+  PLAYS.delete('ev0103.heri_dgsol');
+  const v = { 0: 14, 1: 8 }, S = make(v, G({ 0: 1, 1: 13 })), R = S.R;
+  S.run(1500, () => R.log.some(x => /^skip /.test(x[1])));
+  PLAYS.add('ev0103.heri_dgsol');
+  ok(R.log.some(x => /^skip ev0103\.heri_dgsol/.test(x[1])), 'an unplayed event inside: skipped at its first wait: ' + R.log.filter(x => /^skip/.test(x[1])).map(x => x[1]).join());
 }
 // 3e. A player's Skip in heri_taijou (Start, cross): main's branch at pc 6355 goes past sk_mituketa2, chunks (6, 7), battle
 {
@@ -195,6 +217,51 @@ for (const [ev, flags, g1, extra] of [
   const r = resets[resets.length - 1];
   ok(r && r.eye.join() === '1,2,3' && r.aim.join() === '1,2,4', 'its battle() reads main\'s Camera.set from get_battle_camera_l: ' + JSON.stringify(r));
 }
+// 3j. isPlayerReadyGun = game-state bit 8 (FUN_00576548: draw / holsterCore): with the gun drawn main's end of help_orei02 takes fov 52, battlemode 1 (pc 4462); holstered 73.5, battlemode 2
+{
+  const GS = await import(pathToFileURL(path.join(base, 'game_state.js')));
+  const { WeaponSystem } = await import(pathToFileURL(path.join(base, 'aim_core.js')));
+  const core = { W: { class: 0, se_draw: 1 }, P: {}, far: [0, 0, 0], setView() {}, sound: null, camJump() {} };
+  GS.reset();
+  try { WeaponSystem.prototype.draw.call(core, true, null); } catch { /* the rest of draw needs a real weapon: the bit comes first */ }
+  ok(GS.test(8) === 1, 'draw sets game-state bit 8');
+  try { WeaponSystem.prototype.holsterCore.call(core, true, null); } catch { /* as above */ }
+  ok(GS.test(8) === 0, 'holsterCore clears it');
+  for (const [drawn, fov, mode] of [[true, 52, 1], [false, 73.5, 2]]) {
+    const S = make({ 0: 12, 1: 12, 39: 1, 40: 1, 41: 1 }, G({ 0: 1, 1: 12 }), { gameState: () => ({ set() {}, clear() {}, test: b => (b === 8 && drawn ? 1 : 0) }), viewMatrix: () => ({ eye: [0, 0, 0], fwd: [0, 0, 1], down: [0, 1, 0], fov: 70 }) }), R = S.R, seen = new Set();
+    let v = null;
+    const orig = R.o.cameraReset; R.o.cameraReset = (view) => { v = view; if (orig) orig(view); };
+    S.run(4000, () => { for (const F of R.vm.frames) seen.add(F.m.name); return seen.has('help_orei02') && !R.vm.frames.some(F => F.m.name === 'help_orei02') && R.battle; });
+    ok(v && v.fov === fov && R.log.some(x => x[1] === 'battlemode ' + mode), `gun ${drawn ? 'drawn' : 'away'}: fov ${v && v.fov} (want ${fov}), battlemode ${mode}: ` + R.log.filter(x => /^battlemode/.test(x[1])).map(x => x[1]).join());
+  }
+}
+// 3k. The page's loads: load_l's and loadmotion_l's handles stay busy until the model and pack are in (EventActors.loading); getbattleactor asks for the model; none of it without ensure (the tests' resident case)
+{
+  const pend = [], A = new EventActors({ warn: () => {} });
+  const later = () => { let res; const p = new Promise(r => { res = r; }); pend.push(res); return p; };
+  const asked = [];
+  A.ensure = (m) => { asked.push('model ' + m); return later(); }; A.ensurePack = (m, n) => { asked.push('pack ' + m + ' ' + n); return later(); };
+  const S = make({}, G({ 0: 1, 1: 13 }), { actors: A }), R = S.R, N = R.vm.natives;
+  const h = N['fake/KerberosActor.load_l(Ljava/lang/String;II)I'](R.vm, ['n013', 21, 0]);
+  ok(h && R.busy(h), 'load_l: handle busy until the model is in');
+  pend.shift()(); await new Promise(r => setTimeout(r, 0)); R.frame(20);
+  ok(!R.busy(h), 'then free');
+  const h2 = N['fake/KerberosActor.loadmotion_l(II)I'](R.vm, [21, 125]);
+  ok(h2 && R.busy(h2) && asked.includes('model n013') && asked.includes('pack n013 125'), 'loadmotion_l: asks for model and pack, handle busy: ' + asked.join());
+  pend.shift()(); await new Promise(r => setTimeout(r, 0)); R.frame(20);
+  ok(R.busy(h2), 'still busy with only one of the two in');
+  pend.shift()(); await new Promise(r => setTimeout(r, 0)); R.frame(20);
+  ok(!R.busy(h2), 'free when both are in');
+  // under Skip these loads are passed by (FUN_003837d0 mode bit 1; FUN_00382220 skip 2 with bit 0): no fetch, no hold
+  asked.length = 0; R.skip = 2; R.skipMode = 3;
+  const hs = N['fake/KerberosActor.load_l(Ljava/lang/String;II)I'](R.vm, ['e050', 22, 0]), hm = N['fake/KerberosActor.loadmotion_l(II)I'](R.vm, [22, 126]);
+  ok(hs === 0 && hm === 0 && !asked.length, 'Skip: load_l and loadmotion_l pass by: ' + asked.join());
+  R.skip = 0; R.skipMode = 0;
+  const S2 = make({}, G({ 0: 1, 1: 13 }), { actors: A, battleObject: n => ({ tag: n, model: 'e027', matrix: () => [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1], lend() {}, show() {}, release() {}, place() {} }) });
+  asked.length = 0;
+  S2.R.vm.natives['fake/KerberosActor.getbattleactor_l(ILjava/lang/String;)V'](S2.R.vm, [30, 'e_x']);
+  ok(asked.join() === 'model e027', 'getbattleactor_l asks for the model: ' + asked.join());
+}
 // 4. hide_model_l: bit set = the smd list entry is skipped (FUN_0037aa20: b 0 sets, b 1 clears)
 {
   const A = new EventActors({ warn: () => {} }), a = A.create('n013', 7);
@@ -240,6 +307,15 @@ for (const [ev, flags, g1, extra] of [
   ok(f === 10, 'first ends after its 200 ms: ' + f);
   step();
   ok(a.code === 'h_st' && a.loop === false && a.blend === 30 && a.flags === 0x86, `second clip's request: ${a.code} ${a.loop} ${a.blend} ${a.flags}`);
+  // Skip (FUN_00382768): a running chain ends at the next update, but not in the update that started it
+  const h3 = N(R.vm, [7, 'x_sk', 0, 0, 5000, 1, 0, 0]);
+  const c3 = R.slots.find(c => c.type === 0x22 && c.name === 'x_sk');
+  R.skip = 2; R.frameNo = 100;
+  ok(A.chain(c3, R) === false, 'chain under Skip: not over in the update that started it');
+  R.frameNo = 101;
+  ok(A.chain(c3, R) === true, 'chain under Skip: over at the next update, long before its 5 s');
+  R.skip = 0; R.slots = R.slots.filter(c => c !== c3);
+  ok(h3 > 0, 'chain handle');
   const q = quatRows(0, 0, Math.SQRT1_2, Math.SQRT1_2);   // 90 degrees about z: row 0 = (0, 1, 0), row 1 = (-1, 0, 0)
   const want = [0, 1, 0, 0, -1, 0, 0, 0, 0, 0, 1, 0];
   ok(q.every((x, i) => Math.abs(x - want[i]) < 1e-5), 'quatRows 90 about z: ' + q);
@@ -259,6 +335,20 @@ for (const [ev, flags, g1, extra] of [
   R.clock = c.start + 2100; ok(A.walk(c, R), 'done at the end');
   ok(a.code === 'st' && a.loop === true && a.flags === 0x86, `end clip ${a.code} ${a.loop} ${a.flags}`);
   ok(h > 0, 'handle');
+  // Skip: +0x156c == 2 ends the walk at once, row 3 on the line at s (not at its end), the end clip goes out
+  const h2 = R.vm.natives['fake/KerberosActor.move_l(FFFLjava/lang/String;FIFZZLjava/lang/String;Z)I'](R.vm, [0, 0, 300, 'rn', 0, 9, 0.005, 0, 1, 'st2', 1]);
+  const c2 = R.slots.find(x => x.type === 0xc && x !== c);
+  R.clock = c2.start + 200; R.skip = 2;
+  ok(A.walk(c2, R) === true, 'walk under Skip ends at once');
+  ok(a.code === 'st2', 'walk under Skip: the end clip goes out: ' + a.code);
+  R.skip = 0; R.slots = R.slots.filter(x => x !== c2);
+  // FUN_0037a600 == 0 -> LAB_00378678: no actor: the slot stays, the handle stays busy
+  const h4 = R.vm.natives['fake/KerberosActor.move_l(FFFLjava/lang/String;FIFZZLjava/lang/String;Z)I'](R.vm, [0, 0, 300, 'rn', 0, 9, 0.005, 0, 1, 'st2', 1]);
+  const c4 = R.slots.find(x => x.type === 0xc && x !== c);
+  c4.id = 987;
+  ok(A.walk(c4, R) === false && R.busy(h4), 'walk with no actor: the slot is kept, its handle busy');
+  R.slots = R.slots.filter(x => x !== c4);
+  ok(h2 > 0 && h4 > 0, 'walk handles');
 }
 // 8. wro_kaisetu's choice box (kind 27): the box opens at its sel, ✕ on 'Nothing' ends the talk; ○ reopens it; Supplies plays and the box comes back with it marked;
 // a Skip takes state 2 and +0x1130 (the page hung on this before: getstate_l was missing). A player's path through main: stage 1 = 32
@@ -297,6 +387,40 @@ for (const [ev, flags, g1, extra] of [
   }
   const C = go(['circle', 'cross']);
   ok(C.k === 2 && C.done, '○ closes the box and the talk comes back to it (state 3): keys used ' + C.k);
+  // the box's keys, on the box itself: the lock is flag 2 alone (FUN_003de568 -> FUN_003d47b8), so a key in the 100 ms open counts; left / right FUN_003d8bc8 +0x30 / +0x3c
+  if (D) {
+    const box = (n, sel) => { const b = new EventChoiceScreen(D, 1000, -1); b.moveTo(b.root, 64, 149); b.setSize(384, 162); for (let i = 0; i < n; i++) b.addRow(Uint8Array.from([0x41 + i])); b.select(sel); return b; };
+    const o = box(4, 3);
+    ok((o.flags & 0x10) !== 0, 'a new box is opening (flag 0x10)');
+    o.key('up', 1000); ok(o.cursor === 2, 'up in the open moves the cursor: ' + o.cursor);
+    o.key('cross', 1000); ok(o.result === 3, '✕ in the open answers: ' + o.result);
+    ok((o.flags & 2) !== 0, 'the answer locks the box (flag 2)');
+    o.key('down', 1000); ok(o.cursor === 2, 'locked: down does nothing: ' + o.cursor);
+    o.key('circle', 1000); ok(o.result === 3, 'locked: ○ does not change the answer: ' + o.result);
+    const n = box(4, 3);
+    ok(n.noPage === true, 'rows fit: +0x90 bit 0 (RAM s2420: 3)');
+    n.key('left', 1000); ok(n.cursor === 3, 'rows fit: left does nothing: ' + n.cursor);
+    n.key('right', 1000); ok(n.cursor === 3, 'rows fit: right does nothing: ' + n.cursor);
+    const l = box(10, 3);
+    ok(l.noPage === false, 'ten rows do not fit 140: bit 0 clear');
+    l.key('right', 1000); ok(l.cursor === 9, 'right: a page (7), clamped to the last row: ' + l.cursor);
+    l.key('left', 1000); ok(l.cursor === 2, 'left: a page: ' + l.cursor);
+    l.key('left', 1000); ok(l.cursor === 0, 'left: clamped to the first row: ' + l.cursor);
+    const c = box(2, 0);
+    c.key('circle', 1000); ok(c.result === 4, '○ answers 4 (cancel), ✕ answers 3: ' + c.result);
+  }
+  // the entry's kind: a kind 4 window in an entry a choice box used: getstate_l under Skip by kind 4 -> 0 (FUN_00378f10)
+  {
+    const W = createEventWindows({ D: null, warn: () => {} }), S = make({}, G({ 0: 1, 1: 25 }), { windows: W }), R = S.R;
+    const gs = R.vm.natives['fake/KerberosWindow.getstate_l(I)I'];
+    W.open(R, { id: 5, kind: 27, t: 0, x: 0, y: 0, w: 10, h: 10, texts: [], sel: 0, key: 'a' });
+    R.skip = 2;
+    ok(gs(R.vm, [5]) === 2, 'kind 27 under Skip: 2: ' + gs(R.vm, [5]));
+    W.entries.find(e => e.id === 5).id = 0;
+    W.open(R, { id: 6, kind: 4, t: 0, x: 0, y: 0, w: 10, h: 10, text: new Uint8Array(1), key: 'b' });
+    ok(gs(R.vm, [6]) === 0, 'kind 4 in the same entry under Skip: 0: ' + gs(R.vm, [6]));
+    R.skip = 0;
+  }
   const Sup = go(['down', 'cross', 'cross']);
   ok(Sup.got.some(x => x[0] === 'down' && x[1] === 0), 'down from the last row wraps to row 0: ' + JSON.stringify(Sup.got));
   ok(Sup.k === 3 && Sup.done, 'Supplies plays, the box comes back, ✕ ends: keys ' + Sup.k);

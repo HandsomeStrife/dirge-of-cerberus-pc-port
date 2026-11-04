@@ -75,6 +75,7 @@ function makeWidgets(D, lw, parent, out) {
     rgba: lw.rgba.slice(), image: lw.image, flags: 0, parent, children: [],
     textOff: lw.textOff.slice(), s36: lw.s36, textId: lw.text >>> 0,
     rx: lw.params.rect[0], ry: lw.params.rect[1],  // +0x1c / +0x1e: position in the parent (FUN_003c8ab0)
+    c30: lw.params.c30 >>> 0, help: lw.params.u24 >>> 0,   // op 0x12 (text colour), op 0x1b (the bar's help message, FUN_003da4c8 / vt+0xac)
   };
   innerRect(D, w);
   if (lw.type === 12 || lw.type === 3) initButton(D, w);

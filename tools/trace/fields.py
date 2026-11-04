@@ -570,6 +570,9 @@ AMBFOOT_FIELDS = [f for f in FIELDS if f[0] in ("step", "pad_held", "matrix", "g
 # the event clock, actor slots 0..13 (event +0x1800 + 0x200 i: +0x18 id, +0x1c MP, +0x50 matrix row 3 = setpos;
 # FUN_00376308 / FUN_0037abf8). TRACE_EVMP="a,b,..." (hex MP addresses from a first run) adds per MP: +0x10 matrix
 # (64 bytes), +0x40c rate, +0x448 head / count, and each of the 8 layers' clip (+0x200 + 0x30 k) and frame (+0x218).
+# TRACE_EVVOICE=1 (worker 0263): the six voice channels DAT_004f7c38 (0x40 each): +4 the voice, +0x1c bit 1 playing (FUN_003ead30, FUN_003eaea8)
+if __import__("os").environ.get("TRACE_EVVOICE"):
+    EVENT_FIELDS += [("ev_vc%d" % i, None, 0x4F7C38 + 0x40 * i, "bytes:32", "D", "voice channel %d" % i) for i in range(6)]
 _EVSLOTS = int(__import__("os").environ.get("TRACE_EVSLOTS", "14"))   # worker 0262: kita_ev0145 has 30 slots
 EVACTOR_FIELDS = [f for f in FIELDS if f[0] in ("step",)] + [
     ("ev_clock", None, EV + 0x9848, "bytes:20", "D", "+0x9848 clock .. +0x9858 paused total"),

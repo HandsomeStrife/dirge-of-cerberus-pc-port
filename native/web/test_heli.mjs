@@ -34,6 +34,57 @@ function fight(rand = () => 0.5, flag0 = 13) {
   return { W, a: W.objects.get(ID), fx, flag: n => W.t.send(W.objects.get(ID), -2, 0xc, [n, 0, 0, 0]), player };
 }
 
+// Rockets (routine 6, script 29: 0x19d(25, 1, 4, 15), then 0x19d(25, 1, 4, 16)): each rocket starts at its own pod's marker, in that order, the
+// offset from the body = the marker's xyz on bone 2 (FUN_00569870 -> FUN_003461a0). The pose here is a known matrix (a bone at the body, a 90 degree turn).
+{
+  const { W, a } = fight();
+  const mk = data.markers.e023, B = [[0, 0, -1, 0], [0, 1, 0, 0], [1, 0, 0, 0], [a.pos[0], a.pos[1], a.pos[2], 1]];
+  ok(mk[15][3] === 2 && mk[16][3] === 2 && Math.abs(Math.hypot(mk[15][0], mk[15][1], mk[15][2]) - 71.8) < 0.1 && Math.abs(mk[15][2] + mk[16][2]) < 1, `pods: markers 15 / 16 on bone 2, ${Math.hypot(mk[15][0], mk[15][1], mk[15][2]).toFixed(1)} u from it, one each side (z ${mk[15][2].toFixed(1)} / ${mk[16][2].toFixed(1)})`);
+  const bonesAsked = [];
+  W.boneWorld = () => i => { bonesAsked.push(i); return B; };
+  const before = new Set(W.bullets);
+  W.t.send(a, -2, 0x114, [6, 0, 0, 0]);
+  const shots = [];
+  for (let i = 0; i < 500 && shots.length < 2; i++) {
+    const at = a.pos.slice();
+    B[3] = [at[0], at[1], at[2], 1];
+    W.tick(1.2, pp, pp);
+    for (const b of W.bullets) if (!before.has(b) && b.shooter === ID) { before.add(b); shots.push({ start: b.start.slice(), at, dmg: b.damage }); }
+  }
+  ok(shots.length === 2, `routine 6: 2 rockets (${shots.length})`);
+  const off = (s, m) => Math.hypot(...[0, 1, 2].map(k => s.start[k] - (m[0] * B[0][k] + m[1] * B[1][k] + m[2] * B[2][k] + s.at[k])));
+  if (shots.length === 2) {
+    ok(off(shots[0], mk[15]) < 0.01, `rocket 1 from marker 15 (${off(shots[0], mk[15]).toFixed(3)} u off; marker 16 would be ${off(shots[0], mk[16]).toFixed(0)})`);
+    ok(off(shots[1], mk[16]) < 0.01, `rocket 2 from marker 16 (${off(shots[1], mk[16]).toFixed(3)} u off; marker 15 would be ${off(shots[1], mk[15]).toFixed(0)})`);
+    const dist = s => Math.hypot(...[0, 1, 2].map(k => s.start[k] - s.at[k]));
+    ok(Math.abs(dist(shots[0]) - 71.8) < 0.1 && Math.abs(dist(shots[1]) - 72.1) < 0.1, `from the bone: ${dist(shots[0]).toFixed(1)} / ${dist(shots[1]).toFixed(1)} u (the markers' lengths; T: tools/trace/out/w259_rockets when present)`);
+    ok(shots.every(s => s.dmg === 80), 'weapon 25: damage 80');
+  }
+  ok(bonesAsked.every(i => i === 2), `the markers are read on bone 2 (${[...new Set(bonesAsked)]})`);
+}
+// T (tools/trace/out/w259_rockets.calls.jsonl, gitignored; TRACE_CALLLOG=missile): the game's rockets at their first move, wound back along their flight to
+// the start, against the decode's markers. Frame 1099, both in one frame: offset from the body 71.9 / 70.9 u, 65.8 / -64.7 u to the side, 29 u ahead.
+{
+  const f = path.join(here, '../../tools/trace/out/w259_rockets.calls.jsonl'), g = path.join(here, '../../tools/trace/out/w259_rockets.jsonl');
+  if (existsSync(f) && existsSync(g)) {
+    const calls = readFileSync(f, 'utf8').trim().split('\n').map(l => JSON.parse(l)).slice(1);
+    const recs = new Map(readFileSync(g, 'utf8').trim().split('\n').map(l => JSON.parse(l)).filter(r => r.frame != null).map(r => [r.frame, r]));
+    const first = calls.filter(c => c['a3+0x150'].f[2] <= 3.01);
+    const mk = data.markers.e023;
+    const o = first.map(c => {
+      const dist = c['a3+0x150'].f[2], p = c['a3+0x90'].f, d = c['a3+0x80'].f, m = Buffer.from(recs.get(c.frame).e0_face_pos, 'hex');
+      const face = [m.readFloatLE(0), m.readFloatLE(4), m.readFloatLE(8)], body = [m.readFloatLE(16), m.readFloatLE(20), m.readFloatLE(24)];
+      const v = [0, 1, 2].map(k => p[k] - d[k] * dist - body[k]);
+      return { frame: c.frame, len: Math.hypot(...v), side: -v[0] * face[2] + v[2] * face[0], ahead: v[0] * face[0] + v[1] * face[1] + v[2] * face[2] };
+    });
+    ok(o.length === 2 && o[0].frame === o[1].frame, `T: two rockets start in one frame (${o.map(x => 'f' + x.frame)})`);
+    if (o.length === 2) {
+      ok(Math.abs(o[0].side - mk[15][2]) < 2 && Math.abs(o[1].side - mk[16][2]) < 2, `T: in the bullet list's order, sideways = markers 15 / 16's z (${o.map(x => x.side.toFixed(1))} vs ${mk[15][2].toFixed(1)} / ${mk[16][2].toFixed(1)})`);
+      ok(o.every(x => Math.abs(x.ahead - mk[15][0]) < 2), `T: forward = their x (${o.map(x => x.ahead.toFixed(1))} vs ${mk[15][0].toFixed(1)})`);
+      ok(Math.abs(o[0].len - 71.8) < 2 && Math.abs(o[1].len - 72.1) < 2, `T: distance = the markers' lengths (${o.map(x => x.len.toFixed(1))} vs 71.8 / 72.1)`);
+    }
+  } else console.log('SKIP T rocket starts: w259_rockets missing');
+}
 // 1. the export: functions by index, the flight clips' frame counts
 {
   const f = data.script_fns && data.script_fns['29'];
@@ -68,7 +119,6 @@ function fight(rand = () => 0.5, flag0 = 13) {
     if (a.C.mp && a.C.mp.clip !== last) { last = a.C.mp.clip; seen.push(last); }
   }
   ok(seen.length >= 3 && seen[0] === 'eva_0', `legs follow: ${seen.join(' -> ')}`);
-  ok(new Set(seen).size === seen.length || seen.length > 2, 'each leg ends in a new request');
   ok(n === seen.length - 1, `event 0x16 fired once per leg end (${n} for ${seen.length} clips)`);
 }
 // 4. what ends the fight: HP <= 20000 on a hit -> timer 0 = 240 -> event 1 -> flag 0 = 16; before that, nothing

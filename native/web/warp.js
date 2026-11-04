@@ -46,9 +46,9 @@ export const WARPS = {
   chunk07: { pos: [-1798.3, 0, 1575.2], face: [-1, 0], pair: [6, 7], stage: { 0: 18 }, global: { 1: 20 }, note: 'chunk 07, before first_encounter' },
   // worker 0263: ev0141's events, at the flags main tests. first_encounter: global 1 = 21, stage 0 = 20 (trigger 18 sets it; pc 6743 / 6804). rv_toujou: stage 0 = 24, global 1 = 22
   // (first_encounter's pc 6893; e036's death sets the flag). wro_kaisetu: stage 1 = 32 (trigger 26), global 1 = 25, on r06_back's walk (-1039, 0, 956) (pc 10041)
-  encounter: { pos: [-1948.8, -44, 1594.2], face: [-1, 0], pair: [6, 7], stage: { 0: 20 }, global: { 1: 21 }, note: 'chunk 07, first_encounter' },
-  toujou: { pos: [-1753, -44, 1571], face: [-1, 0], pair: [6, 7], stage: { 0: 24 }, global: { 1: 22 }, note: 'chunk 07, e036 beaten: rv_toujou' },
-  wro: { pos: [-1039, 0, 956], face: [1, 0], pair: [6, 8], stage: { 0: 24, 1: 32 }, global: { 1: 25 }, note: 'market, WRO officer: wro_kaisetu' },
+  encounter: { cutscene: true, pos: [-1948.8, -44, 1594.2], face: [-1, 0], pair: [6, 7], stage: { 0: 20 }, global: { 1: 21 }, note: 'chunk 07, first_encounter' },
+  toujou: { cutscene: true, pos: [-1753, -44, 1571], face: [-1, 0], pair: [6, 7], stage: { 0: 24 }, global: { 1: 22 }, note: 'chunk 07, e036 beaten: rv_toujou' },
+  wro: { cutscene: true, pos: [-1039, 0, 956], face: [1, 0], pair: [6, 8], stage: { 0: 24, 1: 32 }, global: { 1: 25 }, note: 'market, WRO officer: wro_kaisetu' },
   // chunk 09 near the fire-glow wall (22, -40, 797) (worker 0213's fix), pair (8, 9) (area boxes 5 / 7). Story: the market
   // beats done (wro_kaisetu: stage 1 == 32, then global 1 = 26 at pc 10276); main waits for stage 0 == 36 (pc 10482)
   chunk09: { pos: [-8.3, -40, 779.2], face: [30.3, 17.8], pair: [8, 9], stage: { 0: 24, 1: 32 }, global: { 1: 26 }, note: 'chunk 09, the fire-glow wall' },

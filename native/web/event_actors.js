@@ -42,7 +42,8 @@ export async function loadEventActors(dir = DIR, { preload = null } = {}) {
   const pack = (M, n) => {
     const P = M.packs[n];
     if (!P) return Promise.resolve();
-    return P.ready ??= fetch(dir + P.info.file).then(r => { if (!r.ok) throw new Error(`${P.info.file}: HTTP ${r.status}`); return r.arrayBuffer(); }).then(b => { P.buf = b; });
+    return P.ready ??= fetch(dir + P.info.file).then(r => { if (!r.ok) throw new Error(`${P.info.file}: HTTP ${r.status}`); return r.arrayBuffer(); }).then(b => { P.buf = b; })
+      .catch(e => { P.failed = true; console.warn(`event actors: pack ${P.info.file} not loaded: ${e.message}`); });
   };
   for (const [m, info] of Object.entries(index.models)) {
     const packs = {};
@@ -56,11 +57,18 @@ export async function loadEventActors(dir = DIR, { preload = null } = {}) {
       .then(([gltf, side, tad]) => { M.gltf = gltf; M.side = side; M.tad = tad; })
       .catch(e => { M.failed = true; console.warn(`event actors: ${m} not loaded: ${e.message}`); });
   };
-  const ensurePack = (m, n) => (models[m] ? pack(models[m], n).catch(e => { console.warn(`event actors: ${m} pack ${n} not loaded: ${e.message}`); }) : Promise.resolve());
+  const ensurePack = (m, n) => (models[m] ? pack(models[m], n) : Promise.resolve());
+  // keep: what a slot still holds; the opening's preload stays too (a Restart with no record replays it, and intro.js's runtime has no loads to wait on)
   const trim = (keep) => {
     for (const [m, M] of Object.entries(models)) {
-      for (const P of Object.values(M.packs)) if (!keep.includes(m)) { P.buf = null; P.ready = null; }
-      if (keep.includes(m) || !M.gltf) continue;
+      const held = keep.includes(m), open = preload && preload.models[m];
+      for (const [n, P] of Object.entries(M.packs)) {
+        if (held || (open && (open.includes(+n) || (M.info.resident || []).includes(n)))) continue;
+        P.buf = null; P.ready = null; P.failed = false;
+      }
+      if (held || open) continue;
+      M.failed = false;
+      if (!M.gltf) { M.ready = null; continue; }
       M.gltf.scene.traverse(o => { if (o.isMesh) { o.geometry.dispose(); if (o.material.map) o.material.map.dispose(); o.material.dispose(); } });
       M.gltf = null; M.side = null; M.tad = null; M.ready = null;
     }
@@ -179,6 +187,7 @@ export function createEventActorView({ root, lib, rt, litPatch, light, weapon = 
     }
     const M = lib.models[a.model];
     if (!M) { warnOnce('model ' + a.model, `event actor ${a.id}: model ${a.model} not exported (left out)`); return null; }
+    if (M.failed) { warnOnce('failed ' + a.model, `event actor ${a.id}: model ${a.model} didn't load (left out)`); return null; }
     if (!M.gltf) { if (lib.ensure) lib.ensure(a.model); return null; }          // not in yet: next frame (a slot without its handle's wait)
     const scn = cloneSkinned(M.gltf.scene);
     const prims = [];
@@ -235,6 +244,7 @@ export function createEventActorView({ root, lib, rt, litPatch, light, weapon = 
     }
     for (const n of fs.slice(v.files.length)) {
       const p = v.model.packs[n];
+      if (p && p.failed) { warnOnce('pack ' + v.a.model + n, `event actor ${v.a.id} (${v.a.model}): motion file ${n} didn't load`); v.files.push(n); continue; }
       if (p && !p.buf) { if (lib.ensurePack) lib.ensurePack(v.a.model, n); return; }   // in order: this one's next frame
       if (p) v.pose.addLocalPose(p.info, p.buf);
       else warnOnce('pack ' + v.a.model + n, `event actor ${v.a.id} (${v.a.model}): motion file ${n} not exported for this model`);
@@ -296,11 +306,13 @@ export function createEventActorView({ root, lib, rt, litPatch, light, weapon = 
     if (a.lent && !a.mp.clip) return;
     let v = bodies.get(a);
     if (!v) { v = spawn(a); bodies.set(a, v); }
-    if (a.lent) a.lent.show(false);             // every frame: the gameplay body can appear after the lend (its model still loading), and a setVisible before the clip shows it
+    if (a.lent && v) a.lent.show(false);             // every frame: the gameplay body can appear after the lend (its model still loading), and a setVisible before the clip shows it
     if (!v || v.weapon) return;
     syncPacks(v);
     applyMask(v);
     const mp = a.mp;
+    // a set behind loadchr's mask (event_actor_rt.js findClip): its pack joins when asked for
+    if (mp.clip && !v.pose.lp.clips[mp.clip]) { const h = rt.actors.findClip(a, mp.clip), p = h && (a.late || []).includes(h.n) ? v.model.packs[h.n] : null; if (p && p.buf) v.pose.addLocalPose(p.info, p.buf); }
     if (mp.clip && v.pose.lp.clips[mp.clip]) v.pose.poseLocal(mp.clip, mp.frame, null, 0, 1);
   }
 

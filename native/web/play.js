@@ -881,6 +881,8 @@ async function main() {
       rootTrack: (model, clip) => enemies.rootTrack(model, clip),
       // GUESS: FUN_005449f0 probe 3 = the page's collision triangle set (probe sets not decoded)
       los: (a, b) => !!(col.segment && col.segment({ x: a[0], y: a[1], z: a[2] }, { x: b[0], y: b[1], z: b[2] })),
+      // manager cmd 0xab's map ray: FUN_0054fc38's probe 3 word, 0x187 (RAM 0x58c990[3])
+      viewRay: col.segment && col.probeFlags ? (a, b) => !!col.segment({ x: a[0], y: a[1], z: a[2] }, { x: b[0], y: b[1], z: b[2] }, col.probeFlags(0x187)) : null,
       // the bullets' room probe FUN_00553808 -> FUN_0026a320(a, b, 0x18d): sub-tree 1 packets of probe set 0x18d
       roomRay: col.segment && col.probeFlags ? (a, b) => {
         const h = col.segment({ x: a[0], y: a[1], z: a[2] }, { x: b[0], y: b[1], z: b[2] }, col.probeFlags(0x18d));
@@ -954,7 +956,6 @@ async function main() {
   loadMotions('vincent').then(m => Object.assign(motions, m)).catch(e => console.warn(e.message));
   ctrl.attach({ anim, motions });
   ctrl.ctx.cam = follow;                           // the ladder's FUN_00328640 (CAM+0x1c8, actions/ladder.js)
-  ctrl.doorWall = (p, mx, mz) => (enemyAI && enemyAI.doorWall ? enemyAI.doorWall(p, mx, mz) : [mx, mz]);   // worker 0257: a shut door stops him
   let actionHelp = [];
   if (params.get('actions') !== '0') {
     for (const a of await loadActions()) { ctrl.addAction(a.action); if (a.help) actionHelp.push(a.help); }
@@ -1401,7 +1402,7 @@ async function main() {
                     playerState, camView, report, keys, pressed, motions, packsReady, actionHelp, cape, enemies, enemyAI, php, pause, gameHud, pauseSound, gameOver,
                     sound: () => (soundProbe ? soundProbe() : null), soundStop: () => { if (soundStop) soundStop(); }, restart: { get count() { return restarts; }, get pending() { return restartPending || !!restartHold || restartReady; }, get record() { return checkpointRec; } },
                     intro: { get active() { return !!intro; }, get rt() { return introRt; }, get windows() { return introWin; }, get hudParked() { return !!intro && output.hud !== introHud; }, get ended() { return introEnded; }, get paused() { return !!intro && intro.paused; } },
-                    get stage() { return stage; }, get stageView() { return stageView; }, get stageWin() { return stageWin; }, get stagePaused() { return stagePaused; }, get stageInfo() { return stageSi; }, get gameState() { return stageGs; }, get results() { return stageRes; }, get voices() { return introVoices; }, visMask, roomOccl };
+                    get stage() { return stage; }, get stageLib() { return stageLib; }, get stageView() { return stageView; }, get stageWin() { return stageWin; }, get stagePaused() { return stagePaused; }, get stageInfo() { return stageSi; }, get gameState() { return stageGs; }, get viewRay() { return aiOpts && aiOpts.viewRay; }, get results() { return stageRes; }, get voices() { return introVoices; }, visMask, roomOccl };
   // ---- the opening event (intro.js): played before play on a fresh load; at its end the Restart path (checkpoint.js)
   // places Vincent and soldiers 41-43 as the event's end hands them to play. The page's gameplay bodies and HUD are
   // hidden while it runs (the event's own actors are left out, see intro.js)
@@ -1441,7 +1442,7 @@ async function main() {
     const R = stage.rt, isStart = PAUSE_KEYS.start.includes(e.code);
     // an open choice box (wro_kaisetu; event_window.js, worker 0263): it holds the menu focus, Start still opens the event pause
     if (!stagePaused && !isStart && stageWin && !e.repeat) {
-      const a = ['cross', 'circle', 'up', 'down'].find(k => PAUSE_KEYS[k].includes(e.code));
+      const a = ['cross', 'circle', 'up', 'down', 'left', 'right'].find(k => PAUSE_KEYS[k].includes(e.code));
       if (a && stageWin.choiceKey(a)) { e.preventDefault(); return; }
     }
     if (stagePaused) {

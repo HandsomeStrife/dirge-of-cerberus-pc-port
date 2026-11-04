@@ -313,7 +313,9 @@ try {
     const again = [];
     await sweep(fireI, -1, again);
     const fire = again[again.length - 1] || { id: null, side: 0 };
-    P.aim.press('r1'); await wait(3000);                                    // fire, the reticle off him; r_stbf0 runs 70 frames
+    P.aim.press('r1');                                                      // fire, the reticle off him
+    // the death clip runs 0.6 frames a tick (r_stbf0: 70 frames, 117 ticks, 2.33 s at 50 Hz and longer under load): wait on its last frame, not a time
+    for (let i = 0; i < 1200 && !(a.hp === 0 && body.clip === a.C.clip && body.frame >= (body.side.clips[body.clip]?.frames ?? Infinity) - 1); i++) await wait(50);
 
     return { poseErr, vinErr, aimErr, lockId, lockErr, heldId, heldErr, offErr, dropAt: (steps.find(x => x.id !== 66) || {}).i, fireId: fire.id, fireSide: fire.side, fireI, upDrop, shotsNoLock, hpNoLock, stateNoLock, hp0, hp: a.hp, astate: a.astate, mode: a.ai.mode, clip: a.C.clip, drawn: body.clip, hold: a.C.hold, drawnLoop: body.head ? body.head.loop : null, drawnFrame: body.frame, drawnN: body.side.clips[body.clip]?.frames };
   });

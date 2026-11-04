@@ -38,15 +38,13 @@ const T12 = w => w.W.triggers[12], B6 = w => w.props.camBoxes.find(b => b.rec ==
   ok(!w.W.gimmickChoose(O, [0, 0, -1]) || w.W.gimmickChoose(O, [0, 0, -1]).o !== T12(w), 'facing away: not trigger 12');
   ok(!w.W.gimmickChoose([-1328.9, -7, 1120], [0, 0, 1]) || w.W.gimmickChoose([-1328.9, -7, 1120], [0, 0, 1]).o !== T12(w), 'out of the 7 unit reach: not trigger 12');
 }
-// the state: ✕ -> mail -> event 2 -> 0x168(15) -> FUN_0057c728 -> open after 15 ticks; camera, wall, bullets by state
+// the state: ✕ -> mail -> event 2 -> 0x168(15) -> FUN_0057c728 -> open after 15 ticks; camera, bullets by state
 {
   const w = newWorld();
   ok(T12(w).e0 === 0 && T12(w).use, 'trigger 12 starts shut, takes ✕');
   const sh = (a, b) => w.W.cameraObjects(a, b);
   const A = [-1328, -12, 1125], Bp = [-1328, -12, 1155];
   ok(!!sh(A, Bp), 'shut: the camera stops on the door');
-  const m0 = w.W.doorWall([-1328, 0, 1134.09], 0, 1);
-  ok(Math.abs(1134.09 + m0[1] - 1134.10) < 0.02, `shut: Vincent stops at z ${(1134.09 + m0[1]).toFixed(2)} (T 1134.10)`);
   w.W.gimmickUse({ o: T12(w), face: 4 });
   const seq = [];
   for (let f = 1; f <= 20; f++) { frame(w); seq.push(T12(w).e0); }
@@ -54,8 +52,6 @@ const T12 = w => w.W.triggers[12], B6 = w => w.props.camBoxes.find(b => b.rec ==
   ok(first2 === 1, `state 2 the frame after ✕ (T f426 -> f427): frame ${first2}`);
   ok(first1 - first2 === 13, `state 1 ${first1 - first2} frames after state 2 (T f427 -> f440: 13)`);
   ok(T12(w).vars[0] === 1, `face 4 -> the side var 1 -> animation 6 (T): ${T12(w).vars[0]}`);
-  const m1 = w.W.doorWall([-1328, 0, 1134.09], 0, 1);
-  ok(m1[1] === 1, 'open: Vincent walks on');
   const pos = B6(w).m[3];
   ok(Math.abs(pos[0] + 1334.37) < 0.02 && Math.abs(pos[2] - 1146.66) < 0.02, `open: record 6's box at (${pos[0].toFixed(2)}, ${pos[2].toFixed(2)}) (T -1334.37, 1146.66)`);
   ok(!w.props.cameraProbe(A, Bp), 'open: a ray through the doorway passes (the box swung with the door, the trigger off)');
@@ -117,13 +113,28 @@ const T12 = w => w.W.triggers[12], B6 = w => w.props.camBoxes.find(b => b.rec ==
   // FUN_00544960: the lower +0x4f wins whatever the distance: shape 3 over shape 0
   const A = w.W.triggers[153], D = T12(w);
   ok(A.f4f === 2 && D.f4f === 1, `+0x4f: gate ${A.f4f}, door ${D.f4f}`);
+  // two at the same origin: the same +0x4f, the nearer; a lower +0x4f, the farther
+  const g = w.W.triggers[152], g2 = w.W.triggers[157], t = g.t, O = [0, 1, 2].map(j => t.m[3][j] + (t.lo[0] + t.hi[0]) / 2 * t.m[0][j] + (t.lo[1] + t.hi[1]) / 2 * t.m[1][j] + (t.lo[2] + t.hi[2]) / 2 * t.m[2][j]);
+  g.active = g2.active = true; g2.t = { ...t, m: [t.m[0], t.m[1], t.m[2], [t.m[3][0] + 3, t.m[3][1], t.m[3][2], 1]] };
+  ok(w.W.gimmickChoose(O, [0, 0, 1]).o === g, 'FUN_00544960: the same +0x4f: the nearer');
+  { const g0 = g.t; g.t = { ...t, m: [t.m[0], t.m[1], t.m[2], [t.m[3][0] + 6, t.m[3][1], t.m[3][2], 1]] };
+    ok(w.W.gimmickChoose(O, [0, 0, 1]).o === g2, 'FUN_00544960: the same +0x4f: the nearer, the later in the list'); g.t = g0; }
+  g2.f4f = 1; ok(w.W.gimmickChoose(O, [0, 0, 1]).o === g2, 'FUN_00544960: the lower +0x4f wins, farther');
+  g2.f4f = 2; g2.t = ai.triggers[157];
+  // FUN_005513c8: a ray only with bit 3, the origin in the box only with bit 4
+  { const gt = ai.triggers[153], m = gt.m, n = [0, 1, 2].map(j => m[3][j] + (gt.lo[0] + gt.hi[0]) / 2 * m[0][j] + (gt.lo[1] + gt.hi[1]) / 2 * m[1][j] + (gt.lo[2] - 2) * m[2][j]);
+    w.W.triggers[153].active = true; const h = w.W.gimmickChoose(n, [m[2][0], m[2][1], m[2][2]]);
+    ok(!h || h.o !== w.W.triggers[153], 'gate 153 (bit 4 only): 2 u outside, facing it: the ray is not asked'); }
+  { const dt = T12(w).t, m = dt.m, n = [0, 1, 2].map(j => m[3][j] + (dt.lo[0] + dt.hi[0]) / 2 * m[0][j] + (dt.lo[1] + dt.hi[1]) / 2 * m[1][j] + (dt.lo[2] + dt.hi[2]) / 2 * m[2][j]);
+    const h = w.W.gimmickChoose(n, [m[0][0], m[0][1], m[0][2]]);
+    ok(!h || h.o !== T12(w), 'door 12 (bit 3 only): origin in its box, the 7 u ray inside it: not chosen'); }
 }
 // manager cmd 0xab (script 209 event 0x18, FUN_0053da98): soldier 149 on the screen and in clear sight: short 66 = 1 (the routine that sends him through door 150)
 {
-  const run = (eye, { los = false, door = false } = {}) => {
+  const run = (eye, { los = false, view = null } = {}) => {
     const anims = new ChunkAnims(pd.chunkAnims), props = createProps({ data: pd, areas: { has: k => k >= 0 }, warn: () => {} });
-    const W = createEnemyAI({ data: ai, player: { pos: [0, 0, 0], hp: 780, id: 0x16, f118: 0, s64: 0 }, rand: () => 0.5, quiet: true, props, chunkAnims: anims, los: () => los,
-      viewCam: () => ({ eye, fov: 73.5, toView: p => [p[0] - eye[0], p[1] - eye[1], p[2] - eye[2]] }) });
+    const W = createEnemyAI({ data: ai, player: { pos: [0, 0, 0], hp: 780, id: 0x16, f118: 0, s64: 0 }, rand: () => 0.5, quiet: true, props, chunkAnims: anims, viewRay: () => los,
+      viewCam: () => (view ? { eye, ...view } : { eye, fov: 73.5, toView: p => [p[0] - eye[0], p[1] - eye[1], p[2] - eye[2]] }) });
     const o = [...W.objects.values()].find(x => x.rec === 149);
     const r = W.runEvent(o, 0x18);
     return W.mshort[66];
@@ -132,7 +143,15 @@ const T12 = w => w.W.triggers[12], B6 = w => w.props.camBoxes.find(b => b.rec ==
   ok(run([p[0], p[1], p[2] - 100]) === 1, '149 ahead and clear: true');
   ok(run([p[0], p[1], p[2] + 100]) === 0, '149 behind the camera: false (the clip test)');
   ok(run([p[0] + 400, p[1], p[2] - 100]) === 0, '149 far to the side, off the screen: false');
+  ok(run([p[0] + 95, p[1], p[2] - 100]) === 0, '149 inside the clip test but beyond the 512 wide screen: false');
+  ok(run([p[0] + 60, p[1], p[2] - 100]) === 1, '149 near the side, on the screen: true');
   ok(run([p[0], p[1], p[2] - 100], { los: true }) === 0, '149 ahead with a wall on the ray: false');
+  { // a shut door on the ray (cameraObjects): from the far side of door 150's box; the view is a stub that has him ahead
+    const c = ai.triggers[150].m[3], mid = [c[0], c[1] - 12, c[2]], d = [0, 1, 2].map(j => mid[j] - p[j]), l = Math.hypot(...d), eye = mid.map((v, j) => v + d[j] / l * 20);
+    const see = { fov: 73.5, toView: () => [0, 0, 100] };
+    ok(run(p.map((v, j) => v - d[j] / l * 20), { view: see }) === 1, 'the near side of 149, no door between: clear');
+    ok(run(eye, { view: see }) === 0, 'door 150 shut on the ray: false');
+  }
 }
 // against the game
 const F = new URL('../../tools/trace/out/w257_door2.jsonl', import.meta.url);

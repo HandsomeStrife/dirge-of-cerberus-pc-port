@@ -1,4 +1,4 @@
-// test_door_page.mjs -- the door at chunk 06's (trigger 12, script 149; worker 0257) on the real page: shut, it stops Vincent and the camera; ✕ facing it opens it (with manager short 78 set,
+// test_door_page.mjs -- the door at chunk 06's (trigger 12, script 149; worker 0257) on the real page: shut, it stops the camera but not Vincent (door walls are MISSING: notes/fidelity-audit.md); ✕ facing it opens it (with manager short 78 set,
 // as the key's script does), the door's vertices swing, the camera box with them, and he walks through.
 //   flock tools/trace/out/.browser.lock node native/web/test_door_page.mjs
 import { createRequire } from 'node:module';
@@ -29,10 +29,11 @@ try {
   const st = () => pg.evaluate(() => { const P = window.__play, T = P.enemyAI.triggers[12], B = P.enemyAI && P.enemyAI.props ? null : null, c = P.ctrl.pos; return { e0: T.e0, z: c.z, x: c.x, dist: P.follow.dist, eye: P.follow.eye.slice() }; });
   const s0 = await place(-1328.3, 1134.1, 0, 0, -0.1);
   ok(s0.t === 0 && s0.poly, 'at the door, shut', JSON.stringify(s0));
-  // W into the shut door: stopped at 1134.10
-  await pg.keyboard.down('KeyW'); await pg.waitForTimeout(1500); await pg.keyboard.up('KeyW');
+  // MISSING: door walls (FUN_005451d0 -> FUN_0054c628; notes/fidelity-audit.md): W into the shut door doesn't stop at T's 1134.10. A short walk, as past the door ✕ on it didn't open here; back to the door for ✕
+  await pg.keyboard.down('KeyW'); await pg.waitForTimeout(500); await pg.keyboard.up('KeyW');
   let s = await st();
-  ok(s.e0 === 0 && s.z < 1134.2, `walking into the shut door: z ${s.z.toFixed(2)} (T 1134.10)`);
+  ok(s.e0 === 0 && s.z > 1134.2, `MISSING door wall: he walks past the game's stop at the shut door: z ${s.z.toFixed(2)} (T 1134.10)`);
+  await place(-1328.3, 1134.1, 0, 0, -0.1);
   // the door's vertices before
   const vert = () => pg.evaluate(() => { const R = window.__play.root; for (const m of R.children) { const u = m.userData; if (!u.chunks) continue; const r = u.chunks.find(q => q[0] === 6 && q[5] === 1); if (r) { const a = m.geometry.attributes.position; const n = 0; return [a.getX(r[1]), a.getY(r[1]), a.getZ(r[1])]; } } return null; });
   const v0 = await vert();
@@ -57,6 +58,13 @@ try {
   ok(s.z > 1142, `he walks through: z ${s.z.toFixed(2)}`);
   ok(s.dist > 5, `behind him the camera isn't pulled to the door: distance ${s.dist.toFixed(2)} (the review: 0.3 with the box shut)`);
   if (SHOT) { await place(-1328.975, 1134.025, 0, 0.6053507924079895, -0.10331715643405914); await pg.waitForTimeout(800); await pg.screenshot({ path: SHOT + '_open.png' }); }   // w257_door2 f436's feet and view
+  // manager cmd 0xab's map ray is probe 3's word (FUN_0054fc38: 0x187), not every triangle: a sweep around gate 150, where the two differ
+  const sw = await pg.evaluate(() => { const P = window.__play, col = P.col, acc = col.probeFlags(0x187), V = (x, y, z) => ({ x, y, z }); let n = 0, wrong = 0, differ = 0;
+    for (let i = 0; i < 36; i++) for (let k = 0; k < 31; k++) { const th = i * Math.PI / 18, c = [-1680 + 12 * k * Math.cos(th), -16, -407 + 12 * k * Math.sin(th)], e = [-1680 - 300 * Math.sin(th), -12, -407 + 300 * Math.cos(th)];
+      const a = V(...c), b = V(...e), p3 = !!col.segment(a, b, acc), all = !!col.segment(a, b); n++; if (all !== p3) differ++; if (P.viewRay(c, e) !== p3) wrong++; }
+    return { n, wrong, differ }; });
+  ok(sw.differ > 0, `0xab's ray: the sweep has rays where probe 3 and every triangle differ (${sw.differ} of ${sw.n})`);
+  ok(sw.wrong === 0, `0xab's ray answers as probe word 0x187 on every ray (${sw.wrong} of ${sw.n} wrong)`);
   ok(!errs.length, 'no page errors', errs.slice(0, 2).join(' | '));
 } catch (e) { ok(false, 'page run', String(e).slice(0, 300)); } finally { await browser.close(); srv.kill(); }
 console.log(fail ? `${fail} FAILED` : 'all ok');

@@ -64,33 +64,60 @@ try {
       ok(Math.abs(fly.head - fly.fr) < 3, 'the drawn clip frame is the AI\'s (a body loaded late takes the running frame)');
       ok(fly.yaw === 0, 'the body adds no heading of its own under C+0x564 bit 4');
     }
-    // routine 6 (script 29): two rockets (weapon 25) from markers 0xf / 0x10 at step 1
-    const shot = await pg.evaluate(() => {
+    // routine 6 (script 29): two rockets (weapon 25), marker 15 then 16 (FUN_00569870 -> FUN_003461a0). The spawn is caught at the push, in the same
+    // tick, so the body's flight can't move the comparison; markerWorld is the page's drawn pose.
+    await pg.evaluate(() => {
       const A = window.__play.enemyAI, h = A.objects.get(53);
-      A.t.send(h, -2, 0x114, [6, 0, 0, 0]);
       window.__shots = [];
-      const P = () => { for (const b of A.bullets) if (b.shooter === 53 && !window.__shots.includes(b)) window.__shots.push(b); };
-      window.__shotTimer = setInterval(P, 30);
-      return true;
+      const bl = A.bullets, push0 = bl.push;
+      bl.push = function (...x) {
+        for (const b of x) if (b.shooter === 53) {
+          const d = i => { const m = A.t.markerWorld(h, i); return m ? Math.hypot(b.start[0] - m[0], b.start[1] - m[1], b.start[2] - m[2]) : null; };
+          window.__shots.push({ dmg: b.damage, d15: d(15), d16: d(16), d17: d(17), off: Math.hypot(b.start[0] - h.pos[0], b.start[1] - h.pos[1], b.start[2] - h.pos[2]) });
+        }
+        return push0.apply(this, x);
+      };
+      A.t.send(h, -2, 0x114, [6, 0, 0, 0]);
+      window.__unpush = () => { delete bl.push; };
     });
-    const rockets = await pg.waitForFunction(() => window.__shots.length >= 1, null, { timeout: 120000, polling: 100 }).then(() => true).catch(() => false);
-    const rr = await pg.evaluate(() => { clearInterval(window.__shotTimer); const b = window.__shots[0], h = window.__play.enemyAI.objects.get(53); return b ? { dmg: b.damage, start: b.start ? [...b.start] : null, pos: h.pos.slice() } : null; });
-    ok(rockets && rr && rr.dmg === 80, `routine 6 fired weapon 25 (damage ${rr && rr.dmg})`);
-    if (rr && rr.start) ok(Math.hypot(rr.start[0] - rr.pos[0], rr.start[1] - rr.pos[1], rr.start[2] - rr.pos[2]) < 200, `from the helicopter, not the origin (start ${rr.start.map(v => v.toFixed(0))}, body ${rr.pos.map(v => v.toFixed(0))})`);
+    const rockets = await pg.waitForFunction(() => window.__shots.length >= 2, null, { timeout: 120000, polling: 100 }).then(() => true).catch(() => false);
+    const rr = await pg.evaluate(() => { window.__unpush(); return window.__shots; });
+    ok(rockets && rr.length >= 2 && rr.every(s => s.dmg === 80), `routine 6 fired 2 of weapon 25 (damage ${rr.map(s => s.dmg)})`);
+    if (rr.length >= 2) {
+      ok(rr[0].d15 < 0.01, `rocket 1 leaves marker 15 (${rr[0].d15?.toFixed(3)} u off; marker 16 ${rr[0].d16?.toFixed(0)}, marker 17 ${rr[0].d17?.toFixed(0)})`);
+      ok(rr[1].d16 < 0.01, `rocket 2 leaves marker 16 (${rr[1].d16?.toFixed(3)} u off; marker 15 ${rr[1].d15?.toFixed(0)}, marker 17 ${rr[1].d17?.toFixed(0)})`);
+    }
     if (process.env.HELI_SHOT) {
       await pg.evaluate(() => { const P = window.__play, h = P.enemyAI.objects.get(53); P.follow.debugLook = h.pos; });
       await pg.screenshot({ path: process.env.HELI_SHOT });
     }
-    // a player's hit past HP 20000 -> timer 0 -> event 1 -> flag 0 = 16 (r06_heli's run: 13 -> 16 at HP 172, poked)
-    const before = await pg.evaluate(() => {
-      const A = window.__play.enemyAI, h = A.objects.get(53);
-      h.hp = 20001;
-      A.t.hitEnemy(h, { damage: 500, kind: 0, dir: [1, 0, 0], shooter: 0x16, f148: 0, hit: 0, f120: 0x800 }, h.pos.slice());
-      return { hp: h.hp, flag: A.t.send(h, -2, 0xc, [0, 0, 0, 0]) };
+    // Real shots (playerShot through FUN_005ad118 / FUN_0055db50 / FUN_0055c7f8, no poked HP): through its part boxes until the fight ends. HP 21600, the
+    // line 20000 (script 29 event 8, cmd 0x138) -> timer 0 = 240 -> event 1 -> flag 0 = 16.
+    const real = await pg.evaluate(async () => {
+      const P = window.__play, A = P.enemyAI, h = A.objects.get(53);
+      const hb = (await fetch('data/enemies/ai.json').then(r => r.json())).hitboxes.e023;
+      const Wv = { ...(await fetch('data/aim/weapon.json').then(r => r.json())), spread: null, pellets: 1 };
+      const flag = () => A.t.send(h, -2, 0xc, [0, 0, 0, 0]);
+      const wait = ms => new Promise(r => setTimeout(r, ms));
+      const hp0 = h.hp, drops = [], t0 = performance.now(); let shots = 0, hits = 0, crossed = null;
+      const flag0 = flag();
+      while (h.hp > 20000 && performance.now() - t0 < 120000) {
+        const bw = P.enemies.partPose(31);
+        if (!bw) { await wait(50); continue; }
+        const b = hb[0], B = bw(b.bone), c = [0, 1, 2].map(k => b.offset[0] * B[0][k] + b.offset[1] * B[1][k] + b.offset[2] * B[2][k] + B[3][k]);
+        const was = h.hp;
+        A.playerShot([c[0] - 60, c[1], c[2]], [c[0] + 60, c[1], c[2]], Wv); shots++;
+        await wait(60);
+        if (h.hp < was) { hits++; drops.push(was - h.hp); }
+      }
+      crossed = { hp: h.hp, flag: flag(), tick: P.stats.ticks, var1: A.t.send(h, -2, 0x138, [0, 0, 0, 0]) };
+      return { hp0, flag0, shots, hits, drops: drops.slice(0, 6), crossed };
     });
-    ok(before.flag === 13 && before.hp <= 20000, `HP ${before.hp}, flag 0 still ${before.flag}`);
-    const f16 = await pg.waitForFunction(() => { const A = window.__play.enemyAI; const h = A.objects.get(53); return h && A.t.send(h, -2, 0xc, [0, 0, 0, 0]) === 16; }, null, { timeout: 120000, polling: 100 }).then(() => true).catch(() => false);
-    ok(f16, 'flag 0 = 16');
+    ok(real.hp0 === 21600 && real.flag0 === 13, `the fight starts at HP ${real.hp0}, flag 0 = ${real.flag0}`);
+    ok(real.hits > 0 && real.crossed.hp < real.hp0, `real shots land: ${real.hits} of ${real.shots} took HP (${real.drops.join(', ')} ...), HP ${real.hp0} -> ${real.crossed.hp}`);
+    ok(real.crossed.hp <= 20000 && real.crossed.flag === 13, `HP ${real.crossed.hp} is past the line, flag 0 still ${real.crossed.flag} (timer 0 running)`);
+    const f16 = await pg.waitForFunction(() => { const A = window.__play.enemyAI, h = A.objects.get(53); return h && A.t.send(h, -2, 0xc, [0, 0, 0, 0]) === 16 ? window.__play.stats.ticks : false; }, null, { timeout: 120000, polling: 50 }).then(h => h.jsonValue()).catch(() => null);
+    ok(f16 && Math.abs(f16 - real.crossed.tick - 240) <= 25, `flag 0 = 16 ${f16 ? f16 - real.crossed.tick : '-'} ticks after the crossing (timer 0 = 240; T w259_heli_end 239)`);
     console.log(`  warnings: ${[...new Set(warns)].slice(0, 10).join(' / ')}`.slice(0, 800));
   }
   ok(errs.length === 0, `no console errors${errs.length ? ': ' + errs.slice(0, 3).join(' | ') : ''}`);

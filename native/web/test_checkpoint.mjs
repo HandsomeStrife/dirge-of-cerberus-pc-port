@@ -542,10 +542,10 @@ else {
     { const bits = new Set(), hud = []; const F5 = { v: { ...rec.sflags } };
       const gs = { set: k => bits.add(k), clear: k => bits.delete(k) };
       const E = mk(F5, { globalFlags: Uint8Array.from(rec.gflags), settle: false, gameState: () => gs, hudControl: b => hud.push(b) });
-      ok(E.c.rt.battle === false && bits.has(6) && bits.has(2) && hud[0] === false, `record reload: event mode before main's first battle() (battle ${E.c.rt.battle}, bits ${[...bits]}, HUD ${hud})`);
+      ok(E.c.rt.battle === false && bits.has(6) && bits.has(2) && bits.has(11) && hud[0] === false, `record reload: event mode before main's first battle() (battle ${E.c.rt.battle}, bits ${[...bits]}, HUD ${hud})`);
       ok(E.c.rt.skippable(), 'record reload: Skip is offered from the start (FUN_003dfd18: bit 37 clear)');
       E.run(400);
-      ok(E.c.rt.battle === true && !bits.has(6) && !bits.has(2), `record reload: battle() ends it (battle ${E.c.rt.battle}, bits ${[...bits]})`); }
+      ok(E.c.rt.battle === true && !bits.has(6) && !bits.has(2) && !bits.has(11) && hud[hud.length - 1] === true, `record reload: main's usercontrol 1 and battle() end it (battle ${E.c.rt.battle}, bits ${[...bits]}, HUD ${hud})`); }
     // the music natives are heard on a record's reload (no opening to wait for)
     { const mus = []; const F4 = { v: { ...rec.sflags } };
       const D = mk(F4, { globalFlags: Uint8Array.from(rec.gflags), settle: false, music: () => ({ playMusic3: n => mus.push(n), changeMusicVol() {}, stopMusic() {} }) });

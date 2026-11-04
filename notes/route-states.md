@@ -174,3 +174,5 @@ the stuck detector (< 3 u in 40 frames) fired. x -1009.5 + 7 = -1002.5 and -872.
 
 **Boss arena (worker 0259, 2026-11-04):** `r0b_fight` (parent r0b_save, no global flag 19: Vincent really moves, unlike r0b_boss2) and `r0b_box4` (walked into btbox4 at (734, -100, 1461), f273). Boss brain 0x9a75c0 on this path; notes/boss-research.md 'The walked arena'.
 
+**Worker 0259, 2026-11-04:** `r02_npcfire` (w223_npc95's prefix, trigger 95 poked to script 23: NPCs 111 / 113 / 114 and soldiers 69-71 awake, Vincent on the roof at (-1070, -146, -1106); 69 / 70 have no walk polygon). `r02_npc2` / `r02_npc3`: teleported into trigger 24, he hangs in h_jp3. `r0b_fire`: r0b_box4 with aimed fire at the boss (hits land). Actor addresses of the records in these states are the same across them.
+

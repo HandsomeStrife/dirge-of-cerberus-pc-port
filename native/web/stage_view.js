@@ -26,7 +26,7 @@ export function createStageActors({ lib = null, rand = null, weaponFrame = null,
 export function createStageView({ rt, camera, output, canvas, lib = null, root = null, litPatch = null, light = null, weapon = null,
                                   warn = (m) => console.warn(m) }) {
   let view = null;
-  if (lib && root) view = import('./event_actors.js').then(m => (view = m.createEventActorView({ root, lib, rt, litPatch, light, weapon, warn })));
+  if (lib && root) view = import('./event_actors.js').then(m => { view = m.createEventActorView({ root, lib, rt, litPatch, light, weapon, warn }); return view; });
   else warn('stage view: no event actor library (data/event/actors): the events\' actors are not drawn');
   let lastFov = null, wasActive = false, wasBattle = true;
   const S = {
@@ -34,6 +34,7 @@ export function createStageView({ rt, camera, output, canvas, lib = null, root =
     // the event camera is the render camera while one is active out of battle mode (FUN_00379148; StageRuntime.frame
     // sets rt.view = null in battle mode)
     get active() { return !!rt.view; },
+    bodyOf(a) { const b = view && view.bodies && view.bodies.get(a); return b ? b.body : null; },   // page tests
     // one game frame after the stage tick: the MPs' draw, then FUN_003772c8
     step() {
       if (view && view.step) view.step(); else rt.actors.step();

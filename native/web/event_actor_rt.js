@@ -127,6 +127,7 @@ export function texAnimAdvance(tex, rand) {
   }
 }
 
+const lateFile = (n) => /^r[0-9a-f]+$/.test(n) && parseInt(n.slice(1), 16) >= 0xe;
 export const LOAD_CMD = 0x7e;                         // page only: no such command type in FUN_00377c68
 
 export class EventActors {
@@ -141,6 +142,7 @@ export class EventActors {
     this.rand = rand || (() => { this.warnOnce('rand', 'event actors: no FUN_0040b5c0 source given: the texture animations\' waits use 0.5'); return 0.5; });
     this.warn = warn;
     this.warned = new Set();
+    this.charMask = new Map();         // model -> loadchr's motion set mask (loadchr_static_l)
     this.slots = [];                   // live actors in slot order (FUN_00376308 takes the first free of 64)
     // the event light set (KerberosLight -> struct 0x4fc7d0: directions +0x630 + 0x10 i, colours +0x6a0 + 0x10 i,
     // ambient +0x6d0; FUN_0040c988 commits them to the fixed rig +0x580.. and sets DAT_004fcaf8 bit 36 from bit 37,
@@ -164,7 +166,9 @@ export class EventActors {
       kids: [null, null, null, null], markers: [0, 0, 0, 0], kidsDirty: false,
       // loadmotion_l, in load order, after the character's resident motion files (worker 0248: the model's own sets,
       // loaded with the character; FUN_005a7390 searches them all, the names are unique)
-      files: (this.residentFiles(model) || []).slice(),
+      files: (this.residentFiles(model) || []).filter(n => !lateFile(n)),
+      // worker 0261: FUN_005a7390's first list holds the sets the character was loaded with. m004 up (k >= 0xe) come from a named loadchr (beast_ev02's loadchr("p000", 7) -> k 0x11, bv011vn): gated on its mask (findClip)
+      late: (this.residentFiles(model) || []).filter(lateFile),
       mp: { clip: null, frame: 0, rate: 0.5, loop: false, count: 0, kids: [null, null, null, null], marker: [0, 0, 0, 0] },
       shown: true, frameDrawn: 0, clipDrawn: null,
       anim: null, animOn: false,                          // +0x10 the setanim name, +0xa8 bits 53 (start) / 54 (stop)
@@ -188,7 +192,10 @@ export class EventActors {
 
   // FUN_005a7390: the clip by name among the actor's motion files (load order)
   findClip(a, name) {
-    for (const n of a.files) { const nf = this.clipFrames(a.model, n, name); if (nf != null) return { n, nf }; }
+    // the character's sets, then the event files. loadchr's mask (bit k - 0xa) -> FUN_00409460 -> FUN_0030bf90; k < 0xe aren't gated: the stage's own loads of them aren't all in the scripts
+    const mask = this.charMask.get(a.model) ?? 0, res = a.files.filter(n => typeof n === 'string');
+    const order = [...res, ...a.late.filter(n => (mask >>> (parseInt(n.slice(1), 16) - 0xa)) & 1), ...a.files.filter(n => typeof n !== 'string')];
+    for (const n of order) { const nf = this.clipFrames(a.model, n, name); if (nf != null) return { n, nf }; }
     return null;
   }
 
@@ -273,7 +280,7 @@ export class EventActors {
   // rows 0-2 = FUN_00383d10 toward the line at s + 1; at the end the end clip (blend, bit 48 from the loop flag, flags 0x86 / 0x82)
   walk(c, R) {
     const a = this.get(c.id);
-    if (!a) return true;
+    if (!a) return false;                                              // FUN_0037a600 == 0 -> LAB_00378678: the slot stays, its handle stays busy
     if (c.clip) { a.code = c.clip; a.blend = c.blend; a.start = -1; c.clip = null; }
     a.flags = 0x86; a.loop = true;
     const el = R.clock < c.start ? 0 : (R.clock - c.start) >>> 0;
@@ -316,14 +323,14 @@ export class EventActors {
       // load_l(name, id, f) (FUN_0039e2f0 -> FUN_00379c68): command 9 (disc load) or, resident, FUN_00380370 at once.
       // The page's models are resident (preloaded): at once; the handle 0 is never busy (event_rt.js 'event loads')
       // the handle is busy until the page has the model (event_actors.js loadEventActors: T.ensure; none = resident, as the tests)
-      'fake/KerberosActor.load_l(Ljava/lang/String;II)I': (vm, [name, id]) => { T.create(str(name), id); T.log.push([R.frameNo, 'load ' + name + ' ' + id]); return T.loading(R, T.ensure && T.ensure(str(name))); },
+      'fake/KerberosActor.load_l(Ljava/lang/String;II)I': (vm, [name, id]) => { T.create(str(name), id); T.log.push([R.frameNo, 'load ' + name + ' ' + id]); return R.skip !== 0 && (R.skipMode & 2) ? 0 : T.loading(R, T.ensure && T.ensure(str(name))); },   // FUN_003837d0: under Skip with mode bit 1 the load is passed by
       // loadchr_static_l / loadchrs / unloadchr: character data loads (no actor); resident on the page
-      'fake/KerberosActor.loadchr_static_l(Ljava/lang/String;Ljava/lang/String;I)I': () => 0,
+      'fake/KerberosActor.loadchr_static_l(Ljava/lang/String;Ljava/lang/String;I)I': (vm, [name, , mask]) => { T.charMask.set(str(name), mask | 0); return 0; },
       'fake/KerberosActor.loadchrs(I)I': () => 0,
-      'fake/KerberosActor.unloadchr(Ljava/lang/String;)V': () => {},
+      'fake/KerberosActor.unloadchr(Ljava/lang/String;)V': (vm, [name]) => { T.charMask.delete(str(name)); },
       // loadmotion_l(id, n) (FUN_003a13a8 -> FUN_0037b368: command 0x12 -> FUN_00382220): event motion file
       // FUN_00250898(n, event) = 0x0c000400 + event x 0x1000 + n for the actor's MP; at once on the page
-      'fake/KerberosActor.loadmotion_l(II)I': (vm, [id, n]) => { const a = A(id); if (a && !a.files.includes(n)) a.files.push(n); T.log.push([R.frameNo, 'loadmotion ' + id + ' ' + n]); return T.loading(R, a && T.ensurePack && T.ensurePack(a.model, n)); },
+      'fake/KerberosActor.loadmotion_l(II)I': (vm, [id, n]) => { if (R.skip === 2 && (R.skipMode & 1)) return 0;   /* FUN_00382220: passed by */ const a = A(id); if (a && !a.files.includes(n)) a.files.push(n); T.log.push([R.frameNo, 'loadmotion ' + id + ' ' + n]); return T.loading(R, a && T.ensurePack && Promise.all([T.ensure(a.model), T.ensurePack(a.model, n)])); },   // the model and the pack
       // unload_residentmotion_l(name, n) (FUN_003a1410 -> FUN_0037b3b0: FUN_0030dac8 on the character's data, FUN_0030dc28): frees a character's resident motion file. Nothing on the page: the library stays (worker 0262)
       'fake/KerberosActor.unload_residentmotion_l(Ljava/lang/String;I)V': () => {},
       'fake/KerberosActor.unloadmotion_l(II)I': (vm, [id, n]) => { const a = A(id); if (a) a.files = a.files.filter(x => x !== n); return 0; },

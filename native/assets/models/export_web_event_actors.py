@@ -126,8 +126,8 @@ def mod_entries(buf):
     return out
 
 
-def fits(buf, P, end, bc):
-    """True when bc bones' tracks (P1, P2, Q per bone) end each segment within its 16-byte padding."""
+def fits(buf, P, end, bc, slack=16):
+    """True when bc bones' tracks (P1, P2, Q per bone) end each segment within its padding (16 bytes, or `slack`)."""
     nseg = A._u32(buf, P + 0x10)
     ends = [A._seg_ptr(buf, P, s) for s in range(1, nseg)] + [end]
     for s in range(nseg):
@@ -137,7 +137,7 @@ def fits(buf, P, end, bc):
                 p = AR.read_vec_keys(buf, p)[0]; p = AR.read_vec_keys(buf, p)[0]; p = AR.read_keys(buf, p)[0]
         except Exception:                    # ran off the file: another skeleton
             return False
-        if not (ends[s] - 16 < p <= ends[s]):
+        if not (ends[s] - slack < p <= ends[s]):
             return False
     return True
 
@@ -213,16 +213,17 @@ def main():
             packs['%d' % n] = lp
         # worker 0248: the character's own (resident) motion files (export_web_enemy CLIP_KS: FUN_00249cb8 k) that hold a
         # clip the script names (the opening's p000 plays h_st, Vincent's stand): pack 'rK' (K = k in hex), listed in
-        # `resident`; the page puts them before the event files in the actor's search (FUN_005a7390 takes the first file
-        # holding the name; the names are unique across them)
+        # `resident`; FUN_005a7390 searches the character's loaded sets, then the event files, and takes the first holding the name. The names aren't unique: p000's m007 (k 0x11)
+        # has its own bv002vn, bv000vn0, bv003vn, which differ from file 13's (worker 0261; event_actor_rt.js findClip gates k >= 0xe on the loadchr mask)
         resident = []
         for k in E.CLIP_KS:
             f = E.NOPATH + '%08x.bin' % E.file_id(m, k)
             if os.path.basename(f) not in listed or not os.path.exists(f):
                 continue
             buf = open(f, 'rb').read()
-            # worker 0261: the clips that fit (e027's m001 names r_stlaf0, which doesn't, and the whole file went: help_people01's r_st_a)
-            ents = [x for x in mod_entries(buf) if x[0] in strs and fits(buf, x[1], x[2], bc)]
+            # worker 0261: the clips that parse. A character's own file can't be another skeleton's, so the end-of-segment test is looser here: e027's m001 has clips ending 22, 24, 38 bytes short
+            # (r_stlaf0, r_sqhf0, r_gwk) with all 46 bones read. L: r_stlaf0 from this parse matches a soldier's GS dump (notes/enemy-placement.md: f15, RMS 1.52 u); not traced per bone
+            ents = [x for x in mod_entries(buf) if x[0] in strs and fits(buf, x[1], x[2], bc, 48)]
             if not ents:
                 continue
             key = 'r%x' % k

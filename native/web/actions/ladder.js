@@ -262,11 +262,10 @@ export function ladderAction({ airgrab = AIRGRAB } = {}) {
   // acts on the trigger chosen from last frame's pose (traced: l_ladder_jump_a ✕ f520 jumps,
   // l_ladder_jump_e ✕ f521 mounts). States 2..5 (FUN_0055abd8): choose from the pose; other
   // states: cleared while moving (C+0x1d8 > 0), else kept. The mount clears it (FUN_00576c88).
-  // GUESS: with two boxes hit, the first in data order wins (FUN_00544960's pick is not decoded;
-  // no z128 ladder boxes overlap).
-  // MISSING: only ladder boxes are chosen. In FUN_00333150 any chosen gimmick with +0xd4 set eats ✕
-  // (e.g. type 8, FUN_00576428), so beside a non-ladder gimmick the game may not jump where the page does
-  // (notes/fidelity-audit.md "Non-ladder gimmicks taking ✕").
+  // GUESS: with two ladder boxes hit, the first in data order wins (FUN_00544960's pick is only
+  // translated for the other triggers, enemy_ai gimmickChoose; no z128 ladder boxes overlap).
+  // Non-ladder triggers (shapes 0 / 3 / 8) are chosen beside them and take ✕ (doors; canEnter). MISSING: the
+  // ladder is asked first, not picked against them with FUN_00544960 (notes/fidelity-audit.md "Non-ladder gimmicks taking ✕").
   let gimmick = null, other = null, doors = null;   // other: a chosen non-ladder trigger (worker 0257; doors = play.js: enemy_ai gimmickChoose / gimmickUse)
   function choose(ctx) {
     const c = ctx.ctrl, st = c.P ? c.P.state : (c.onGround ? 2 : 8);

@@ -21,10 +21,14 @@ const e024Clips = JSON.parse(readFileSync(path.join(here, 'data/enemies/e024.jso
 // worker 0235: also w235_move (the same state, records 531-1189: the left stick held, but Vincent stays pinned at the
 // save's spot in this route state, so the boss keeps to states 2 / 3 / 5; the gun burst at record 985)
 // worker 0259: w259_boss_box4 / box4b / box4c (route r0b_box4: Vincent walked from r0b_fight into btbox4, no input; brain 0x9a75c0 on this path)
-for (const [name, nVolleys] of [['w231_fight2', 1], ['w235_move', 0], ['w259_boss_box4', null], ['w259_boss_box4b', null], ['w259_boss_box4c', null]]) {
+for (const [name, nVolleys] of [['w231_fight2', 1], ['w235_move', 0], ['w259_boss_box4', null], ['w259_boss_box4b', null], ['w259_boss_box4c', null], ['w259_boss_hit9', null], ['w259_boss_fire', null], ['w259_boss_fire2', null], ['w259_boss_fire7', null]]) {
 const file = path.join(T, name + '.jsonl');
 if (!existsSync(file)) { console.log(`SKIP: trace ${name} missing`); continue; }
-const recs = readFileSync(file, 'utf8').trim().split('\n').map(l => JSON.parse(l)).slice(1);
+let recs = readFileSync(file, 'utf8').trim().split('\n').map(l => JSON.parse(l)).slice(1);
+if (name === 'w259_boss_hit9') recs = recs.filter(r => r.frame < 192);
+if (name === 'w259_boss_fire2') recs = recs.filter(r => r.frame < 801);
+// KNOWN: state 7's end comes 5 frames before FUN_003460d8 at 0.6 a frame on atk_sp2's 190 (T f999, 310 frames from its request; atk_sp1 / atk_sp3 / lean_idl agree to the frame): FUN_005a9860 not read. Compared up to there.
+if (name === 'w259_boss_fire7') recs = recs.filter(r => r.frame < 999);        // state 9's end: FUN_0055cac8 clears the AI
 
 const hex = h => Buffer.from(h, 'hex');
 function brainOf(r) {
@@ -70,9 +74,9 @@ const io = {
   clockA: () => clock, clockB: () => clock, rand: () => 0.5, mshort: () => 17000, difficulty: () => 1,
   // nVolleys === null (Vincent knocked down for real): his clip stands for FUN_003419c0's class (c_fl / h_rev are busy, T: timer 0
   // re-stamped through them; his body runs first, so record f + 1's clip); the clip frame FUN_00346108 reads = 2 x head frame = the step sum since the request
-  player: () => P, busy: () => false, motionId: c => (nVolleys === null && c === P.C && /^(c_fl|h_rev)/.test(recs[frame + 1].motion) ? 0x37 : 0), motionDone: () => nVolleys === null && clipFrames * 0.6 >= e024Clips.atk_sp3.frames - 1,
+  player: () => P, busy: () => false, motionId: c => (nVolleys === null && c === P.C && /^(c_fl|h_rev)/.test(recs[frame + 1].motion) ? 0x37 : 0), motionDone: () => nVolleys === null && clipFrames * 0.5 * 1.1999999284744263 >= (e024Clips[curClip]?.frames ?? Infinity) - 1,
   motionPast: (c, fr) => nVolleys === null && clipFrames * 1.1999999284744263 >= fr,
-  motionReq() {}, setClip: (c, nm) => { clipFrames = 0; log.push(`clip ${nm}`); }, bodyMode() {}, bodyFlag() {}, moverRates() {},
+  motionReq() {}, setClip: (c, nm) => { clipFrames = 0; curClip = nm; log.push(`clip ${nm}`); }, bodyMode() {}, bodyFlag() {}, moverRates() {},
   flyTo: (a, p) => log.push(`fly ${p.map(Math.round)}`), turnTo() {}, placeAt() {}, soundBody() {}, soundAt() {},
   shoot(x) {
     // the volley's slot i is the first free slot the brain writes next: found from the call order (FUN_00aa2c40 i)
@@ -86,17 +90,17 @@ const io = {
   hudGauge() {},
 };
 let pend = [];
-let clipFrames = 0;
+let clipFrames = 0, curClip = null;
 let mism = 0, first = null;
 for (frame = 0; frame + 1 < recs.length; frame++) {
   const r = recs[frame];
   // record f is logged before frame f's logic (the state after f - 1); the AI clock frame f's update reads has
   // already advanced: record f + 1's (T: the gun rest W+0x46 = 240 ends at 3852 - 3612)
-  clock = recs[frame + 1].ai_now; P.pos = posOf(r); status.hp = r.e0_hp;
+  clock = recs[frame + 1].ai_now; P.pos = posOf(r); status.hp = name === 'w259_boss_hit9' ? recs[frame + 1].e0_hp : r.e0_hp;   // (TRACE_HIT runs in Vincent's update, before the brain)
   if (nVolleys === null) {                     // the body is the game's: position, FUN_0034ab40's arrival (+0x1c4 bit 4: move mode 0)
     C.pos = actor.pos = bossPos(r); clipFrames++;
     // bit 8 (turn done) has no traced field: the game's own leaving state 4 / 6 stands for it
-    C.f1c4 = (r.e0_move_mode === 0 ? 4 : 0) | (brainOf(recs[frame + 1]).st === ai.st && (ai.st === 4 || ai.st === 6) ? 0 : 8);
+    C.f1c4 = (r.e0_move_mode === 0 ? 4 : 0) | (brainOf(recs[frame + 1]).st === ai.st && (ai.st === 4 || ai.st === 6 || ai.st === 8 || ai.st === 7) ? 0 : 8);
   }
   pend = [];
   B.update(b, io);
@@ -111,6 +115,8 @@ for (frame = 0; frame + 1 < recs.length; frame++) {
 ok(mism === 0, `${name}: brain state / sub-state / count / moves / alternation / shots / timer 0 / shot slots match the game every frame (${recs.length - 1} frames, ${mism} off${first ? ': first ' + JSON.stringify(first) : ''})`);
 if (nVolleys) ok(log.filter(s => s.startsWith('shoot')).length === 4, `one volley of 4 missiles (game: slots 0, 1, 4, 5) (${log.filter(s => s.startsWith('shoot')).length})`);
 else if (name === 'w259_boss_box4b') ok(ai.st === brainOf(recs.at(-1)).st && log.includes('clip atk_sp1') && log.includes('fly 733,-100,1407'), `${name}: the dive (state 4, atk_sp1) flies to 60 u short of Vincent, y his (FUN_00aa1a48 sub 1: T stops at 732.5, -100, 1406.8)`);
+else if (name === 'w259_boss_hit9') ok(ai.st === 9 && recs.at(-1).frame === 191, `${name}: state 9 at HP 9500 for 151 frames (0xb3 ticks; T f41-191)`);
+else if (name === 'w259_boss_fire7') ok(log.includes('clip atk_sp2') && log.filter(s => s.startsWith('shoot')).length >= 8, `${name}: state 7: the volley, atk_sp2, up 200 u, the gun (T f651, f689, f850, f881; ${log.filter(s => s.startsWith('shoot')).length} shots)`);
 else if (name === 'w259_boss_box4c') ok(log.filter(s => s.startsWith('shoot')).length === 4, `${name}: state 6's volley of 4 homing missiles at clip frame 228 (game: slots 0, 1, 4, 5) (${log.filter(s => s.startsWith('shoot')).length})`);
 else if (nVolleys === 0) { const k = log.filter(s => s.startsWith('shoot 17') || s.startsWith('shoot 18')).length; ok(k === ai.W.f48, `${name}: one gun burst of W+0x48 = ${ai.W.f48} marker shots (${k})`); }
 }

@@ -105,20 +105,23 @@ def run(script_path, out_dir, state, scratch, timeout_s):
         struct.pack_into("<I", ee, a_, w_)
     # TRACE_HIT="frame:flags:dmg:dx,dz" (worker 0255): a real hit on Vincent in that frame, the game's own FUN_0055db50 order: FUN_0055c7f8(P, dmg) (HP, the
     # death's vt+0x334) then FUN_00565480(P, flags, dir, point, alive before). A stub in FUN_00334590 case 2's `jal FUN_00326068` (a0 = 1), so it runs once a frame.
+    # worker 0259: an optional fifth field, the target actor's address in hex ("frame:flags:dmg:dx,dz:941f20"): the same two calls on that actor. It skips FUN_0055db50's
+    # FUN_0055d390 (hit area) and its script event 0x12; that's the same order otherwise.
     hit = os.environ.get("TRACE_HIT")
     if hit:
         STUB, DIR, SITE, CASE2 = hit_base, hit_base + 0x200, 0x334694, 0x326068
-        P = bases["P"]
+        P = bases.get("P")                                        # (absolute-address fieldsets have none: give every hit a target)
         def li(r, v): return [0x3C000000 | r << 16 | (v >> 16), 0x34000000 | r << 21 | r << 16 | (v & 0xFFFF)]
         def jal(a): return [0x0C000000 | a >> 2, 0]
         code = [0x27BDFFC0, 0xFFBF0000, 0xFFA40008]               # addiu sp, -0x40; sd ra, 0(sp); sd a0, 8(sp)
         for n, one in enumerate(hit.split(";")):                  # several hits: "frame:flags:dmg:dx,dz;frame:..."
-            fr, fl, dm, d = one.split(":")
+            fr, fl, dm, d, *tgt = one.split(":")
+            A = int(tgt[0], 16) if tgt else P
             fr, fl, dm = int(fr), int(fl, 0), int(dm); dx, dz = (float(x) for x in d.split(","))
             D = DIR + n * 0x20
             struct.pack_into("<4f", ee, D, dx, 0.0, dz, 0.0)
             code += li(8, hook.CTRL + 4) + [0x8D080000] + li(9, fr)   # t0 = frame counter; t1 = fr
-            body = li(4, P) + li(5, dm) + jal(0x55C7F8) + li(4, P) + li(5, fl) + li(6, D) + li(7, D + 0x10) + li(8, 1) + jal(0x565480)
+            body = li(4, A) + li(5, dm) + jal(0x55C7F8) + li(4, A) + li(5, fl) + li(6, D) + li(7, D + 0x10) + li(8, 1) + jal(0x565480)
             code += [0x15090000 | len(body), 0] + body                # bne t0, t1, next; nop
         code += [0xDFBF0000, 0xDFA40008, 0x27BD0040, 0x08000000 | CASE2 >> 2, 0]   # ld ra; ld a0; addiu sp; j FUN_00326068; nop
         for i, w in enumerate(code):

@@ -654,8 +654,7 @@ export class PlayerController {
     if (B.state === 0) {
       // case 0: move = body+0x40 x step -> FUN_00357d48 (collision.js navMove), which first adds the
       // actor push-out (pushIn: FUN_0035a440)
-      let [mx, mz] = this.pushIn(v.x * STEP, v.y * STEP, v.z * STEP);
-      if (this.doorWall) [mx, mz] = this.doorWall([p.x, p.y, p.z], mx, mz);   // worker 0257: a shut door's box (play.js -> enemy_ai doorWall)
+      const [mx, mz] = this.pushIn(v.x * STEP, v.y * STEP, v.z * STEP);
       const r = col.navMove(B.poly, p.x, p.y, p.z, mx, mz, false);
       this.hitWall = r[4];
       B.poly = r[3];

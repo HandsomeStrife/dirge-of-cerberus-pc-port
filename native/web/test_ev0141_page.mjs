@@ -1,4 +1,4 @@
-// test_ev0141_page.mjs -- first_encounter, rv_toujou, wro_kaisetu on the real play.html (worker 0263; notes/story-cutscenes.md): the page aids ?warp=encounter|toujou|wro set
+// test_ev0141_page.mjs -- first_encounter, rv_toujou, wro_kaisetu on the real play.html (worker 0263; notes/story-cutscenes.md): the page aids ?warp=encounter|toujou|wro (test_warp_page leaves `cutscene` places out) set
 // the flags main tests; main plays the event; a player answers wro_kaisetu's choice box with the keys. EV=encounter,toujou,wro picks; STORY_SHOT=<dir>: screenshots at clock
 // STORY_SHOT_AT (ms from the event's start; comma list).  node native/web/test_ev0141_page.mjs  (needs playwright + data; network for the three.js CDN; sandbox off)
 import { createRequire } from 'node:module';
@@ -71,7 +71,7 @@ for (const name of (process.env.EV || 'encounter,toujou,wro').split(',')) {
       await pg.evaluate(() => { window.__ev.boxSeen = window.__ev.box; });
       await pg.keyboard.press('Space');
       await pg.waitForFunction(() => { const e = window.__play.stageWin.entries.find(x => x.id > 0 && x.kind === 27); return e && e.box.box.result === 0 && !(e.box.box.flags & 0x30) && e.box.box.rows[0].bytes[0] === 0x24; }, null, { timeout: 200000, polling: 100 });
-      ok(true, 'after Supplies the box comes back with it marked');
+      ok(true, 'after Supplies the box comes back with it marked (the Shop, stage-info kind 4, is left out with a warning: the game waits in it)');
       await pg.waitForTimeout(500);
       await pg.keyboard.press('Space');
     }

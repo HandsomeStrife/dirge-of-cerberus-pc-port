@@ -61,8 +61,8 @@ export function flyTo(C, point, warn = () => {}) {
   const d = [C.p120[0] - C.p110[0], C.p120[1] - C.p110[1], C.p120[2] - C.p110[2]];
   C.len = f(Math.hypot(d[0], d[1], d[2]));
   C.dir = C.len > 0 ? d.map(x => f(x / C.len)) : [0, 0, 0];
-  // L: FUN_0034bd10's return value for a distance under 0.001 is not read; taken as 0 (-> C+0x1cc = 0, FUN_0034d870(C, 0))
-  if (!(0.001 <= C.len)) { C.t = 0; arrive(C, 0); C.f1c0 = (C.f1c0 & ~0x800) >>> 0; return false; }
+  // FUN_0034bd10 case 1: C+0x1dc < 0.001 -> C+0x1d8 = 0, returns 0 -> FUN_0034db80: C+0x1cc = 0, FUN_0034d870(C, 0)
+  if (!(0.001 <= C.len)) { C.vel = 0; C.t = 0; arrive(C, 0); C.f1c0 = (C.f1c0 & ~0x800) >>> 0; return false; }
   if (C.f1c0 & 2) {
     C.prof = profile(C.len, C.f1e0, C.f1e4, C.f1e8);
     C.dur = C.prof[3];
@@ -99,12 +99,13 @@ export function step(C, dt) {
   if (!(C.t < C.dur) && !(C.dur < 0)) arrive(C, 1);
 }
 
-// FUN_0034d870(C, on) case 1: on -> snap to the target (when farther than 0.001), then mode 0 and C+0x1c4 =
-// (&~1) | 4 (arrived: the boss brain waits on bit 2). The body listener's event 6 (+0x540) is not modelled.
+// FUN_0034d870(C, on) case 1: on -> snap to the target (when farther than 0.001); on = 0 jumps to the shared end without the
+// snap (0x34d8a8's default label, iVar4 = 1). Either way mode 0 and C+0x1c4 = (&~1) | 4 (arrived: the boss brain waits on
+// bit 2). The other modes' cases are not this mover's. The body listener's event 6 (+0x540) is not modelled.
 export function arrive(C, on) {
-  if (C.mm !== 1 || !on) return 0;
+  if (C.mm !== 1) return 0;
   const p = C.pos, q = C.p120;
-  if (0.001 < Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2])) C.pos = q.slice();
+  if (on && 0.001 < Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2])) C.pos = q.slice();
   C.mm = 0;
   C.f1c4 = ((C.f1c4 & ~1) | 4) >>> 0;
   return 1;

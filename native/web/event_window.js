@@ -284,15 +284,22 @@ export class EventChoiceScreen extends PauseScreen {
     this.cursor = sel < 0 ? 0 : Math.min(sel, this.rows.length - 1);   // FUN_003d9ca0
     this.barPrev = this.cursor;                    // +0xbc
     this.init = sel === -1 ? 0 : sel;
+    // FUN_003b9110: FUN_003da800 (+0xa6, the scroll bar's width, 0 when the rows fit: FUN_003ca388) -> +0x90 |= 1. RAM s2420: +0x90 = 3, +0xa6 = 0 in wro_kaisetu's box
+    this.noPage = this.rows.length * ROW_H <= l.ih;
     if (Math.trunc((l.ih + ROW_H - 1) / ROW_H) < this.rows.length) warnOnce('scroll', 'event window: a choice list longer than the box (scrolling, FUN_003d9368) not translated');
   }
   // the box's input (FUN_003d8bc8 for the fresh presses, FUN_003b9000, FUN_003b9070). a: 'up' 'down' 'cross' 'circle'. Locked after a choice (FUN_003d4780)
   key(a, now) {
-    if (this.result !== 0 || (this.flags & 0x30)) return false;
+    if (this.flags & 2) return false;              // FUN_003de568's gate FUN_003d47b8: flag 2 only (the close and FUN_003d4780), so the 100 ms open takes keys
     const n = this.rows.length, was = this.cursor;
     if (a === 'up') this.cursor = was - 1 < 0 ? Math.max(n - 1, 0) : was - 1;        // FUN_003d9238 at the top: the last row
     else if (a === 'down') this.cursor = was + 1 >= n ? 0 : was + 1;                 // FUN_003d9228 at the end: the first row
-    else if (a === 'cross' || a === 'circle') {
+    else if (a === 'left' || a === 'right') {        // FUN_003d8bc8 +0x30 / +0x3c: a page, clamped to the first / last row (FUN_003d9228 / FUN_003d9238); +0x90 bit 0: nothing. The list's nav bytes are all 0xff
+      if (this.noPage) return true;
+      const page = Math.trunc((this.list.ih + ROW_H - 1) / ROW_H);   // +0x88, FUN_003d94d0
+      if (a === 'left') { if (was !== 0) this.cursor = Math.max(was - page, 0); }
+      else if (was !== n - 1) this.cursor = Math.min(was + page, n - 1);
+    } else if (a === 'cross' || a === 'circle') {
       // FUN_003b9000 / FUN_003b9070 -> FUN_003b7830(box, list, 3 / 4): result; +0x3c = 1 (FUN_003b66c0's param_4), so FUN_003d4f00 + vt+0x34 (FUN_003b7930(box, 100)); sound 7 / 8
       this.result = a === 'cross' ? 3 : 4;
       this.se = a === 'cross' ? SE.confirm : SE.cancel;
@@ -450,7 +457,7 @@ export function createEventWindows({ D = null, warn = (m) => console.warn(m), se
       W.log.push([R.frameNo, 'open ' + c.id + ' ' + c.key]);
       const e = W.entries.find(x => x.id === 0);
       if (e) {
-        e.id = c.id; e.box = rec; e.state = 0;
+        e.id = c.id; e.box = rec; e.state = 0; e.kind = c.kind;
         if (R.skip !== 0) W.hide(rec);                            // FUN_003b7118(box, 1)
       } else W.closeBox(rec);                                     // no free entry: FUN_003b6978(box, -1)
     },

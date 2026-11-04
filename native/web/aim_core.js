@@ -3,6 +3,7 @@
 // Research and every offset: notes/aim-research.md. Names: P = player, C = body, CAM =
 // camera, HUD = view object, RET = reticle sprite object, W = weapon stats.
 import { weaponSwitch } from './jump_core.js';
+import * as gameState from './game_state.js';
 //
 // Per game frame the game runs (and so does WeaponSystem.frame):
 //   1. camera update FUN_0032ace0: type transition, fade, recoil, reticle offset; the aim
@@ -596,6 +597,7 @@ export class WeaponSystem {
     const seD = switchSound(this.W.se_draw, this.W.class);       // FUN_005766c0 -> FUN_0033d348 (see switchSound)
     if (this.W.se_draw == null) warnSe();
     if (this.sound && seD) this.sound(seD);
+    gameState.set(8);                                            // FUN_00576548: FUN_00326018(8) (Event.isPlayerReadyGun; worker 0261)
     const P = this.P; P.drawn = true; P.st = 0xc; P.T = Math.max(P.T, 6); P.m29c = 3; P.facePt = this.far;
     if (player) player.P.flags2a8 = (player.P.flags2a8 ?? 0) | 1;   // FUN_00576548: FUN_00574808(P, 0, 1)
     if (!onGround) this.camJump(true, true);                  // FUN_00576548(P, 1): FUN_0032a0f8(CAM, 1, 1)
@@ -607,6 +609,7 @@ export class WeaponSystem {
   // 1. It has no drawn-gun test, nor do its callers: the ladder mount sets 0xe with the gun away too.
   // In the air (C+0x1c0 bit 0x200 clear) it also calls FUN_0032a0f8(CAM, 0, 0).
   holsterCore(onGround = true, player = null) {
+    gameState.clear(8);                                          // FUN_00576548: FUN_00326040(8)
     const P = this.P; P.drawn = false; P.st = 0xe; P.T = Math.max(P.T, 6); this.setView(1);
     if (player) player.P.flags2a8 = (player.P.flags2a8 ?? 0) & ~1;  // FUN_00574808(P, 0, 0)
     if (!onGround) this.camJump(false);

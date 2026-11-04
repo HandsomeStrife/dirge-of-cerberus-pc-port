@@ -106,9 +106,11 @@ export class StageRuntime extends EventRuntime {
     this.battle = !o.globalFlags;
     if (!this.battle) {
       // L: the game has no stage object until the stage init (DAT_0046e290 0, no HUD, no manager: T r1600 against r2600), so nothing of the
-      // world runs; the page's world exists from the start, so it waits as in event mode (enterEvent's bits, cleared by enterBattle)
+      // world runs; the page's world exists from the start, so it waits as in event mode (enterEvent's bits, cleared by enterBattle).
+      // Bit 11: no Vincent to steer either (FUN_00331f08's gate), and main calls no set_usercontrol(0) on this path; each save's next
+      // battle() comes after main's set_usercontrol(1), which clears it (ev0100 main pc 1356, 5246, 6670, 8235, 10759)
       const gs = o.gameState && o.gameState();
-      if (gs) { gs.set(6); gs.set(2); }
+      if (gs) { gs.set(6); gs.set(2); gs.set(11); }
       if (o.hudControl) o.hudControl(false);
     }
     this.running = true;              // +0x1558 bit 44: the event program runs (FUN_00374d08), set before main
@@ -520,6 +522,7 @@ export class StageRuntime extends EventRuntime {
         // the slot plays on the object's own model (MP): loadmotion_l / setmotion_l on this id pose it (heri_toujou's e_Heri, heri_dgsol's e_para_1..6; worker 0262)
         const a = R.actors.create(obj.model || name, id);
         if (!a) return;
+        if (R.actors.ensure && obj.model) R.actors.ensure(obj.model);   // worker 0261: on the page, the model on demand; the gameplay body stands for it until it's in (event_actors.js pose)
         a.M = obj.matrix().map(f32);
         a.lent = obj; obj.lend();
       },
@@ -549,7 +552,7 @@ export class StageRuntime extends EventRuntime {
         if (a.lent) a.lent.release();
         log('finalize ' + id);
       },
-      // isPlayerReadyGun (FUN_003a4420 -> FUN_00325bb0): game-state bit 8. __sv_lock / __sv_unlock (FUN_003a3150 / FUN_003a3190): the event mutex + a mode bit: the page's VM never yields there (event_vm.js). Worker 0261
+      // isPlayerReadyGun (FUN_003a4420 -> FUN_00325bb0): game-state bit 8 (FUN_00576548: aim_core.js draw / holsterCore). __sv_lock / __sv_unlock (FUN_003a3150 / FUN_003a3190): the event mutex + a mode bit: the page's VM never yields there (event_vm.js). Worker 0261
       'fake/KerberosEvent.isPlayerReadyGun()Z': () => { const g = gs(); return g && g.test(8) ? 1 : 0; },
       'fake/KerberosEvent.__sv_lock()V': () => {},
       'fake/KerberosEvent.__sv_unlock()V': () => {},

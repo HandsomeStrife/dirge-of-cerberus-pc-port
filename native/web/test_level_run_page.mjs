@@ -118,10 +118,13 @@ function browserRss(rootPid) {
 
 const port = await new Promise(r => { const s = net.createServer().listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => r(p)); }); });
 const srv = spawn('python3', ['-I', '-m', 'http.server', String(port), '--bind', '127.0.0.1', '--directory', WEB], { stdio: 'ignore' });
-// earlyoom kills under 10% (about 3 GB): this run is long, so start with 5 GB (the page tests' rule is 4.5)
+// earlyoom kills under 10% (about 3 GB): this run is long: start with 6 GB (the page tests' rule is 4.5)
 const availMB = () => +readFileSync('/proc/meminfo', 'utf8').match(/MemAvailable:\s+(\d+)/)[1] >> 10;
-await lockTake();
-while (availMB() < 5000) { log(`waiting for memory (${availMB()} MB available)`); lockDrop(); await new Promise(r => setTimeout(r, 60000)); await lockTake(); }
+// the page takes about 2.2 GB and earlyoom kills under 3: wait until LEVEL_MEM MB (default 7000) has held for two minutes (a dip restarts the wait)
+const MEMNEED = +(process.env.LEVEL_MEM || 7000);
+const memWait = async () => { let good = 0, n = 0; while (good < 12) { good = availMB() >= MEMNEED ? good + 1 : 0; if (n++ % 30 === 0) log(`waiting for memory (${availMB()} MB available, want ${MEMNEED} for 2 min)`); await new Promise(r => setTimeout(r, 10000)); } };
+await memWait(); await lockTake();
+while (availMB() < MEMNEED - 1000) { lockDrop(); await memWait(); await lockTake(); }
 let holdStart = Date.now();
 const browser = await chromium.launch({ args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--enable-precise-memory-info', '--autoplay-policy=no-user-gesture-required'] });
 const ctx = await browser.newContext({ viewport: { width: vw, height: vh }, deviceScaleFactor: vd || 1 });
@@ -131,7 +134,10 @@ const errs = [], warnSeen = new Map();
 pg.on('console', m => { const t = m.text();
   if (m.type() === 'error') { errs.push(t); log('console.error', t.slice(0, 300)); }
   if (m.type() === 'warning') { const k = t.slice(0, 80); warnSeen.set(k, (warnSeen.get(k) || 0) + 1); if (warnSeen.get(k) === 1) appendFileSync(LOGF, `${sec()}s warn ${t.slice(0, 200)}\n`); } });
-pg.on('pageerror', e => { errs.push(e.message); log('PAGEERROR', e.message, (e.stack || '').split('\n').slice(1, 4).join(' | ')); });
+const errSeen = new Map();
+pg.on('pageerror', e => { errs.push(e.message); const k = e.message + (e.stack || '').split('\n')[1]; const n = (errSeen.get(k) || 0) + 1; errSeen.set(k, n);
+  if (n === 1) log('PAGEERROR', e.message, (e.stack || '').split('\n').slice(1, 6).join(' | ')); if (n === 200) { log('PAGEERROR 200 times: stopping the run (the frame loop is throwing)'); pageDead = true; } });
+let pageDead = false;
 // a dead tab is usually earlyoom (journalctl -u earlyoom) on this box: name what the journal says, and exit 3 so a wrapper can run again
 let crashed = false;
 pg.on('crash', () => { crashed = true; let oom = ''; try { oom = execSync('journalctl -u earlyoom --since "-2 min" -q | grep -c "sending SIG"', { encoding: 'utf8' }).trim(); } catch { /* no journal */ } log(`PAGE CRASH (earlyoom kills in the last 2 min: ${oom || 0})`); lockDrop(); srv.kill(); browser.close().catch(() => {}).finally(() => process.exit(3)); });
@@ -237,6 +243,7 @@ async function wedgeCheck() { if (!wedge.p || Math.hypot(S.pos[0] - wedge.p[0], 
 // ---- system states the bot answers before anything else; returns true when it handled the frame
 const stats = { deaths: 0, stucks: 0, restarts: 0, events: [], kills: 0, shots: 0 }; let lastEvLog = 0, evSince = 0, wasEv = false;
 async function systems() {
+  if (pageDead) throw new Error('the page throws every frame');
   await sittingCheck();
   await wedgeCheck();
   if (servoRec != null && (S.intro || S.ev || S.evPaused || S.hp === 0 || S.goOn || S.goMenu || S.pause || S.siKind >= 0 || S.noCtl || S.restartPending)) await servo(null);
@@ -268,7 +275,8 @@ let lastHeal = 0;
 async function heal() { if (S.hp > 0 && S.hp < 350 && S.inv && S.inv.potion > 0 && Date.now() - lastHeal > 4000 && S.pstate !== 7) { lastHeal = Date.now(); log(`heal: E at HP ${S.hp}, potions ${S.inv.potion}`); await tap('KeyE'); } }
 
 // ---- fight: turn the view onto the nearest live enemy with a clear line and hold the gun on it
-const FOES = a => a.ai && a.hp > 0 && /^e/.test(a.type || '');   // n0xx = townspeople: a player doesn't shoot them
+let bigFoes = false;   // Dragonfly (e023, HP 30000 / 21600) and such: only on the goals that fight them
+const FOES = a => a.ai && a.hp > 0 && /^e/.test(a.type || '') && (bigFoes || a.hp < 5000);   // n0xx = townspeople: a player doesn't shoot them
 const notTown = new Set();     // records we were told not to shoot: filled by the goal (townspeople)
 let ignoreUntil = new Map();
 const lineClear = (a, b) => { try { return !col.segment || !col.segment({ x: a[0], y: a[1], z: a[2] }, { x: b[0], y: b[1], z: b[2] }); } catch { return true; } };
@@ -347,15 +355,20 @@ function nearItem() { let b = null; for (const it of S.items) { if (skipItems.ha
 const G = [];
 const goal = (name, opt) => G.push({ name, ...opt });
 const f0 = n => s => (s.flags[0] | 0) >= n;
-// flag 0: 2 rv_matiawase, 4 trigger 63 (dogs), 11 chunk 05, 13 trigger 14, 16 Dragonfly, 20 trigger 18, 24 e036, 36 chunk 0b (notes/route-states.md).
+// flag 0: 2 rv_matiawase, 4 trigger 160 (x -1101), 11 chunk 05, 13 trigger 14, 16 Dragonfly, 20 trigger 18, 24 e036, 36 chunk 0b (notes/route-states.md).
 // The spots are the walked route states' (r03_card, r05_next, r05_key3, r06_door, r08_box ...). In a run a goal that is walked counts as passed;
 // `done` only decides where a Restart re-enters (a record restores flags and items, so gates are shut again unless flag 0 is past them).
 const key = s => s.inv.key > 0;
 goal('stairs', { to: [-842, -28, -574], done: f0(2), until: f0(2) });                          // trigger 15, rv_matiawase; the record scene_save(1)
-goal('dogs', { to: [-1348, 0, -600], done: f0(4), until: f0(4), near: 4 });                    // trigger 63 (flag 0 = 4) wakes 59-61, 64, 65
+goal('dogs', { to: [-1360, 0, -600], done: f0(11), near: 6 });                                 // through trigger 160 (flag 0 = 4) and trigger 63 (x -1348; wakes 59-61, 64, 65)
 goal('square', { to: [-1507, 0, -573], done: f0(11), near: 8 });                               // Dan's market spot
 goal('south', { to: [-1642, 0, -936], done: s => f0(11)(s) || key(s), near: 12 });             // r03_mid: dog 65's side of the square
-goal('alcove', { to: [-1672, 0, -407], done: s => f0(11)(s) || key(s), hunt: 147, near: 10 }); // Cardkey 1: soldier 147's drop
+goal('gate front', { to: [-1732, 0, -356], done: s => f0(11)(s) || key(s), near: 6 });          // r03_mid2: trigger 149 (x -1737; script 192) activates door trigger 150 on the way to the alcove
+// Cardkey 1. Trigger 149 activates record 150 (a soldier far south, -1700, -945); door trigger 150 opens once manager cmd 0xab sees that soldier (on screen, clear ray from the camera, decoded, worker 0257),
+// so a player who turns back down the alley gets the door; soldier 147 comes out and his drop is the key (nearItem walks onto it)
+const has147 = s => s.actors.some(a => a.rec === 147);
+goal('look back', { to: [-1732, 0, -366], look: [-1700.7, -12, -945], lookRec: 150, done: s => f0(11)(s) || key(s), hunt: 147, until: s => has147(s) || key(s), near: 5 });
+goal('alcove', { to: [-1702, 0, -407], look: [-1680, -12, -407], done: s => f0(11)(s) || key(s), hunt: 147, until: key, near: 6 });
 goal('gate1', { to: [-1732, 0, -356], face: [-1739, -351], done: f0(11), use: true, near: 6 });   // script 202 ev 0x11
 goal('east', { to: [-728, 0, -37], done: f0(11), near: 12 });
 goal('west', { to: [-1420, 0, 684], done: s => f0(13)(s) || key(s), near: 12 });
@@ -410,8 +423,9 @@ try {
     const g = G[gi]; await read();
     if (g.done && g.done(S)) { gi++; continue; }
     log(`goal '${g.name}' from ${S.pos.map(Math.round)}, HP ${S.hp}, rounds ${S.loaded}/${S.inv && S.inv.ammo}, flag0 ${S.flags[0]}, key ${S.inv && S.inv.key}, slots ${S.slots.join('/')}`);
+    bigFoes = !!(g.fightOnly || g.boss);
     if (g.to && !planTo(g.to)) { log(`no route to ${g.to}`); throw new Error('no route for ' + g.name); }
-    const startT = Date.now(); let usedN = 0, itemT = 0, keyAt = 0, shootT = 0;
+    let huntLog = 0, recLog = 0; const startT = Date.now(); let usedN = 0, itemT = 0, keyAt = 0, shootT = 0;
     while (true) {
       await read();
       if (await systems()) { lastMove = { t: Date.now(), p: S.pos.slice(), tk: S.ticks }; if (S.restarts !== lastRestarts) break; continue; }
@@ -438,7 +452,10 @@ try {
         if (g.use && usedN === 0) keyAt = S.inv.key;
         if (g.use && usedN > 0 && S.inv.key < keyAt) { log(`'${g.name}': the key went (${keyAt} -> ${S.inv.key})`); break; }
         if (g.use && usedN < 6) { usedN++; const ft = g.face ? [g.face[0], 0, g.face[1]] : g.to; const q = moveKeys(S, ft[0] - S.pos[0], ft[2] - S.pos[2]); await hold(q.want); await wait(300); await release(); await tap('Space'); log(`✕ at '${g.name}' (${usedN}), key ${S.inv && S.inv.key}, flag0 ${S.flags[0]}`); await wait(1000); continue; }
-        if (g.hunt != null) { const a = S.actors.find(x => x.rec === g.hunt); if (a && a.hp > 0) { await wait(150); continue; } }
+        if (g.lookRec != null) { const q = await pg.evaluate(r => { const o = window.__play.enemyAI.objects.get(r + 22); return o ? { kind: o.kind, f28: o.flags28, pos: o.pos || o.p90 || null, hp: o.hp, body: !!o.body } : null; }, g.lookRec);
+          if (q && q.pos) { g.look = [q.pos[0], q.pos[1] - 12, q.pos[2]]; } if (Date.now() - (recLog || 0) > 20000) { recLog = Date.now(); const e = g.look ? aimErr(g.look) : null; log(`record ${g.lookRec}: ${JSON.stringify(q)}; view error ${e ? e.yaw.toFixed(3) + ', ' + e.pitch.toFixed(3) : '-'}; eye ${S.eye.map(Math.round)}`); await pg.screenshot({ path: path.join(OUT, `look_${g.lookRec}.png`) }).catch(() => {}); } }
+        if (g.look) { const e = aimErr(g.look); await look(signX * e.yaw / SENS * 0.5, signY * e.pitch / SENS * 0.5); }
+        if (g.hunt != null && !S.logged147) { const a = S.actors.find(x => x.rec === g.hunt); if (Date.now() - (huntLog || 0) > 20000) { huntLog = Date.now(); log(`waiting for ${g.hunt}: ${a ? `active, hp ${a.hp}, d ${a.d.toFixed(0)}, mode ${a.mode}` : 'not active'}; door ${JSON.stringify(await pg.evaluate(() => { const T = window.__play.enemyAI.triggers[150]; return { e0: T.e0, active: T.active }; }))}`); } }
         if (g.shoot != null) { if (!shootT) { shootT = Date.now(); await pg.evaluate(r => { window.__botServo.prop = r; }, g.shoot); }
           if (Date.now() - shootT > 60000) { log(`'${g.name}': box still up after 60 s`); break; }
           await read(); if (key(S)) break; await wait(150); continue; }

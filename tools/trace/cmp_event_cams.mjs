@@ -27,6 +27,7 @@ for (const file of tr.split(',')) for (const l of fs.readFileSync(file, 'utf8').
 }
 const [cls, m] = ev.split('.'), M = data.classes[cls].methods.find(x => x.name === m);
 const zf = new Array(64).fill(0), warns = [];
+for (const x of (args[args.indexOf('--flags') + 1] || '').split(',')) if (args.includes('--flags') && x) { const [k, v] = x.split('='); zf[+k] = +v; }   // --flags 30=1: the event's branches on stage flags
 const ans = args.includes('--answers') ? answers(args[args.indexOf('--answers') + 1].split(',')) : null;   // worker 0263: a choice box's keys
 const R = new StageRuntime(data, { autoSkip: false, warn: w => warns.push(w), flags: () => zf, sound: {}, ...(ans ? { windows: ans.windows } : {}) });
 R.vm.start(cls, m, M.desc, M.desc === '()V' ? [] : [101, 102, 103].map(id => ({ f: { id } })));   // help_orei02's actors

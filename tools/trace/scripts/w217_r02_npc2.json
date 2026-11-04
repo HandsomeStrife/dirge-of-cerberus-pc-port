@@ -1,0 +1,35 @@
+{
+"name": "r02_npc2",
+"frames": 88,
+"log_from": 86,
+"doc": "worker 0217 route replay from r02_npcfire.p2s (pokes: 960660=270f; HP set to 780 before the save). Recorded pad bytes of a PINE-steered run; see notes/route-states.md.",
+"events": [
+{
+"from": 3,
+"to": 43,
+"lx": -1.0,
+"ly": 0.91373,
+"rx": 0.00392,
+"ry": 0.00392
+},
+{
+"from": 43,
+"to": 47,
+"lx": -1.0,
+"ly": 0.91373,
+"rx": 0.00392,
+"ry": 0.00392,
+"buttons": [
+"cross"
+]
+},
+{
+"from": 47,
+"to": 88,
+"lx": -1.0,
+"ly": 0.91373,
+"rx": 0.00392,
+"ry": 0.00392
+}
+]
+}

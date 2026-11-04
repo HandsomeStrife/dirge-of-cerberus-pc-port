@@ -586,7 +586,7 @@ export function bodyTakeoff(a, h) {
 }
 // FUN_003579a8 (FUN_00326500 true: player.js gravityStep): rising v0 t + g t^2 / 2; past the apex the rise plus 0.8 g (DAT_0046f4a0)
 // from the apex; + 0.01, t += dt. The new height is body+0xd8 + body+0xdc.
-function gravityStep(B) {
+export function gravityStep(B) {
   const g = B.g ?? BODY_G, t = B.t;
   let dy;
   if (t < B.rise) dy = f(f(B.v0 * t) + f(f(f(g * t) * 0.5) * t));

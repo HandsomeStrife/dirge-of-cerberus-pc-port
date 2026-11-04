@@ -80,7 +80,7 @@ try {
   await pg.keyboard.press('Space');
   await until(n => window.__play.restart.count === n + 1 && !window.__play.pause.active, n0);
   // the replay's event, Skipped by the player if it plays again, then battle
-  const rs = await pg.waitForFunction(() => { const R = window.__play.stage.rt; return R.battle && R.gflags[1] === 20; }, null, { timeout: 500000, polling: 200 }).then(() => pg.evaluate(() => {
+  const rs = await pg.waitForFunction(() => { const R = window.__play.stage.rt; return R.battle && R.gflags[1] === 20; }, null, { timeout: +process.env.STORY_TO || 500000, polling: 200 }).catch(async (e) => { console.log('     Restart stuck:', JSON.stringify(await pg.evaluate(() => { const P = window.__play, R = P.stage.rt; return { w: R.vm.where(), g1: R.gflags[1], f0: P.enemyAI.eventFlags[0], battle: R.battle, skip: R.skip, fade: R.fade, pend: !!R.vm.pending, calls: R.vm.calls, log: R.log.slice(-12).map(x => x.join(' ')) }; }))); throw e; }).then(() => pg.evaluate(() => {
     const P = window.__play, R = P.stage.rt;
     return { eh: !!P.vin.eventHidden, vis: P.vin.body.visible, g1: R.gflags[1], s0: P.enemyAI.eventFlags[0], cam: !!R.view, calls: R.vm.calls, pos: [P.ctrl.pos.x, P.ctrl.pos.z] };
   }));
