@@ -541,3 +541,16 @@ Dan: "When reloading, Vincent isn't running; he seems to glide." The page played
 - **KNOWN / not decoded (two attempts):** the class hands back 2 frames before the game (the done event at record 139, the
   new class's clip at 141; w214's standing reloads show the same 2 frames). The state's FUN_0055b8e0 path through
   FUN_00343160's loop (C+0x564 bit 0x80 repeat) is where the delay lives; not translated.
+
+### Class 0x1c from outside, bits 0x4000 / 0x20000 (worker 0255, 2026-11-03) — D + T
+- FUN_00341780 runs the enter at once: FUN_00574f40 -> FUN_005612e8 inside FUN_003320c0 sets C+0x564 0x4000 | 0x20000, so FUN_00333150's ✕ of the same frame is refused
+  (FUN_00577230). Bit 0x4000 clears when FUN_00342f50 < DAT_0046efcc (60), in phases 1 / 2 on the ground; both at the leave FUN_00598070.
+- FUN_003320c0 under bit 0x4000 (bVar1 false): R1 / R3 with the gun away refused; R2 refused; circle with bit 0x20000: FUN_005766c0(P, 0, 0): no sound, FUN_0055b8e0(P, 2, 0, 1)
+  (param 4: no motion), so the class stays and FUN_005980f8 switches to the gun-away rows with C+0x568 |= 0x40000: FUN_00346860 keeps the old frame (FUN_00345590 ->
+  FUN_00345448). R3 gun out: only view != 2 -> message 0x7d1 + view 2. Bit clear: circle = FUN_005766c0(P, 0, 1): the sound, FUN_0055b8e0(P, 2, 0, 0) replaces the class.
+  FUN_005772c8 also refuses a reload while bit 0x20000 is set.
+- Jump / fall / hit / ladder: FUN_00341780 replaces the class (FUN_00345678 drops the table): the landing picks from the move class's table.
+- FUN_00345b58 packs the rows the MP has and FUN_00345e38's 24.0 goes to index 1, so a missing walk row gives the run row the threshold: filter-then-index is the game's order.
+- **T:** w246_reload_run / walk (C+0x564 bits every record: test_reload_motion), w255_reload_holster1 (circle at press + 10: h_frn_rd 6.0 -> h_rn_rd 6.6, class stays; all frames equal),
+  w255_reload_holster2 (circle at press + 28, after the window: class gone at 119).
+- ✕ closing a box: the box closes 1000 ms after its ✕ (message-research.md), so the ✕ that closes it is not read in the frame bit 11 clears.

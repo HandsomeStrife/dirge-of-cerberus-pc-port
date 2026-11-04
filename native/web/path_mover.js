@@ -289,6 +289,14 @@ export function stepFactor(w, step) {
 // FUN_0034de50, turn mode 5: with ground speed, the facing takes the move direction (blend factor
 // FUN_00323318(C+0x2cc): 1.0, or 0.25 with C+0x1c0 bit 15), then FUN_0034a5a8(C, 1) keeps it upright
 // (C+0x1c0 bit 8: face = (up x face) x up, up = (0, -1, 0))
+// FUN_0034de50's end (0x34e7xx): C+0x224 = FUN_00260fe8(new, old row 2, (0, -1, 0)) x 60 / *(DAT_0046e290 + 4) (the step, 1.2 in
+// the save RAM); |rate| <= 0.2 -> 0. FUN_00260fe8: the angle, negative when (old x new) . up < 0: a rising atan2(x, z) is negative.
+export function turnRate(old, now, step) {
+  const c = f(f(f(old[2] * now[0]) - f(old[0] * now[2])) * -1.0);             // (old x new) . (0, -1, 0)
+  const d = f(f(f(old[0] * now[0]) + f(old[1] * now[1])) + f(old[2] * now[2])), ang = f(Math.acos(d < -1 ? -1 : d > 1 ? 1 : d));
+  const r = f(f(f(c < 0 ? -ang : ang) * 60.0) / step);
+  return Math.abs(r) <= 0.2 ? 0 : r;
+}
 function turnMode5(a, step, warn) {
   const C = a.C;
   if (C.speed === 0) return;
@@ -307,6 +315,7 @@ function turnMode5(a, step, warn) {
   let v = unit3([0, 1, 2].map(c => f(face[c] + f(f(tg[c] - face[c]) * k))));
   if (C.f1c0 & 0x100) v = unit3([v[0], 0, v[2]]);
   else warn('path_mover: FUN_0034a5a8 without C+0x1c0 bit 8 not translated');
+  C.f224 = turnRate(face, v, step);                                           // C+0x224 (enemy_ai turnRate)
   a.face = v;
 }
 
@@ -319,7 +328,7 @@ function turnMode5(a, step, warn) {
 //   C.lo / C.hi  +0x314 / +0x318 distance window   C.want / C.wk  +0xc0 move direction / +0xcc per frame
 
 // FUN_0034b110(k, C): C+0xc0 = the facing row C+0x20, C+0xcc = k (C+0xd0 = the last non-zero C+0xc0)
-function wantFace(a, k) {
+export function wantFace(a, k) {
   const C = a.C;
   C.want = [a.face[0], a.face[1], a.face[2]];
   C.wk = f(k);
@@ -363,6 +372,7 @@ function setMode0xc(a) {
   if (!(C.f1c4 & 0x10)) C.t = 0;
   C.speed = 0;
   C.f1c0 = (C.f1c0 & ~0x800) >>> 0;
+  C.f1c0 = ((C.f1c0 & 0xffe3fbff) | 0x200) >>> 0;                             // FUN_0034bd10 entering mode 0xc: bits 0x400, 0x40000, 0x80000, 0x100000 clear
 }
 // FUN_00352a60 cases 3-0xb: turn mode 8 -> 0, C+0x45c bits 19-21 clear; then mover 0, C+0x1c4 bit 5
 // clear / bit 8 set, and in move mode 0xc FUN_0034b110(0, C) (else move mode 0)
@@ -535,9 +545,10 @@ function mode0xc(a, step, walk, warn) {
   const w = [f(C.want[0] * k), B.state === 2 ? 0 : f(C.want[1] * k), f(C.want[2] * k)];
   B.want = w;
   const old = a.pos.slice();
-  if (B.state !== 0) warn(`path_mover: soldier body state ${B.state} (FUN_003590c8) not translated`);
+  if (B.state !== 0 && B.state !== 2) warn(`path_mover: soldier body state ${B.state} (FUN_003590c8) not translated`);
   else if (C.f45c & 0x20) limitVel(B, C.f45c, w, B.dt);
   else warn('path_mover: body flags without bit 5 (FUN_003590c8 acceleration) not translated');
+  if (B.state === 2) gravityStep(B);                                        // FUN_003579a8
   const p = walk(a, [f(B.vel[0] * step), f(B.vel[1] * step), f(B.vel[2] * step)]);
   a.pos = p;
   const dv = [f(p[0] - old[0]), f(p[1] - old[1]), f(p[2] - old[2])];
@@ -564,6 +575,32 @@ function mode0xc(a, step, walk, warn) {
   if (B.state === 2) C.f1c0 = (C.f1c0 & ~0x200) >>> 0; else C.f1c0 = (C.f1c0 | 0x200) >>> 0;
 }
 
+// FUN_00357168(h, body): the take-off (attack op 8 through FUN_0034a8e0; player.js startFall, the same function). t 0, +0xd8 = y,
+// +0xdc = 0; h > 0: v0 = -sqrt(2 g h), rise = |v0 / g| (DAT_0046f4a4 = 0 in the save RAM); else 0. Then FUN_00357860(body, 2). g = body+0xd0.
+export function bodyTakeoff(a, h) {
+  const B = a.B, g = B.g ?? BODY_G;
+  B.t = 0; B.y0 = a.pos[1]; B.dy = 0; B.gy = a.pos[1];
+  if (h <= 0) { B.rise = 0; B.v0 = 0; }
+  else { B.v0 = f(-Math.sqrt(f(f(2 * g) * h))); B.rise = f(Math.abs(f(B.v0 / g))); }
+  B.state = 2;
+}
+// FUN_003579a8 (FUN_00326500 true: player.js gravityStep): rising v0 t + g t^2 / 2; past the apex the rise plus 0.8 g (DAT_0046f4a0)
+// from the apex; + 0.01, t += dt. The new height is body+0xd8 + body+0xdc.
+function gravityStep(B) {
+  const g = B.g ?? BODY_G, t = B.t;
+  let dy;
+  if (t < B.rise) dy = f(f(B.v0 * t) + f(f(f(g * t) * 0.5) * t));
+  else { const r = B.rise, u = f(t - r); dy = f(f(f(B.v0 * r) + f(f(f(g * r) * 0.5) * r)) + f(f(f(f(g * 0.8) * 0.5) * u) * u)); }
+  B.dy = f(dy + 0.01);
+  B.t = f(t + B.dt);
+}
+const BODY_G = 235.2;                                                         // C+0xb4 / body+0xd0, T: r03_dogawake dog 65 (cfg+0xcc 1.2 x 196)
+// FUN_0034db80(C, 0xc, 0) from op 8 / op 9, after FUN_0034b110(0, C)
+export function enterMode0xc(a) { if (a.C.mm !== 0xc) { wantFace(a, 0); setMode0xc(a); } }
+
+// FUN_0034c388's start (0x34c3e4..0x34c408; the move, after the mover tick, which reads them: path_mover stuckTest): C+0x1c0 bits 0x400, 0x40000, 0x80000, 0x100000 clear
+export function moveStart(C) { C.f1c0 = (C.f1c0 & 0xffe3fbff) >>> 0; }
+
 // FUN_0034ea18 for a soldier in move mode 0xc: the mover (FUN_0034f8c0 -> FUN_003504b0 for mover 3; at its end
 // FUN_00352a60), the move (mode 0xc), then the turn (FUN_0034de50: turn mode 5). tpos = the target's position
 // or null; walk = the walk-mesh step. sliding = a slide mover (9 / 0xb) runs: in the game its FUN_0034f178
@@ -586,6 +623,7 @@ export function approachFrame(a, tpos, step, walk, warn = () => {}, sliding = fa
       ev = 'nav end';
     }
   } else if (C.mover === 8) rootTick(a, step);                              // FUN_0034f8c0 case 8: FUN_00351418
+  moveStart(C);
   if (C.mm === 0xc && !sliding) mode0xc(a, step, walk, warn);
   if (C.s214 === 5) turnMode5(a, step, warn);
   return ev;

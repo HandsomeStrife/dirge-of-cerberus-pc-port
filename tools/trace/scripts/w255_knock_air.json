@@ -1,0 +1,1 @@
+{"name": "w255_knock_air", "frames": 420, "log_from": 90, "doc": "worker 0255: a live hit in a jump: TRACE_HIT=112:4:50:-1,0 (FUN_005618d0(P, dir, 0, 2)).", "events": [{"from": 10, "to": 130, "lx": 0.6, "ly": -1.0}, {"from": 100, "to": 104, "buttons": ["cross"]}]}

@@ -389,3 +389,35 @@ roomProbe), so #72 came out 0x200 on the page vs 0x80 in the save whenever the p
 rule error: the test now rebuilds the volumes from the save's camera and slots 0 / 1 / 2 first (FUN_00269868 then
 FUN_002ea6a0, as test_effects), compares 0x200 exactly (the old "listed, not failed" exemption is gone) and asserts the
 volumes' eye = the save's eye (mutant without the rebuild: killed, eye 4.9 u off).
+
+## Grades per chunk (worker 0260, 2026-11-04)
+
+Method: for each walked state of notes/route-states.md, `tools/gsdump/src/room_grade_fixture.py` -> `room_vertex_match.py DUMP FIXTURE OUT.json` -> `node native/web/test_room_chunks.mjs` (grades through `room_chunk_grade.py`).
+Outputs in `tools/trace/out/w260/fit/` (gitignored): `NAME_cmp.png` (game room | page | diff), `montage.png`, `NAME.txt` (vertex report).
+
+**Traps that gave wrong grades, in order:**
+- The state's camera is not the dump's: on a turning camera they differ by up to 7 degrees / 10 u (r05, r07). `room_vertex_match.py` fits it from the dump: UV + screen matches, then Gauss-Newton on pixels, median 0.025 px. Kabsch alone is not enough: the dump's w has a small scale error and far vertices dominate.
+- **`gsrender2.py` draws no fog and samples nearest.** A plain render looks clearer and sharper than the game; look at the PCSX2 PNG before believing it. `G.GS_FULL = True` + vertices from `room_vertex_match.Probe` add fog, TEX1 bilinear and the integer colour math. Off by default, so older fixtures keep their numbers.
+- SSIM cannot see the fog-slot table or the integer math (both mutants survived the chunk grades). `test_room_chunks.mjs` checks those on exact quads.
+- `test_room_grade`'s near plane (far x 0.0005, about 12 u) clips close surfaces; `play.js` uses 1.
+
+**Decoded:**
+- Each chain has its own env slot (header +0x96; FUN_00265560): fog ramp + floor (DAT_004e63b0 + slot x 0x120), FOGCOL (+0x110). The table is chunk 00's only (FUN_00269d90 -> FUN_0026afe8, slot-table entry 0), which settles the old "which chunk's env" question; RAM agrees at r04, r05, r06, r0b. near = far (slots 2, 5, 6, 27) has a = +max, so F = 255 (no fog). Dump, matched vertices: |F - ramp| mean 0.2-0.8, FOGCOL never differs.
+- TEX1 per texture (FUN_002659b8): MXL = texture record +0xc, MMIN 4, K = DAT_004fcae0 = -96 (raw 0xfa0, -6.0), L 0. In z128 only 0680ff85 (MXL 1) and 0680ff32 (MXL 2) have levels; every other room texture has MXL 0, MMIN 1. Mip data: the image descriptor's first words are level offsets from (descriptor - 0x90), each with its own 0x40 descriptor; wide levels are stored like the base, narrow ones linear T4. Byte-equal to the uploads at MIPTBP1 / 2 in r05. `room.js` samples them by the GS LOD. **An earlier version of this note and the page said "no mips anywhere": wrong, I had only read two dumps' histograms (review, worker 0260).** `?mips=1` = generated trilinear on all textures, not the game's mode. Grade with it: all 9 chunks fail.
+- GS integer math in room.js: (Ct x Cv) >> 7, (F x C + (255 - F) x FOGCOL) >> 8.
+
+**Result (SSIM / edge, room + what sky is kept; page has no actors, HUD or effects):**
+r02 0.996 / 0.994, r03 0.986 / 0.966, r04 0.992 / 0.986, r05 0.972 / 0.976, r06 0.946 / 0.957, r07 0.998 / 0.996, r08 0.997 / 0.992, r09 0.998 / 0.994, r0b 0.998 / 0.992. Mean colour within 2 levels per channel.
+
+**Ct / Cv rounding (review item, undecided):** the GS rule uses integer Ct and Cv, so flooring both before the multiply is arguable. Compared to the PCSX2 PNGs on flat room pixels, mean |page - PNG| per chunk: as is 0.24, 0.58, 0.54, 0.09, 0.16; floored 0.07, 0.89, 0.19, 0.25, 0.46 (r04, r07, r09, r0b, r08). Floored is closer on 2, as-is on 3, under half a level either way: the comparison does not decide. Left as is.
+
+**Largest defect per chunk (still open unless fixed above):**
+- r02: none above 40 levels (8 px). r07, r09: 0 px. r08, r0b, r03: under 60 px, edges.
+- r03, r05: the sky tile scores (r03 (224,32), r05 (112,64)): the game frame's sky is not fully kept by the room-only filter, so these chunks' sky is **not really graded**.
+- r04: node 31 of chunk 04 (472 px ff28, the wall by the lantern): the dump has specks of light there, candidate an effect left in the room-only frame; not traced.
+- r06: **the sky.** Game shows wisps, page flat, about 70 levels (channel sum) per tile at (128,144). Not decoded after two tries (the opaque captured `room_sky` mesh in the dev data is not the cause: removing it changes nothing). Also a late additive layer, TBP 14272 (34 tris, 256 x 512), adds the bright blue blocks: not a room chain; not identified. A surface on the crate at r06 (blue, in PCSX2's PNG too) is not in the room draws: candidate a prop; not traced.
+- Overlapping copies with other env slots: **not a defect** (my earlier note blamed the export's dedupe; wrong). The export drops no such copy; the |dF| 21 was the matcher pairing with chunk 00's group 69, hidden at r09 / r0b. The matcher now leaves out the state's hidden groups: r09 max 1. A few outliers remain at r0b / r06, not traced.
+- Dev data keeps `room_sky.mesh` (a hero-dump capture); a build from tools/byo/build_web.sh has none. Harmless in these views.
+
+## Dan's "texture deloading" report 7bd8 (re-checked, worker 0260)
+The t_0680ff6e surface 2.45 u from the eye is chunk 03's camera wall (area-stream.md, worker 0247): the eye had gone through it. Fixed by the rays testing loaded slots; test_market_cam_page passes. Not a texture or binding fault: the matcher finds no binding fault in chunk 03.

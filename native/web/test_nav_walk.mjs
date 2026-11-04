@@ -97,9 +97,11 @@ const flatWalk = (a, mv) => [f(a.pos[0] + mv[0]), a.pos[1], f(a.pos[2] + mv[2])]
   PM.approachFrame(d, null, 1.2, flatWalk, quiet, false, nav2);
   ok(d.C.mover === 0xd, 'first link flag 2 with no detour (FUN_0033f6a0): not blocked');
   // stuck (FUN_003528d8): bit 18 and no progress for 61 frames -> link flags |= 2, mover ends
+  // the bit is cleared by each move (FUN_0034c388's start) and set again by the walk into the wall; the mover tick, before the move, sees last frame's
   d.C.f1c0 |= 0x40000;
   let k = 0, r = null;
-  for (; k < 80 && r !== 'nav end'; k++) r = PM.approachFrame(d, null, 1.2, a2 => a2.pos.slice(), quiet, false, nav2);
+  const wallWalk = a2 => { a2.C.f1c0 |= 0x40000; return a2.pos.slice(); };
+  for (; k < 80 && r !== 'nav end'; k++) r = PM.approachFrame(d, null, 1.2, wallWalk, quiet, false, nav2);
   ok(r === 'nav end' && k === 61, `stuck with C+0x1c0 bit 18 for 61 frames within 1.5 u: the mover ends (frame ${k})`);
 }
 

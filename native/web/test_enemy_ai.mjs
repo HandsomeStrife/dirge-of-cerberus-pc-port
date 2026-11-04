@@ -689,11 +689,11 @@ else {
   // entry 3: hit commands at keyframes 13 and 52, length 95. FUN_0059eb18 adds the step before it reads the
   // timer and its first update runs on the attack frame (the brain runs first in FUN_00323128), so
   // keyframe k runs k - 1 frames after the attack frame and the motion is done at +94. Mode 1's start set
-  // the gun bit (state 3's enter), so the return state (0x539ea0) is 3.
+  // the gun bit (state 3's enter); the entry's op 6 ([6, 0, 0, 0]: FUN_00565d78(a, 0)) clears it, so the return state (0x539ea0) is 2.
   // state 9's return writes AI +0x20 (the scheduler interval) = 6
   ok(lo.a.ai.interval === 6, `mode 1 state 9 -> 8: AI +0x20 interval ${lo.a.ai.interval} (6)`);
-  ok(lo.b9 && lo.end && lo.end.f - lo.atk.f === 94 && lo.end.st === 3 && lo.hits.join() === '12,51',
-     `e030 attack 3: brain state 9 while attacking (${lo.b9}), hit windows at +${lo.hits.join(', +')} (+12, +51), ends +${lo.end ? lo.end.f - lo.atk.f : '?'} (+94) -> actor state ${lo.end?.st} (3; GUESS stand-in for the leave)`);
+  ok(lo.b9 && lo.end && lo.end.f - lo.atk.f === 94 && lo.end.st === 2 && lo.hits.join() === '12,51',
+     `e030 attack 3: brain state 9 while attacking (${lo.b9}), hit windows at +${lo.hits.join(', +')} (+12, +51), ends +${lo.end ? lo.end.f - lo.atk.f : '?'} (+94) -> actor state ${lo.end?.st} (2: entry 3's op 6 clears the gun bit; GUESS stand-in for the leave)`);
 }
 
 // Attack pick geometry (FUN_00347bd8 / FUN_00347af0) on e027's entry (zone set 7: r_atk_0, 1-30, yaw +-10)
@@ -723,10 +723,10 @@ else {
   // (skipped), 3 (30-65) passes alone -> 3 for any draw; 1 (70-120, pitch -4..4) needs 70.
   ok(pickAt(7, 52, 0, 0.0) === 3 && pickAt(7, 52, 0, 0.99) === 3 && pickAt(7, 80, 0, 0.0) === 1 && pickAt(7, 80, 0, 0.99) === 1,
      `attack pick e030: 52 u -> ${pickAt(7, 52, 0, 0.0)} / ${pickAt(7, 52, 0, 0.99)} (3 / 3: 0 flag 1, 6 flag 8 skipped), 80 u -> ${pickAt(7, 80, 0, 0.0)} / ${pickAt(7, 80, 0, 0.99)} (1 / 1)`);
-  // entry 1's pitch window [-4, 4) (x 16/pi): Vincent 47.6 above at 50 u (aim point 60 up: 50 deg, dist 78)
-  // -> pitch 4: out (GUESS sign: up = positive, FUN_00260f54 not decoded); 10 above (22 deg) -> 1: in
-  ok(pickAt(7, 50, 0, 0.0, 47.6) === -1 && pickAt(7, 70, 0, 0.0, 10) === 1,
-     `attack pick e030 pitch: 50 deg up -> ${pickAt(7, 50, 0, 0.0, 47.6)} (-1), 18 deg up at 70 u -> ${pickAt(7, 70, 0, 0.0, 10)} (1)`);
+  // entry 1's pitch window [-4, 4) (x 16/pi, FUN_00260f54: negative = above): aim point 60 up at 50 u (50 deg, dist 78) -> -4: in;
+  // 60 down -> +4: out (the window's open end); aim point 87 up (60 deg, dist 100) -> -5: out; 22 up at 70 u -> in
+  ok(pickAt(7, 50, 0, 0.0, 47.6) === 1 && pickAt(7, 50, 0, 0.0, -72.4) === -1 && pickAt(7, 50, 0, 0.0, 74.2) === -1 && pickAt(7, 70, 0, 0.0, 10) === 1,
+     `attack pick e030 pitch: 50 deg up -> ${pickAt(7, 50, 0, 0.0, 47.6)} (1), 50 deg down -> ${pickAt(7, 50, 0, 0.0, -72.4)} (-1), 60 deg up -> ${pickAt(7, 50, 0, 0.0, 74.2)} (-1), 18 deg up at 70 u -> ${pickAt(7, 70, 0, 0.0, 10)} (1)`);
 }
 
 // Brain mode 5 (FUN_003639d0): a soldier switched to mode 5 (most scripts do it when he's hit; here by
@@ -777,8 +777,8 @@ else {
   const T = data.attacks[rec.zones];
   ok(atk && atk.f <= 10 && atk.st === 0x80 && atk.clip === T.names['0'] && atk.comb === 0 && hitw === T.entries[0].kf.find(k => k.cmds.some(c => c[0] === 2)).frame - 1,
      `mode 5 at 15 u (d34 < 22): attack at f${atk?.f} (the second brain run: state 6 -> 10, then 10 picks), actor state 0x${atk?.st?.toString(16)} (0x80), clip ${atk?.clip} (${T.names['0']}), combat layer ${atk?.comb} (0), hit window +${hitw}`);
-  ok(endf && endf.f === T.entries[0].dur - 1 && endf.st === 3,
-     `mode 5 attack ends +${endf?.f} (entry length ${T.entries[0].dur}), actor state ${endf?.st} (3: gun bit set by state 3's enter)`);
+  ok(endf && endf.f === T.entries[0].dur - 1 && endf.st === 2,
+     `mode 5 attack ends +${endf?.f} (entry length ${T.entries[0].dur}), actor state ${endf?.st} (2: op 6 clears the gun bit; T: k_lunge166 r_atk_0 -> r_gst f1511)`);
   // no boneWorld here: the hit volume IS made (follow bit +0xc1 bit 3: no centre needed at the make), but each
   // update finds no marker pose (warned), so it tests nothing and runs out its life: life L at step 1.0 -> < 0
   // on update L + 1 (test_melee.mjs covers the hit)

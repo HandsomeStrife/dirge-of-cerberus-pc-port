@@ -10,9 +10,8 @@
 import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
-// autoskip=1: roji02_01 is skipped at once (the page cannot play it yet). The stand-in's default (Skip at the event's
-// first wait, a GUESS) lands Skip mid camera-0 move, which then overwrites main's rescue Camera.set (worker 0250);
-// the battle() camera checks compare main's own camera, which follows the event either way.
+// The default stand-in runs here, as for a player: Skip at main's wait before roji02_01, the same point as ?autoskip=1 (worker
+// 0257; the old stand-in pressed it inside the event, mid camera-0 move, which overwrote main's rescue Camera.set).
 import { spawn, execSync } from 'node:child_process';
 import net from 'node:net';
 import path from 'node:path';
@@ -43,7 +42,7 @@ try {
   for (let i = 0; ; i++) {
     // NPC_SHOT: the game's camera of w223_npcview f100 (CAM+0x90 eye, +0x80 forward -> yaw 96.92, pitch 8.13) as ?cam=
     const cam = process.env.NPC_SHOT ? '&cam=' + (process.env.NPC_CAM || '-1162.73,-11.40,-1250.42,96.92,8.13') : '';
-    try { await pg.goto(`http://127.0.0.1:${port}/${page}?intro=0&sound=0&autoskip=1${cam}`, { waitUntil: 'load' }); break; }
+    try { await pg.goto(`http://127.0.0.1:${port}/${page}?intro=0&sound=0${cam}`, { waitUntil: 'load' }); break; }
     catch (e) { if (i > 20) throw e; await new Promise(r => setTimeout(r, 250)); }
   }
   await pg.waitForFunction(() => window.__play && window.__play.stats.ticks > 30 && window.__play.enemyAI && window.__play.enemies, null, { timeout: 120000 });
@@ -115,23 +114,30 @@ try {
   // -1277.3) facing (0.98894, 0, -0.14831), the camera's forward (0.75641, 0.64547, -0.10588) = main's event camera, eye
   // (-1136.096, -31.009, -1275.074). The townspeople are off by the rescue (see the last check), so nothing of theirs is lent.
   if (!process.env.NPC_SHOT) {
-    const beat = async (pokes, want) => pg.evaluate(async ([pokes, want]) => {
+    const beat = async (pokes, want, hold7 = false) => pg.evaluate(async ([pokes, want, hold7]) => {
       const P = window.__play, rt = P.stage && P.stage.rt;
       if (!rt) return { err: 'no stage controller' };
       // battle()'s camera (worker 0244: follow.battleReset, then battleHandBack and the message 0x7d5)
       const cams = [], f = P.follow, reset = f.battleReset;
       f.battleReset = function (...a) { const r = reset.apply(this, a); cams.push({ eye: this.eye.slice(), fwd: this.M[2].slice(), dist: this.dist }); return r; };
       for (const [k, v] of pokes) P.enemyAI.eventFlags[k] = v;
+      // worker 0257: play.js stageCameraReset's noUser (FUN_0032ace0 l.437-441). main gives control back before each of its battle()s
+      // (bit 11 is clear there), so a test aid holds game-state bit 7 (FUN_00324258(10)) while the mouse moves: the counts fed before
+      // stage.tick must turn nothing in battle()'s updates
+      const gs = P.gameState; let under = 0, moving = true;
+      if (hold7 && gs) gs.set(7);
+      const wig = () => { if (!moving) return; if (hold7) { f.addMouse(40, 25); under++; } requestAnimationFrame(wig); };
+      requestAnimationFrame(wig);
       const t0 = Date.now();
       while (!rt.log.some(([, m]) => m.startsWith('handback p_Vin ' + want)) && Date.now() - t0 < 30000) await new Promise(r => setTimeout(r, 50));
       const t1 = P.stats.ticks; while (P.stats.ticks < t1 + 3) await new Promise(r => setTimeout(r, 50));
-      f.battleReset = reset;
+      f.battleReset = reset; moving = false; if (hold7 && gs) gs.clear(7);
       const slots = P.light ? P.light.stream.slots.filter(x => x.loaded).map(x => x.chunk) : null;
       const E = P.enemies.actors, vis = k => { const a = E.find(x => x.rec === k); return a ? a.body.visible : null; };
       const recs = [113, 114].map(k => { const o = P.enemyAI.objects.get(k + 22); return o ? o.kind + ' ' + (o.flags28 & 1) : null; });
-      return { pos: [P.ctrl.pos.x, P.ctrl.pos.y, P.ctrl.pos.z], face: [P.ctrl.C.face.x, P.ctrl.C.face.z], cams, slots, dist: f.dist, fwd: f.M[2].slice(), vis: [vis(113), vis(114)], vin: P.vin.body.visible, recs,
+      return { under, ramp: P.aim ? (P.aim.core || P.aim).cam ? (P.aim.core || P.aim).cam.ramp : null : null, pos: [P.ctrl.pos.x, P.ctrl.pos.y, P.ctrl.pos.z], face: [P.ctrl.C.face.x, P.ctrl.C.face.z], cams, slots, dist: f.dist, fwd: f.M[2].slice(), vis: [vis(113), vis(114)], vin: P.vin.body.visible, recs,
                log: rt.log.filter(([, m]) => /getbattleactor|battlename|handback|freed|^battle /.test(m)).map(x => x.join(' ')).slice(-8) };
-    }, [pokes, want]);
+    }, [pokes, want, hold7]);
     const near = (a, b, e) => a.every((x, i) => Math.abs(x - b[i]) <= e);
     // both flags at once, as the trace's poke (a06338 = flags 0 = 2, 1 = 5 from s826): flag 1 is 5 before rv_matiawase's
     // battle(1500), so its stage-load pass switches 113 / 114 off (worker 0250; poking flag 1 after the first hand-back raced
@@ -139,7 +145,7 @@ try {
     const b1 = await beat([[0, 2], [1, 5]], '-889.20');
     ok(b1 && !b1.err && near(b1.pos, [-889.2, -0.064, -599], 0.02) && near(b1.face, [-1, 0], 1e-5),
        `rv_matiawase: main's p000 slot named p_Vin hands Vincent its place (T f1850 (-889.2, -0.064, -599) facing -x): ${b1 && b1.pos ? b1.pos.map(v => v.toFixed(3)) + ' face ' + b1.face.map(v => v.toFixed(4)) : JSON.stringify(b1)}`);
-    const b2 = await beat([], '-1120.20');
+    const b2 = await beat([], '-1120.20', true);
     ok(b2 && !b2.err && near(b2.pos, [-1120.2, -0.0623, -1277.3], 0.02) && near(b2.face, [0.98894, -0.14831], 1e-4),
        `the rescue (getbattleactor p_Vin, setpos, setdir, setbattlename): Vincent at T record 2126 (-1120.2, -0.0623, -1277.3) facing (0.98894, -0.14831): ${b2 && b2.pos ? b2.pos.map(v => v.toFixed(4)) + ' face ' + b2.face.map(v => v.toFixed(5)) : JSON.stringify(b2)}`);
     // the forward after battle()'s frame (its in-place update blends from the old view by the page's ramp: see below)
@@ -151,6 +157,8 @@ try {
     // the ramp at 0.9495 (re-entered ~110 frames before, inside the unskipped roji02_01); the page auto-skips that event,
     // so its ramp at battle() differs and its distance is the collision one (21.65). test_battle_camera checks the frame
     // from the game's own state.
+    ok(b2 && b2.under > 0, `the mouse moved through the beat with bit 7 held (${b2 && b2.under} frames): the forward above held (play.js noUser)`);
+    ok(b2 && b2.ramp !== null && b2.ramp < 0.5, `battle()'s message 0x7d5 re-entered the type: ramp ${b2 && b2.ramp} a few frames on (T: 0 after the message; 1 without it)`);
     ok(b2 && b2.slots && b2.slots.includes(3) && b2.dist > 21.2 && b2.dist < 21.7,
        `battle()'s camera distance 3 frames on: ${b2 && b2.dist ? b2.dist.toFixed(4) : '-'} (T 21.29 -> 21.66, was 36.1); slots ${b2 && b2.slots} (T 0 / 3 / 2)`);
     // worker 0250: rv_matiawase sets stage flag 1 = 5 and its battle(1500) runs the stage-load pass (FUN_00324e70 ->

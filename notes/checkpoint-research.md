@@ -280,3 +280,46 @@ gflags / wake 2 / 2 via WEB_ROOT).
 **Open.** Which soldiers the game has active after the reload (not compared; the page: none until main's beats); the inventory /
 taken bits from the record (decoded, no pickup on the route); +0x3a / +0x3c / +0x44 and the gil / section-stat parts; later
 beats' records (n 2-5) not traced; the reload's frames before battle() (load / fade) run at the page's speed.
+
+## The Restart invariant (worker 0254, 2026-11-04)
+
+**What a Restart leaves depends on the record alone, not on which Restart it was.** The pause's and the game over's differ only inside the
+stage loop FUN_004012c0: result 6 by default runs FUN_002574a0 and FUN_0031dbc8 (-> FUN_0031d9c0: 54 stats, +0, +4, +8 zeroed) for the game
+over; case 0xf runs FUN_00241990(0xe, 1) for the pause. Both then take FUN_00401b90 -> FUN_00400508 -> FUN_003ffbb8 (teardown: FUN_003e66d0,
+FUN_003ad5b0, FUN_003e9950 stream SE, FUN_003ea5f0 voices) and FUN_00247508 0x15 case 6 (FUN_003ea1d0(-1), FUN_003e62d0(-1), mode bit 0xd).
+Whatever FUN_0031dbc8 cleared is written over or cleared again below, so the two converge. The page has one `restart()` for both.
+
+| | DAT_0046b0b8 == 0: a scene_save's record | DAT_0046b0b8 == 1: the stage start |
+|---|---|---|
+| path | mode bit 3 -> FUN_003ff0c0 -> FUN_00400778 -> FUN_0030f688(stage, 2, rec + 0x100) -> FUN_0030fff0 case 2 -> FUN_00311fa0(stream, 0) | FUN_0030f3d8 (bit 5 set, 0xd / 0xe clear); FUN_00400778 does not run (FUN_003ff0c0 with +0x1c4 != 0: index 0, no resume) |
+| gil | FUN_00321480: the record's | reset among FUN_00312650, FUN_00320848, FUN_003202e8, FUN_0031c2f8, FUN_00312558, FUN_00312408 (not split per function) |
+| inventory, selection | FUN_00320308 (DAT_0046e240), FUN_0031c390 (DAT_0046e218): the record's | the same list; the selection is a GUESS on the page (fidelity-audit) |
+| magazine, reserve | **the record's** (T: 3 / 40 after 7 / 100 at the Restart) | start values |
+| HP | not restored: FUN_00319798 reads it into a scratch that is dropped | start value |
+| section stats, totals, taken words | FUN_0031d4d8: the record's | FUN_0031dae8 (FUN_0031dac0, FUN_0031d9c0, FUN_0031d9f0): 0; stat 14 then returns to 1 (below) |
+| mark PTR_0047db90 | FUN_003fda68: the record's stat 14 | stays (FUN_003fda68 is only called from FUN_00400778) |
+| play seconds, KOs | stay (FUN_00400778 case 0 skips FUN_00242990 / FUN_00242970 under bits 0xd / 0xe) | stay |
+| bodies | only what the world activates | the stage start's |
+| placed sounds, voices | rebuilt (FUN_00548788), freed (FUN_003ea5f0) | the same |
+| HUD | rebuilt; re-read at main's second battle() (FUN_00324e70: DAT_0046e54c = -1 -> FUN_00339590). FUN_00322758's refresh is on FUN_003245e8's a0 = 0 branch; T: a0 = -1 here | the same battle() refresh; stage init's a0 not traced |
+
+**T w254** (scratch driver from w229's route, no input during the reload):
+
+- record: s826 route, record taken with 3 / 40 rounds. At f2165 poked magazine 7, reserve 100, stats 0 / 1 + 100, start 77, total 0 = 55, HP 300;
+  pause Restart at f2200, reload at f2459. r150, r800, r1500: magazine 3, count 40, start 11, stats 3 / 3, total 0 = 0, mark 1, play seconds 106 -> 137.
+- record, actors before main's second battle (f3259, f3959): bodied and active only records 0, 62, 63 (table at manager + 0x1164, index rec + 22;
+  221-233 bodied, inactive). 41-49 and 66 have no bodies. 62 / 63 fill at the stage init f3148.
+- record, the order: f3132 battle_end(1) with nothing inside (no statuses, no pass), f3147 stage_objs, f3148 stage_init (a0 = -1), f3977 statuses + stage pass.
+  So **the first battle() of a record reload does nothing and the next runs the pass**, which is what stage_controller.js already did.
+  With T's flags (global {0: 1, 1: 5, 18: 1, 55: 7}, stage {0: 2, 1: 5, 2: 7, 46: 1}) the page gives the same order (test_checkpoint).
+- no record: r02_walkway with stats poked at f160, pause Restart at f200, reload at f453. reload0: start 0, stats and totals 0, area entries -1, mark 1, mode 0x20,
+  the clock running. **Zero, the same as the game over's** (w242_reload0, w201 reload0).
+- no record, stat 14: it is 0 at reload0 and 1 from r150. Call log: frames 505-508 setSectionStat(0x2a .. 0x2d, 0) = main pc 694-712, frame 519 FUN_0031d698(14, 1) via FUN_0031d6b8.
+  The ELF has two calls of FUN_0031d6b8: 0x247ac4 (constant (14, 15), mode bit 10) and 0x3a541c (the native setSectionStat FUN_003a53e0).
+  So a script calls it, but no method in ev0100's exported classes does: the only sites are main's four and ev0141.wro_kaisetu's (0x13, 1). **Not found after two attempts.**
+  Page: results.js R.reload sets 1 at once, labelled GUESS (fidelity-audit 'Restart: stat 14 after a stage-start reload').
+- Stat 7 = 9 after a reload (FUN_0053c140 / FUN_00541c70 -> FUN_00548118 -> FUN_0031dca8, manager + 0x10f2): left out on the page, stat 6 never moves so pct(6, 7) is 0 either way.
+
+Corrections to the review: A1's magazine is restored too, it does not reset. H2's 'mark = stat 14 on every reload' holds on the record path only.
+H3: both sides were partly right and the page was already correct, no code change. notes/results-research.md's 'does not reset them' was wrong.
+FUN_00324e70's refresh on the HUD (B2) is decoded, not traced: T did not read the HUD's text across the second battle().

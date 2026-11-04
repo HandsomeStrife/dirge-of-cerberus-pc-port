@@ -41,7 +41,10 @@ const ctrlAt = (p, face) => {
      'small hit (flags 2 | 0x40, P+0x118 bit 3 set): no reaction, state 2 (traced: bullet hits keep state 2 / 3)');
   ok(c.hitReact({ flags: 4, dir: [-1, 0, 0], f118: 0x20209 | 0x10 }) === 'none' && c.P.state === 2,
      'big hit with P+0x118 bit 4: no reaction');
-  ok(c.hitReact({ flags: 8, dir: [-1, 0, 0] }) === 'missing' && c.P.state === 2, 'knock-down (flags 8): not translated, no state change');
+  {                                               // worker 0255: FUN_005618d0, test_knock
+    const k = ctrlAt([-1070.03, -146.0675, -1105.5845], [0.9124, 0, -0.4093]); k.step(IDLE()); k.cSnap = null;
+    ok(k.hitReact({ flags: 8, dir: [-1, 0, 0] }) === 'knock' && k.P.state === 0xf, 'knock-down (flags 8): FUN_005618d0, state 0xf');
+  }
   ok(c.hitReact({ flags: 4, dir: [-1, 0, 0], aliveBefore: false, deadNow: true }) === 'none' && c.P.state === 2, 'already dead: no reaction (FUN_003419c0 != 0x36)');
   {                                               // worker 0181: the deaths themselves are in test_death.mjs
     const d = ctrlAt([-1070.03, -146.0675, -1105.5845], [0.9124, 0, -0.4093]); d.step(IDLE()); d.cSnap = null;
@@ -51,8 +54,9 @@ const ctrlAt = (p, face) => {
   ok(c.hitReact({ flags: 4, dir: [-1, 0, 0] }) === 'none' && c.P.state === 2, 'on the ladder (FUN_0055a410 states): no reaction');
   c.active = null;
   c.P.state = 9;
-  ok(c.hitReact({ flags: 2, dir: [-1, 0, 0] }) === 'none' && c.hitReact({ flags: 4, dir: [-1, 0, 0] }) === 'missing' && c.P.state === 9,
-     'in the air (FUN_0055aa88): small -> none, big -> FUN_005618d0 not translated');
+  ok(c.hitReact({ flags: 2, dir: [-1, 0, 0] }) === 'none' && c.hitReact({ flags: 4, dir: [-1, 0, 0] }) === 'knock' && c.P.state === 0xf,
+     'in the air (FUN_0055aa88): small -> none, big -> FUN_005618d0, state 0xf');
+  c.jump.motion = null; c.C.slide = null; c.onGround = true; c.body.state = 0;
   c.P.state = 2;
   ok(c.hitReact({ flags: 4, dir: [-1, 0, 0] }) === 'big' && c.P.state === 0x18 && c.C.slide && c.jump.motion && c.jump.motion.id === 0x3f,
      'big hit on the ground: state 0x18, slide, motion class 0x3f');

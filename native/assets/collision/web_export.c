@@ -71,6 +71,7 @@ int main(int argc, char **argv) {
     uint32_t *T = malloc(tot_t * 3 * 4 + 4), *S = malloc(tot_t * 4 + 4),
              *I = malloc(tot_t * 4 + 4);
     uint32_t *P = malloc(tot_p * 40 + 4);
+    uint32_t *W0 = malloc(tot_p * 4 + 4);
     if (!h || !V || !T || !S || !I || !P) { fprintf(stderr, "oom\n"); return 1; }
     uint32_t nv = 0, nt = 0, np = 0;
     float bmin[3] = { 1e30f, 1e30f, 1e30f }, bmax[3] = { -1e30f, -1e30f, -1e30f };
@@ -109,6 +110,7 @@ int main(int argc, char **argv) {
             uint32_t *w = &P[(size_t)np * 10];
             w[0] = (uint32_t)pl->nv | ((uint32_t)pl->flags << 16);
             w[1] = (uint32_t)pl->word6 | ((uint32_t)(f & 0xffff) << 16);
+            W0[np] = pl->word0;
             for (int a = 0; a < 4; a++) {
                 w[2 + a] = a < pl->nv ? remap[pl->v[a]] : 0;
                 w[6 + a] = (a < pl->nv && pl->nbr[a] >= 0) ? pbase + (uint32_t)pl->nbr[a] : 0xffffffffu;
@@ -138,12 +140,21 @@ int main(int argc, char **argv) {
     ok &= fwrite(P, 4, (size_t)np * 10, o) == (size_t)np * 10;
     long sz = ftell(o);
     if (fclose(o) != 0) ok = 0;
+    /* <out>.shade: u32[npolys], face record +0x00 (corner shades, FUN_005ae1f0), in the walk mesh's order; a sidecar so DCOL v2 stays as it is */
+    {
+        char sp[4096];
+        snprintf(sp, sizeof sp, "%s.shade", argv[1]);
+        FILE *so = fopen(sp, "wb");
+        if (!so) { fprintf(stderr, "error: cannot write %s\n", sp); return 1; }
+        ok &= fwrite(W0, 4, np, so) == np;
+        if (fclose(so) != 0) ok = 0;
+    }
     if (!ok) { fprintf(stderr, "write failed: %s\n", argv[1]); return 1; }
     printf("wrote %s: %u verts (welded from %zu), %u tris, %u walk polygons, %d files, %ld bytes\n",
            argv[1], nv, tot_v, nt, np, nf, sz);
     printf("bbox %.2f %.2f %.2f .. %.2f %.2f %.2f\n",
            bmin[0], bmin[1], bmin[2], bmax[0], bmax[1], bmax[2]);
     for (int i = 0; i < nf; i++) cid_free(&ms[i]);
-    free(ms); free(h); free(V); free(T); free(S); free(I); free(P);
+    free(ms); free(h); free(V); free(T); free(S); free(I); free(P); free(W0);
     return 0;
 }

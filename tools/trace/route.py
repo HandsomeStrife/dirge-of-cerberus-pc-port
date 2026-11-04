@@ -12,8 +12,8 @@ table. Only the script table is written while the game runs, so the run is a pur
 the recorded pad bytes): NAME's replay script w217_NAME.json is written from the hook's own log of the pad
 bytes the game read.
 
-Stuck handling: if Vincent moves < 3 u in 40 frames with the stick held, tap cross (closes a message box,
-grabs a ladder) and, on a ladder (P+0x104 == 10), hold up. At the end: stick released for --settle frames,
+Stuck handling: if Vincent moves < 3 u in 40 frames with the stick held, cycle cross (closes a message box, uses a
+gate), fire, back up, sidestep; on a ladder (P+0x104 == 10), climb. Options for story beats and fights: notes/route-states.md. At the end: stick released for --settle frames,
 HP set back to --hp-end (PS+0x20) over PINE, PINE save state, then (--gs) one GS dump (Shift+F8). Outputs
 (game-derived, so OUTDIR must be gitignored): NAME.p2s, NAME.gs.zst/.png, NAME.json (frame, position,
 chunk slots, event flags), w217_NAME.json (replay script).
@@ -26,9 +26,11 @@ import trace as T
 from p2s import read_p2s, write_p2s
 from pine import Pine
 
-SCRATCH = os.environ.get("TRACE_SCRATCH", "")
+SCRATCH = T.scratch_dir()
 SLOTS, PAIR = 0x4E4C60, 0x46BFB0         # chunk slot table (3 x 0x70: +0x54 chunk, +0x5c loaded), current pair
 EVF, EVKEY = 0x47DBB0, 0x47DBF0          # event-flag block (+0x38, 64 bytes) and its XOR key (FUN_003ff738)
+G_FLAGS, G_KEY = 0x50DB20, 0x46F608      # global flags DAT_0050db20[64] XOR DAT_0046f608 (FUN_0037cea0)
+G_EV = 0x46F850                          # DAT_0046f850: event object; +0x1558 mode bits (bit 37 battle, 44 program)
 WRITE32, SAVESTATE = 6, 9                # PINE opcodes (pcsx2/PINE.cpp)
 
 
@@ -69,7 +71,15 @@ def game_info(p):
     fl = bytearray(p.read_block((evf + 0x38) & ~7, 0x48)[(evf + 0x38) % 8:][:64])
     key = p.read_block(EVKEY, 0x40)
     flags = {i: fl[i] ^ key[i] for i in range(64) if fl[i] ^ key[i]}
-    return dict(slots=slots, pair=list(struct.unpack_from("<4I", pr)), flags=flags)
+    gf, gk = p.read_block(G_FLAGS, 0x40), p.read_block(G_KEY, 0x40)
+    gflags = {i: gf[i] ^ gk[i] for i in range(64) if gf[i] ^ gk[i]}
+    return dict(slots=slots, pair=list(struct.unpack_from("<4I", pr)), flags=flags, gflags=gflags)
+
+
+def in_event(p):
+    """The stage program is in event mode: FUN_003dfd18's test (+0x1558 & 0x102000000000 == 0x100000000000)."""
+    ev = p.read32(G_EV)
+    return bool(ev) and (p.read32(ev + 0x155C) & 0x1020) == 0x1000
 
 
 def stick_byte(v):
@@ -89,18 +99,23 @@ def main():
     ap.add_argument("--hp-end", type=int, default=780, help="HP written back just before the save")
     ap.add_argument("--settle", type=int, default=40)
     ap.add_argument("--reach", type=float, default=6.0)
-    ap.add_argument("--look", type=float, default=7.0, help="aim at the first waypoint at least this far")
+    ap.add_argument("--look", type=float, default=10.0, help="aim at the first waypoint at least this far")
     ap.add_argument("--timeout", type=float, default=1500)
     ap.add_argument("--prefix", default="", help="SCRIPT.json:K - play that script's first K frames before steering")
-    ap.add_argument("--fight", type=int, default=600, help="frames of aim-and-fire when stuck (mode 5)")
+    ap.add_argument("--fight", type=int, default=300, help="frames of aim-and-fire when stuck (mode 5)")
+    ap.add_argument("--fight-range", type=float, default=60, help="enemies within this are fought when stuck")
+    ap.add_argument("--fire-range", type=float, default=1e9, help="hold fire beyond this (the gun's reach, ammo)")
+    ap.add_argument("--aim-at", default="", help="x,y,z: fight mode aims here (a breakable box) instead of at an enemy")
     ap.add_argument("--fight-first", action="store_true", help="start with a fight (aim and fire)")
     ap.add_argument("--teleport", default="", help="x,y,z: move Vincent within his current walk polygon (documented poke)")
     ap.add_argument("--drop-poly", action="store_true", help="with --teleport: clear C+0x4c0 (walk polygon)")
-    ap.add_argument("--max-stuck", type=int, default=6)
+    ap.add_argument("--max-stuck", type=int, default=10)
+    ap.add_argument("--hunt", type=int, default=-1, help="section-1 record: chase and shoot it, then walk onto its drop")
+    ap.add_argument("--stop-item", default="", help="hex item id: end the run when the inventory holds one")
+    ap.add_argument("--beats", action="store_true", help="skip events and answer the save box when they come up")
+    ap.add_argument("--stop-flag", default="", help="F=V: end the run when stage flag F == V (a trigger fired)")
     ap.add_argument("--shots", default="", help="dir for a screenshot each time Vincent is stuck")
     a = ap.parse_args()
-    if not SCRATCH:
-        sys.exit("set TRACE_SCRATCH to the pcsx2trace unit's scratch dir")
     repo = os.path.dirname(os.path.dirname(HERE)); oabs = os.path.abspath(a.out)
     if oabs.startswith(repo + os.sep) and subprocess.run(
             ["git", "-C", repo, "check-ignore", "-q", os.path.relpath(oabs, repo) + "/x.p2s"]).returncode:
@@ -130,7 +145,10 @@ def main():
             print("walk poly %#x: %#x -> 0" % (C + 0x4C0, u32(ee, C + 0x4C0))); struct.pack_into("<I", ee, C + 0x4C0, 0)
     N = a.frames
     neutral = bytes([0xFF, 0xFF, 0x80, 0x80, 0x80, 0x80] + [0] * 12)
-    hook.LOG = (hook.SCRIPT + N * hook.SCRIPT_STRIDE + 15) & ~15
+    # (worker 0253) leave a gap: steering writes up to 3 frames past f, and near the end of the script those landed on
+    # the log's first records ("log record 0 corrupt" on any run that used up its frames; not an overflow). The log
+    # has room for about 8900 frames here.
+    hook.LOG = (hook.SCRIPT + (N + 8) * hook.SCRIPT_STRIDE + 15) & ~15
     K, frames0 = 0, [neutral] * N
     if a.prefix:                                       # a known-good opening (e.g. k_enemy_engage7: message box, ladder)
         sp_, K = a.prefix.rsplit(":", 1); K = int(K)
@@ -168,26 +186,43 @@ def main():
     wi, hist, events, cross_until, cool, t_end, last = 0, [], [], -1, 0, None, -1
     status, nstuck, recover_until, rec_wp, fire_until = "running", 0, -1, 0, -1
     m_ = p.read32(fields.G_OBJTAB); otab = p.read32(m_ + 0x1164)
-    aim = dict(sy=1.0, sp=1.0, last=None, n=0, tgt=None, kills=0)
+    aim = dict(n=0, tgt=None)
 
     def enemies(pos):
-        """Live enemy actors (vtable ENEMY_VT, active, HP > 0) within 90 u: [(dist, obj, (x, y, z))]."""
+        """Live enemy actors (vtable ENEMY_VT, active, HP > 0) within fight_range: [(dist, obj, (x, y, z))]."""
+        otab = p.read32(p.read32(fields.G_OBJTAB) + 0x1164)
         tab = struct.unpack("<256I", p.read_block(otab, 1024))
         out = []
         for o in tab:
             if not o or p.read32(o + 0x18) != fields.ENEMY_VT or not p.read32(o + 0x28) & 1: continue
             c_, st_ = p.read32(o + 0xE8), p.read32(o + 0x17C)
-            if not c_ or not st_ or p.read32(st_ + 0x20) <= 0: continue
+            if not c_ or not st_ or p.read32(st_ + 0x20) <= 0: continue  # dead
             q = p.f32s(c_ + 0x30, 3)
             dd = math.dist(q, pos)
-            if dd < 90: out.append((dd, o, q))
+            if dd < a.fight_range: out.append((dd, o, q))
         return sorted(out)
 
+    hunt_o = 0
+    hunt = dict(last=None)
+
+    def has_item(idw):
+        """Inventory *(status +0x80): +0x26 slots, *(+0x34) = entries of 12 bytes (id, count) (FUN_0031e940)."""
+        inv = p.read32(PS + 0x80); n_ = p.read32(inv + 0x24) >> 16; ent = p.read32(inv + 0x34)
+        raw = p.read_block(ent, 12 * min(n_, 64))
+        for k_ in range(min(n_, 64)):
+            if struct.unpack_from("<II", raw, 12 * k_) [0] == idw and struct.unpack_from("<II", raw, 12 * k_)[1] > 0: return True
+        return False
+
     def aim_stick(pos, f):
-        """Right stick toward the nearest live enemy's chest; signs found by trial (flip if the error grows)."""
+        """Right stick toward the nearest live enemy's chest. Signs from w253_cal: rx > 0 turns the camera's
+        atan2(fz, fx) down, ry > 0 turns its forward y up (down the screen); full stick ~0.036 rad a frame."""
         if aim["n"] % 10 == 0:
             es = enemies(pos); aim["tgt"] = es[0] if es else None
+            if hunt_o: aim["tgt"] = next((e_ for e_ in es if e_[1] == hunt_o), None)
         aim["n"] += 1
+        if a.aim_at:
+            q_ = [float(v) for v in a.aim_at.split(",")]; q_[1] += 12   # (the chest offset below)
+            aim["tgt"] = (math.dist(q_, pos), 0, q_)
         if not aim["tgt"]: return None
         cam = p.f32s(CAM + 0x80, 8)
         fw, eye = cam[0:3], cam[4:7]
@@ -195,21 +230,22 @@ def main():
         L_ = math.sqrt(sum(v * v for v in d)) or 1; d = [v / L_ for v in d]
         ey = math.atan2(fw[0] * d[2] - fw[2] * d[0], fw[0] * d[0] + fw[2] * d[2])
         ep = math.asin(max(-1, min(1, d[1]))) - math.asin(max(-1, min(1, fw[1])))
-        if aim["last"] and f - aim["last"][0] >= 12:
-            f_, ey0, ep0, ry0, rp0 = aim["last"]
-            if abs(ry0) > 0.3 and abs(ey) > abs(ey0) + 0.005: aim["sy"] *= -1
-            if abs(rp0) > 0.3 and abs(ep) > abs(ep0) + 0.005: aim["sp"] *= -1
-            aim["last"] = None
         # the game's stick dead zone is 0x30 of 0x80 (FUN_00258218): keep any correction above it
-        dz = lambda e, g: 0.0 if abs(e) < 0.015 else math.copysign(max(0.5, min(1.0, 6 * abs(e))), e * g)
-        rx, ry = dz(ey, aim["sy"]), dz(ep, aim["sp"])
-        if aim["last"] is None: aim["last"] = (f, ey, ep, rx, ry)
-        if f % 50 == 0:
+        dz = lambda e, g: 0.0 if abs(e) < 0.015 else math.copysign(min(1.0, 0.55 + 3 * abs(e)), e * g)
+        rx, ry = dz(ey, -1.0), dz(ep, 1.0)
+        if f >= aim.get("next", 0) and not a.aim_at:
+            aim["next"] = f + 50
             st_ = p.read32(aim["tgt"][1] + 0x17C)
-            print("fight f%d target %#x d %.0f hp %d err yaw %.3f pitch %.3f signs %g %g" % (
-                f, aim["tgt"][1], aim["tgt"][0], p.read32(st_ + 0x20), ey, ep, aim["sy"], aim["sp"]), flush=True)
-        return rx, ry, abs(ey) < 0.05 and abs(ep) < 0.06
+            print("fight f%d target %#x d %.0f hp %d err yaw %.3f pitch %.3f" % (
+                f, aim["tgt"][1], aim["tgt"][0], p.read32(st_ + 0x20), ey, ep), flush=True)
+        close = aim["tgt"][0] < 20                       # point blank: the chest fills the view (and the pitch clamps)
+        # a big target (the helicopter, radius 90: other-types.md) is hit well off its centre
+        wide = 0.12 if hunt_o and a.fight_range > 500 else 0.05
+        return rx, ry, abs(ey) < (0.2 if close else wide) and abs(ep) < (0.25 if close else wide + 0.01)
     side_until, side_pt, side_k = -1, None, 0
+    stuck_wi = 0
+    flags_seen, pair_seen, flags_g, evt = None, None, {}, dict(t=None, box=None)
+    stopf = tuple(int(x) for x in a.stop_flag.split("=")) if a.stop_flag else None
     if a.fight_first: fire_until = a.fight
     dl = time.time() + a.timeout
     while time.time() < dl:
@@ -220,6 +256,51 @@ def main():
             time.sleep(0.01); continue
         last = f
         pos = p.f32s(C + 0x30, 3)
+        if f % 10 == 0:                                 # report story progress; optionally stop on a stage flag
+            info_ = game_info(p); flags_g = info_["gflags"]
+            if info_["flags"] != flags_seen or info_["pair"] != pair_seen:
+                flags_seen, pair_seen = info_["flags"], info_["pair"]
+                print("f%d (%.0f,%.0f,%.0f) flags %s global %s pair %s" % (f, pos[0], pos[1], pos[2], flags_seen, flags_g, pair_seen[:2]), flush=True)
+            # (not mid-event: a state saved during a stage load has no player object, fields.resolve_bases fails on it)
+            if stopf and flags_seen.get(stopf[0]) == stopf[1] and not in_event(p):
+                status = "flag"; break
+        # story beats: skip an event with the game's own path (Start, then cross on the pause menu's Skip); after
+        # scene_save (global flag 18 = 1) answer the save box and the map screen, as w229_rescue
+        if a.beats and K <= f:
+            ev_ = p.read32(G_EV)                        # the save's hold: +0x1558 bit 39 (FUN_00376ee0(ev, 1, 1))
+            if evt["box"] is None and (flags_g.get(18) == 1 or p.read32(ev_ + 0x155C) & 0x80):
+                evt["box"] = f; print("f%d scene_save: answering the box" % f, flush=True)
+            if evt["box"] is not None and f < evt["box"] + 640:
+                dt = f - evt["box"]
+                btn_ = () 
+                for t0, b in ((300, "right"), (320, "cross"), (380, "left"), (400, "cross"), (500, "cross"), (600, "cross")):
+                    if t0 <= dt < t0 + 5: btn_ = (b,)
+                for k in (1, 2, 3): entry(f + k, 0, 0, btn_)
+                hist.clear(); continue
+            if evt["box"] is not None: evt["box"] = None
+            if in_event(p):
+                if evt["t"] is None:
+                    evt["t"] = f; print("f%d (%.0f,%.0f,%.0f) event mode" % (f, pos[0], pos[1], pos[2]), flush=True)
+                dt = (f - evt["t"]) % 240
+                btn_ = ("start",) if 30 <= dt < 35 else ("cross",) if 70 <= dt < 75 else ()
+                for k in (1, 2, 3): entry(f + k, 0, 0, btn_)
+                hist.clear(); continue
+            elif evt["t"] is not None:
+                print("f%d (%.0f,%.0f,%.0f) event over after %d frames" % (f, pos[0], pos[1], pos[2], f - evt["t"]), flush=True)
+                evt["t"] = None
+        if a.stop_item and f % 10 == 0 and has_item(int(a.stop_item, 16)):
+            status = "item"; print("f%d has item %s at (%.0f,%.0f,%.0f)" % (f, a.stop_item, pos[0], pos[1], pos[2]), flush=True); break
+        hunt_t = None
+        if a.hunt >= 0 and not hunt_o:                  # (not before the state has finished loading)
+            otab = p.read32(p.read32(fields.G_OBJTAB) + 0x1164); hunt_o = p.read32(otab + 4 * (a.hunt + 22))
+        if hunt_o:                                      # the target's position while alive, then the spot it died on
+            c_h, st_h = p.read32(hunt_o + 0xE8), p.read32(hunt_o + 0x17C)
+            alive = c_h and p.read32(hunt_o + 0x28) & 1 and p.read32(st_h + 0x20) > 0
+            if alive: hunt["last"] = p.f32s(c_h + 0x30, 3)
+            elif hunt["last"] and not hunt.get("dead"): hunt["dead"] = f; print("f%d target down at %s" % (f, [round(v) for v in hunt["last"]]), flush=True)
+            hunt_t = hunt["last"]
+            if alive and math.dist(hunt_t, pos) < a.fight_range and math.dist(route[-1], pos) < 12: fire_until = max(fire_until, f + 5)
+            elif hunt.get("dead"): fire_until = f
         cam = p.f32s(CAM + 0x60, 12)
         rgt, fwd = (cam[0], cam[2]), (cam[8], cam[10])
         pst = p.read32(P + 0x104) & 0xFF
@@ -235,24 +316,42 @@ def main():
         # after it that is >= look away. (Worker 0221: the old nearest-WAYPOINT rule flipped the target between
         # waypoint i and i+1 when Vincent stood `look` u past i on a long segment, so the stick swapped every
         # frame and the run reported "stuck": the x -1001 (wp 25) and x -868 (wp 40) "blockers" were that.)
-        dist = lambda q: math.hypot(q[0] - pos[0], q[2] - pos[2]) + 0.3 * abs(q[1] - pos[1])
+        # (worker 0253: y weight 1, not 0.3: the alley stairwell's flights are stacked 36 u apart)
+        dist = lambda q: math.hypot(q[0] - pos[0], q[2] - pos[2]) + abs(q[1] - pos[1])
         def segd(i):
             if i + 1 >= len(route): return dist(route[i])
             q0, q1 = route[i], route[i + 1]
             ex, ez = q1[0] - q0[0], q1[2] - q0[2]
             t_ = max(0.0, min(1.0, ((pos[0] - q0[0]) * ex + (pos[2] - q0[2]) * ez) / ((ex * ex + ez * ez) or 1)))
-            return dist([q0[0] + t_ * ex, q0[1] + t_ * (q1[1] - q0[1]), q0[2] + t_ * ez])
-        wi = min(range(wi, min(len(route), wi + 40)), key=segd)
+            py_ = q0[1] + t_ * (q1[1] - q0[1])
+            # another flight of stairs right above or below is not "nearer": only this floor's segments count
+            return dist([q0[0] + t_ * ex, py_, q0[2] + t_ * ez]) + (1e4 if abs(py_ - pos[1]) > 10 else 0)
+        wi = min(range(wi, min(len(route), wi + 15)), key=lambda i: (segd(i) >= 1e4, segd(i), i))
         ti = min(wi + 1, len(route) - 1)
         if f < recover_until:                           # back up along the path, then rejoin it
             ti = rec_wp
             if dist(route[ti]) < 3: recover_until = f
         else:
             while ti < len(route) - 1 and dist(route[ti]) < a.look and abs(route[ti][1] - pos[1]) < 20: ti += 1
-        if ti == len(route) - 1 and dist(route[ti]) < a.reach:
+        if ti == len(route) - 1 and dist(route[ti]) < a.reach and not hunt_o:
             t_end = f + a.settle; print("reached the last waypoint at f%d" % f, flush=True)
             continue
         tx, tz = route[ti][0] - pos[0], route[ti][2] - pos[2]
+        if f >= recover_until and ti < len(route) - 1 and wi + 1 < len(route):
+            # (worker 0253) carrot on the path, not the next waypoint: on a long segment, a straight line to its far end
+            # from off the path cuts through the wall corners. Closest point on segment wi, then `look` u along the path.
+            q0, q1 = route[wi], route[wi + 1]
+            ex, ez = q1[0] - q0[0], q1[2] - q0[2]; sl = math.hypot(ex, ez) or 1
+            t_ = max(0.0, min(sl, ((pos[0] - q0[0]) * ex + (pos[2] - q0[2]) * ez) / sl))
+            left_, i_, cx, cz = a.look, wi, q0[0] + ex / sl * t_, q0[2] + ez / sl * t_
+            while left_ > 0 and i_ + 1 < len(route):
+                nx_, nz_ = route[i_ + 1][0], route[i_ + 1][2]
+                d_ = math.hypot(nx_ - cx, nz_ - cz)
+                if d_ >= left_: cx += (nx_ - cx) / d_ * left_; cz += (nz_ - cz) / d_ * left_; break
+                left_ -= d_; cx, cz = nx_, nz_; i_ += 1
+            tx, tz = cx - pos[0], cz - pos[2]
+        if hunt_t and (hunt.get("dead") or 25 < math.dist(hunt_t, pos) < 60):
+            tx, tz = hunt_t[0] - pos[0], hunt_t[2] - pos[2]
         if f < side_until:                              # sidestep: back-and-aside point, then past the obstacle
             sx, sz = side_pt[2 * side_k], side_pt[2 * side_k + 1]
             if side_k == 0 and math.hypot(sx - pos[0], sz - pos[2]) < 3: side_k = 1
@@ -268,18 +367,22 @@ def main():
             lx, ly = 0.0, (-1.0 if route[ti][1] < pos[1] else 1.0)
         rx = ry = 0.0
         if f < fire_until:                              # fight: aim at the nearest soldier and fire
-            lx, ly = 0.0, 0.0
+            if not (hunt_t and 25 < math.dist(hunt_t, pos) < 60): lx, ly = 0.0, 0.0
             r_ = aim_stick(pos, f)
             if r_ is None:
                 fire_until = f
             else:
                 rx, ry, on = r_
-                btn = ("r1",) if (on or f % 24 == 0) and (f // 4) % 2 else ()
+                btn = ("r1",) if on and (f // 4) % 2 and aim["tgt"][0] < a.fire_range else ()
         if f < cross_until: btn = ("cross",)
         elif cool <= f and len(hist) > 40 and pst != 10:
             f0, p0 = hist[-41]
             if math.hypot(pos[0] - p0[0], pos[2] - p0[2]) < 3.0 and abs(pos[1] - p0[1]) < 3.0:
-                mode = ("recover", "left", "right", "cross", "fire")[nstuck % 5]
+                near = enemies(pos)
+                if wi >= stuck_wi + 3: nstuck = 0
+                stuck_wi = wi
+                # cross first: a message box (an item's "Obtained!") holds the game until it is closed
+                mode = "cross" if nstuck % 2 == 0 else "fire" if near and nstuck % 4 == 1 else ("recover", "left", "right")[(nstuck // 2) % 3]
                 if mode in ("left", "right"):          # go round an obstacle that is not in the walk mesh (a prop)
                     nx_, nz_ = route[ti][0] - pos[0], route[ti][2] - pos[2]
                     ln_ = math.hypot(nx_, nz_) or 1; nx_, nz_ = nx_ / ln_, nz_ / ln_
@@ -290,7 +393,7 @@ def main():
                 elif mode == "recover":                  # back onto the path line
                     recover_until, cool, rec_wp = f + 60, f + 65, max(0, wi - 3)
                 elif mode == "fire":                   # something (a soldier) stands in the way: shoot ahead
-                    fire_until, cool = f + a.fight, f + a.fight + 40
+                    fire_until, cool = f + a.fight, f + a.fight + 40; aim["n"] = 0
                 else:
                     cross_until, cool = f + 4, f + 60
                     btn = ("cross",)
@@ -335,7 +438,8 @@ def main():
     evs, cur, start = [], None, 0
     for i in range(nlog):
         idx, w0b, w1b = struct.unpack_from("<III", raw, i * rec)
-        if idx != i: sys.exit("log record %d corrupt" % i)
+        if idx != i:                                   # the state is already saved: keep it, just no full replay
+            print("log record %d corrupt: replay script stops there" % i, flush=True); nlog = i; break
         bits = ((w0b >> 16) & 0xFFFF) ^ 0xFFFF
         key = (bits, (w1b >> 16) & 0xFF, (w1b >> 24) & 0xFF, w1b & 0xFF, (w1b >> 8) & 0xFF)
         if key != cur:

@@ -63,22 +63,24 @@ try {
     await pg.waitForFunction(() => { const d = window.__play.enemyAI.objects.get(87); return d.ai && d.ai.mode === 3; }, null, { timeout: 30000 }).catch(() => null);
     const m3 = await pg.evaluate(() => window.__play.enemyAI.objects.get(87).ai.mode);
     ok(m3 === 3, `shot dog 65 (HP ${shot.hp}) is in brain mode 3 (${m3})`);
-    // up to 900 game frames for the approach and an attack
-    await pg.waitForFunction(f => { const A = window.__play.enemyAI; return window.__dogLog.some(e => /^\d+ attack 87 /.test(e)) || A.S.frame > f + 900; }, shot.f, { timeout: 600000 }).catch(() => null);
+    // up to 1500 game frames for the approach and a bite that lands (a user stood in front of the dog)
+    await pg.waitForFunction(f => { const A = window.__play.enemyAI; return window.__dogLog.some(e => /hit player \d+->\d+/.test(e)) || A.S.frame > f + 1500; }, shot.f, { timeout: 600000 }).catch(() => null);
     if (process.env.SHOT) await pg.screenshot({ path: process.env.SHOT });             // a picture at the attack (optional)
     const r = await pg.evaluate(() => {
       const A = window.__play.enemyAI, d = A.objects.get(87), P = A.player;
       return { d1: Math.hypot(d.pos[0] - P.pos[0], d.pos[2] - P.pos[2]), st: d.ai.bstate, astate: d.astate, hp: P.hp,
-               log: window.__dogLog.filter(e => /\b87\b/.test(e)).slice(0, 40) };
+               log: window.__dogLog.filter(e => /\b87\b|hit player/.test(e)).slice(0, 40) };
     });
     console.log('  log: ' + r.log.join(' | '));
     ok(r.d1 < shot.d0 - 200, `the dog closed in: ${shot.d0.toFixed(1)} -> ${r.d1.toFixed(1)} u`);
-    const attacked = r.log.some(e => /attack 87 \d/.test(e));
-    // KNOWN gap (worker 0252): stopped at the approach's 0.8 x reach (~12.4 u) in state 10, Vincent's aim bone sits on entry 2's
-    // pitch limit (+4, exclusive); the pitch convention of FUN_00260f54 is a GUESS (VU code; notes 'Mode 3: the dogs'). Whether the
-    // dog bites on the way in depends on state 5's 1-in-11 draw.
-    if (!attacked && r.st === 10 && r.d1 < 14) console.log(`KNOWN no attack: stalled in state 10 at ${r.d1.toFixed(1)} u (attack pitch GUESS)`);
-    else ok(attacked, `the brain started an attack (state ${r.st}, actor state 0x${r.astate.toString(16)})`);
+    // the dog runs its clips, not sliding in st_a (motions 3 / 4 / 8; T: w253_dog2 rhtn, wk_a, rn_a)
+    const seq = r.log.map(e => /clip 87 (\w+)/.exec(e)).filter(Boolean).map(m => m[1]);
+    const iT = seq.findIndex(c => c === 'rhtn' || c === 'lhtn'), iW = seq.indexOf('wk_a'), iR = seq.indexOf('rn_a');
+    ok(iT >= 0 && iT < iW && iW < iR, `clips on the way: ${seq.slice(0, 5).join(' ')} (a turn, wk_a, rn_a)`);
+    ok(r.log.some(e => /attack 87 \d/.test(e)), `the brain started an attack (state ${r.st}, actor state 0x${r.astate.toString(16)})`);
+    const hit = r.log.map(e => /(\d+) hit player (\d+)->(\d+)/.exec(e)).find(Boolean);
+    const lastAtk = hit ? r.log.filter(e => /attack 87 \d/.test(e) && +e.split(' ')[0] <= +hit[1]).pop() : null;
+    ok(hit && +hit[3] < +hit[2] && r.hp < 780, `a dog bite took HP: ${hit ? `${hit[2]} -> ${hit[3]} at frame ${hit[1]}, after '${lastAtk}'` : 'no hit'} (Vincent HP ${r.hp})`);
     console.log(`  Vincent HP ${r.hp}; warnings: ${[...new Set(warns)].slice(0, 8).join(' / ')}`);
   }
   ok(errs.length === 0, `no console errors${errs.length ? ': ' + errs.slice(0, 3).join(' | ') : ''}`);

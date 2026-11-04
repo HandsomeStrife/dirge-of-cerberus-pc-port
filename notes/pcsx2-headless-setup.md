@@ -1,5 +1,12 @@
 # PCSX2 headless on the server — ground-truth capture (2026-10-15) ✅ WORKING
 
+**Where it lives now (worker 0253, 2026-11-03):** the `pcsx2trace` user unit's whole environment is
+`tools/trace/out/env/` (gitignored): `cfg/` (XDG_CONFIG_HOME: PCSX2.ini with PINE on, BIOS symlink, memory cards),
+`pcsx2/squashfs-root/` (PCSX2 2.9.127), `trace.env` (PCSX2_DIR, ISO, LOG, STATEFILE). `trace.py`, `grab_gs.py`,
+`route.py` and `ckpt_drive.py` use it with no setup; `TRACE_SCRATCH` is obsolete and ignored with a note. Always run under
+`flock tools/trace/out/.pcsx2.lock`. To rebuild: unit text in `tools/trace/README.md`, PCSX2 AppImage extracted to
+`pcsx2/squashfs-root`, `PCSX2.ini` as below. Paths like `scratchpad/...` further down are from the first setup.
+
 GOAL: get GROUND TRUTH for room geometry (we have none — no room rips) by running
 the real game in PCSX2 and capturing a GS dump (the exact primitive stream the game
 sends to the GS = the real post-VU triangles). This validates the BMD room decoder

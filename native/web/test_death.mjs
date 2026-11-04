@@ -65,11 +65,11 @@ const AT = [-1070.912, -146.066, -1105.614], FACE = [0.912, 0, -0.409];
   const c = ctrlAt(AT, FACE); c.step(IDLE()); c.cSnap = null;
   ok(c.hitReact({ flags: 2, dir: [-1, 0, 0], deadNow: true, f118: 0x20209 | 0x8000 }) === 'none' && c.P.state === 2, 'P+0x118 bit 0x8000: no state 7 (FUN_00560fc8 returns 0)');
   c.P.state = 9;
-  ok(c.hitReact({ flags: 2, dir: [-1, 0, 0], deadNow: true }) === 'missing' && c.P.state === 9, 'in the air: FUN_00561270 not translated');
-  c.P.state = 2; c.active = { name: 'ladder' };
+  ok(c.hitReact({ flags: 2, dir: [-1, 0, 0], deadNow: true }) === 'knock' && c.P.state === 0xf, 'in the air: FUN_00561270 -> state 0xf (test_knock)');
+  c.P.state = 2; c.jump.motion = null; c.P.t164 = null; c.active = { name: 'ladder' };
   ok(c.hitReact({ flags: 2, dir: [-1, 0, 0], deadNow: true }) === 'none' && c.P.state === 2, 'on the ladder (FUN_0055a410 states): none');
   c.active = null;
-  ok(c.hitReact({ flags: 8, dir: [-1, 0, 0], deadNow: true }) === 'missing' && c.P.state === 2, 'knocked down at HP 0 (FUN_00561270): not translated');
+  ok(c.hitReact({ flags: 8, dir: [-1, 0, 0], deadNow: true }) === 'knock' && c.P.state === 0xf, 'knocked down at HP 0: FUN_00561270 -> state 0xf');
 }
 {
   // flag 2 with P+0x118 bit 3 clear: the small-hit branch's own death (FUN_00560fc8 on the ground)

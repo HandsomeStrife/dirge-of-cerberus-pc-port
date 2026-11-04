@@ -100,7 +100,13 @@ class DepthInterp(TriInterp):
         ctx = self._ctx()
         self.tris.append((c0, c1, c2, ctx)); self.tris.append((c0, c2, c3, ctx))
 
+    tex1 = (0, 0); miptbp1 = (0, 0)
+
     def write_reg(self, addr, data):
+        if addr in (0x14, 0x15):
+            t_ = list(self.tex1); t_[addr - 0x14] = data; self.tex1 = tuple(t_)
+        elif addr in (0x34, 0x35):
+            t_ = list(self.miptbp1); t_[addr - 0x34] = data; self.miptbp1 = tuple(t_)
         if addr == R_TEST_1:   self.test[0] = data
         elif addr == R_TEST_2: self.test[1] = data
         elif addr == R_ZBUF_1: self.zbuf[0] = data
@@ -162,6 +168,8 @@ class DepthInterp(TriInterp):
         c = (self.prim >> 9) & 1
         t = self.test[c]; z = self.zbuf[c]; al = self.alpha[c]
         d['zte'] = t & 1                   # NB: legacy - this is really ATE (bit 0)
+        d['fge'] = (self.prim >> 5) & 1
+        d['tex1'] = self.tex1[c]; d['miptbp1'] = self.miptbp1[c]
         d['zte16'] = (t >> 16) & 1         # the actual ZTE bit
         d['ztst'] = (t >> 17) & 3          # 0 NEVER,1 ALWAYS,2 GEQUAL,3 GREATER
         d['zmsk'] = (z >> 32) & 1           # 1 = z-write disabled
@@ -329,8 +337,12 @@ class TexCache:
             elif spsm == 0x02:
                 self.stats['ct'] += 1
                 return np.asarray(decode_ct16(data, uw, uh), dtype=np.float32)
-            elif spsm == 0x14 and _UNSW4 is not None:   # PSMT4 (CT32 fast-path upload)
-                idx = _UNSW4(data, w, hgt)
+            elif spsm == 0x14 and _UNSW4 is not None:   # PSMT4 (CT32 fast-path upload; a dpsm 0x14 upload is linear nibbles: narrow mip levels)
+                if up.get('dpsm') == 0x14:
+                    raw_ = np.frombuffer(data, np.uint8)
+                    idx = np.stack((raw_ & 15, raw_ >> 4), 1).reshape(-1)[:w * hgt].reshape(hgt, w)
+                else:
+                    idx = _UNSW4(data, w, hgt)
                 if idx is None:
                     self.stats['miss'] += 1; return None
                 cu = self.best_at(f['cbp'], getattr(self, '_seq', None))
@@ -466,6 +478,9 @@ def rasterize(gif, tc, W=640, Hh=480, notex=False, only_tex=False, flat=False):
             sub_z[wm] = z[wm]
         drawn += 1
     return img, drawn, offscreen, textured
+
+GS_FULL = False     # fog, TEX1 bilinear and the integer colour math (off: the old nearest, fogless oracle)
+
 
 def drawable_size(tris, default=(432, 512)):
     """The GS draws the 3D scene into a native drawable that the video hardware then
@@ -756,14 +771,47 @@ def rasterize_targets(tris, tc, targets, notex=False, only_tex=False, flat=False
                 th, tw = tex.shape[0], tex.shape[1]
                 ui, vi = texel_index(u, v, tw, th, texW, texH)
                 texel = tex[vi, ui]
+                if GS_FULL and not ctx['fst']:            # TEX1: bilinear, repeat wrap; levels by the GS LOD (LCM 0: log2(1 / Q) + K, nearest level, up to MXL)
+                    def bil(tx_, uu, vv):
+                        th_, tw_ = tx_.shape[:2]
+                        fu = uu * tw_ / texW - 0.5; fv = vv * th_ / texH - 0.5
+                        u0 = np.floor(fu); v0 = np.floor(fv); du = (fu - u0)[..., None]; dv = (fv - v0)[..., None]
+                        ua, ub = u0.astype(int) % tw_, (u0.astype(int) + 1) % tw_
+                        va_, vb_ = v0.astype(int) % th_, (v0.astype(int) + 1) % th_
+                        return (tx_[va_, ua] * (1 - du) + tx_[va_, ub] * du) * (1 - dv) + (tx_[vb_, ua] * (1 - du) + tx_[vb_, ub] * du) * dv
+                    texel = bil(tex, u, v)
+                    tex1 = ctx.get('tex1', 0); mxl = (tex1 >> 2) & 7
+                    if mxl:
+                        k_ = (tex1 >> 32) & 0xfff; k_ = (k_ - 0x1000 if k_ >= 0x800 else k_) / 16.0
+                        qq = np.maximum(np.abs(w0 * a[5] + w1 * b[5] + w2 * c[5]), 1e-9)
+                        lod = np.log2(1 / qq) + k_
+                        lev = np.where(lod <= 0, 0, np.minimum(np.floor(lod + 0.5), mxl)).astype(int)
+                        m1 = ctx.get('miptbp1', 0)
+                        for L, (tb_, tbw_) in enumerate(((m1 & 0x3fff, (m1 >> 14) & 0x3f), ((m1 >> 20) & 0x3fff, (m1 >> 34) & 0x3f)), 1):
+                            if L > mxl or not (lev == L).any():
+                                continue
+                            t0 = ctx['tex0']
+                            k2 = (t0 & ~0x3fff & ~(0x3f << 14) & ~(0xf << 26) & ~(0xf << 30)) | tb_ | (tbw_ << 14) | ((f['tw'] - L) << 26) | ((f['th'] - L) << 30)
+                            tl = tc.get(k2, ctx.get('seq'))
+                            if tl is None:
+                                st['mip_miss'] = st.get('mip_miss', 0) + 1
+                                continue
+                            texel = np.where((lev == L)[..., None], bil(tl, u, v), texel)
                 trgb = texel[..., :3]; ta = texel[..., 3]
             out = trgb * (col / 128.0)                    # TFX MODULATE
+            if GS_FULL:
+                out = np.floor(out)                       # (Ct * Cv) >> 7
             As = va * ta / 128.0
             st['textured'] += 1
         else:
             if only_tex:
                 continue
             out = col.copy()
+        # GS fog, before the blend: (F * C + (255 - F) * FOGCOL) >> 8. Vertices from room_vertex_match.Probe (v[6] = F, v[7] = FOGCOL)
+        if GS_FULL and ctx.get('fge') and not ctx['fst'] and a[6] >= 0:
+            F = np.floor(w0 * a[6] + w1 * b[6] + w2 * c[6])[..., None]
+            fc_ = int(a[7]); fcv = np.array([fc_ & 255, fc_ >> 8 & 255, fc_ >> 16 & 255], np.float32)
+            out = np.floor((F * np.minimum(out, 255) + (255 - F) * fcv) / 256)
         zw_ok = mask.copy(); fb_ok = mask.copy()
         if t & 1:                                         # alpha test
             ok = _atest((t >> 1) & 7, np.floor(np.clip(As, 0, 255)), (t >> 4) & 0xff)

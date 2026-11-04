@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""(worker 0242) ckpt_drive.py OUTDIR STATE (env TRACE_SCRATCH = the pcsx2trace unit's scratch; run under flock out/.pcsx2.lock).
+"""(worker 0242) ckpt_drive.py OUTDIR STATE (run under flock out/.pcsx2.lock).
 OUTDIR must be gitignored (game-derived states). STATE: worker 0223's grab95/s826.p2s.
 Driver: s826 + the w229 rescue route (scene_save(1) at ~f702, box answered), then a pause
 Restart (OK) after the rescue's battle(), cross every 60 frames only while the game is outside state 0x15, and PINE
@@ -12,7 +12,7 @@ import trace as T
 from p2s import read_p2s, write_p2s
 from route import PineW, unpatch, u32, stick_byte
 
-SCR = os.environ['TRACE_SCRATCH']
+SCR = T.scratch_dir()
 OUT = sys.argv[1]
 STATE = sys.argv[2]
 os.makedirs(OUT, exist_ok=True)

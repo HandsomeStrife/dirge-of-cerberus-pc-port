@@ -49,6 +49,7 @@ const spoil = pg => pg.evaluate(async () => {
   const P = window.__play, W = P.enemyAI, a = W.actors.find(x => x.rec === 44);
   a.hp = 0; a.pos[0] += 40;
   P.ctrl.pos.x += 30;
+  if (window.__items) window.__items.inventory.remove(0, 2);   // both Potions used: slot empty, nothing selected (worker 0255)
   const r50 = [...W.objects.values()].find(o => o.kind === 'record' && o.rec === 50);
   W.setActive(r50, 1);                               // FUN_00559748 -> onActivate: its body
   window.__oldWorld = W;
@@ -72,7 +73,7 @@ const watchFirstTick = pg => pg.evaluate(() => {
 const bodies = pg => pg.evaluate(() => window.__play.enemies.actors.map(x => x.rec).sort((p, q) => p - q).join());
 const after = pg => pg.evaluate(() => {
   const P = window.__play, W = P.enemyAI, a = W && W.actors.find(x => x.rec === 44);
-  return { instance: window.__instance, count: P.restart.count, hp: P.php.hp, pos: [P.ctrl.pos.x, P.ctrl.pos.y, P.ctrl.pos.z],
+  return { inv: window.__items ? { sel: window.__items.inventory.sel, id0: window.__items.inventory.slots[0][0], n: window.__items.inventory.countAt(0) } : null, instance: window.__instance, count: P.restart.count, hp: P.php.hp, pos: [P.ctrl.pos.x, P.ctrl.pos.y, P.ctrl.pos.z],
            state: P.ctrl.P.state, newWorld: W !== window.__oldWorld, recs: W ? W.actors.map(x => x.rec).sort((p, q) => p - q) : null,
            a44: a ? { hp: a.hp, x: a.pos[0] } : null, flags: W ? JSON.stringify(W.eventFlags) : null, frame: W ? W.S.frame : null,
            goActive: P.gameOver.go.active, goWm: P.gameOver.go.wm, hudHp: P.gameHud ? P.gameHud.state.hp[0] : null };
@@ -125,6 +126,7 @@ function check(s, how, n, f) {
   ok(s.frame >= 24 && s.frame < 24 + 200, `${how}: its frame counter started at the placement's 24 (now ${s.frame})`);
   ok(s.a44 && s.a44.hp > 0 && Math.abs(s.a44.x - SAVE44) < 0.05, `${how}: soldier 44 back alive at its place (${JSON.stringify(s.a44)})`);
   ok(!s.goActive && s.goWm === 2, `${how}: game over reset`);
+  ok(!s.inv || (s.inv.sel === 0 && s.inv.id0 === 0x69300000 && s.inv.n === 2), `${how}: both Potions back and selected (FUN_0030f3d8; slot ${s.inv && s.inv.sel}, count ${s.inv && s.inv.n})`);
   // (at the first tick: 41-43 may hit him soon after)
   ok(!f || f.hud === null || f.hud[0] === 780, `${how}: the HUD rebuilt with HP 780 (${f && f.hud && f.hud[0]})`);
 }

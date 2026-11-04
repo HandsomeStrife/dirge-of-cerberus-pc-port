@@ -28,7 +28,7 @@ try {
 const { WARPS } = await import('./warp.js');
 
 // the chunk each place lies in (walk polygon file; hex 0b = 11)
-const CHUNK = { deck: 2, stairs: 2, market: 6, chunk07: 7, chunk09: 9, chunk0b: 11, boss: 11 };
+const CHUNK = { deck: 2, stairs: 2, dogs: 3, market: 6, chunk07: 7, chunk09: 9, chunk0b: 11, boss: 11 };
 const only = process.env.WARP_ONLY ? process.env.WARP_ONLY.split(',') : null;
 const names = Object.keys(WARPS).filter(n => !only || only.includes(n));
 ok(Object.keys(CHUNK).every(n => WARPS[n]) && Object.keys(WARPS).every(n => n in CHUNK), `the warp names: ${Object.keys(WARPS).join(', ')}`);
@@ -112,11 +112,22 @@ try {
     const { pg, errs, info } = await open('warp=list&intro=0');
     await pg.waitForFunction(() => window.__play && window.__play.stats.ticks > 60, null, { timeout: 240000 }).catch(() => null);
     const r = await pg.evaluate(() => ({ help: document.getElementById('hud') ? document.getElementById('hud').textContent : document.body.innerText, warp: window.__play.warp || null }));
-    ok(/\?warp=list\|deck\|stairs\|market\|chunk07\|chunk09\|chunk0b\|boss/.test(r.help), `list: the help line names the warps`);
+    ok(/\?warp=list\|deck\|stairs\|dogs\|market\|chunk07\|chunk09\|chunk0b\|boss/.test(r.help), `list: the help line names the warps`);
     ok(info.some(m => /^warp \(page aid\): deck = /.test(m)), 'list: the names on the console');
     ok(r.warp === null, 'list: no warp');
     ok(errs.length === 0, `list: no console errors${errs.length ? ': ' + errs.slice(0, 3).join(' | ') : ''}`);
     await pg.close();
+  }
+  // a name that is not a place, including what every object inherits (WARPS.constructor): warned and off, no throw in applyWarp
+  if (!only || only.includes('unknown')) {
+    for (const bad of ['constructor', 'toString', 'nowhere']) {
+      const { pg, errs } = await open(`warp=${bad}&intro=0`);
+      await pg.waitForFunction(() => window.__play && window.__play.stats.ticks > 60, null, { timeout: 240000 }).catch(() => null);
+      const r = await pg.evaluate(() => ({ warp: window.__play ? window.__play.warp || null : 'no page', ticks: window.__play ? window.__play.stats.ticks : -1 }));
+      ok(r.warp === null && r.ticks > 60, `?warp=${bad}: no warp, the game runs (ticks ${r.ticks})`);
+      ok(errs.length === 0, `?warp=${bad}: no console errors${errs.length ? ': ' + errs.slice(0, 3).join(' | ') : ''}`);
+      await pg.close();
+    }
   }
 } finally { await browser.close(); srv.kill(); }
 done();

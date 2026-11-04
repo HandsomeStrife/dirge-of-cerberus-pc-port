@@ -94,6 +94,23 @@ def largest_image(container, cache):
     return im
 
 
+def mip_images(container):
+    """The extra mip levels of a texture (RST payload byte +0xe = level count), rgba per level, or []: dtex --mip.
+    FUN_002659b8 uploads them as MXL = record +0xc, MIPTBP1; the rest of TEX1 is the same for every texture."""
+    from PIL import Image
+    raw = open(container, "rb").read()
+    n = raw[0x4e] if raw[8:11] == b"txd" and len(raw) > 0x4e else 1
+    out = []
+    for lv in range(1, n):
+        with tempfile.TemporaryDirectory() as td:
+            subprocess.run([DTEX, "--raw-alpha", "--mip", str(lv), container, "-o", td], capture_output=True, timeout=60, check=True)
+            pngs = [f for f in os.listdir(td) if f.endswith(".png")]
+            if len(pngs) != 1:
+                raise SystemExit(f"dtex --mip {lv}: {container}: {pngs}")
+            out.append(np.asarray(Image.open(os.path.join(td, pngs[0])).convert("RGBA")))
+    return out
+
+
 def parse_list(path):
     fog, nofog, groups = None, set(), []
     for ln in open(path):
@@ -167,6 +184,8 @@ def main():
             names = [m["file"] for m in list(prev.get("meshes", {}).values()) + list(prev.get("textures", {}).values())]
             names += [m["uvt"] for m in prev.get("meshes", {}).values() if m.get("uvt")]
             names += [m["cul"] for m in prev.get("meshes", {}).values() if m.get("cul")]
+            names += [m["env"] for m in prev.get("meshes", {}).values() if m.get("env")]
+            names += [l["file"] for t in prev.get("textures", {}).values() for l in t.get("mips", [])]
         except (ValueError, KeyError, TypeError, AttributeError) as x:
             raise SystemExit(f"{old}: unreadable ({x}); remove the stale export by hand")
         for f in names:
@@ -179,12 +198,14 @@ def main():
     fog, nofog, groups = parse_list(a.room)
     # per-chunk vertex ranges (export_z128_room.py manifest `chunks`); a room without them draws whole
     man = os.path.splitext(a.room)[0] + "_manifest.json"
-    chunk_ranges = {}; uvt_of = {}; cul_of = {}; uv_anims = None; occl = None
+    chunk_ranges = {}; uvt_of = {}; cul_of = {}; env_of = {}; env_fog = None; uv_anims = None; occl = None
     if os.path.exists(man):
         mj = json.load(open(man))
         chunk_ranges = {g["mesh"]: g["chunks"] for g in mj["groups"] if g.get("chunks")}
         uvt_of = {g["mesh"]: g["uvt"] for g in mj["groups"] if g.get("uvt")}   # scrolling UVs (bmd_uvanim.py)
         cul_of = {g["mesh"]: g["cul"] for g in mj["groups"] if g.get("cul")}   # back faces (export_z128_room cull_tag)
+        env_of = {g["mesh"]: g["env"] for g in mj["groups"] if g.get("env")}   # per-vertex env slot (+0x96): room.js fog
+        env_fog = mj.get("env_fog")
         uv_anims = mj.get("uv_anims")
         occl = mj.get("occl")             # bone trees + occluder quads (bmd_occl.py): room_occl.js
     if not chunk_ranges:
@@ -215,6 +236,12 @@ def main():
                 raise SystemExit(f"{cul_of[g['mesh']]}: {len(ct) // 5} cull tags for {len(v)} vertices")
             ct.tofile(os.path.join(out, mid + ".cul.bin"))
             meshes[mid]["cul"] = mid + ".cul.bin"
+        if g["mesh"] in env_of:            # uint8 per vertex: the chain's env slot (FUN_00265560)
+            et = np.fromfile(os.path.join(ldir, env_of[g["mesh"]]), "<u1")
+            if len(et) != len(v):
+                raise SystemExit(f"{env_of[g['mesh']]}: {len(et)} env slots for {len(v)} vertices")
+            et.tofile(os.path.join(out, mid + ".env.bin"))
+            meshes[mid]["env"] = mid + ".env.bin"
         lo, hi = np.minimum(lo, v[:, :3].min(0)), np.maximum(hi, v[:, :3].max(0))
         tid = None
         if g["tex"] != "NONE":
@@ -222,6 +249,13 @@ def main():
             if tid not in textures:
                 add_tex(tid, largest_image(g["tex"], cache))
                 textures[tid]["alpha"] = "ps2"     # raw PS2 alpha (128 == 1.0): room.js uTexA
+                lv = mip_images(g["tex"])
+                if lv:                             # the game's own levels (room.js: GS LOD)
+                    textures[tid]["mips"] = []
+                    for k, im in enumerate(lv, 1):
+                        f_ = f"{tid}.m{k}.rgba"
+                        open(os.path.join(out, f_), "wb").write(np.ascontiguousarray(im, np.uint8).tobytes())
+                        textures[tid]["mips"].append(dict(file=f_, w=int(im.shape[1]), h=int(im.shape[0])))
         aref = g["aref"] if tid else -1.0
         d = dict(name=g["mesh"], kind="room", mesh=mid, first=0, count=len(v),
                  tex=tid, aref=aref, fog=fog is not None and g["mesh"] not in nofog)
@@ -261,7 +295,7 @@ def main():
         draws.append(dict(name=f"vincent_run{i:02d}", kind="char", mesh="vincent", first=3 * st, count=3 * n,
                           tex="t_vincent", aref=aref, fog=fog is not None))
 
-    scene = dict(version=1, up=[0, -1, 0], fog=fog, camera=cam,
+    scene = dict(version=1, up=[0, -1, 0], fog=fog, env_fog=env_fog, camera=cam,
                  bbox=dict(min=lo.tolist(), max=hi.tolist()), clear=[24 / 255, 26 / 255, 32 / 255],
                  textures=textures, meshes=meshes, draws=draws,
                  char=dict(mesh="vincent", s=s, yaw=yaw, x=tx, y=fy, z=tz, pivot=piv, runs=runs, aref=aref,

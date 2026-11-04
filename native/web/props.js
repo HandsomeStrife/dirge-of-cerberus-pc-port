@@ -209,6 +209,26 @@ export function createProps({ data, weapons = [], effect = null, areas = null, w
     }
     return best;
   }
+  // FUN_005449f0 probe 6 (the camera, player.js probe6): active barrels with +0x38 bit 6, vt+0x17c = FUN_00584408: shape 2 ->
+  // FUN_0025c0f8 on the cylinder (fRam0046ef60 only with +0x110 != 0: not a barrel's). The nearest to a: { point, normal }.
+  // L: the normal = the end disc's axis or the side's radial, from the hit point (FUN_0025c0f8's branches give the same)
+  function cameraProbe(a, b_) {
+    let best = null;
+    for (const o of barrels) {
+      if (!(o.flags28 & 1) || o.gone || !(o.f38 & 0x40) || o.type.shape !== 2) continue;
+      const up = o.m[1].slice(0, 3), hh = f(o.h * 0.5);
+      const A = add3(o.pos, mul3(up, hh)), B = add3(o.pos, mul3(up, f(-hh)));
+      const c = cylinderHit(o.r, a, b_, A, B);
+      if (!c) continue;
+      const d = len3(sub3(a, c.point));
+      if (best && !(d < best.d)) continue;
+      const w = sub3(c.point, o.pos), h = dot3(w, up);
+      const onDisc = Math.abs(Math.abs(h) - hh) < 1e-3;
+      const normal = onDisc ? mul3(up, h < 0 ? -1 : 1) : unit3(sub3(w, mul3(up, h)));
+      best = { point: c.point.map(f), normal, d };
+    }
+    return best;
+  }
   // FUN_00585000 (vt+0x1b4) for the closest hit; it returns 1: the bullet ends on the barrel.
   function bulletHit(h, b) {
     const o = h.o, ty = o.type;
@@ -411,7 +431,7 @@ export function createProps({ data, weapons = [], effect = null, areas = null, w
   }
 
   return {
-    barrels, explosions, attach, areaSwitch, update, mgr, cmd, bulletTest, bulletHit, lockTargets, deleted,
+    barrels, explosions, attach, areaSwitch, update, mgr, cmd, bulletTest, bulletHit, cameraProbe, lockTargets, deleted,
     id: k => (byRec.has(k) ? byRec.get(k).id : -1),
     get world() { return W; }, get mgr260() { return W ? W.mgr260 : null; },
     t: { nearestOnCylinder, insideCylinder, gather, perTarget, explode, damage, bulletFilter, filter },

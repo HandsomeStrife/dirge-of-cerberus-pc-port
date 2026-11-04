@@ -95,6 +95,23 @@ int dtex__decode_rst(const uint8_t *data, size_t size, const char *name,
     }
     if (!img) return -1;
 
+    /* Mip levels (worker 0260; byte-equal to the dumps' uploads at MIPTBP1 / 2, FUN_002659b8): the image descriptor's first
+     * words are the levels' data offsets from (descriptor - 0x90); each level's own 0x40-byte descriptor sits in front of it. */
+    rst_desc lev;
+    if (dtex_mip_level > 0) {
+        if (dtex_mip_level > 3) return -1;
+        uint32_t lo = rd32(data, img->off + 4 * dtex_mip_level);
+        size_t dataoff = (size_t)img->off - 0x90 + lo;
+        if (lo == 0 || dataoff < 0x40 || dataoff > size) return -1;
+        lev.off = (int)dataoff - 0x40; lev.psm = rd16(data, lev.off + 0x12);
+        lev.w = rd16(data, lev.off + 0x14); lev.h = rd16(data, lev.off + 0x16);
+        int bpp2 = psm_bpp2(lev.psm);
+        if (lev.w <= 0 || lev.h <= 0 || bpp2 == 0) return -1;
+        lev.dataoff = dataoff; lev.nbytes = (size_t)lev.w * lev.h * bpp2 / 2;
+        if (dataoff + lev.nbytes > size) return -1;
+        img = &lev;
+    }
+
     memset(out, 0, sizeof(*out));
     out->width = img->w; out->height = img->h; out->psm = img->psm;
     strcpy(out->source, "RST");

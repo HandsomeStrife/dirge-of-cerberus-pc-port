@@ -1,0 +1,1 @@
+{"name": "w255_knock_gun", "frames": 420, "log_from": 55, "doc": "worker 0255: a live knock-down with the gun out (R1 at 60). TRACE_HIT=100:8:50:-1,0", "events": [{"from": 10, "to": 130, "lx": 0.6, "ly": -1.0}, {"from": 60, "to": 62, "buttons": ["r1"]}]}

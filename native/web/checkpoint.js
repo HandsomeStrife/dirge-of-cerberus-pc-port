@@ -5,7 +5,7 @@
 //     (default case: FUN_003fdd00() == 6 -> FUN_002574a0, FUN_0031dbc8) returns 6;
 //   pause OK on Restart: FUN_003c0a20 + FUN_003dee40(0xf) -> FUN_004012c0 case 0xf: FUN_00241990(0xe, 1), returns 6.
 //   Both: the stage program FUN_00401b90 (cmd 6) returns 6 -> FUN_00247508 game state 0x15, case 6: FUN_003ea1d0(-1),
-//   FUN_003e62d0(-1), FUN_00241990(0xd, 1) (or, with bit 0xe, FUN_0030f3d8: the status reset), -> game state 0x13:
+//   FUN_003e62d0(-1), FUN_00241990(0xd, 1) (or, with bit 10, FUN_0030f3d8: the status reset), -> game state 0x13:
 //   FUN_00312c68(0), FUN_003ff0c0(alloc, DAT_004b8ba0 (stage 0x80), DAT_004b8ba2[0 / 1] (0, 0)) -> 0x14 FUN_00402220
 //   (load) -> 0x15: the stage program runs again from index 0 (the save's program: cmds 0xd, 0xc, 5, 1, 0x11 x 7,
 //   4, 0xa, 0 = area 0x80 entry (1, 2), 6 = the stage loop).
@@ -108,6 +108,18 @@ export const PLAYER_STAMPS = Object.freeze({ t27c: -40, t280: -15, part: -1, s14
 const warned = new Set();
 const warnOnce = m => { if (!warned.has(m)) { warned.add(m); console.warn(m); } };
 
+// ---- The Restart invariant (worker 0254; notes/checkpoint-research.md 'The Restart invariant')
+// The game over's Restart and the pause's Restart differ in the stage loop only: FUN_004012c0 result 6 runs FUN_0031dbc8 for the
+// game over; case 0xf sets mode bit 0xe for the pause. Both then take FUN_00247508 0x15 case 6 (mode bit 0xd set) and what
+// survives depends on DAT_0046b0b8 (FUN_0023d598) alone, so the two paths end in the same state:
+//   DAT_0046b0b8 == 0, a scene_save's record: mode bit 3, FUN_00400778 -> FUN_0030f688(stage, 2, rec + 0x100) -> FUN_0030fff0 case 2 ->
+//     FUN_00311fa0: gil, slot list, inventory and FUN_0031d4d8 (section stats, totals, taken words) are the record's, over
+//     whatever the game over cleared; FUN_003fda68: mark = the record's stat 14. HP alone is dropped (FUN_00319798's scratch).
+//   DAT_0046b0b8 == 1, the stage start: FUN_0030f3d8 -> FUN_0031dae8 (stats, totals, taken words 0), FUN_003202e8 / FUN_0031c2f8
+//     (the lists back); FUN_00400778 does not run, so the mark stays as it was.
+//   Either way: the clocks are not rewound, the sounds are torn down (FUN_003ffbb8) and the HUD is rebuilt (FUN_003ad5e0 / FUN_003ad530).
+// T w254: the table in the notes. Not decoded: who runs setSectionStat(14, 1) after a stage-start reload (results.js R.reload's GUESS).
+
 // ---- Mid-level checkpoints (worker 0242; notes/checkpoint-research.md 'Mid-level checkpoints (P8)')
 // main's beats save with `setflag(18, 1); scene_save(n); setflag(18, 0)` (ev0100 main pc 1271-1286 for n = 1 after
 // rv_matiawase; pc 5130-5142 later). scene_save = Zone native FUN_0039c728: unless mode bits DAT_004b8ac8 0xc / 0x10 /
@@ -134,8 +146,9 @@ export function sceneSave(n, s = {}) {
     pair: Array.isArray(s.pair) ? s.pair.slice(0, 2) : null,
     hp: s.hp,
     // worker 0243: the inventory's selection (+0 / +0xc / +0x10) and slot pool are part of the same block
-    inventory: inv ? { slots: inv.slots.map(e => e.slice()), gil: inv.gil, other: inv.other, sel: inv.sel, last: inv.last, selId: inv.selId, freed: (inv.freed || []).slice() } : null,
+    inventory: inv ? { slots: inv.slots.map(e => e.slice()), gil: inv.gil, other: inv.other, sel: inv.sel, last: inv.last, selId: inv.selId, freed: (inv.freed || []).slice(), ammo: inv.ammoState ? inv.ammoState() : null } : null,
     taken: s.taken ? [...s.taken] : [],            // DAT_0046e228 +0x1c0 entries' taken words (FUN_0031e0e0)
+    stats: s.stats ? s.stats.block() : null,       // DAT_0046e228 +0 .. +0x1c0 (FUN_0031d4d8; results.js)
   });
 }
 
@@ -296,6 +309,8 @@ function restoreRecord(sys, rec) {
   if (sys.hud) sys.hud.reset();
   if (sys.sfx) sys.sfx.pending.length = 0;
   if (sys.rebuildEnemies) out.enemies = sys.rebuildEnemies({ ...rec.sflags }, RECORD_RELOAD.frame, RECORD_RELOAD.clock, rec);
-  // no music() here: main's flag-18 branch plays it (playMusic3 / playBgAreaSound)
+  // FUN_003ffbb8's sounds and FUN_00548788's new section-22 objects, as at the stage start; main's flag-18 branch starts the
+  // music and ambience again itself (playMusic3 / playBgAreaSound)
+  if (sys.music) sys.music(true);
   return out;
 }

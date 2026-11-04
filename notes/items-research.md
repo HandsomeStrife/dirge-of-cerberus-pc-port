@@ -124,6 +124,41 @@ ELF); it maps an item id to an effect id (0x69300000 -> 0x82400) for a caller no
   sounds.cycle) and export_web_hud.py (`item_names`): **re-run both**. Tests: test_item_use (hooked, the trace; mutants
   18 / 19, the survivor equivalent: Vincent's parameter-set script has only event 0x25), test_item_use_page.
 
+## The revive: Phoenix Down and status +0x64 (worker 0255, 2026-11-03)
+- **Item scripts:** 0x69300004 (script 5; also 0x69320004, script 17) event 0x68: `not cmd 0x178(3)`, else msj_001. Event 100: msj_024, effect
+  0x87800, `cmd 0x178(2)` -> `cmd 0x137(2)`, then `cmd 0x136(3)`. Script 11 (0x69310001) heals as well; 6 sets status 2; 7 / 8 set status 1 for
+  600 / 1200 ticks. z128 places or drops only scripts 0, 1, 5, 12.
+- **Commands** (FUN_005661e8): 0x178 = status +0x64 bit r0; 0x136 = FUN_0055f128(P, r0, r1); 0x137 = FUN_0055f338(P, r0, 0). FUN_0055f128: 0 restarts,
+  1 / 4 refused while on, 2 refused while 2 or 3, 3 refused while on and clears 2 (bare, its timer kept); then FUN_0055f3b0, and r1 > 0:
+  FUN_0053e9e0(code DAT_0058e580[k]). Delivery FUN_0053f040 cases 0x6c / 0x6b / 0x6e / 0x6d / 0x6a -> FUN_0055f338(P, k, 1) (codes -0x67 -0x68 -0x65 -0x66 -0x69).
+- **Readers of bits 2 / 3:** FUN_00316d08 (dead for good: the enemies' target test), FUN_00576b48 (game-state 0xc at the kill), FUN_0055cac8 (keeps the
+  model FED), **FUN_00334590**. (FUN_0033bdb0 / 0033b948 / 0033c060 / 0033c868 read +0x64 of a HUD object, not the status.)
+- **FUN_00334590:** case 2 dead with bit 3 / 2: state 5. Case 5 waits for P+0x118 bit 0x100, then FUN_00560d80(P, 2 / 1): HP = max, FUN_003533e0, state 0x16,
+  FUN_00335290 (effect 0x86c00), msj_026, HUD bit 4; camera message 0x7d3; state 6. Case 6 waits for P+0x104 != 0x16: HP = max (bit 3) or 20% (bit 2),
+  both flags off, FUN_0055f128(P, 0, 0xb4), FUN_00241760(0, 3, 0), FUN_00326040(0xc), FUN_00328750; state 2.
+- **State 0x16** (vtable 0x58aa10): enter FUN_00539a10 (stance 0, gun bit off), leave 0x539aa8 (P+0x118 &= ~0x100), event 0x539ae0 (-> 2), motion FUN_00539ac0
+  -> FUN_00537aa0: 0x3e. **Class 0x3e** FUN_0059dd48 (vtable 0x5a4bf0): row 1 (h_st) flags 0x83, blend 15, timer 60 counting down.
+- **T: w255_phoenix** (TRACE_FIELDSET=revive TRACE_CALLLOG=w255 TRACE_POKE=960660=1,9606a4=8, scripts/w255_phoenix.json; w192's death route). Records (each the
+  previous frame's result): 789 HP 0, state 7; 790 world mode 5, CAM+0x1e8 0x400000; 1004 P+0x118 bit 0x100 (with the death class's done event: 215 frames, no
+  game over); 1005 state 0x16, HP 780, h_st, mode 6, effect 0x86c00, FUN_00560d80(2), message 0x7d3; 1007 state 2; 1008 mode 2, s64 1, FUN_0055f128(0, 180),
+  camera bit off; 1158 s64 0 (150 frames = 180 ticks). Weapon state 14 at 789 and 1007: FUN_00576548(P, 0).
+- **Corrections (worker 0255, re-review):** class 0x3e has no 2-frame rule: FUN_0059dd48's timer gives 50 frames (T w255_phoenix_air); w255_phoenix's 2 came from C+0x1d8 = 8.87 at record 1006. Enter
+  0x59dcf0 sets C+0x564 0x4000 | 0x8000 (T 0xc001), so FUN_003320c0 / FUN_00577230 refuse R1 and ✕ in state 0x16. FUN_0055db50 wraps all bullet damage in the status 1 / 0 test.
+  FUN_00331f08 skips FUN_003320c0 **and** FUN_00333150 at HP 0: no button, no ✕, no ladder.
+- **The knock-down** (FUN_00561270 = FUN_005618d0, from FUN_00565480 for a death off the ground, flags 8, or flags 4 / 2 off the ground). T **w255_phoenix_air** (✕ at f786, shot in the wind-up at f788): 789
+  state 0xf, c_st_bl0, 255 u/s; 796 c_bl_0; 800 state 0x10 (15 above the ground); 801 c_bl_ht0; 848 c_fl_0; 857 landed: state 0x11, c_fl_1, 30 u/s less 0.9 a frame; 917 P+0x118 bit 0x100 (60 ticks of class 0x3a +
+  class 0x36's 10); 918 state 0x16; 968 state 2; 969 status 0; 1119 off. Rows (the save's C+0x7fc, 8-byte entries): 0xa8 c_st_bl0, 0xab c_bl_0, 0xac c_bl_1, 0xad c_bl_ht0, 0xae c_jp_fa0, 0xaf c_fl_0, 0xb0 c_fl_1.
+  **Re-export the jump pack** (build_web.sh PACK_JUMP +7 clips).
+- **Death on the ladder** (TRACE_HIT, tools/trace/trace.py: a stub calls FUN_0055c7f8 + FUN_00565480 on a frame; r: scripts/w255_ladder_climb, w255_ladder_mount): state 10: FUN_00562d30 -> **state 0x17 at once = the jump-off** (class 0x25 FUN_0059a428: row 0xa2 c_ld_jp, at its end row 0x18 and the done event -> state 8, class 0x22; 7 frames, -10 along the ladder's normal, up 3.5). 0xb / 0xc: nothing until the mount's done event (FUN_00538ec8 / FUN_00538fa0): 0x17. 0xd / 0xe: the exit's done event: dead -> 7. T: lands x -1116.1, y -90.63; state 7 (no slide); settles 216 frames later.
+- **The live knock-down:** same chain to state 0x11 (T w255_knock_run). Class 0x3a's end alive (51 frames): state 2, class 0x37: h_rev_0, C+0x564 |= 0x4000 | 0x8000 | 0x4000000; 40 ticks (34 frames): bit 0x4000000 clears, the stick is his, and C+0x1d8 > 0 ends the class; else the clip's end (67 frames). In state 0x11: C+0x79c bit 0x100 (under 62 clip units: 29 frames in) and a stick over 0.3: state 2 at once, c_rev_l / c_rev_r by the stick's side (T w255_knock_hold: 189, moved 3.09 before the railing, 224 h_st). ✕ in the first 8 ticks: FUN_005763b8 -> FUN_00575768 (decomp only). FUN_005738d0: states 7, 0xf, 0x10: FUN_00576548(P, 0).
+- **TRACE_HIT** caveat: the stub calls the damage and the reaction, not the bullet's other steps (hit effect, FUN_0055d950 stagger).
+- **NOT verified:** status 2's 20% HP has no trace (decomp only).
+- Page: items.js `statusOn` / `statusOff` / `reviveStart` / `reviveEnd`, playerCmd 0x178 / 0x136 / 0x137; enemy_ai delayedTick + `PST.f64 | P.s64` for the melee gates;
+  gameover.js cases 5 / 6 (`status`); jump_core REVIVE_STATE, ReviveMotion; player.js `revive`; play.js wiring.
+- **The Limit Breaker** (0x6931001b, script 12, records 36 / 142, drop 130): event 0x68 = cmd 0x200 = FUN_0056ae40: (FUN_005491d0(mgr, 0) or FUN_00326500), C+0x564 bit 0x4000 clear,
+  on the ground, FUN_0055a3a0(P, 1), not already in status 5 and P+0x118 bit 0x800 clear. Event 100 = cmd 0x201 = FUN_0056afb8, which starts the limit break (not read in full; status 5's FUN_0055f448 path has state 0x1a,
+  FUN_00565bd0 and effect 0x4000), and none of that is on the page. So 0x200 answers 0 and the item is refused with msj_001, not wasted.
+
 ## The HUD notices and the text logs (decoded, not on the page)
 - FUN_003b3538(HUD, kind, id, n): kind 0 (pickup, from FUN_00560098): text = sprintf(kelstr message DAT_00472820, the
   item's name (FUN_003d24c8 / FUN_003fd690), n) (FUN_00248e98); it goes to **log 1** (and opens it:

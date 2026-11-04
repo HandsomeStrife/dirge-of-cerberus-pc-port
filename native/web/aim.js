@@ -19,6 +19,7 @@ const AIM_RELOAD = 'h_st_rd';                                    // row 0x48 (th
 // gun out (C+0x590 bit 24) 0x48 h_st_rd / 0x50 h_fwk_rd / 0x4a h_frn_rd, gun away 0x48 / 0x4b h_wk_rd / 0x49 h_rn_rd
 const RELOAD_ROWS = { gun: ['h_st_rd', 'h_fwk_rd', 'h_frn_rd'], away: ['h_st_rd', 'h_wk_rd', 'h_rn_rd'] };
 const RELOAD_REM = 25;                                          // DAT_0046efc8 (FUN_005980f8: clip units left, x 2)
+const RELOAD_GATE_REM = 60;                                     // DAT_0046efcc (FUN_005980f8 clears C+0x564 bit 0x4000 below it)
 const RELOAD_MAX = 180.0;                                       // FUN_005980f8's timer limit (ticks)
 const rlWarned = new Set();
 const rlWarn = m => { if (!rlWarned.has(m)) { rlWarned.add(m); console.warn('aim: reload class 0x1c: ' + m); } };
@@ -176,14 +177,17 @@ export function makeClipControl({ core, anim, ctrl, motions, step = STEP }) {
   // FUN_003460d8 -> FUN_005a9860 -> FUN_005aa200: a head clip that does not loop, at its last frame
   const motionDone = () => anim.head.loop === false && anim.head.frame >= (anim.frames[anim.head.key] || 0) - 1;
   // FUN_00345b58(C, r0, r1, r2) (rows the MP has: FUN_003455e8), FUN_00345e38(0, 24.0) (walk threshold), FUN_00345e58(C, 0, 1, 0)
-  // (only the walk row's root speed, FUN_00344340); C+0x564 |= 8 | 0x40000 (0x40000: FUN_00346860 plays the rows with flags
+  // (only the walk row's root speed, FUN_00344340; FUN_00345b58 packs the rows the MP has, and FUN_00345e38's 24.0 goes to
+  // index 1 whichever row that is, so the threshold is set after the filter); C+0x564 |= 8 | 0x40000 (0x40000: FUN_00346860 plays the rows with flags
   // 0x86, no loop), &= ~0x10: FUN_00343160 then skips FUN_00346c10 (the speed rate), so every row plays at FUN_003456c0's
   // rate 1.0 -> MP+0x40c 0.5 (T: w246_reload_walk h_fwk_rd 0.6 a frame at 15 u/s). The page's table rate comes from `root`
   // (0 = rate 0.5), so the walk root is left out here. blend0: phase 0's FUN_00340bb8(C, 1, 5) for a first pick of row 0
-  function reloadTable(rows) {
+  // carry: C+0x568 |= 0x40000 (the holster branch of FUN_005980f8): the first pick keeps the old clip's frame (FUN_00346860:
+  // FUN_00345590 -> FUN_00345448, player.js switchTo)
+  function reloadTable(rows, carry = false) {
     const e = rows.filter(k => anim.has(k) && motions[k]).map((k, i) => ({ key: k, thr: i === 1 ? AIM_WALK_THR : 0.0, root: 0.0 }));
     if (!e.length) return false;
-    e.noLoop = true; e.blend0 = 5;
+    e.noLoop = true; e.blend0 = 5; e.carry = carry;
     if (!anim.setTable(e)) return false;
     quad = 0;
     return true;
@@ -208,10 +212,11 @@ export function makeClipControl({ core, anim, ctrl, motions, step = STEP }) {
       if ((rem < RELOAD_REM && rl.t >= 4.0) || !(rl.t < RELOAD_MAX)) rl.phase = 3;
       else if (!onGround) { rl.done = true; rlWarn('in the air: the done flag (+8 bit 0) event FUN_00343160 is not translated'); }
       else if (rl.phase === 2 && !gun && anim.has(RELOAD_ROWS.away[2])) {   // holstered mid-reload: the gun-away rows
-        reloadTable(RELOAD_ROWS.away); rl.phase = 1;
+        reloadTable(RELOAD_ROWS.away, true); rl.phase = 1;
       }
-      // L: rem < DAT_0046efcc (60 with FUN_00326500 and C+0x7dc +0x28 bit 2, else 0) clears C+0x564 bit 0x4000 (the reload /
-      // fire gate aim_core passes as c564 = 0 on the page)
+      // rem < DAT_0046efcc (60 with FUN_00326500 and C+0x7dc +0x28 bit 2: both set on the page's path, T w246_reload_run
+      // records 91-108 / 109): C+0x564 &= ~0x4000
+      if (onGround && rl.phase !== 3 && remaining() < RELOAD_GATE_REM) rl.b4000 = false;
     } else {
       const done = anim.request ? !!anim.request.ended : motionDone();
       if (done || !(rl.t < RELOAD_MAX)) { rl.done = true; return next(); }
@@ -221,19 +226,38 @@ export function makeClipControl({ core, anim, ctrl, motions, step = STEP }) {
     rl.t = f32(rl.t + step);
     return 0;
   }
+  // FUN_005612e8 -> FUN_00341780(C, 0x1c, 0) replaces the old class and runs the enter FUN_00598000 at once, inside
+  // FUN_003320c0's FUN_00574f40: C+0x564 |= 0x4000 | 0x20000, so FUN_00333150's ✕ of the same frame already sees them. The
+  // class runs with the gun out or away (FUN_00574f40 has no drawn test).
+  function reloadEnter() {
+    const i = core.events.findIndex(e => e.type === 'reload');
+    if (i < 0) return;
+    core.events.splice(i, 1);
+    if (anim.request) anim.clearRequest();
+    fire = null; rl = { phase: 0, t: 0, done: false, b4000: true };
+  }
+  // the class replaced from outside (FUN_00341780 -> FUN_00345678, leave FUN_00598070): by the jump / fall / hit classes
+  // (FUN_00599820, jump_core.js) and the ladder's: the reload table goes, the landing picks from the locomotion table
+  function reloadLeave() {
+    rl = null; quad = 0;
+    if (anim.request) anim.clearRequest();
+    if (anim.table && anim.table !== GAME.loco) anim.setTable(null);
+  }
   function clips() {
+    reloadEnter();
     // the jump's motion states (FUN_00598f50 / FUN_00599aa0, jump_core.js) own the head layer
     // from the take-off until the landing ends; no other class runs (aim_g: a shot in the air
     // changes no clip). The classes below pick up again on the next frame.
-    if (ctrl.jump && ctrl.jump.head) { core.events.length = 0; return; }
-    // the reload class runs with the gun out or away (FUN_00574f40 has no drawn test); FUN_00341780 replaces the old class
-    if (core.events.some(e => e.type === 'reload')) { if (anim.request) anim.clearRequest(); fire = null; rl = { phase: 0, t: 0, done: false }; }
+    if (ctrl.jump && ctrl.jump.head) { if (rl) reloadLeave(); core.events.length = 0; return; }
+    // FUN_005766c0 with the sound (bit 0x4000 clear): FUN_0055b8e0(P, 2 / 3, 0, 0) -> FUN_005641c0 sets the new state's motion
+    // over class 0x1c (aim_core input)
+    if (rl && core.events.some(e => e.type === 'motion')) reloadLeave();
     if (rl) {
       core.events.length = 0;
       const gun = core.drawn();
       const nx = reloadUpdate(gun);
       if (!nx) return;
-      // FUN_00598070 (leave): C+0x564 &= ~0x4000 / ~0x20000, C+0x1c0 &= ~0x20; then class nx's enter. FUN_00340bb8(C, 1, 0x14)
+      // FUN_00598070 (leave, c564 below): C+0x564 &= ~0x4000 / ~0x20000, C+0x1c0 &= ~0x20; then class nx's enter. FUN_00340bb8(C, 1, 0x14)
       // (L: the next class's first blend is the page's own, as before)
       rl = null; if (anim.request) anim.clearRequest();
       inMove = nx === 9;                                      // 9 FUN_00595440 aimed move, 6 aim idle; 8 / 3 the unarmed ones
@@ -282,9 +306,13 @@ export function makeClipControl({ core, anim, ctrl, motions, step = STEP }) {
     actionEnter(a) {
       if (a.name !== 'ladder') return;
       core.ladderMount(ctrl.onGround, ctrl);             // FUN_00576548(P, 0) reads the ground bit
+      if (rl) reloadLeave();                             // FUN_0055b8e0(P, 0xb / 0xc, 0, 0): the ladder's class replaces it
       if (anim.request) anim.clearRequest();
       fire = null;
     },
+    reloadEnter,
+    // C+0x564 as the input gates read it (the page's writers: class 0x1c's enter, FUN_005980f8, leave; class 0x3e's enter 0x59dcf0)
+    c564: () => (rl ? 0x20000 | (rl.b4000 ? 0x4000 : 0) : 0) | (ctrl.jump && ctrl.jump.motion && (ctrl.jump.motion.id === 0x3e || ctrl.jump.motion.knock) ? 0x4000 : 0),   // T w255_knock_*: 0xc001 through the knock-down
     reset() { quad = 0; fire = null; inMove = false; rl = null; if (anim.request) anim.clearRequest(); if (anim.table && anim.table !== GAME.loco) anim.setTable(null); },
     state: () => ({ quad, fire: !!fire, reload: !!rl, rl: rl ? { ...rl } : null }),
   };
@@ -407,15 +435,18 @@ export async function setupAim({ ctrl, anim, motions, col, follow, output, vin, 
     pre(input, inAction) {
       lastRay = aimRay();
       core.eye = { x: follow.eye[0], y: follow.eye[1], z: follow.eye[2] }; core.hit = lastRay.hit;
-      if (inAction || isFrozen()) { clearEdges(); core.events.length = 0; return; }
+      // FUN_00331f08: FUN_003320c0 runs only while FUN_00316cf8 (HP 0) is false: at HP 0 no button is read
+      if (inAction || isFrozen() || (ctrl.hpZero && ctrl.hpZero())) { clearEdges(); core.events.length = 0; return; }
       // game-state bit 11 (play.js input.noControl): FUN_00331f08 skips FUN_003320c0; the pad's edges of these frames
       // are never read (R1 held is the pad's level and stays; worker 0246)
       if (input && input.noControl) { btn.r1Edge = btn.r3Edge = btn.circleEdge = btn.r2Edge = false; core.noControl(ctrl); return; }
       core.input({ r1Pressed: btn.r1Edge, r1Held: btn.r1, r3Pressed: btn.r3Edge, circlePressed: btn.circleEdge, r2Pressed: btn.r2Edge },
-                 ctrl.onGround, lastRay.far, ctrl);
+                 ctrl.onGround, lastRay.far, ctrl, { c564: ctl.c564() });
+      ctl.reloadEnter();
       btn.r1Edge = btn.r3Edge = btn.circleEdge = btn.r2Edge = false;
     },
     actionEnter: a => ctl.actionEnter(a),
+    c564: () => ctl.c564(),                         // FUN_00577230's C+0x564 (player.js takeOff)
     // FUN_00579570 (every frame, FUN_005786e8: right after FUN_00578748, before the character's
     // motion update). Returns true when a shot was fired this frame (FUN_00577480 -> FUN_00560b58).
     weapon(input, inAction) {

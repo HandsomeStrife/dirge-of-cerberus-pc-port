@@ -220,6 +220,7 @@ INPUTS = {
     '076506c1.bin': 'a4e4e9d70dbf65d279acb18fdcba34717e4006afdc4c42c46a9dc31e8c9b9f73',   # e027 model (export_web_enemy)
     '076506c2.bin': 'b69e6647ad51724335f325eec6b7ff97c019bde8dfa8868e7c4ec51f071c820a',   # e027 textures
     '076506cb.bin': '95430e94db04ee4cd74dd28b991ce8d30540423a827e162b24bdc1f470bac500',   # e027 rifle clips (r_gst)
+    '076506cd.bin': '106921e6007653eeb13f6a9405999804f8eddf2fcaf36b95818af688def53757',   # e027 clips: the paratroopers' r_para* (script 159-164 cmd 0x19b; worker 0259)
     '07650e41.bin': '46566553c97b678893e7553b809cfe8a298853752e891944157beb8b81bac65e',   # e057 barrel model (export_web_enemy, props_view.js)
     '07650e42.bin': '9d3f285ec76e66595b0eb125e913f1e8aa8067d698a2a88783d0b3d0c0d2d313',   # e057 barrel texture
     '07670981.bin': '29488b3854b64387414f742e9e79a13e455e7f65378727b658918a62911975e6',   # g038 item model (export_web_enemy, items_view.js)

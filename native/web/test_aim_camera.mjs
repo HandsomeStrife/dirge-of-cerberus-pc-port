@@ -17,7 +17,9 @@ const W = J('./data/aim/weapon.json'), RET = J('./data/aim/reticle.json');
 const buf = readFileSync(new URL('./data/z128_collision.bin', import.meta.url));
 const rays = cameraRays(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength));
 const files = process.argv.slice(2).length ? process.argv.slice(2)
-  : ['aim_a_tap', 'aim_b_hold', 'aim_c_walk', 'aim_d_turn', 'aim_e_zoom', 'aim_f_r3cold', 'aim_g_air', 'aim_h_holster_run', 'aim_i_fp_holster'].map(n => DIR + '/' + n + '.jsonl');
+  : ['aim_a_tap', 'aim_b_hold', 'aim_c_walk', 'aim_d_turn', 'aim_e_zoom', 'aim_f_r3cold', 'aim_g_air', 'aim_h_holster_run', 'aim_i_fp_holster'].map(n => DIR + '/' + n + '.jsonl')
+      // worker 0257: standing at the spawn's back wall, the view pitched and turned (TRACE_FIELDSET=aim): the pre-probes stay quiet in both
+      .concat(['w257_wall_look'].map(n => DIR + '/../' + n + '.jsonl').filter(existsSync));
 const hex = h => Buffer.from(h, 'hex');
 const F = (h, o) => hex(h).readFloatLE(o);
 const V3 = (h, o) => [F(h, o), F(h, o + 4), F(h, o + 8)];
@@ -75,6 +77,8 @@ for (const file of files) {
   cam.M = [0, 1, 2].map(i => V3(r0.cam_60, 16 * i));
   cam.dist = F(c0, 0x50); cam.snap = false; cam.base = [r0.matrix[3][0], r0.matrix[3][1], r0.matrix[3][2]];
   cam.weapon = core;
+  let probed = 0;
+  { const pp = cam.preProbes; cam.preProbes = function (b_, pr, e_, M_, f_) { const s = pr.slice(); pp.call(this, b_, pr, e_, M_, f_); if (pr.some((v, i) => Math.abs(v - s[i]) > 1e-6)) probed++; }; }
   const err = { eye: [0, 0], at: [0, 0], ang: [0, 0], fwd: [0, 0], far: [0, 0], a220: [0, 0] };
   const put = (k, v, f) => { if (v > err[k][0]) err[k] = [v, f]; };
   let n = 0, leadN = 0, skipN = 0, jumped = false, turned = false;
@@ -132,7 +136,7 @@ for (const file of files) {
     n++;
   }
   const bad = Object.keys(LIM).filter(k => err[k][0] > LIM[k]);
-  console.log(file.split('/').pop().padEnd(24), `frames ${n} (lead ${leadN}, not compared ${skipN})  ` + Object.keys(err).map(k => `${k} ${err[k][0].toExponential(1)} (f${err[k][1]})`).join('  ') + (bad.length ? '  FAIL ' + bad.join(',') : '  ok'));
+  console.log(file.split('/').pop().padEnd(24), `frames ${n} (lead ${leadN}, not compared ${skipN}, pre-probes moved the pivot ${probed})  ` + Object.keys(err).map(k => `${k} ${err[k][0].toExponential(1)} (f${err[k][1]})`).join('  ') + (bad.length ? '  FAIL ' + bad.join(',') : '  ok'));
   if (bad.length) fails++;
 }
 process.exit(fails ? 1 : 0);

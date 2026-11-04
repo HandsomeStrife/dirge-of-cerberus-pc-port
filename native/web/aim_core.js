@@ -205,6 +205,8 @@ let ammoSeWarned = false;
 // FUN_00577038 (player state 10 under game-state bit 11: C+0x565 bit 0 -> FUN_00346fc0 / FUN_003470d8 -> states 0xd / 0xe,
 // else FUN_00346fb0(C, 0) + FUN_00328640(CAM, 1)) is not translated (worker 0246)
 let nc10Warned = false;
+let m7d1Warned = false;
+const warnMsg7d1 = () => { if (!m7d1Warned) { m7d1Warned = true; console.warn('aim_core: camera message 0x7d1 (FUN_0032ffb0: CAM+0x100) not on the page'); } };
 const warnNoControl10 = () => { if (!nc10Warned) { nc10Warned = true; console.warn('aim_core: FUN_00577038 (player state 10 with user control off) not translated'); } };
 const warnAmmoSe = () => { if (!ammoSeWarned) { ammoSeWarned = true; console.warn('aim_core: weapon.json has no se_dry / se_reload: rebuild data/aim (export_web_aim.py); no dry-fire / reload sound'); } };
 
@@ -499,22 +501,34 @@ export class WeaponSystem {
   input(inp, onGround, far = null, player = null, gates = null) {
     this.far = far;
     const P = this.P, W = this.W;
+    const g = { pad54: 0, c564: 0, ctl: 0, ...gates };
+    // FUN_003320c0's bVar1 (with FUN_00326500 true): C+0x564 bit 0x4000 clear, or the head class is 0x20 / 0x22 / 0x59. The
+    // page's c564 holds only the reload class 0x1c's bits (aim.js), so the class test is not needed here.
+    const free = !(g.c564 & 0x4000);
     this.events.length = 0;
     if (!P.drawn) {
-      if (inp.r3Pressed) {                                    // R3: draw + first person
-        this.setFirstPerson(); this.draw(onGround, player); return;
+      if (inp.r3Pressed && free) {                            // R3: draw + first person
+        this.setFirstPerson(); this.draw(onGround, player); this.events.push({ type: 'motion' }); return;
       }
       // R1: draw + weapon camera. FUN_003320c0 l.288 (LAB_00332810): on the ground (C+0x1c0 bit
       // 0x200) or with P+0x2a8 bit 3 clear (set by a draw in the air, cleared at a take-off from the
       // ground: jump_core startJump). The l.288 state test (bVar1 / bVar3) is true in the on-foot
       // and air states; the page runs this only there (not during actions).
-      if (inp.r1Pressed && (onGround || !(((player && player.P.flags2a8) ?? 0) & 8))) {
-        this.setView(2); this.draw(onGround, player); return;
+      if (inp.r1Pressed && free && (onGround || !(((player && player.P.flags2a8) ?? 0) & 8))) {
+        this.setView(2); this.draw(onGround, player); this.events.push({ type: 'motion' }); return;
       }
     } else {
-      if (inp.circlePressed) { this.holster(onGround, player); return; }
+      if (inp.circlePressed) {
+        // free: FUN_005766c0(P, 0, 1) (the sound; FUN_0055b8e0(P, 2, 0, 0) sets the new state's motion over the class: event
+        // 'motion', aim.js). Else with C+0x564 bit 0x20000 FUN_005766c0(P, 0, 0): no sound, FUN_0055b8e0(P, 2, 0, 1) keeps the
+        // class (FUN_005980f8's holster branch); neither bit: nothing.
+        if (free) { this.holster(onGround, player); this.events.push({ type: 'motion' }); return; }
+        if (g.c564 & 0x20000) { this.holster(onGround, player, false); return; }
+      }
       if (inp.r3Pressed && !(P.st >= 10 && P.st <= 11)) {     // FUN_005773c8
-        if (this.cam.view === 2) this.setFirstPerson(); else this.setView(2);
+        if (free) { if (this.cam.view === 2) this.setFirstPerson(); else this.setView(2); }
+        // the window: only C+0x564 bit 0x20000 and view != 2: camera message 0x7d1, FUN_0032a420(CAM, 2, 0, 0)
+        else if ((g.c564 & 0x20000) && this.cam.view !== 2) { warnMsg7d1(); this.setView(2); }
       }
     }
     // R2 (id 0xa) pressed: FUN_00316b28 ? FUN_00574f40 (+ FUN_00324440(9), not on the page) : FUN_00563240 (the dry
@@ -523,15 +537,14 @@ export class WeaponSystem {
     //           and fire off), c564 = C+0x564 (bit 0x4000; FUN_003422f0 = bits 0x18000000), ctl = FUN_003242e8()
     //           (DAT_0046e290 +0x10 | +0x18, or ~0 while game-state bit 7 / 5 is set; bit 0x200 no reload, 8 no fire;
     //           P+0x188 bit 39 adds 0x1888).
-    // The page models none of them, so play passes none and they are 0. ctl and pad54: play ticks only with the player in
-    // control (L: nothing on the page's path sets them). c564: set by motion-class enters (factory FUN_00592918, not
-    // decoded on the page); the aim traces show bit 0x4000 during the draw (states 0xd / 0xf, aim_a f11-17) and through
-    // jumps (aim_g f41-81). In the draw FUN_005772c8 refuses a reload anyway (state 0xd / 0xf); in the air the page
-    // reloads where the game would not (fidelity-audit 'Reload gates C+0x564').
-    const g = { pad54: 0, c564: 0, ctl: 0, ...gates };
+    // ctl and pad54: play ticks only with the player in control (L: nothing on the page's path sets them). c564: aim.js passes
+    // the reload class 0x1c's bits (worker 0255). The other class enters that set bit 0x4000 are not on the page: the aim
+    // traces show it during the draw (states 0xd / 0xf, aim_a f11-17) and through jumps (aim_g f41-81). In the draw
+    // FUN_005772c8 refuses a reload anyway (state 0xd / 0xf); in the air the page reloads where the game would not
+    // (fidelity-audit 'Reload gates C+0x564').
     if (inp.r2Pressed && !(g.pad54 & 4) && !(g.c564 & 0x4000)) {
       if (!(g.ctl & 0x200)) {
-        if (this.ammo.canReload()) this.reload(player);
+        if (this.ammo.canReload()) this.reload(player, g.c564);
         else this.dry();
       }
       return;
@@ -544,7 +557,7 @@ export class WeaponSystem {
     if (this.ammo.emptyCanReload()) {
       const idle = P.st === 0 && P.drawn;                     // FUN_00577180 (FUN_0055a410: player states 10-14 / 0x15, not on this path)
       if ((idle || !P.drawn || (W.flags & 2)) && !(g.pad54 & 4) && !(g.c564 & 0x4000) && !(g.c564 & 0x18000000) && !(g.ctl & 0x200)) {
-        this.reload(player); return;
+        this.reload(player, g.c564); return;
       }
     }
     // fire: (R1 held && auto) || (R1 pressed && !auto); FUN_00577180: state 0 and drawn
@@ -600,10 +613,11 @@ export class WeaponSystem {
   }
   // circle (FUN_005766c0(P, 0, 1)): P+0x29c 2 (traced); player state 2 on the ground
   // (FUN_0055b8e0(P, 2): its enter clears the flag), 9 in the air (jump_core weaponSwitch)
-  holster(onGround = true, player = null) {
+  // sound false: FUN_005766c0(P, 0, 0), from circle while C+0x564 bit 0x4000 is set (FUN_003320c0): no FUN_0033d3c8
+  holster(onGround = true, player = null, sound = true) {
     const seH = switchSound(this.W.se_holster, this.W.class);    // FUN_005766c0 -> FUN_0033d3c8
-    if (this.W.se_holster == null) warnSe();
-    if (this.sound && seH) this.sound(seH);
+    if (sound && this.W.se_holster == null) warnSe();
+    if (sound && this.sound && seH) this.sound(seH);
     this.holsterCore(onGround, player); this.P.m29c = 2;
     const st = player ? weaponSwitch(player, false) : (onGround ? 2 : 9);
     if (st != null) this.P.state = st;
@@ -623,9 +637,9 @@ export class WeaponSystem {
   // FUN_0033d208(P+0x10c & 3, C's position, FUN_00317a98(PS)) (se_reload; FUN_00317a98 false and status +0x61 bit 0
   // clear in the save: traced bsj_012 at P+0x10c & 3 = 1) and the reload motion class 0x1c (event 'reload': aim.js).
   // The page takes P+0x10c & 3 = 1 and P+0x118 bit 0x200 set (w214 traces); alt is W+4 bit 0x800 only.
-  reload(player = null) {
+  reload(player = null, c564 = 0) {
     const P = this.P, W = this.W;
-    if (!(P.st === 0 || (P.st >= 2 && P.st <= 4))) return false;   // FUN_005772c8
+    if (!(P.st === 0 || (P.st >= 2 && P.st <= 4)) || (c564 & 0x20000)) return false;   // FUN_005772c8
     const alt = !!(W.flags & 0x800);
     if (P.st === 3) P.st = 0; else if (P.st === 4) P.st = 2;  // FUN_00574b98 (its P+0x2a8 bit 0x20 path: not on the page)
     P.st = alt ? 8 : 7;

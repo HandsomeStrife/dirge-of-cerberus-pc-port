@@ -60,22 +60,30 @@ async function beat(q) {
   });
   // during the event (worker 0248): the stage view's camera and actors, sampled each animation frame
   await pg.evaluate(() => { const P = window.__play; window.__ev = { cam: 0, bodies: new Set(), shown: new Set(), win: 0 };
+    // worker 0257: the room's occluders from the camera rendered (FUN_0026c878: 0x4fcb10): at each occluder update while an event camera is out, the volumes' eye is that camera's
+    const O = P.roomOccl, occlFrame = O.frame;
+    O.frame = function (...a) { const r = occlFrame.apply(this, a), v = P.stageView; if (v && v.active) { const E = P.stage.rt.view.eye, D = Math.hypot(O.eye[0] - E[0], O.eye[1] - E[1], O.eye[2] - E[2]); window.__ev.occl = (window.__ev.occl || 0) + 1; window.__ev.occlFar = Math.max(window.__ev.occlFar || 0, D); } return r; };
     const f = () => { const v = P.stageView; if (v && v.active) { window.__ev.cam++;
-        const c = P.camera, e = P.stage.rt.view.eye; if (Math.hypot(c.position.x - e[0], c.position.y - e[1], c.position.z - e[2]) < 1e-3) window.__ev.at = (window.__ev.at || 0) + 1; }
+        const c = P.camera, V = P.stage.rt.view, e = V.eye;
+        // the render camera: the eye and its forward (camera.lookAt), up to the event's view
+        const d = [V.aim[0] - e[0], V.aim[1] - e[1], V.aim[2] - e[2]], n = Math.hypot(...d) || 1, w = c.getWorldDirection(new c.position.constructor());
+        if (Math.hypot(c.position.x - e[0], c.position.y - e[1], c.position.z - e[2]) < 1e-3 && Math.hypot(w.x - d[0] / n, w.y - d[1] / n, w.z - d[2] / n) < 1e-3) window.__ev.at = (window.__ev.at || 0) + 1;
+      }
       const g = P.root.getObjectByName('event actors'); if (g) for (const a of P.stage.rt.actors.slots) if (a.drawn && a.drawn.shown && !a.lent) window.__ev.shown.add(a.model);
       if (P.stageWin && P.stageWin.drawAll(performance.now()).length) window.__ev.win++;
       if (!P.stage.battle || !window.__evDone) requestAnimationFrame(f); };
     requestAnimationFrame(f); });
-  await pg.waitForFunction(() => window.__play.stage.rt.log.some(([, m]) => m === 'scene_save 1'), null, { timeout: 120000 });
-  await pg.waitForFunction(() => window.__play.stage.battle, null, { timeout: 60000 });
+  await pg.waitForFunction(() => window.__play.stage.rt.log.some(([, m]) => m === 'scene_save 1'), null, { timeout: 120000, polling: 250 });
+  await pg.waitForFunction(() => window.__play.stage.battle, null, { timeout: 60000, polling: 250 });
   s = await st(pg);
   const req = await pg.evaluate(() => window.__req);
   ok(s.calls.includes('ev0101.rv_matiawase'), 'rv_matiawase ran', s.calls);
-  const ev = await pg.evaluate(() => { window.__evDone = true; const e = window.__ev; return { cam: e.cam, at: e.at || 0, shown: [...e.shown], win: e.win }; });
+  const ev = await pg.evaluate(() => { window.__evDone = true; const e = window.__ev; return { cam: e.cam, at: e.at || 0, shown: [...e.shown], win: e.win, occl: e.occl || 0, occlFar: e.occlFar || 0 }; });
   if (q.includes('autoskip=1')) ok(s.log.some(m => / skip ev0101\.rv_matiawase/.test(m)), '?autoskip=1: skipped inside rv_matiawase (after Zone.event)');
   else {
     ok(!s.log.some(m => / skip /.test(m)), 'default: rv_matiawase plays (no Skip in it or in main after it)', s.log.filter(m => / skip/.test(m)).join(' | '));
-    ok(ev.cam > 20 && ev.at === ev.cam, 'the event camera is the render camera while it runs (FUN_00379148)', JSON.stringify(ev));
+    ok(ev.cam > 20 && ev.at === ev.cam, 'the event camera (eye and forward) is the render camera while it runs (FUN_00379148)', JSON.stringify(ev));
+    ok(ev.occl > 20 && ev.occlFar < 0.5, 'the occluder volumes come from that camera, not the follow camera (FUN_0026c878)', `max ${ev.occlFar.toFixed(3)} u`);
     ok(ev.shown.includes('p000') && ev.shown.includes('p005') && ev.shown.includes('weapon'), 'p000, p005 and the weapon drawn (stage_view.js)', ev.shown.join(' '));
     ok(ev.win > 0, 'the window MES_10201VN drawn (event_window.js)', 'frames ' + ev.win);
     ok(s.log.some(m => / voice 10201vn$/.test(m)) && s.log.some(m => / fadein 1500$/.test(m)), 'playVoice 10201vn, then main\'s fadein 1500 unskipped');
@@ -86,8 +94,78 @@ async function beat(q) {
   ok(!errs.length, 'no page errors', errs.slice(0, 3).join(' | '));
   await pg.close();
 }
+// mean luminance (0..255) of a canvas screenshot, and of its inner rectangle: what the player sees
+async function lum(pg) {
+  const b64 = (await pg.screenshot({ type: 'png' })).toString('base64');
+  return pg.evaluate(async (d) => {
+    const im = new Image(); im.src = 'data:image/png;base64,' + d; await im.decode();
+    const c = document.createElement('canvas'); c.width = im.width; c.height = im.height;
+    const x = c.getContext('2d', { willReadFrequently: true }); x.drawImage(im, 0, 0);
+    const D = x.getImageData(0, 0, c.width, c.height).data; let s = 0, m = 0;
+    for (let i = 0; i < D.length; i += 4) { const v = (D[i] + D[i + 1] + D[i + 2]) / 3; s += v; if (v > m) m = v; }
+    return { mean: s / (D.length / 4), max: m };
+  }, b64);
+}
+// worker 0257: Start and ✕ in main's event; the fade under the menus; the faces' texture animation
+async function eventKeys() {
+  const { pg, errs } = await open('');
+  await pg.waitForFunction(() => window.__play.stage && window.__play.stage.rt.frameNo > 20, null, { timeout: 60000 });
+  await pg.evaluate(() => { const P = window.__play; P.enemyAI.eventFlags[0] = 2; P.enemyAI.eventFlags[63] = 6;
+    window.__tad = new Set(); window.__seen = new Map();
+    const f = () => { const R = P.stage.rt;
+      for (const a of R.actors.slots) if (a.drawn && a.drawn.tex && a.drawn.tex.length) { const k = a.model + ':' + JSON.stringify(a.drawn.tex); window.__tad.add(k); }
+      const g = P.root.getObjectByName('event actors');
+      if (g) g.traverse(o => { const t = o.material && o.material.map; if (t && t.isDataTexture && t.image && t.image.data) { const d = t.image.data; let h = 0; for (let i = 0; i < d.length; i += 64) h = (h * 31 + d[i]) | 0; const S = window.__seen.get(t) || new Set(); S.add(h); window.__seen.set(t, S); } });
+      requestAnimationFrame(f); };
+    requestAnimationFrame(f); });
+  await pg.waitForFunction(() => { const R = window.__play.stage.rt; return !R.battle && R.frameNo > 0 && R.skippable() && R.vm.calls.includes('ev0101.rv_matiawase') && R.view; }, null, { timeout: 120000 });
+  await pg.waitForFunction(() => { const R = window.__play.stage.rt; return R.log.some(([, m]) => / voice|voice /.test(m)) || R.frameNo > 200; }, null, { timeout: 120000 });
+  const before = await pg.evaluate(() => window.__play.stage.rt.frameNo);
+  // Start: the event pause, not the battle menu
+  await pg.keyboard.press('Enter');
+  await pg.waitForFunction(() => window.__play.stagePaused, null, { timeout: 5000 }).catch(() => null);
+  const a = await pg.evaluate(() => { const P = window.__play; return { held: P.stagePaused, menu: P.pause.active, prompt: !!(P.stageWin && P.stageWin.prompt), f: P.stage.rt.frameNo, log: P.stage.rt.log.slice(-1)[0][1] }; });
+  ok(a.held && !a.menu && a.prompt, 'Start in rv_matiawase: the event pause\'s screen, not the battle menu (FUN_003de130 -> FUN_003dfd58)', JSON.stringify(a));
+  await pg.waitForTimeout(400);
+  const f2 = await pg.evaluate(() => window.__play.stage.rt.frameNo);
+  ok(f2 === a.f, 'the event is held while paused (FUN_00376ee0: +0x1558 bit 39)', a.f + ' -> ' + f2);
+  // the fade: black over the world, under the menus (level poked while held: no frame integrates it)
+  const clear = await lum(pg);
+  await pg.evaluate(() => { window.__play.stage.rt.fade = { level: 256, rate: 0 }; window.__play.stageView.render(); });
+  await pg.waitForTimeout(150);
+  const black = await lum(pg);
+  ok(clear.mean > 8 && black.mean < clear.mean * 0.4 && black.max > 40, 'fade level 256: the world goes black (output.js), the pause\'s screen still shows above it', `mean ${clear.mean.toFixed(1)} -> ${black.mean.toFixed(1)}, brightest ${black.max}`);
+  await pg.evaluate(() => { window.__play.stage.rt.fade = null; window.__play.stageView.render(); });
+  // Start again: resumes; the frames go on
+  await pg.keyboard.press('Enter');
+  await pg.waitForFunction(f => !window.__play.stagePaused && window.__play.stage.rt.frameNo > f + 5, a.f, { timeout: 15000 }).catch(() => null);
+  const b = await pg.evaluate(() => ({ held: window.__play.stagePaused, f: window.__play.stage.rt.frameNo, skip: window.__play.stage.rt.skip }));
+  ok(!b.held && b.f > a.f + 5 && b.skip === 0, 'Start again: the event goes on, no Skip (FUN_003dfd90)', JSON.stringify(b));
+  // ✕ alone does nothing in the event (no Skip without the pause)
+  await pg.keyboard.press('Space');
+  await pg.waitForTimeout(150);
+  ok(await pg.evaluate(() => window.__play.stage.rt.skip === 0 && !window.__play.stagePaused), '✕ without the pause: no Skip');
+  // the faces change on the page (a DataTexture of the texanm targets gets more than one content)
+  const faces = await pg.evaluate(async () => { const t0 = performance.now(); while (performance.now() - t0 < 15000) { let m = 0; for (const S of window.__seen.values()) m = Math.max(m, S.size); if (m > 1) return { m, keys: window.__tad.size }; await new Promise(r => setTimeout(r, 200)); }
+    let m = 0; for (const S of window.__seen.values()) m = Math.max(m, S.size); return { m, keys: window.__tad.size }; });
+  ok(faces.m > 1, 'the faces change: the texanm target\'s texture gets new pixels (FUN_00259058 copies)', JSON.stringify(faces));
+  // Start, then ✕: Skip
+  await pg.keyboard.press('Enter');
+  await pg.waitForFunction(() => window.__play.stagePaused, null, { timeout: 5000 }).catch(() => null);
+  await pg.keyboard.press('Space');
+  await pg.waitForFunction(() => window.__play.stage.battle, null, { timeout: 60000 }).catch(() => null);
+  const c = await pg.evaluate(() => { const R = window.__play.stage.rt; return { battle: R.battle, skipLog: R.log.filter(([, m]) => /^skip /.test(m)).map(x => x[1]), paused: window.__play.stagePaused, menu: window.__play.pause.active }; });
+  ok(c.battle && c.skipLog.some(m => /rv_matiawase/.test(m)) && !c.paused, '✕ in the event pause: Skip (FUN_003dfdc8), main reaches battle()', JSON.stringify(c));
+  // back in battle: Start is the battle menu again
+  await pg.keyboard.press('Enter');
+  await pg.waitForFunction(() => window.__play.pause.active, null, { timeout: 5000 }).catch(() => null);
+  ok(await pg.evaluate(() => window.__play.pause.active), 'in battle mode Start is the pause menu');
+  ok(!errs.length, 'no page errors', errs.slice(0, 3).join(' | '));
+  await pg.close();
+}
 try {
   await beat('');
+  await eventKeys();
   await beat('&autoskip=1');
   // ?stage=0: no controller
   const o2 = await open('&stage=0');

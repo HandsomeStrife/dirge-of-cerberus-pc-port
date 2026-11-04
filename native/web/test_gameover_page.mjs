@@ -77,7 +77,7 @@ try {
         let x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9;
         for (const s of letters) for (const v of s.verts) {
           const [x, y, z] = [v.pos[0], -v.pos[1], -v.pos[2]];
-          const q = new V(w[0] * x + w[4] * y + w[8] * z + w[12], w[1] * x + w[5] * y + w[9] * z + w[13], w[2] * x + w[6] * y + w[10] * z + w[14]).project(camera);
+          const q = new V(w[0] * x + w[4] * y + w[8] * z + w[12], w[1] * x + w[5] * y + w[9] * z + w[13], w[2] * x + w[6] * y + w[10] * z + w[14]).applyMatrix4(L.proj2d.value);
           const px = (q.x + 1) / 2 * W, py = (q.y + 1) / 2 * H;
           x0 = Math.min(x0, px); x1 = Math.max(x1, px); y0 = Math.min(y0, py); y1 = Math.max(y1, py);
         }
@@ -107,7 +107,7 @@ try {
         const glows = L.last.filter(s => s.glow), on = (L.gpool ?? []).filter(g => g.mesh.visible);
         let x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9;
         for (const g of on) { const P = g.mesh.geometry.attributes.position.array; for (let j = 0; j < 4; j++) {
-          const q = new V(P[3 * j], P[3 * j + 1], P[3 * j + 2]).project(camera), px = (q.x + 1) / 2 * W, py = (q.y + 1) / 2 * H;
+          const q = new V(P[3 * j], P[3 * j + 1], P[3 * j + 2]).applyMatrix4(L.proj2d.value), px = (q.x + 1) / 2 * W, py = (q.y + 1) / 2 * H;
           x0 = Math.min(x0, px); x1 = Math.max(x1, px); y0 = Math.min(y0, py); y1 = Math.max(y1, py); } }
         if (!on.length) return { glows: glows.length, on: 0 };
         x0 = Math.max(0, Math.floor(x0)); y0 = Math.max(0, Math.floor(y0)); x1 = Math.min(W, Math.ceil(x1)); y1 = Math.min(H, Math.ceil(y1));
@@ -130,7 +130,7 @@ try {
         const THREE = await import('three');
         const { renderer, output, root, camera, gameOver: G } = window.__play, L = G.titleLayer;
         output.render(root, camera);
-        const Pk = output.prevProj.clone();                               // the kept frame's projection
+        const Pk = L.proj2d.value;                                        // the screen pixel in the kept frame (TitleLayer proj2d)
         // move both cameras between the kept frame and the glow pass (the game's copy is tied to the screen, not the world)
         const save = [camera, L.camera].map(c => [c.position.clone(), c.quaternion.clone()]);
         for (const c of [camera, L.camera]) { c.position.x += 3; c.position.y -= 2; c.rotateY(0.05); c.updateMatrixWorld(); }
@@ -152,7 +152,7 @@ try {
           return (at(x0, y0) * (1 - ax) + at(x0 + 1, y0) * ax) * (1 - ay) + (at(x0, y0 + 1) * (1 - ax) + at(x0 + 1, y0 + 1) * ax) * ay;
         };
         // the expected pixel from the glow's GS screen box alone: the copy's ST x 512 + the frame's XYOFFSET (1824, 1792) =
-        // GS, the GS point as view space (PROJ, the title's depth) through the kept projection
+        // GS, the GS point as view space (PROJ, the title's depth) through proj2d
         const PR = { fx: 299.972351, fy: 449.958527, cx: 2037, cy: 2048 };   // effects.js PROJ (camera 0)
         const score = () => {
           let n = 0, diff = 0, worst = 0;
@@ -184,6 +184,41 @@ try {
       });
       ok(K, 'a render with keep: false (report.js captures) leaves the kept frame as it was');
       ok(C.n >= 100 && C.mean < 6, `the glow pages copy the kept frame at the screen pixels of their GS boxes, with the cameras moved in between (${C.n} page texels: mean |dRGB| ${C.mean?.toFixed?.(1)}, worst ${C.worst}${C.err ? '; ' + C.err : ''})`);
+      // worker 0258: the title is fixed on the screen (FUN_002e3300 camera 1): the layer alone, glows included, renders the same
+      // pixels with the camera turned (the death camera moves) and through an event fov; corners where the menu draw puts them
+      const F = await pg.evaluate(async () => {
+        const THREE = await import('three');            // before the hiding: a game frame's roomShow would show the room again
+        const { renderer: r, output: out, root: T, camera: cam, gameOver: G } = window.__play, L = G.titleLayer;
+        const kept = new Map(), hud = out.hud, target = new THREE.WebGLRenderTarget(640, 360, { depthBuffer: true });
+        for (const c of T.children) { kept.set(c, c.visible); c.visible = c === L.group; }
+        out.hud = null;
+        const shot = () => { out.render(T, cam, target, { keep: false }); const px = new Uint8Array(640 * 360 * 4); r.readRenderTargetPixels(target, 0, 0, 640, 360, px); return px; };
+        const diff = (x, y) => { let d = 0; for (let i = 0; i < x.length; i += 4) if (x[i] !== y[i] || x[i + 1] !== y[i + 1] || x[i + 2] !== y[i + 2]) d++; return d; };
+        const q0 = cam.quaternion.clone(), p0 = cam.position.clone();
+        L.group.visible = false; const none = shot(); L.group.visible = true;
+        const a = shot();
+        cam.position.x += 300; cam.rotateY(1.1); cam.rotateX(0.4); cam.updateMatrixWorld();
+        const b = shot();
+        out.fitCamera(cam, 35);
+        const c = shot();
+        out.fitCamera(cam); cam.position.copy(p0); cam.quaternion.copy(q0); cam.updateMatrixWorld();
+        const nat = !!out.native, rw = nat ? out.framebuffer.width : 640, rh = nat ? out.framebuffer.height : 360, kx = (4 / 3) * rh / 425.5, ky = rh / 512;
+        r.setRenderTarget(nat ? out.framebuffer : target); L.fitProj(r); r.setRenderTarget(null);
+        const V = new THREE.Vector4(); let worst = 0;
+        for (const s of L.last.filter(s => s.verts && !s.line && s.tex)) for (const v of s.verts) {
+          V.set(v.pos[0], -v.pos[1], -v.pos[2], 1).applyMatrix4(L.proj2d.value);
+          const x = (V.x / V.w + 1) / 2 * rw, y = (1 - V.y / V.w) / 2 * rh;
+          const ex = nat ? v.gs[0] - 1824 : rw / 2 + (v.gs[0] - 2037) * kx, ey = nat ? v.gs[1] - 1792 : rh / 2 + (v.gs[1] - 2048) * ky;
+          worst = Math.max(worst, Math.hypot(x - ex, y - ey));
+        }
+        for (const [o, v] of kept) o.visible = v;
+        out.hud = hud; target.dispose();
+        return { drawn: diff(a, none), turned: diff(a, b), fov: diff(a, c), worst, glows: (L.gpool ?? []).filter(g => g.mesh.visible).length };
+      });
+      ok(F.drawn > 500 && F.glows === 8, `the title's layer alone draws (${F.drawn} pixels, ${F.glows} glows)`);
+      ok(F.turned === 0, `the title: turning the camera moves nothing (${F.turned} pixels differ)`);
+      ok(F.fov === 0, `the title: an event fov moves nothing (${F.fov} pixels differ)`);
+      ok(F.worst < 0.01, `the title's corners where the menu draw puts their GS points: worst ${F.worst.toFixed(5)} px`);
       // worker 0206: the dim backdrop (type 11 tag 40: FED model 4, FUN_002f5c50 kind 4): two gouraud quads over the view,
       // RGBA (24, 8, 8, 64) on the centre line to (0, 0, 0, 64) at the top / bottom, ALPHA 0x44 (w198 dumps g4 / g5). Render
       // with and without its meshes: near the quads' bottom edge every pixel = the frame behind it / 2 + the vertex colour
@@ -195,7 +230,7 @@ try {
         if (dim.length !== 2) return { n: dim.length };
         let y0 = 1e9, y1 = -1e9, x0 = 1e9, x1 = -1e9;
         for (const [, m] of dim) { const P = m.geometry.attributes.position.array; for (let j = 0; j < 4; j++) {
-          const q = new V(P[3 * j], P[3 * j + 1], P[3 * j + 2]).project(camera);
+          const q = new V(P[3 * j], P[3 * j + 1], P[3 * j + 2]).applyMatrix4(L.proj2d.value);
           x0 = Math.min(x0, (q.x + 1) / 2 * W); x1 = Math.max(x1, (q.x + 1) / 2 * W); y0 = Math.min(y0, (q.y + 1) / 2 * H); y1 = Math.max(y1, (q.y + 1) / 2 * H); } }
         // the bottom 8 % of the quads (readPixels rows count from the bottom), inside the canvas
         const bx0 = Math.max(0, Math.ceil(x0) + 2), bx1 = Math.min(W, Math.floor(x1) - 2), by0 = Math.max(0, Math.ceil(y0) + 2), by1 = Math.min(H, Math.floor(y0 + 0.08 * (y1 - y0)));
@@ -229,7 +264,7 @@ try {
         const [x, y, z] = [v.pos[0], -v.pos[1], -v.pos[2]], w = L.camera.matrixWorld.elements;
         c.add(new THREE_V(w[0] * x + w[4] * y + w[8] * z + w[12], w[1] * x + w[5] * y + w[9] * z + w[13], w[2] * x + w[6] * y + w[10] * z + w[14]));
       }
-      c.multiplyScalar(1 / Math.max(1, 4 * letters.length)).project(cam);
+      c.multiplyScalar(1 / Math.max(1, 4 * letters.length)).applyMatrix4(L.proj2d.value);
       return { titleAt: window.__titleAt, beginAt: window.__beginAt, n: L.last.filter(s => !s.glow && !s.line && s.model === undefined).length, lines: L.last.filter(s => s.line && s.type === 103).length, models: L.last.filter(s => s.model !== undefined).length, vis: vis.length, inRoot: L.group.parent === window.__play.root,
         letters: letters.length, ndc: [c.x, c.y] };
     });

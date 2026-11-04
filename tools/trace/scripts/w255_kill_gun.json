@@ -1,0 +1,1 @@
+{"name": "w255_kill_gun", "frames": 420, "log_from": 55, "doc": "worker 0255: killed standing-ish with the gun out and a Phoenix Down. TRACE_HIT=100:2:9999:-1,0 TRACE_POKE=9606a4=8", "events": [{"from": 10, "to": 130, "lx": 0.6, "ly": -1.0}, {"from": 60, "to": 62, "buttons": ["r1"]}]}

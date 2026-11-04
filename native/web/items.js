@@ -44,6 +44,10 @@ export const HEAL_REQ = 5;                   // FUN_005661e8 cases 0x12d / 0x12e
 export const EV_CAN_USE = 0x68, EV_USE = 100, EV_PLAYER_USE = 0x39;   // FUN_00573eb0 / FUN_00568ea0
 export const PLAYER_HP_MAX = 780;            // Vincent's status +4 (T w243_potion ps_04 = 780; the save's)
 export const GIL_MAX = 99999999;             // FUN_003213d8
+// worker 0255 (notes/items-research.md 'The revive'): the status flags +0x64, FUN_0055f128 / FUN_0055f338. FUN_0053e9e0's timer code
+// by flag (DAT_0058e580; FUN_0053f040 cases 0x6c / 0x6b / 0x6e / 0x6d / 0x6a clear it again: enemy_ai delayedTick)
+export const STATUS_TIMER = [-0x67, -0x68, -0x65, -0x66, -0x69];
+export const REVIVE_FX = 0x86c00, REVIVE_SE = 'msj_026';   // DAT_004a0bd8 (FUN_00335290), 0x58d968 (FUN_00560d80)
 // FUN_00310c40 = the save data's version (FUN_00312248 of "bzdNNN": 48 in the save); FUN_00316d70 reads the status
 // flags only from version 0x1d on
 export const SAVE_VERSION = 48;
@@ -149,6 +153,9 @@ export class Inventory {
   // aim_core's Ammo, read live: a reset (Restart / H) makes a new one (aim_core reset). `ammo` = the object or a getter
   get A() { return typeof this.ammo === 'function' ? this.ammo() : this.ammo;
   }
+  // worker 0254: the rounds in a record's status block: the inventory count (FUN_0031c390's list) and the slot's R+0x30 (FUN_00320308's
+  // list); both are read back by FUN_00311fa0 (T w254: 3 / 40 at the save, 7 / 100 at the Restart -> 3 / 40 after the reload)
+  ammoState() { const A = this.A; return A ? { count: this.count(AMMO_ID), loaded: A.loaded } : null; }
   rec(id) { return this.table[(id >>> 0).toString(16).padStart(8, '0')] || null; }
   find(id) { return this.slots.findIndex(e => e[0] === id); }                     // FUN_0031f0b0
   count(id) {
@@ -243,6 +250,8 @@ export function createItems({ data, effect = null, warn = console.warn, ground =
       inventory.sel = rec.inventory.sel ?? START_SEL; inventory.last = rec.inventory.last ?? START_LAST;
       inventory.selId = rec.inventory.selId ?? START_LAST; inventory.freed = (rec.inventory.freed || []).slice();
       taken.clear(); for (const k of rec.taken || []) taken.add(k);
+      const A = inventory.A, am = rec.inventory.ammo;      // aim_core Ammo: inv = reserve + loaded, sum = loaded (weapon.reset made it new)
+      if (A && am) { A.loaded = am.loaded; A.sum = am.loaded; A.inv = am.count - inventory.other; }
       return;
     }
     inventory.slots = RESTART_INVENTORY.map(e => e.slice()); inventory.gil = RESTART_GIL; inventory.other = RESTART_OTHER_LOADED;
@@ -539,8 +548,9 @@ export function createItems({ data, effect = null, warn = console.warn, ground =
   // -> FUN_00574058(P, 0); else id 0x29 -> FUN_00574058(P, 1). Pad table 0x46bae0: 0x1d = D-pad right, 0x1e = D-pad left,
   // 0x29 = no button. Gates: FUN_003242e8's mask (DAT_0046e290 +0x10 | +0x18) bit 0x2000 (use) / 0x4000 (cycle), FUN_00574d30's
   // result and the input object's +0x54 bit 8 (use): 0 on the page's path, as aim_core's `g` (fidelity-audit 'Item buttons').
+  // FUN_00331f08 runs vt+0x4c FUN_003320c0 only while FUN_00316cf8 (status +0x20 == 0) is false: at HP 0 neither button is read.
   function input({ use = false, next = false, prev = false } = {}) {
-    if (!W || !W.player) return;
+    if (!W || !W.player || W.player.hp === 0) return;
     if (use) requestUse();
     else if (next) cycle(0);
     else if (prev) cycle(1);
@@ -606,6 +616,9 @@ export function createItems({ data, effect = null, warn = console.warn, ground =
   //   0x14b: FUN_00336658(r0, P+0x100, model) -> FUN_00336748: effect r0 from the model's own FED (MP +0x3e4) attached to it
   //          (FUN_002dbc80 / FUN_002e8d50 / FUN_002e77f8). MISSING on the page (warned): no model FED is loaded.
   //   0x172: HP == max -> 1, else 0                                0x173: r0 < HP -> 1, else 0
+  //   0x178: status +0x64 bit r0 (r0 <= 7) -> 1, else 0            0x136: FUN_0055f128(P, r0, r1)     0x137: FUN_0055f338(P, r0, 0)
+  //   0x200 / 0x201: FUN_0056ae40 / FUN_0056afb8: the limit break: not on the page, so the script's event 0x68 refuses it (msj_001;
+  //   fidelity-audit 'Limit Breaker'). 0x151 / 0x14e (MP) are not sent by any item z128 places or drops.
   function playerCmd(t, c, r) {
     const P = W && W.player;
     if (!P) return undefined;
@@ -618,8 +631,71 @@ export function createItems({ data, effect = null, warn = console.warn, ground =
         return 0;
       case 0x172: return P.hp === hpMax(P) ? 1 : 0;
       case 0x173: return (r[0] | 0) < P.hp ? 1 : 0;
+      case 0x178: return (r[0] >>> 0) > 7 ? 0 : ((P.s64 ?? 0) >>> r[0]) & 1;
+      case 0x136: return (r[0] >>> 0) > 7 ? 0 : statusOn(r[0] >>> 0, r[1] | 0);
+      case 0x137: return (r[0] >>> 0) > 7 ? 0 : statusOff(r[0] >>> 0, true);
+      case 0x200: case 0x201:
+        warnOnce('items: the limit break (cmd 0x200 / 0x201, FUN_0056ae40 / FUN_0056afb8) is not on the page: the Limit Breaker is refused');
+        return 0;
+      case 0x14e: case 0x151:
+        warnOnce(`items: cmd 0x${c.toString(16)} (MP, FUN_00316998 / status +0x24) not on the page`);
+        return undefined;
       default: return undefined;
     }
+  }
+  // FUN_0055f3b0(P, k, on): the flag; FUN_0055f448's side effects for k = 0-3: DAT_0046e54c |= 0xe0 and FUN_003212d8 (a copy in the
+  // stage record, no reader on the page). k = 4-7: its camera / state paths are not on the page (warned).
+  function statusBit(k, on) {
+    const P = W.player, b = 1 << k, s = (P.s64 ?? 0) >>> 0;
+    if (!!(s & b) === !!on) return 0;
+    if (k > 3) warnOnce(`items: status ${k}'s FUN_0055f448 path not translated`);
+    P.s64 = on ? (s | b) >>> 0 : (s & ~b) >>> 0;
+    if (hud) hud(0xe0);
+    push(`status ${k} ${on ? 'on' : 'off'}`);
+    return 1;
+  }
+  // FUN_0055f338(P, k, keep): the flag off, and unless keep != 0 its pending timer leaves the list (FUN_0053edb0)
+  function statusOff(k, drop) {
+    const v = statusBit(k, 0);
+    if (drop && W.delayedDrop && k < STATUS_TIMER.length) W.delayedDrop(W.playerObj.id, STATUS_TIMER[k]);
+    return v;
+  }
+  // FUN_0055f128(P, k, ticks): 0 restarts; 1 refused while on; 2 refused while 2 or 3 is on; 3 refused while on, and takes over from
+  // 2 (bit 2 off, its timer kept); 4 refused while on. Then the flag, and ticks > 0: FUN_0053e9e0 with the flag's code.
+  // L: k = 4's weapon test (W+4 bit 0x1000) and k = 5-7 are not reached: no item on the page sends them.
+  function statusOn(k, ticks) {
+    const P = W.player, s = (P.s64 ?? 0) >>> 0;
+    if (k === 0 && (s & 1)) statusOff(0, true);
+    else if (k === 1 && (s & 2)) return 0;
+    else if (k === 2 && (s & 0xc)) return 0;
+    else if (k === 3) {
+      if (s & 8) return 0;
+      if (s & 4) P.s64 = (s & ~4) >>> 0;
+    } else if (k === 4 && (s & 0x10)) return 0;
+    else if (k > 4) { warnOnce(`items: FUN_0055f128 status ${k} not on the page`); return 0; }
+    statusBit(k, 1);
+    if (ticks > 0 && W.delayedPost) W.delayedPost(W.playerObj.id, STATUS_TIMER[k], ticks);
+    return 1;
+  }
+  // FUN_00560d80(P, 2 / 1) from FUN_00334590 case 5 (the Phoenix Down's status 3 / 2): FUN_00316948(status, 1) (HP = max), the state 0x16
+  // (play.js, player.js revive), FUN_00335290(P, mode): effect DAT_004a0bd8[mode] = 0x86c00 at +0x90 (FUN_003365e0), the sound 0x58d968
+  // msj_026 (FUN_0054b158), DAT_0046e54c |= 4. T w255_phoenix record 1005.
+  function reviveStart() {
+    const P = W.player;
+    P.hp = hpMax(P);
+    if (effect && effect.spawn) effect.spawn(REVIVE_FX, P.pos.slice());
+    sound(REVIVE_SE, P.pos);
+    if (hud) hud(4);
+    push('revive');
+  }
+  // FUN_00334590 case 6: FUN_00316948(status, bit 3 ? 1 : 0) (max, or status 2: 20% of it, at least 1), vt+0x344, both flags off with their
+  // timers, FUN_0055f128(P, 0, 0xb4): 180 ticks without damage (T w255_phoenix: s64 1 from record 1008 to 1158, 150 frames)
+  function reviveEnd() {
+    const P = W.player, s = (P.s64 ?? 0) >>> 0, max = hpMax(P);
+    P.hp = (s & 8) ? max : (Math.trunc(Math.fround(max * Math.fround(0.2))) || 1);
+    if (hud) hud(4);
+    statusOff(3, true); statusOff(2, true);
+    statusOn(0, 0xb4);
   }
   // request 5's vt+0x1f4 = FUN_0055c910(P, n): FUN_003168e8 (0 < HP < max: HP += n, capped at max), then vt+0x32c =
   // FUN_00576b10 -> FUN_0055ca20 (FUN_00567d00: the number popup returns for Vincent; n > 0: vt+0x344) and vt+0x344 =
@@ -635,6 +711,7 @@ export function createItems({ data, effect = null, warn = console.warn, ground =
   return {
     attach, restart, areaSwitch, sweep, update, drop, cmd, deleted, inventory, taken, list,
     input, useSlot, playerCmd, heal,                          // worker 0243: item use
+    statusOn, statusOff, reviveStart, reviveEnd,              // worker 0255: FUN_0055f128 / FUN_0055f338, FUN_00334590's revive
     id: k => (byRec.has(k) && !byRec.get(k).gone ? byRec.get(k).id : -1),
     t: { inRange, take, touch, activate, modelIndex },
   };

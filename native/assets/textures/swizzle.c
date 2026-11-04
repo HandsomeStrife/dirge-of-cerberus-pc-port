@@ -142,6 +142,7 @@ int dtex_unswizzle4(uint8_t *dst, const uint8_t *src, int w, int h)
  * reaches 0xff / 0x80 (ff88's CLUT has 29% of its texels above 0x80). dtex_raw_alpha = 1 keeps the byte
  * (128 == 1.0) for a renderer that scales it itself (export_web_room.py -> room.js; worker 0226). */
 int dtex_raw_alpha = 0;
+int dtex_mip_level = 0;
 /* Raw mode, formats without an 8-bit alpha: the GS expands it with TEXA (CT24: TA0; CT16 / 16-bit CLUT: TA1 when
  * bit 15 is set, else TA0 unless AEM and the colour is black). The room's draws in the GS dumps tp09 / tp0b /
  * npc_g100 run with TEXA 0x8000000080 (TA0 = TA1 = 0x80, AEM 0), so every such texel is 0x80 (worker 0227). */

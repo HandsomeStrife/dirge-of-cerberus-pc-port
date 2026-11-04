@@ -27,10 +27,6 @@ export function createStageView({ rt, camera, output, canvas, lib = null, root =
   let view = null;
   if (lib && root) view = import('./event_actors.js').then(m => (view = m.createEventActorView({ root, lib, rt, litPatch, light, weapon, warn })));
   else warn('stage view: no event actor library (data/event/actors): the events\' actors are not drawn');
-  // GUESS: the fade particle's draw as a black layer (intro.js's; notes/fidelity-audit.md 'GUESS: the event fade's draw')
-  const veil = document.createElement('div');
-  veil.style.cssText = 'position:fixed;left:0;top:0;width:100%;height:100%;background:#000;opacity:0;pointer-events:none;z-index:5';
-  (canvas && canvas.parentNode ? canvas.parentNode : document.body).appendChild(veil);
   let lastFov = null, wasActive = false;
   const S = {
     rt,
@@ -50,11 +46,23 @@ export function createStageView({ rt, camera, output, canvas, lib = null, root =
       } else if (wasActive) {                                        // back to gameplay's projection (play.js fits 73.5)
         wasActive = false; lastFov = null; output.fitCamera(camera);
       }
-      veil.style.opacity = rt.fade ? String(Math.min(1, Math.max(0, rt.fade.level / 256))) : '0';
+      // GUESS: the fade particle's draw as a black layer (output.js fade, before the menus; notes/fidelity-audit.md 'GUESS: the event fade's draw')
+      output.fade = rt.fade ? Math.min(1, Math.max(0, rt.fade.level / 256)) : 0;
     },
     refit() { lastFov = null; },
+    // the event pause (FUN_003de130's event branch -> FUN_003dfd58 -> FUN_00376ee0(ev, 1, 1); FUN_003dfd90 / FUN_003dfdc8 -> (ev, 0, 1)):
+    // +0x1558 bit 39, the voices (FUN_003ea9f0 / FUN_003eaa78), the SEs, the effects, the BGM volume (FUN_003ed7d0(0) / (0x7f)).
+    // play.js holds the event by not running game frames. L: the voice channels' decode pauses in the game; muted here, as intro.js
+    pause(on) {
+      rt.log.push([rt.frameNo, on ? 'event pause' : 'event resume']);
+      const s = rt.sound, m = s && s.music && s.music(), vo = s && s.voices && s.voices();
+      if (m && m.setVolume) m.setVolume(on ? 0 : 0x7f);
+      const au = s && s.audio && s.audio();
+      if (au && au.setPaused) au.setPaused(on);                      // FUN_003e86e0(.., on)
+      if (vo && vo.out) vo.out.gain.value = on ? 0 : 0x7fff / 32768;
+    },
     dispose() {
-      veil.remove();
+      output.fade = 0;
       if (view && view.dispose) view.dispose();
       if (wasActive) output.fitCamera(camera);
     },

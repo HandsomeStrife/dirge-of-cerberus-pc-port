@@ -313,7 +313,7 @@ try {
     const again = [];
     await sweep(fireI, -1, again);
     const fire = again[again.length - 1] || { id: null, side: 0 };
-    P.aim.press('r1'); await wait(1500);                                    // fire, the reticle off him
+    P.aim.press('r1'); await wait(3000);                                    // fire, the reticle off him; r_stbf0 runs 70 frames
 
     return { poseErr, vinErr, aimErr, lockId, lockErr, heldId, heldErr, offErr, dropAt: (steps.find(x => x.id !== 66) || {}).i, fireId: fire.id, fireSide: fire.side, fireI, upDrop, shotsNoLock, hpNoLock, stateNoLock, hp0, hp: a.hp, astate: a.astate, mode: a.ai.mode, clip: a.C.clip, drawn: body.clip, hold: a.C.hold, drawnLoop: body.head ? body.head.loop : null, drawnFrame: body.frame, drawnN: body.side.clips[body.clip]?.frames };
   });

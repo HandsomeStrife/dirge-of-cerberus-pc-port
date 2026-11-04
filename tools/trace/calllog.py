@@ -577,6 +577,17 @@ SETS["w243"] = [
     dict(id=2439, kind="site", where=(0x339590, 0x339988, 0x3AE308), name="hud_item", copy=[cpr("a1"), cpr("a2")]),
     dict(id=2440, kind="site", where=(0x339590, 0x339988, 0x3ADDA8), name="hud_hp", copy=[cpr("a1"), cpr("a2")]),
 ]
+# worker 0255 (notes/items-research.md 'The revive'): FUN_00334590's calls, FUN_00560d80 and its sound / effect, the status setters
+SETS["w255"] = [
+    SETS["sound"][0],
+    dict(id=2550, kind="site", where=(0x334590, 0x334C80, 0x560D80), name="revive", copy=[cpr("a1")]),
+    dict(id=2551, kind="site", where=(0x334590, 0x334C80, 0x316948), name="hp_set", copy=[cpr("a1")]),
+    dict(id=2552, kind="site", where=(0x334590, 0x334C80, 0x55F128), name="status_on", copy=[cpr("a1"), cpr("a2")]),
+    dict(id=2553, kind="site", where=(0x334590, 0x334C80, 0x336EF0), name="cam_msg", copy=[cpr("a2")]),
+    dict(id=2554, kind="site", where=(0x335290, 0x335338, 0x3365E0), name="effect", copy=[cpr("a0")]),
+    dict(id=2555, kind="site", where=(0x565480, 0x565bd0, 0x561270), name="air_death", copy=[cpr("a2"), cpr("a3")]),
+    dict(id=2556, kind="site", where=(0x5618D0, 0x561F78, 0x353280), name="launch", copy=[cpr("a2")]),
+]
 # worker 0244 (the camera after the rescue's battle()): camera type 0xc's update (vt 0x4a07a8 +0x14 = FUN_00330478) and
 # enter (+0xc = FUN_00330240) with the caller and CAM+0x17c / +0x1c0 / eye after; the reset FUN_003285d0, battle()'s
 # FUN_00324e70, FUN_0053d420 (the 0x7d5 re-enter) and FUN_00325880

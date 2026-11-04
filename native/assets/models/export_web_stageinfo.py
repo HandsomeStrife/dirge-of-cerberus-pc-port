@@ -31,12 +31,14 @@ ROOT = os.path.abspath(os.path.join(HERE, '..', '..', '..'))
 sys.path.insert(0, HERE)
 from export_web_menu import Elf, read_layout, OPLEN_AT, OPLEN_N  # noqa: E402
 import kel_class as K  # noqa: E402
+from export_web_pause import LOCALE, kelstr_decode, kelstr_keys, kelstr_message  # noqa: E402
 
 LANGUAGE = 2                                    # FUN_00242450 for the uk build (as export_web_pause.py)
 KIND_BOX_AT = 0x4a8250                          # FUN_003fdf00: box kind = DAT_004a8250[stage-info kind] (7 bytes)
 SCRIPTS = {0x2b: (0x47a220, 0x51cfd8), 0x1f: (0x47a0a0, 0x47a0a0)}   # (FUN_003e2760() == 0, != 0)
 ITEM_FX_AT = (0x47a528, 0x51d090)               # FUN_003c6f98: slot 1's effect id by event flag 55 (12)
-LAYOUTS = {0x2b: (0x479610, 0x51f9a0), 0x1f: (0x479168, 0x51f960)}   # FUN_003c6600 case 0x1a: script, override table
+LAYOUTS = {0x2b: (0x479610, 0x51f9a0), 0x1f: (0x479168, None)}   # FUN_003c6600 case 0x1a: script, override table (FUN_003c5d10's third argument; kind 0x1f passes 0)
+OBJECTIVES_AT, OBJECTIVES_N = 0x47a388, 0x28     # FUN_003c6600 case 0x1a, kind 0x1f: DAT_0047a388[stat 0x32], kelstr ids (FUN_003fd578)
 COLOURS_AT, CODES_AT, INLINE_AT, IMAGES_AT = 0x47a7c0, 0x47abb0, 0x47a990, 0x47bfc0
 MSG_FILE = 'noPath/0c0641ca.bin'                # ev0100's message file: the one the game had loaded (save RAM equal)
 MSG_KEYS = ['MES_ITEM_%02d' % i for i in range(1, 12)]
@@ -128,7 +130,7 @@ def messages(path, elfpath, elf, keys):
     return out
 
 
-def dump_reference(path):
+def dump_reference(path, rect=(14, 104, 420, 400)):
     """The open box's draws in the last full frame of a GS dump (test_stage_info.mjs compares them): the font (TBP 0,
     PSMT4HH) and menu page 2 (TBP 0x2a4c) sprites inside widget 0x35's rect (drawable px, a 6 px margin), in order, as
     1/16 drawable units (XYOFFSET removed), UV / RGBA per vertex, TEX0 / TEX1. Game-derived: gitignored data/."""
@@ -166,7 +168,7 @@ def dump_reference(path):
             off += 0x2000
         else:
             break
-    x0, x1, y0, y1 = 14 * 16, 420 * 16, 104 * 16, 400 * 16
+    x0, x1, y0, y1 = rect[0] * 16, rect[2] * 16, rect[1] * 16, rect[3] * 16
     out = []
     for d in g.draws[vs[-2]:vs[-1]]:
         if not d['verts'] or not d['tme'] or d['ptype'] != 6:   # sprites (the frame's last draw is a flat strip here)
@@ -192,6 +194,7 @@ def main():
     ap.add_argument('--disc', default=os.path.join(ROOT, 'extract/_KEL'))
     ap.add_argument('-o', default=os.path.join(ROOT, 'native/web/data/stage_info.json'))
     ap.add_argument('--dump', help='GS dump (.gs, unpacked) of the open MES_ITEM_07 box: also write stage_info_ref.json')
+    ap.add_argument('--dump-objective', help='GS dump (.gs, unpacked) of the open objective box: also write stage_info_k1_ref.json (worker 0258)')
     a = ap.parse_args()
     elf = Elf(open(a.elf, 'rb').read())
     oplen = list(elf.read(OPLEN_AT, OPLEN_N))
@@ -206,7 +209,7 @@ def main():
            'inline': [], 'fed': 'stage_info.fed', 'fedId': FED_ID}
     for k, (lay, tab) in LAYOUTS.items():
         doc['layouts'][str(k)] = read_layout(elf, lay, oplen).hex()
-        ov = elf.u32(tab + 4 * LANGUAGE) if pal else 0     # FUN_003ca488: param_6[language] when FUN_003e2760()
+        ov = elf.u32(tab + 4 * LANGUAGE) if pal and tab else 0     # FUN_003ca488: param_6[language] when FUN_003e2760()
         b, q, n = read_layout(elf, lay, oplen), 0, 0
         while b[q] != 0xff:                     # one override rect per op 0x0e (FUN_003ca488)
             n += b[q] == 0x0e
@@ -222,6 +225,8 @@ def main():
                               'col': col})
         i += 1
     doc['messages'] = messages(os.path.join(a.disc, MSG_FILE), a.elf, elf, MSG_KEYS)
+    kelstr = kelstr_decode(open(os.path.join(a.disc, 'data/etc/locale', LOCALE, 'kelstr.bin'), 'rb').read(), kelstr_keys(elf))
+    doc['objectives'] = [kelstr_message(kelstr, elf.u32(OBJECTIVES_AT + 4 * i)).hex() for i in range(OBJECTIVES_N)]
     fed = open(os.path.join(a.disc, FED_FILE), 'rb').read()
     if fed[:4] != b'FED\x08' or struct.unpack_from('<I', fed, 4)[0] != FED_ID:
         raise SystemExit('%s: not FED %#x' % (FED_FILE, FED_ID))
@@ -235,6 +240,11 @@ def main():
         with open(os.path.join(os.path.dirname(os.path.abspath(a.o)), 'stage_info_ref.json'), 'w') as f:
             json.dump(ref, f, separators=(',', ':'))
         print('reference: %d draws from %s' % (len(ref['draws']), ref['source']))
+    if a.dump_objective:
+        ref = dump_reference(a.dump_objective, (14, 225, 420, 290))     # widget 2's rect (drawable px) with a margin
+        with open(os.path.join(os.path.dirname(os.path.abspath(a.o)), 'stage_info_k1_ref.json'), 'w') as f:
+            json.dump(ref, f, separators=(',', ':'))
+        print('objective reference: %d draws from %s' % (len(ref['draws']), ref['source']))
     print('stage info: kinds %s, %d / %d steps, %d messages, %d inline images -> %s' % (
         doc['kinds'], len(doc['scripts']['43']), len(doc['scripts']['31']), sum(1 for v in doc['messages'].values() if v), len(doc['inline']), a.o))
 

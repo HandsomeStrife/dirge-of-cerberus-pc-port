@@ -91,9 +91,13 @@ const len = v => Math.hypot(v[0], v[1], v[2]);
 }
 
 {
-  // mover 3 from the air (C+0x1c0 bit 9 clear): FUN_003504b0 waits, the mode-0xc step sets bit 9 (on the
+  // FUN_0034bd10 entering mode 0xc: C+0x1c0 &= 0xffe3fbff (0x400, 0x40000, 0x80000, 0x100000), |= 0x200 (worker 0256)
+  const e = { pos: [0, 0, 0], face: [1, 0, 0], C: { f1c0: 0x1c0400, f1c4: 0, f45c: 0x20, mover: 0, mm: 0, spd: 50, s214: 0, t: 0 }, B: mkB() };
+  PM.approachStart(e, { pos: [0, 0, 60] }, 20, 1000, () => {});
+  ok((e.C.f1c0 & 0x1c0600) === 0x200, `entering mode 0xc: C+0x1c0 0x${e.C.f1c0.toString(16)} (bits 0x400, 0x40000, 0x80000, 0x100000 clear, 0x200 set)`);
+  // mover 3 from the air, already in mode 0xc (C+0x1c0 bit 9 clear): FUN_003504b0 waits, the mode-0xc step sets bit 9 (on the
   // ground: body state 0), and the next frame walks
-  const a = { pos: [0, 0, 0], face: [1, 0, 0], C: { f1c0: 0, f1c4: 0, f45c: 0x20, mover: 0, mm: 0, spd: 50, s214: 0, t: 0 }, B: mkB() };
+  const a = { pos: [0, 0, 0], face: [1, 0, 0], C: { f1c0: 0, f1c4: 0, f45c: 0x20, mover: 0, mm: 0xc, spd: 50, s214: 0, t: 0, want: [1, 0, 0], wk: 0 }, B: mkB() };
   const tp = [0, 0, 60];
   const walk = (b, mv) => [f(b.pos[0] + mv[0]), b.pos[1], f(b.pos[2] + mv[2])];
   ok(PM.approachStart(a, { pos: tp }, 20, 1000, () => {}) && a.C.mover === 3 && a.C.mm === 0xc, 'approachStart: mover 3, move mode 0xc');

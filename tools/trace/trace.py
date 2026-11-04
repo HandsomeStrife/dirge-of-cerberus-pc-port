@@ -24,6 +24,15 @@ from p2s import read_p2s, write_p2s  # noqa: E402
 DEFAULT_STATE = "/srv/shared/dirge-port/save-states/sea-of-flames.p2s"
 DEFAULT_OUT = os.path.join(HERE, "out")       # gitignored (default-deny .gitignore)
 UNIT = "pcsx2trace"
+TRACE_DIR = os.path.join(HERE, "out", "env")  # the unit's durable dir (cfg/, pcsx2/, trace.env); gitignored
+
+
+def scratch_dir(given=None):
+    """The unit reads only TRACE_DIR/trace.env, so an older TRACE_SCRATCH would start the wrong state: ignore it."""
+    given = given or os.environ.get("TRACE_SCRATCH")
+    if given and os.path.abspath(given) != TRACE_DIR:
+        print("note: ignoring TRACE_SCRATCH=%s, the pcsx2trace unit uses %s" % (given, TRACE_DIR), file=sys.stderr)
+    return TRACE_DIR
 
 # Pad byte 2/3 bit numbers (libpad; active low). byte 2 = bits 0..7, byte 3 = bits 8..15.
 BUTTONS = {"select": 0, "l3": 1, "r3": 2, "start": 3, "up": 4, "right": 5, "down": 6, "left": 7,
@@ -70,6 +79,7 @@ def systemctl(*a):
 
 
 def run(script_path, out_dir, state, scratch, timeout_s):
+    scratch = scratch_dir(scratch)
     script = json.load(open(script_path))
     name = script["name"]
     mem = read_p2s(state)
@@ -78,6 +88,9 @@ def run(script_path, out_dir, state, scratch, timeout_s):
     table = fields.field_table(bases)
     frames = build_frames(script)
     log_from = int(script.get("log_from", 0))
+    if os.environ.get("TRACE_HIT"):
+        hook.LOG_END -= 0x1000                  # room for TRACE_HIT's stub below
+    hit_base = hook.LOG_END
     clog = os.environ.get("TRACE_CALLLOG")     # optional call logger (calllog.py)
     if clog:
         import calllog
@@ -90,6 +103,29 @@ def run(script_path, out_dir, state, scratch, timeout_s):
         a_, w_ = (int(x, 16) for x in item.split("="))
         print("poke %#x: %#010x -> %#010x" % (a_, struct.unpack_from("<I", ee, a_)[0], w_))
         struct.pack_into("<I", ee, a_, w_)
+    # TRACE_HIT="frame:flags:dmg:dx,dz" (worker 0255): a real hit on Vincent in that frame, the game's own FUN_0055db50 order: FUN_0055c7f8(P, dmg) (HP, the
+    # death's vt+0x334) then FUN_00565480(P, flags, dir, point, alive before). A stub in FUN_00334590 case 2's `jal FUN_00326068` (a0 = 1), so it runs once a frame.
+    hit = os.environ.get("TRACE_HIT")
+    if hit:
+        STUB, DIR, SITE, CASE2 = hit_base, hit_base + 0x200, 0x334694, 0x326068
+        P = bases["P"]
+        def li(r, v): return [0x3C000000 | r << 16 | (v >> 16), 0x34000000 | r << 21 | r << 16 | (v & 0xFFFF)]
+        def jal(a): return [0x0C000000 | a >> 2, 0]
+        code = [0x27BDFFC0, 0xFFBF0000, 0xFFA40008]               # addiu sp, -0x40; sd ra, 0(sp); sd a0, 8(sp)
+        for n, one in enumerate(hit.split(";")):                  # several hits: "frame:flags:dmg:dx,dz;frame:..."
+            fr, fl, dm, d = one.split(":")
+            fr, fl, dm = int(fr), int(fl, 0), int(dm); dx, dz = (float(x) for x in d.split(","))
+            D = DIR + n * 0x20
+            struct.pack_into("<4f", ee, D, dx, 0.0, dz, 0.0)
+            code += li(8, hook.CTRL + 4) + [0x8D080000] + li(9, fr)   # t0 = frame counter; t1 = fr
+            body = li(4, P) + li(5, dm) + jal(0x55C7F8) + li(4, P) + li(5, fl) + li(6, D) + li(7, D + 0x10) + li(8, 1) + jal(0x565480)
+            code += [0x15090000 | len(body), 0] + body                # bne t0, t1, next; nop
+        code += [0xDFBF0000, 0xDFA40008, 0x27BD0040, 0x08000000 | CASE2 >> 2, 0]   # ld ra; ld a0; addiu sp; j FUN_00326068; nop
+        for i, w in enumerate(code):
+            struct.pack_into("<I", ee, STUB + 4 * i, w)
+        if struct.unpack_from("<I", ee, SITE)[0] != 0x0C000000 | CASE2 >> 2:
+            raise RuntimeError("TRACE_HIT: FUN_00334590 case 2's call site moved")
+        struct.pack_into("<I", ee, SITE, 0x0C000000 | STUB >> 2)
     if clog:
         hook.LOG_END = log_end
         lo, hi = (int(x) for x in os.environ.get("TRACE_CALLLOG_FRAMES", "0:100000").split(":"))
@@ -162,7 +198,7 @@ def main():
     ap.add_argument("scripts", nargs="+")
     ap.add_argument("--out", default=DEFAULT_OUT)
     ap.add_argument("--state", default=DEFAULT_STATE)
-    ap.add_argument("--scratch", default=os.environ.get("TRACE_SCRATCH", "/tmp/dirge-trace"))
+    ap.add_argument("--scratch", default=None, help="obsolete: the unit's dir is TRACE_DIR")
     ap.add_argument("--timeout", type=float, default=600)
     a = ap.parse_args()
     for s in a.scripts:

@@ -197,9 +197,9 @@ SKY_FC = '0680ff35'   # TBP 11504 sky-dome texture (correlation 1.000), see expo
 
 # z128's chunks do NOT agree on env slot 0 (fog): 06800012/112/212 '38 38 47, 0 810, floor 51',
 # 06800312 '39 39 46, 0 640, 128', 06800412-0a12 '39 39 46, 0 640, 240', 06800b12/0c12
-# '20 20 29, 0 1280, 240'. Which chunk's env the game makes live is not decoded. 06800012 is
-# chosen because it is the one the hero dump confirms: FOGCOL 38,38,47 and floor 51 exact,
-# ramp F = 254.56 - 0.3150*w (far 810). Not by triangle count, not by glob order.
+# '20 20 29, 0 1280, 240'. The live table is chunk 00's: FUN_00269d90 -> FUN_0026afe8 reads only
+# slot-table entry 0 (DAT_004e4c80; worker 0260, against DAT_004e62b0 at the route states); the hero
+# dump: FOGCOL 38,38,47 and floor 51 exact, ramp F = 254.56 - 0.3150*w (far 810).
 ENV_CHUNK = '06800012'
 
 # Texture binding read from the game files (--bind file, the default; worker 0051, 2026-10-26).
@@ -344,10 +344,11 @@ def cull_tag(pk, t):
     return (n[0], n[1], n[2], n[0] * q[0] + n[1] * q[1] + n[2] * q[2])
 
 
-def build_flat_kept(packets, idxs, kept, tags=None, tag_of=None, culls=None):
+def build_flat_kept(packets, idxs, kept, tags=None, tag_of=None, culls=None, envs=None, env_of=None):
     """export_bmd_bound.build_flat restricted to the kept triangles of each packet.
     tags (list) gets tag_of(packet index) once per emitted vertex (the UV track, bmd_uvanim.py).
-    culls (list) gets 5 floats once per emitted vertex: cull_tag + the own game-front plane distance."""
+    culls (list) gets 5 floats once per emitted vertex: cull_tag + the own game-front plane distance.
+    envs (list) gets env_of(packet index) once per emitted vertex (the chain's env slot, +0x96)."""
     flat = []; ntri = 0
     for pi in idxs:
         pk = packets[pi]; V = pk['verts']; UV = pk['uv']; C = pk['col']
@@ -364,6 +365,8 @@ def build_flat_kept(packets, idxs, kept, tags=None, tag_of=None, culls=None):
                              rgba[0]/255.0, rgba[1]/255.0, rgba[2]/255.0, rgba[3]/255.0))
             if tags is not None:
                 tags.extend((tag_of(pi),) * 3)
+            if envs is not None:
+                envs.extend((env_of(pi),) * 3)
             ntri += 1
     return flat, ntri
 
@@ -407,6 +410,7 @@ def main():
     flat_by = defaultdict(list); ntri_by = defaultdict(int)
     cul_by = defaultdict(list)          # per-vertex back-face tag (cull_tag)
     occl_chunks = []                                                    # bone tree + occluder quads per chunk (bmd_occl.py)
+    env_by = defaultdict(list)          # per-vertex env slot (chain header +0x96; FUN_00265560)
     uvt_by = defaultdict(list); uv_anims = []; uv_tracks = []         # per-vertex UV track (-1 none); bmd_uvanim.py
     abe_by = defaultdict(bool);  npk_by = defaultdict(int)
     ntri_chunk = defaultdict(int)
@@ -612,9 +616,10 @@ def main():
                 else:
                     runs.append(((vg, nd), [i]))
             for (vg, nd), ridx in runs:
-                tg = []; cg = []
+                tg = []; cg = []; eg = []
                 flat, ntri = build_flat_kept(packets, ridx, under if key.endswith(UNDER_SUFFIX) else kept,
-                                             tg, lambda i: chain_gtrack.get(chain[i], -1), cg)
+                                             tg, lambda i: chain_gtrack.get(chain[i], -1), cg,
+                                             eg, lambda i: hdrs[chain[i]]['env'] if chain[i] in hdrs else 0)
                 if ntri == 0:
                     continue
                 r = ranges_by[key]
@@ -626,6 +631,7 @@ def main():
                 flat_by[key].extend(flat); ntri_by[key] += ntri; npk_by[key] += len(ridx)
                 uvt_by[key].extend(tg)
                 cul_by[key].extend(cg)
+                env_by[key].extend(eg)
                 ntri_chunk[cid] += ntri
                 if any(packets[i]['abe'] for i in ridx):
                     abe_by[key] = True
@@ -703,6 +709,10 @@ def main():
         assert len(cul_by[key]) == 5 * 3 * ntri_by[key], key
         array.array('f', cul_by[key]).tofile(open(cul, 'wb'))   # back faces: float32 x 5 per vertex (cull_tag, own dg)
         g['cul'] = os.path.basename(cul)
+        if any(e != 0 for e in env_by[key]):   # the chain's env slot, u8 per vertex (room.js fog; none = all slot 0)
+            envf = os.path.splitext(os.path.join(os.path.dirname(a.out) or '.', mesh_name))[0] + '.env'
+            array.array('B', env_by[key]).tofile(open(envf, 'wb'))
+            g['env'] = os.path.basename(envf)
         if base in blend_ref:
             g['bucket'] = border(key)
         if ATEST_SUFFIX in base:
@@ -782,6 +792,10 @@ def main():
                   sum(ntri_chunk[c] for c in cs)), file=sys.stderr)
     manifest['env'] = dict(env, chunk=env_cid, fog_directive=fog,
                            chunks_differing={d: cs for d, cs in differ.items()})
+    # FUN_00269d90 -> FUN_0026afe8: the 32 slots DAT_004e62b0 always come from slot 0's chunk (chunk 00), and each
+    # chain picks one by its header's +0x96 (FUN_00265560); RAM agrees at every route state (worker 0260)
+    manifest['env_fog'] = [dict(zip(('color', 'near', 'far', 'min'), (e['fog_col'], e['fog_near'] * 10, e['fog_far'] * 10, e['fog_floor'] / 255)))
+                           for e in (read_env(open(os.path.join(EXTRACT, env_cid + '.bin'), 'rb').read(), s) for s in range(32))]
     json.dump(manifest, open(a.out + '_manifest.json', 'w'), indent=2)
     with open(a.out + '.list', 'w') as f:
         if fog:

@@ -40,6 +40,9 @@ if (MUT) {
     // worker 0248: no event played (PLAYS empty); main's own waits skipped too (no unplayedEvent test)
     plays: ["export const PLAYS = new Set(['ev0101.rv_matiawase']);", "export const PLAYS = new Set([]);"],
     mainskip: ["(this.autoSkip === true || this.unplayedEvent())", "(this.autoSkip === true || !this.playing())"],
+    // worker 0257: Skip only inside the event (the old 'unplayed'); set_usercontrol applied before the stream's wait
+    latepress: ["unplayedEvent() { return !this.playing() && !this.eventPlayed; }", "unplayedEvent() { return !this.playing() && this.vm.frames.some(F => F.cls !== 'ev0100' && !F.cls.startsWith('fake/')); }"],
+    ucorder: ["if (s && s.busy) return block(() => !s.busy, apply);\n        apply(); return undefined;", "apply(); return s && s.busy ? block(() => !s.busy) : undefined;"],
     hud: ["if (o().hudControl) o().hudControl(!!v);", ""],
     bname: ["return block(() => R.frameNo > f0, () => { const a = R.actors.get(id); if (a) { a.tag = str(s).slice(0, 8); log('battlename ' + id + ' ' + a.tag); } });",
             "const a = R.actors.get(id); if (a) { a.tag = str(s).slice(0, 8); log('battlename ' + id + ' ' + a.tag); } return undefined;"],
@@ -345,6 +348,35 @@ const gf = (c) => Object.fromEntries([...c.globalFlags].map((v, i) => [i, v]).fi
   const T = make(FT, { autoSkip: true });
   run(T, 60); FT.v = { 0: 2, 63: 6 }; run(T, 200);
   ok(T.c.rt.log.some(([, m]) => /^skip ev0101\.rv_matiawase/.test(m)), 'autoSkip true: skipped inside rv_matiawase (the ?autoskip=1 aid)');
+}
+
+// 9. worker 0257: the default stand-in in the rescue beat: Skip before roji02_01 starts (main's wait, as autoSkip true), so main's
+// Camera.set is what battle() reads (T w229_rescue_pos: forward 0.75641, 0.64547, -0.10588), and rv_matiawase still plays
+{
+  const F = { v: {} }, views = [];
+  const obj = (n) => ({ tag: n, matrix: () => [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1], lend() {}, show() {}, release() {}, place() {} });
+  const S = make(F, { autoSkip: 'unplayed', battleObject: obj, cameraReset: (v) => views.push(v ? { eye: v.eye.slice(), aim: v.aim.slice() } : null) });
+  run(S, 60); views.length = 0; F.v = { 0: 2, 1: 5, 63: 6 }; run(S, 1500);
+  const L = S.c.rt.log.map(([, m]) => m);
+  ok(S.c.rt.vm.calls.includes('ev0143.roji02_01'), 'rescue: roji02_01 ran');
+  ok(!L.some(m => /^skip ev0101\.rv_matiawase/.test(m)) && L.some(m => /^skip ev0100\.main/.test(m)), "'unplayed': no Skip in rv_matiawase; Skip at main's wait before roji02_01: " + L.filter(m => /^skip/.test(m)).join(' | '));
+  const v = views[views.length - 1], fw = v ? [0, 1, 2].map(k => v.aim[k] - v.eye[k]) : [0, 0, 0], n = Math.hypot(...fw) || 1;
+  ok(v && [0.75641, 0.64547, -0.10588].every((x, k) => Math.abs(fw[k] / n - x) < 2e-3), "'unplayed': battle() reads main's Camera.set, not the skipped move's end: " + fw.map(x => (x / n).toFixed(5)));
+}
+// 10. set_usercontrol (FUN_0037e5e8): the stream's wait first, then the HUD and the bits (they stay as they were during the wait)
+{
+  const bits = new Set(), hud = [];
+  const gs = { set: b => bits.add(b), clear: b => bits.delete(b), test: b => bits.has(b) };
+  const stream = { busy: true, request() {} };
+  const S = make({ v: {} }, { gameState: () => gs, hudControl: b => hud.push(b), stream: () => stream });
+  const R = S.c.rt, n = R.vm.natives['fake/KerberosEvent.set_usercontrol(Z)V'];
+  const bl = n(R.vm, [0]);
+  ok(bl && bl.$block && !bits.has(11) && !hud.length, 'set_usercontrol(0), stream busy: blocks with nothing applied yet');
+  stream.busy = false;
+  ok(bl.test(), 'the wait ends when the stream is idle');
+  bl.then();
+  ok(bits.has(11) && bits.has(6) && hud.join() === 'false', 'then FUN_003b01b0 and game-state bits 11 / 6');
+  ok(n(R.vm, [1]) === undefined && !bits.has(11) && !bits.has(6) && hud.join() === 'false,true', 'stream idle: applied at once, no block');
 }
 
 console.log((fails ? 'FAILED ' : 'ok ') + oks + ' / ' + (oks + fails) + (MUT ? ' (mutant ' + MUT + ')' : ''));

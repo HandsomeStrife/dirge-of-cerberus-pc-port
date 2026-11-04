@@ -96,7 +96,8 @@ export class StageRuntime extends EventRuntime {
     // main's prelude runs before the opening (asj_033 at f20, then scr001's asj_036 replaces it: T w222_snd). Until
     // first_event returns its sounds are logged only: the page's opening sound (play.js / event_sound.js, worker 0222)
     // owns that stretch, and from the save the prelude is already past
-    this.beforeOpening = true;
+    // worker 0254: a record's reload has no opening (o.globalFlags: FUN_00400778 resumes main), so its sounds are heard
+    this.beforeOpening = !o.globalFlags;
     this.skipMode = 0;                // +0x9860 (setSkipMode bits)
     this.battle = true;               // +0x1558 bit 37. T: set in the save and at the hand-off (trace_w205_reload)
     this.running = true;              // +0x1558 bit 44: the event program runs (FUN_00374d08), set before main
@@ -105,6 +106,7 @@ export class StageRuntime extends EventRuntime {
     // not yet. T w240_init (a Restart's reload): main's battle() after first_event (f2264) comes before the stage init
     // (f2276-2278), so that battle's FUN_00324e70 finds none (worker 0240)
     this.stageObj = false;
+    this.eventPlayed = false;         // page only: a PLAYS event ran in this event-mode stretch (the auto-skip stand-in)
     // true: every event (the tests' default), 'unplayed': not the PLAYS events (play.js), false: none
     this.autoSkip = o.autoSkip === 'unplayed' ? 'unplayed' : o.autoSkip !== false;
     // DAT_0050db20 (stored XOR DAT_0046f608; kept plain here). A new controller = a stage (re)load: all 0. The clearing is
@@ -156,9 +158,11 @@ export class StageRuntime extends EventRuntime {
 
   // an event of PLAYS is running (its method is on the VM's stack)
   playing() { return this.vm.frames.some(F => PLAYS.has(F.cls + '.' + F.m.name)); }
-  // 'unplayed': a wait inside an event method that is not one of PLAYS (an event = a method of the event classes
-  // scr001..scr007; main's own class ev0100 and the library are not events): main's code after a played event is not skipped
-  unplayedEvent() { return !this.playing() && this.vm.frames.some(F => F.cls !== 'ev0100' && !F.cls.startsWith('fake/')); }
+  // 'unplayed': the first wait of an event-mode stretch (Zone.event ... battle()) with no PLAYS event on the stack and none
+  // run in it yet, the same point as ?autoskip=1. Skip must come before an unplayed event starts: pressed inside it, a
+  // camera move it queued (roji02_01's cam 0) ends after main's own Camera.set in the frame the event returns (FUN_00377c68:
+  // the VM window, then the commands) and overwrites it. Main's code after a played event is not skipped (eventPlayed)
+  unplayedEvent() { return !this.playing() && !this.eventPlayed; }
 
   frame(dtMs = 20) {
     this.frameNo++;
@@ -167,6 +171,7 @@ export class StageRuntime extends EventRuntime {
     if (this.sePending && this.sePending.length) this.seSent = sendEventSe(this, this.sound && this.sound.audio ? this.sound.audio() : null);
     this.lentUpdate();                                                  // the statuses' update (main thread, before the VM window)
     if (!this.vm.done) this.vm.run();                                   // the VM thread's time this frame
+    if (this.playing()) this.eventPlayed = true;
     this.cardStep();
     this.clock = (this.clock + dtMs) >>> 0;                              // FUN_003798a0
     for (const c of this.slots.slice()) {                                // FUN_00377c68's slot loop, slots in order
@@ -241,13 +246,15 @@ export class StageRuntime extends EventRuntime {
     // worker 0240: then FUN_005453b0, the stage-load pass: its per-status loop and FUN_005459d8 (script event 0x23 to every
     // object: the z128 boss's HP / gauge / activation at stage flag 0 = 36). T w240_boss (w231_boss4's route): f1373
     // FUN_0037cf30 -> FUN_00324e70(1) -> FUN_00319190, FUN_005453b0 -> FUN_005459d8. All of FUN_00324e70 is inside
-    // `DAT_0046e290 != 0`: the battle() before the stage init (above) sends nothing. L: the hand-back / camera reset of that
-    // battle stay as they were (the page's settle and hand-off rely on them; in the game they are inside the same test)
+    // `DAT_0046e290 != 0`: the battle() before the stage init (above) sends nothing and resets no camera (worker 0257). Its L: the
+    // hand-back (FUN_00319190) stays (the page's settle and hand-off rely on it); +0x1528 stays set for FUN_004012c0 case 9, whose
+    // FUN_00326da8 (camera re-enter, message 0x7d5) runs once the stage program does, after the stage init: follow.battleHandBack
+    const first = !this.stageObj;
     if (!this.stageObj) this.log.push([this.frameNo, 'battle: no stage object yet (FUN_00324e70: nothing)']);
     else if (this.o.stagePass) this.o.stagePass();
     else this.warnOnce('stage: battle()\'s stage-load pass FUN_005453b0 (event 0x23) not wired');
     this.stageObj = true;             // the stage init follows that first battle (FUN_003245e8, T w240_init)
-    if (this.o.cameraReset) this.o.cameraReset(this.view); else this.warnOnce('stage: battle()\'s camera reset (FUN_00329f68) not wired');
+    if (this.o.cameraReset) this.o.cameraReset(this.view, first); else this.warnOnce('stage: battle()\'s camera reset (FUN_00329f68) not wired');
     this.warnOnce('stage: FUN_00324e70\'s player calls (FUN_00578548, FUN_00574928, FUN_0034b2c8, FUN_00331ab0 ...) left out');
     this.cams.forEach(c => { c.active = false; });
     this.skip = 0;
@@ -308,6 +315,7 @@ export class StageRuntime extends EventRuntime {
     // FUN_00325b10(1): game-state bit 6, the AI paused (enemy_ai FUN_00365008); then FUN_00326018(2)
     if (gs) { gs.set(6); gs.set(2); }
     this.battle = false;
+    this.eventPlayed = this.playing();                                  // page only: the stand-in's stretch (unplayedEvent)
     this.log.push([this.frameNo, 'event ' + n]);
     if (this.o.onMode) this.o.onMode('event');
   }
@@ -331,17 +339,20 @@ export class StageRuntime extends EventRuntime {
       // ---- fake/KerberosEvent: the global flags DAT_0050db20 (FUN_003a3268 -> FUN_0037cea0 / FUN_003a31e8 -> FUN_0037ce60)
       'fake/KerberosEvent.getflag(I)B': (vm, [n]) => (n >>> 0 < 0x40 ? R.gflags[n] : 0),
       'fake/KerberosEvent.setflag(IB)V': (vm, [n, v]) => { if (n >>> 0 < 0x40) { R.gflags[n] = v & 0xff; log('gflag ' + n + ' = ' + (v & 0xff)); } },
-      // set_usercontrol (0x39bf80 -> FUN_0037e5e8): waits for the stream (FUN_00267358), FUN_003b01b0, game-state bit 11
+      // set_usercontrol (0x39bf80 -> FUN_0037e5e8): waits for the stream (FUN_00267358) first, then FUN_003b01b0, game-state bit 11
       // set when off (FUN_00325b60(b == 0)), FUN_0037def0, FUN_00380a28, FUN_003edaa8 (left out)
       'fake/KerberosEvent.set_usercontrol(Z)V': (vm, [v]) => {
-        R.state.usercontrol = v; log('usercontrol ' + v);
-        // FUN_00325b60(b == 0): bit 11; FUN_0037def0(ev, b == 0) -> FUN_00325b10: bit 6 (the AI paused while off)
-        const g = gs(); if (g) { if (v) { g.clear(11); g.clear(6); } else { g.set(11); g.set(6); } }
-        // FUN_003b01b0(DAT_00471380, b): the HUD's panels out / in (worker 0248: hud.js control; T w248_gs: no HUD in the event)
-        if (o().hudControl) o().hudControl(!!v);
-        R.warnOnce('stage: set_usercontrol\'s FUN_00380a28 / FUN_003edaa8 left out');
+        const apply = () => {
+          R.state.usercontrol = v; log('usercontrol ' + v);
+          // FUN_00325b60(b == 0): bit 11; FUN_0037def0(ev, b == 0) -> FUN_00325b10: bit 6 (the AI paused while off)
+          const g = gs(); if (g) { if (v) { g.clear(11); g.clear(6); } else { g.set(11); g.set(6); } }
+          // FUN_003b01b0(DAT_00471380, b): the HUD's panels out / in (worker 0248: hud.js control; T w248_gs: no HUD in the event)
+          if (o().hudControl) o().hudControl(!!v);
+          R.warnOnce('stage: set_usercontrol\'s FUN_00380a28 / FUN_003edaa8 left out');
+        };
         const s = o().stream && o().stream();
-        return s && s.busy ? block(() => !s.busy) : undefined;
+        if (s && s.busy) return block(() => !s.busy, apply);
+        apply(); return undefined;
       },
       // free_usercontrol (FUN_003a4768): FUN_00325b60(b != 0)
       'fake/KerberosEvent.free_usercontrol(Z)V': (vm, [v]) => { const g = gs(); if (g) (v ? g.set(11) : g.clear(11)); log('free_usercontrol ' + v); },

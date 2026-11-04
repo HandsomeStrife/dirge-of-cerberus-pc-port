@@ -3,15 +3,16 @@
 F1 (save state), then F2 (next slot), and move the dumps / states to OUTDIR (game-derived: keep them
 out of the repo). Each GS dump stalls the emulator, so later grabs land late (grab_log.json has the
 frames); the dump's frame is 4 game frames after its save state (notes/effects-research.md).
-Usage (under the trace lock): flock /srv/shared/dirge-port/trace.lock python3 -I tools/trace/grab_gs.py
-    SCRIPT.json TRACE_SCRATCH OUTDIR frame[,frame...]"""
+Usage (under the trace lock): flock tools/trace/out/.pcsx2.lock python3 -I tools/trace/grab_gs.py
+    SCRIPT.json OUTDIR frame[,frame...]   (an older 4-argument form with TRACE_SCRATCH second is still accepted)"""
 import json, struct, os, sys, time, subprocess, glob, shutil
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import trace as T, fields, hook
 from p2s import read_p2s, write_p2s
 from pine import Pine
-script_path, scratch, outdir, grab = sys.argv[1], sys.argv[2], sys.argv[3], [int(x) for x in sys.argv[4].split(",")]
+args_ = sys.argv[1:]; scratch = T.scratch_dir(args_.pop(1) if len(args_) == 4 else None)
+script_path, outdir, grab = args_[0], args_[1], [int(x) for x in args_[2].split(",")]
 # the dumps and states are game data: OUTDIR must be outside the repo or gitignored (the repo is public)
 repo = os.path.dirname(os.path.dirname(HERE)); oabs = os.path.abspath(outdir)
 if oabs == repo or oabs.startswith(repo + os.sep):

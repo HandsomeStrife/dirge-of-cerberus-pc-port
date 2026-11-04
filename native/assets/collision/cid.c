@@ -215,6 +215,7 @@ static void parse_indexed_node(blob *b, builder *bd, size_t node, size_t pool,
             p.off = (uint32_t)fo;
             p.flags = rd_u16(b, fo + 4, &k);
             p.word6 = rd_u16(b, fo + 6, &k);
+            p.word0 = rd_u32(b, fo, &k);
             for (int j = 0; j < 4; j++) {
                 p.v[j] = j < vc ? idx[j] : 0;
                 p.raw_nbr[j] = j < vc ? rd_u32(b, fo + 0x10 + (size_t)j * 4, &k) : 0;

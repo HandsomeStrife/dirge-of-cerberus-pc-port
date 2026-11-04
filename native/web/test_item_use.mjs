@@ -153,4 +153,93 @@ else {
   W2.frame({ next: true });
   ok(W2.items.inventory.sel === 0 && W2.snd.length === s1, 'one entry, selected: no change, no sound (w243_potion frame 150)');
 }
+// ---------------------------------------------------------------- what else the player can select (worker 0255)
+{ // Q at HP 0: FUN_00331f08 skips FUN_003320c0 while FUN_00316cf8 is true
+  const W = world({ hp: 0 });
+  const inv = W.items.inventory;
+  inv.slots.push([0x69300001, 1]);
+  const sel0 = inv.selId, s0 = W.snd.length;
+  W.frame({ next: true });
+  ok(inv.selId === sel0 && W.snd.length === s0, 'HP 0: Q does not cycle or play the cycle sound');
+  W.P.hp = 300;
+  W.frame({ next: true });
+  ok(inv.selId !== sel0 && W.snd.includes(itemsData.sounds.cycle), 'alive again: Q cycles');
+}
+const PHOENIX = 0x69300004, LIMIT = 0x6931001b;
+{ // the Phoenix Down (script 5): event 0x68 refuses while status bit 3 is on; event 100 sets it (cmd 0x136, r1 = 0: no timer)
+  const W = world({ hp: 780 });
+  const inv = W.items.inventory;
+  inv.slots[0] = [PHOENIX, 2]; inv.setSel(0);
+  W.frame({ use: true });
+  ok(inv.countAt(0) === 1 && (W.P.s64 & 8) === 8, `Phoenix Down at full HP: used (count ${inv.countAt(0)}), status bit 3 on (s64 ${W.P.s64})`);
+  ok(W.snd.includes('msj_024'), 'its sound msj_024');
+  const s0 = W.snd.length;
+  W.frame({ use: true });
+  ok(inv.countAt(0) === 1 && W.snd.slice(s0).includes('msj_001'), `the second: refused (FUN_0054e138 event 0x68, cmd 0x178), msj_001, count ${inv.countAt(0)}`);
+  ok(!W.warns.some(m => /not translated/.test(m)), 'no untranslated command on the way: ' + W.warns.filter(m => /not translated/.test(m)).join(' | '));
+  for (let i = 0; i < 400; i++) W.frame();
+  ok((W.P.s64 & 8) === 8, 'no timer: still on 400 frames later');
+}
+{ // cmd 0x137 / the take-over: a Phoenix Down with status bit 2 on clears 2 and sets 3 (script 5, event 100's 0x178 test)
+  const W = world({ hp: 780 });
+  const inv = W.items.inventory;
+  inv.slots[0] = [PHOENIX, 1]; inv.setSel(0);
+  W.P.s64 = 4;
+  W.frame({ use: true });
+  ok(W.P.s64 === 8, `status bit 2 -> 3 (s64 ${W.P.s64})`);
+}
+{ // the Limit Breaker (script 12): the limit break isn't on the page, cmd 0x200 answers 0: refused, not wasted
+  const W = world({ hp: 780 });
+  const inv = W.items.inventory;
+  inv.slots[0] = [LIMIT, 1]; inv.setSel(0);
+  W.frame({ use: true });
+  ok(inv.countAt(0) === 1 && W.snd.includes('msj_001') && W.warns.some(m => /limit break/.test(m)), 'Limit Breaker: refused with msj_001, kept, warned');
+}
+{ // FUN_0055f128's refusals and its timer (FUN_0053e9e0 -> FUN_0053f040 case 0x6c -> FUN_0055f338(P, 0, 1))
+  const W = world({ hp: 780 }), it = W.items;
+  ok(it.statusOn(1, 0) === 1 && it.statusOn(1, 0) === 0, 'status 1: refused while on');
+  W.P.s64 = 8; ok(it.statusOn(2, 0) === 0 && W.P.s64 === 8, 'status 2: refused while 3 is on');
+  W.P.s64 = 0;
+  it.statusOn(0, 60);
+  ok(W.P.s64 === 1, 'status 0 on');
+  for (let i = 0; i < 40; i++) W.ai.tick(STEP, W.P.pos, W.P.pos);
+  ok(W.P.s64 === 1, 'still on after 48 ticks');
+  for (let i = 0; i < 12; i++) W.ai.tick(STEP, W.P.pos, W.P.pos);
+  ok(W.P.s64 === 0, 'its timer of 60 ticks ended it (at 62.4 ticks)');
+  it.statusOn(0, 60); for (let i = 0; i < 40; i++) W.ai.tick(STEP, W.P.pos, W.P.pos);
+  it.statusOn(0, 60); for (let i = 0; i < 12; i++) W.ai.tick(STEP, W.P.pos, W.P.pos);
+  ok(W.P.s64 === 1, 'status 0 again restarts it: the old timer left the list (FUN_0053edb0)');
+}
+{ // the plain Restart: FUN_0030f3d8's inventory, selection and pool (both Potions used before)
+  const W = world({ hp: 100 });
+  const inv = W.items.inventory;
+  W.frame({ use: true }); W.frame(); W.P.hp = 100; W.frame({ use: true }); W.frame();
+  ok(inv.sel === -1 && inv.slots[0][0] === -1, 'both Potions used: slot empty, nothing selected');
+  W.items.restart();
+  ok(inv.sel === I.START_SEL && inv.selId === I.START_LAST && inv.last === I.START_LAST, `Restart: the selection is back (slot ${inv.sel})`);
+  ok(inv.slots[0][0] === 0x69300000 && inv.countAt(0) === 2 && inv.freed.length === 0, `Restart: Potion x ${inv.countAt(0)} in slot 0, the pool empty`);
+  W.frame({ use: true });
+  ok(inv.countAt(0) === 1, `HP 100, E: count ${inv.countAt(0)}`);
+}
+// ---------------------------------------------------------------- status 0 / 1 stop the damage (worker 0255; FUN_0055db50, FUN_0055eac8)
+const dmgWorld = s64 => {
+  const P = { pos: [0, 0, 0], face: [1, 0, 0], hp: 780, hpMax: 780, id: 0x16, f118: 0x20209, s64 };
+  const ai = createEnemyAI({ data: aiData, player: P, quiet: true, log: () => {}, damage: true, rand: () => 0.5 });
+  return { P, ai };
+};
+const bullet = () => ({ damage: 50, kind: 0, hit: 0, f148: 0, dir: [1, 0, 0], pos: [0, 0, 0], from: { id: 66 }, f120: 0, shooter: 66 });
+const melee = () => ({ owner: { id: 66, pos: [5, 0, 0] }, dmg: 50, kind: 0, type: 0, c1: 0 });
+for (const [s64, stops] of [[0, false], [1, true], [2, true], [8, false], [4, false]]) {
+  const a = dmgWorld(s64), b = dmgWorld(s64);
+  a.ai.t.damagePlayer(bullet());
+  b.ai.t.attackDamagePlayer(melee(), [0, 0, 0], [0, 0, 0], [0, 0, 0]);
+  ok((a.P.hp === 780) === stops, `status ${s64}: a bullet ${stops ? 'does nothing' : 'hurts'} (HP ${a.P.hp})`);
+  ok((b.P.hp === 780) === stops, `status ${s64}: a melee hit ${stops ? 'does nothing' : 'hurts'} (HP ${b.P.hp})`);
+}
+{ // the melee sphere test FUN_0057a428 (playerCandidate): none under status 0 / 1, none while the class is 0x3c-0x3e (FUN_003419c0: the revive's 0x3e)
+  const cand = (s64, mc) => { const w = dmgWorld(s64); w.P.motionClass = mc; return w.ai.t.playerCandidate({ r: 50, grow: 0, life: 1 }, [0, 0, 0]); };
+  ok(cand(0, 3) === true, 'the attack sphere: a candidate at status 0, class 3');
+  ok(cand(1, 3) === false, 'none under status 0 (bit 0)');
+  ok(cand(0, 0x3e) === false, 'none during class 0x3e');
+}
 done();

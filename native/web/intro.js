@@ -35,9 +35,6 @@ export function createIntro({ data, camera, output, canvas, zoneLoad = null, war
   if (actors) view = import('./event_actors.js').then(m => (view = m.createEventActorView({ root, lib: actorLib, rt, litPatch, light, warn })));
   // GUESS: the fade particle's draw (system-FED emitters 2..5, not decoded) as a black layer with opacity
   // level / 256 over the picture (notes/fidelity-audit.md 'GUESS: the event fade's draw')
-  const veil = document.createElement('div');
-  veil.style.cssText = 'position:fixed;left:0;top:0;width:100%;height:100%;background:#000;opacity:0;pointer-events:none;z-index:5';
-  (canvas && canvas.parentNode ? canvas.parentNode : document.body).appendChild(veil);
   let lastFov = null, paused = false;
   const I = {
     rt,
@@ -61,7 +58,7 @@ export function createIntro({ data, camera, output, canvas, zoneLoad = null, war
         camera.lookAt(v.aim[0], v.aim[1], v.aim[2]);
         if (v.fov !== lastFov) { lastFov = v.fov; output.fitCamera(camera, v.fov); }
       }
-      veil.style.opacity = rt.fade ? String(Math.min(1, Math.max(0, rt.fade.level / 256))) : '0';
+      output.fade = rt.fade ? Math.min(1, Math.max(0, rt.fade.level / 256)) : 0;   // output.js: drawn before the menus
     },
     // after a resize (play.js fits the gameplay projection): the event fov again at the next render
     refit() { lastFov = null; },
@@ -83,7 +80,7 @@ export function createIntro({ data, camera, output, canvas, zoneLoad = null, war
     },
     get skipped() { return rt.skip !== 0; },
     finish() {
-      veil.remove();
+      output.fade = 0;
       if (view && view.dispose) view.dispose();
       output.fitCamera(camera);
       lastFov = null;

@@ -6,7 +6,10 @@
 //     DAT_004ee4a0), FUN_002e62b0(0, mgr, id, { flag 1, position (x, y) }).
 //   FUN_003c5a98 (a slot's life is over): FUN_002e7198, the soft end (effects.js softEnd: the emitter fades out).
 //   FUN_003c5b00 (a slot moving, results' command 5): FUN_002e7660(flag 1, the interpolated position).
-//   FUN_003c5cc0 (the box goes, FUN_003c5428): every slot's emitter goes at once.
+//   FUN_003c5cc0 (the box goes): every slot's emitter goes (FUN_003c5c50; soft-ended ones have left their slots and fade on).
+//     FUN_003fdd58 -> FUN_003b6978 -> vt+0x34 FUN_003b7930 -> FUN_003d4588(box, 100, 0): +0x25 == 0 (RAM: w258 b40 / b120,
+//     w220 open330) -> FUN_003d4630: only +0x10 |= 1, which also stops the box's update (FUN_003dd9f8). FUN_003c5428 (vt+0xc) ->
+//     FUN_003c5cc0 runs from FUN_003de938 in the menu update: after FUN_002efe98, before the draw (state 9, the queue).
 // The box code runs in the menu update (FUN_003dce38, after FUN_002efe98 in FUN_00248110), so the managers are in state
 // 9 then: a spawn is aged at once by 1.0 and drawn in its first frame (effects.js spawn's tail). The page queues the
 // box's slot operations of the frame (the box runs at the page's frame start, stage_info.js) and applies them after
@@ -96,10 +99,10 @@ export function createMenuFx(feds, { rng = null, warn = console.warn } = {}) {
   };
 }
 
-// The layer (a TitleLayer over the menu managers): add layer.group to the 3D scene after the 3D effects; update(camera)
-// once a game frame after end()
-export function menuFxLayer(THREE, mfx) {
-  const L = new TitleLayer(THREE, mfx.title, {});
+// The layer (a TitleLayer over the menu managers, its screen-fixed draw): add layer.group to the 3D scene after the 3D effects;
+// update() once a game frame after end()
+export function menuFxLayer(THREE, mfx, { output = null } = {}) {
+  const L = new TitleLayer(THREE, mfx.title, { screen: output });
   L.group.name = 'menu-box-effects';
   return L;
 }

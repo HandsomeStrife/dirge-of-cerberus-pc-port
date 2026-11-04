@@ -30,7 +30,10 @@ uniform mat4 modelViewMatrix, projectionMatrix;
 uniform mat3 normalMatrix;
 uniform bool uFog, uUVAnim, uCull;
 uniform sampler2D uUVOff;  // RoomUVAnim: (u, v) offset per track (FUN_00265560: node +0xdc / +0xde / 4096)
-uniform float uFogA, uFogB, uFogMin;
+// the chain's env slot (header +0x96; FUN_00265560 / FUN_0026afe8): fog ramp (a, b, floor) and FOGCOL per slot
+in float envSlot;
+uniform vec3 uEnvFog[32], uEnvCol[32];
+flat out vec3 vFogCol;   // one FOGCOL per chain
 out vec2 vUV;
 out vec4 vCol;
 out float vFogW, vW;   // fog*w and w: their ratio interpolates screen-linearly (= native noperspective)
@@ -44,7 +47,8 @@ void main() {
   // triangles collapse to one point outside the clip volume (no fragments). A zero cross is kept (>= 0).
   if (uCull && atEye(-normal, cullD) < 0.0 && atEye(cullP.xyz, cullP.w) < 0.0) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
   vec4 clip = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-  float f = uFog ? clamp(uFogA * clip.w + uFogB, uFogMin, 1.0) : 1.0;
+  int es = int(envSlot + 0.5); vec3 ef = uEnvFog[es]; vFogCol = uEnvCol[es];
+  float f = uFog ? clamp(ef.x * clip.w + ef.y, ef.z, 1.0) : 1.0;
   vUV = uv; vCol = color;
   if (uUVAnim && uvTrack >= 0.0) vUV += texelFetch(uUVOff, ivec2(int(uvTrack), 0), 0).xy; vFogW = f * clip.w; vW = clip.w;
   gl_Position = clip;
@@ -55,9 +59,10 @@ precision highp float;
 in vec2 vUV;
 in vec4 vCol;
 in float vFogW, vW;
+flat in vec3 vFogCol;
 uniform sampler2D uTex;
+uniform float uMXL;      // TEX1 MXL (record +0xc; 0 = bilinear level 0). FUN_002659b8: MMIN 4, L 0, K = DAT_004fcae0 = -96 / 16
 uniform bool uTexOn, uFog, uOutAlpha, uAdd;
-uniform vec3 uFogColor;
 uniform float uARef;
 uniform float uTexA;     // texel alpha scale: 255 / 128 for raw PS2 alpha (scene.textures[].alpha 'ps2'), else 1
 uniform int uAMode;      // 0 none, 1 keep a>=ref, 2 keep a<ref
@@ -66,8 +71,10 @@ void main() {
   vec4 c = vCol;
   float aS = vCol.a * 2.0;                      // GS As (128 == 1.0), not capped: up to 0xff / 0x80
   if (uTexOn) {
-    vec4 t = texture(uTex, vUV);
-    c.rgb = min(t.rgb * vCol.rgb * 2.0, 1.0);   // PS2 MODULATE: 128 == 1.0
+    // GS LOD with LCM 0: log2(1 / Q) + K, Q = 1 / w per pixel (the view depth, not the resolution); LINEAR_MIPMAP_NEAREST rounds to a level, up to MXL
+    float lod = uMXL > 0.0 ? log2(1.0 / gl_FragCoord.w) - 6.0 : 0.0;
+    vec4 t = uMXL > 0.0 ? textureLod(uTex, vUV, lod <= 0.0 ? 0.0 : min(floor(lod + 0.5), uMXL)) : texture(uTex, vUV);
+    c.rgb = min(floor(t.rgb * 255.0 * vCol.rgb * 255.0 / 128.0) / 255.0, 1.0);   // PS2 MODULATE: (Ct * Cv) >> 7
     aS = t.a * uTexA * vCol.a * 2.0;              // At / 128 (raw PS2 byte: up to 0xff / 0x80, not capped)
   }
   c.a = min(aS, 1.0);                           // GS As = A / 128 (textured: At * Av / 128)
@@ -75,7 +82,8 @@ void main() {
   if (uAMode == 1 && c.a <  uARef) discard;
   if (uAMode == 2 && c.a >= uARef) discard;
 #endif
-  if (uFog) c.rgb = mix(uFogColor, c.rgb, vFogW / vW);
+  // GS fog: (F * C + (255 - F) * FOGCOL) >> 8
+  if (uFog) { float F = floor(vFogW / vW * 255.0); c.rgb = floor((F * c.rgb * 255.0 + (255.0 - F) * vFogCol * 255.0) / 256.0) / 255.0; }
   // additive (ALPHA 0x48, Cs * As + Cd): the shader applies As itself (blend factors One, One),
   // because a blend factor would clamp As to 1 and ff88's vertex alpha reaches 192 (As 1.5)
   if (uAdd) { fragColor = vec4(c.rgb * aS, 1.0); return; }
@@ -84,23 +92,37 @@ void main() {
 
 // The two depth-tie offsets and the back-face test, read from the page URL (all on unless =0).
 export function roomOptions(params = new URLSearchParams(location.search)) {
-  return { zprio: params.get('zprio') !== '0', zunder: params.get('zunder') !== '0', cull: params.get('cull') !== '0' };
+  return { zprio: params.get('zprio') !== '0', zunder: params.get('zunder') !== '0', cull: params.get('cull') !== '0', mips: params.get('mips') === '1' };
+}
+
+// FUN_0026afe8 per env slot: F / 255 = clamp(a w + b, floor, 1), a = -1 / (far - near), b = far / (far - near). A slot with
+// near = far (2, 5, 6, 27) has a = +max (255 / 0; DAT_004e62b0 + 0x100 in RAM), so F clamps to 255: no fog.
+function envTable(scene) {
+  if (scene.envTable) return scene.envTable;
+  const slots = scene.env_fog || [scene.fog];
+  const fog = [], col = [];
+  for (let i = 0; i < 32; i++) {
+    const e = slots[i] || slots[0];
+    const none = !e || e.far === e.near;
+    fog.push(new THREE.Vector3(none ? 0 : -1 / (e.far - e.near), none ? 1 : e.far / (e.far - e.near), none ? 0 : e.min));
+    const c = e ? e.color : [0, 0, 0];
+    col.push(new THREE.Vector3(...(scene.env_fog ? c.map(v => v / 255) : c)));
+  }
+  return (scene.envTable = { fog, col });
 }
 
 // mode: 0 = plain draw; 1 / 2 = GS ATE pass keeping alpha >= ref / < ref.
 export function makeMaterial(scene, tex, draw, mode, opts = roomOptions()) {
-  const fog = scene.fog;
+  const fog = scene.fog, env = envTable(scene);
   const m = new THREE.RawShaderMaterial({
     glslVersion: THREE.GLSL3, vertexShader: VS, fragmentShader: FS, defines: mode ? { ATEST: 1 } : {},
     side: THREE.DoubleSide, depthFunc: THREE.LessDepth,
     uniforms: {
       uTex: { value: tex }, uTexOn: { value: !!tex },
+      uMXL: { value: !opts.mips && scene.textures?.[draw.tex]?.mips ? scene.textures[draw.tex].mips.length : 0 },
       uTexA: { value: scene.textures?.[draw.tex]?.alpha === 'ps2' ? 255 / 128 : 1 },
       uFog: { value: !!(fog && draw.fog) },
-      uFogA: { value: fog ? -1 / (fog.far - fog.near) : 0 },
-      uFogB: { value: fog ? fog.far / (fog.far - fog.near) : 0 },
-      uFogMin: { value: fog ? fog.min : 0 },
-      uFogColor: { value: new THREE.Vector3(...(fog ? fog.color : [0, 0, 0])) },
+      uEnvFog: { value: env.fog }, uEnvCol: { value: env.col },
       uARef: { value: draw.aref }, uAMode: { value: mode }, uOutAlpha: { value: mode !== 0 },
       uAdd: { value: draw.blend === 'add' },
       uUVAnim: { value: !!(opts.uvOff && scene.meshes?.[draw.mesh]?.uvt) },
@@ -157,9 +179,10 @@ export async function loadRoom({ skip = null, onProgress = null, normals = false
   const texUsed = new Set(draws.map(([d]) => d.tex).filter(Boolean));
   const meshes = Object.entries(scene.meshes).filter(([id]) => used.has(id));
   const texs = Object.entries(scene.textures).filter(([id]) => texUsed.has(id));
-  const files = [...meshes.map(e => e[1]), ...texs.map(e => e[1]),
+  const files = [...meshes.map(e => e[1]), ...texs.map(e => e[1]), ...texs.flatMap(e => e[1].mips || []),
                  ...meshes.filter(e => e[1].uvt).map(e => ({ file: e[1].uvt })),
-                 ...meshes.filter(e => e[1].cul).map(e => ({ file: e[1].cul }))];
+                 ...meshes.filter(e => e[1].cul).map(e => ({ file: e[1].cul })),
+                 ...meshes.filter(e => e[1].env).map(e => ({ file: e[1].env }))];
   let done = 0;
   const bufs = {};
   await Promise.all(files.map(async f => {
@@ -171,8 +194,15 @@ export async function loadRoom({ skip = null, onProgress = null, normals = false
   for (const [id, t] of texs) {
     const tx = new THREE.DataTexture(new Uint8Array(bufs[t.file]), t.w, t.h, THREE.RGBAFormat);
     tx.wrapS = tx.wrapT = THREE.RepeatWrapping;
-    tx.magFilter = THREE.LinearFilter; tx.minFilter = THREE.LinearMipmapLinearFilter;
-    tx.generateMipmaps = true; tx.flipY = false; tx.colorSpace = THREE.NoColorSpace;
+    // TEX1 per texture (FUN_002659b8): no levels -> MXL 0, bilinear; levels (only ff32, ff85 in z128) -> the file's own, MMIN 4, selected in the shader.
+    // ?mips=1: NOT the game's mode (a page EXTRA, off): generated trilinear mips on every texture.
+    tx.magFilter = THREE.LinearFilter;
+    if (opts.mips) { tx.minFilter = THREE.LinearMipmapLinearFilter; tx.generateMipmaps = true; }
+    else if (t.mips) {
+      tx.minFilter = THREE.LinearMipmapNearestFilter; tx.generateMipmaps = false;
+      tx.mipmaps = [{ data: new Uint8Array(bufs[t.file]), width: t.w, height: t.h }, ...t.mips.map(m => ({ data: new Uint8Array(bufs[m.file]), width: m.w, height: m.h }))];
+    } else { tx.minFilter = THREE.LinearFilter; tx.generateMipmaps = false; }
+    tx.flipY = false; tx.colorSpace = THREE.NoColorSpace;
     tx.needsUpdate = true;
     textures[id] = tx;
   }
@@ -187,6 +217,7 @@ export async function loadRoom({ skip = null, onProgress = null, normals = false
       color: new THREE.InterleavedBufferAttribute(ib, 4, 8),
     };
     if (m.uvt) attrs[id].uvTrack = new THREE.BufferAttribute(new Int16Array(bufs[m.uvt]), 1);
+    if (m.env) attrs[id].envSlot = new THREE.BufferAttribute(new Uint8Array(bufs[m.env]), 1);   // absent: slot 0
     if (m.cul) {                                  // back faces: float32 x 5 per vertex (partner plane, own d)
       const cb = new THREE.InterleavedBuffer(new Float32Array(bufs[m.cul]), 5);
       attrs[id].cullP = new THREE.InterleavedBufferAttribute(cb, 4, 0);

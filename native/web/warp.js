@@ -59,7 +59,7 @@ export function warpRequest(params) {
   if (!params || !params.has('warp')) return null;
   const v = params.get('warp');
   if (v === 'list') { console.info('warp (page aid): ' + WARP_NAMES.map(n => `${n} = ${WARPS[n].note}`).join('; ')); return 'list'; }
-  if (!WARPS[v]) { console.warn(`warp (page aid): unknown place '${v}'; names: ${WARP_NAMES.join(', ')}`); return null; }
+  if (!Object.hasOwn(WARPS, v)) { console.warn(`warp (page aid): unknown place '${v}'; names: ${WARP_NAMES.join(', ')}`); return null; }
   return v;
 }
 

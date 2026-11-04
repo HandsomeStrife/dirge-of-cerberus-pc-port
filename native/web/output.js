@@ -120,9 +120,19 @@ export function createOutputStage(renderer, { enabled = true, msaa = false, nati
     return size;
   }
 
+  // GUESS: the event fade's draw (notes/fidelity-audit.md 'GUESS: the event fade's draw'): a black layer in the frame, opacity
+  // stage.fade (level / 256). The game's fade is a particle of the effect managers (FUN_002f4480 / FUN_002f4578), which draw
+  // before the menu managers, so the menus (pause, Status, event windows) stay above it: not a layer over the canvas
+  const fadeMat = new THREE.MeshBasicMaterial({ color: 0, transparent: true, depthTest: false, depthWrite: false });
+  const fadeQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), fadeMat);
+  fadeQuad.frustumCulled = false;
+  const fadeScene = new THREE.Scene(); fadeScene.add(fadeQuad);
   function drawHud(w, h, nat) {
-    if (!stage.hud) return;
     const a = renderer.autoClear;
+    renderer.autoClear = false;
+    if (stage.fade > 0) { fadeMat.opacity = Math.min(1, stage.fade); renderer.render(fadeScene, qCam); }
+    renderer.autoClear = a;
+    if (!stage.hud) return;
     renderer.autoClear = false;
     const base = { renderer, w, h, x0: CX, y0: CY };
     stage.hud(nat ? { ...base, native: true, cx: CX, cy: CY, kx: 1, ky: 1 }
@@ -163,6 +173,7 @@ export function createOutputStage(renderer, { enabled = true, msaa = false, nati
     renderer,
     keepFrame: false, prevFrame: null, prevView: null, prevProj: null,
     native,
+    cols: COLS,                                        // gameover_title.js: the menu draw's x scale (drawHud's kx)
     // OPTION widehud (not in the game; play.js: ON by default at Dan's request, review board 2026-11-02;
     // ?widehud=0 gives the game's 4:3 layout): full mode only, hud.js moves the HUD's left / right
     // panels out by o.side; the reticle, ring, pause and game-over layers ignore it (centred)
@@ -174,11 +185,13 @@ export function createOutputStage(renderer, { enabled = true, msaa = false, nati
     // full: the projection centre at the canvas centre, one frame row = h / 512, one frame column
     // = (4/3 h / 425.5), the CRTC's 4:3 picture); full mode also passes side (widehud, below)
     hud: null,
+    fade: 0,                                           // the event fade's level, 0..1 (intro.js, stage_view.js)
     // set the camera's projection for this mode (call at start and on resize). fovGame (event cameras, worker 0210):
     // the game's horizontal fov in degrees, FUN_003edce0: screen distance = DAT_004fcab8 (448) / 2 / tan(fov x
     // 0.008726647); null = the gameplay projection (SCRZ)
     fitCamera(camera, fovGame = null) {
       if (camera.userData.fov0 === undefined) camera.userData.fov0 = camera.fov;
+      stage.gameCam ??= camera;                        // the first fitted: the page camera (gameover_title.js proj2d)
       const scrz = fovGame == null ? SCRZ : SCR_W * 0.5 / Math.tan(fovGame * 0.008726647);
       if (stage.native) {
         // centre (213, 256) inside a 432 x 512 view: a symmetric frustum of 438 x 512 px
@@ -192,8 +205,8 @@ export function createOutputStage(renderer, { enabled = true, msaa = false, nati
         // the same vertical extent, FB_H / 2 lines, as the hero fov 59.27 = SCRZ's)
         camera.fov = fovGame == null ? camera.userData.fov0 : 2 * Math.atan(FB_H * 0.5 / (scrz * AY)) * 180 / Math.PI;
         camera.clearViewOffset();
-        renderer.getDrawingBufferSize(size);
-        camera.aspect = size.x / size.y;
+        const d = renderer.getDrawingBufferSize(new THREE.Vector2());   // not `size`: gameover_title.js fits during render(), which holds it
+        camera.aspect = d.x / d.y;
       }
       camera.updateProjectionMatrix();
     },

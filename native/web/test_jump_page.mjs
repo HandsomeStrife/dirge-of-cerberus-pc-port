@@ -629,13 +629,13 @@ ok(ran > 0, `traces replayed: ${ran}`);
     anim.addClips(Object.entries(meta).map(([name, c]) => ({ name, duration: c.duration_s })), meta);
     // every clip the jump motion states can request (SLOT, minus the slots empty in z128) is in
     // the pack with the frame count jump_core's clock uses
-    const want = [...new Set(Object.entries(SLOT).filter(([s]) => !UNLOADED.has(+s)).map(([, n]) => n))];
+    const want = [...new Set(Object.entries(SLOT).filter(([s]) => !UNLOADED.has(+s)).map(([, n]) => n))].filter(k => k !== 'idle');   // (worker 0255: row 1, the page's key for h_st, in the main pack)
     for (const k of want) {
       const has = anim.ensure(k);
       ok(has && anim.frames[k] === CLIP_FRAMES[k], `pack clip ${k}: ${has ? anim.frames[k] + ' frames' : 'missing'} (jump_core ${CLIP_FRAMES[k]})`);
     }
     // loop flags: h_jp3 / h_jp3_a loop (played with flag 1), the rest are one-shots
-    for (const k of want) ok(meta[k] && meta[k].loop === /^h_jp3/.test(k), `pack clip ${k}: loop ${meta[k]?.loop}`);
+    for (const k of want) ok(meta[k] && meta[k].loop === /^(h_jp3|c_bl_0$|c_fl_0$)/.test(k), `pack clip ${k}: loop ${meta[k]?.loop}`);
   }
 }
 process.exit(fail ? 1 : 0);

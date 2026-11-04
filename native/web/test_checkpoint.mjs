@@ -509,14 +509,15 @@ else {
     ok(rec && rec.inventory.slots[0][1] === 2 && rec.inventory.gil === 7 && rec.taken.join() === '22', 'the record copies the inventory and the taken bits');
     // 2. the Restart: restoreCheckpoint with the record (fake systems)
     const php = { hp: 300, f118: 0, s64: 5 };
-    let rb = null, music = 0, resets = 0;
+    let rb = null, music = 0, musicArg = null, resets = 0;
     const sysR = { record: rec, php, ctrl: { pos: { x: 1, y: 2, z: 3 }, C: { face: { x: 0, y: 0, z: 1 } }, reset() { resets++; } },
-      rebuildEnemies: (...a) => { rb = a; return null; }, music: () => music++, handoff: HO };
+      rebuildEnemies: (...a) => { rb = a; return null; }, music: r => { music++; musicArg = r; }, handoff: HO };
     const outR = restoreCheckpoint(sysR);
     ok(php.hp === 780 && php.f118 === CHECKPOINT.f118 && php.s64 === 0, `HP after a record's reload: ${php.hp} (780: FUN_00319798 drops the saved status; T 780, the record held 500)`);
     ok(rb && nz(rb[0]) === nz(rec.sflags) && rb[1] === RECORD_RELOAD.frame && rb[2] === RECORD_RELOAD.clock && rb[3] === rec,
        `rebuildEnemies(the record's stage flags ${rb && nz(rb[0])}, frame 0, clock 0, the record)`);
-    ok(music === 0 && resets === 1 && outR.record === 1 && !outR.soldierHandOff, 'no zone-music restart, no opening hand-off (main\'s flag-18 branch does both)');
+    // worker 0254: the sounds are torn down as at the stage start (FUN_003ffbb8; A4); main's flag-18 branch starts the music itself
+    ok(music === 1 && musicArg === true && resets === 1 && outR.record === 1 && !outR.soldierHandOff, `the record's teardown of the sounds runs (music(record = ${musicArg})), no opening hand-off`);
     // 3. main from its top with the record's flags (play.js startStage(false, 0, rec.gflags))
     const F2 = { v: { ...rec.sflags } };
     const B = mk(F2, { globalFlags: Uint8Array.from(rec.gflags), settle: false });
@@ -528,6 +529,20 @@ else {
     ok(B.vin.pos && Math.abs(B.vin.pos[0] + 889.2) < 1e-3 && Math.abs(B.vin.pos[2] + 599) < 1e-3 && B.vin.face && Math.abs(B.vin.face[0] + 1) < 1e-6,
        `resume: Vincent handed back at ${B.vin.pos && B.vin.pos.map(v => v.toFixed(3))} facing ${B.vin.face && B.vin.face.map(v => v.toFixed(4))} (T (-889.2, -0.0636, -599) facing (-1, 0, 0))`);
     ok(B.c.battle, 'resume: battle mode after main\'s battle()');
+    // worker 0254 (H3): T w254's call log across a record reload: f3132 battle() -> FUN_00324e70 nothing, f3148 the stage init, f3977
+    // battle() -> FUN_00319190, FUN_005453b0 -> FUN_005459d8. So the first battle() has no pass and the flag-18 branch's has it.
+    { let pass = 0; const F3 = { v: { 0: 2, 1: 5, 2: 7, 46: 1 } }, tg = new Uint8Array(64);   // T: w242's / w254's record
+      tg[0] = 1; tg[1] = 5; tg[18] = 1; tg[55] = 7;
+      const C = mk(F3, { globalFlags: tg, settle: false, stagePass: () => { pass++; C.flag9 = F3.v[9] | 0; } });
+      C.run(400);
+      const lines = C.c.rt.log.filter(([, m]) => /^battle(:| \d)/.test(m)).map(([, m]) => m);
+      ok(pass === 1 && lines[0] === 'battle: no stage object yet (FUN_00324e70: nothing)' && C.flag9 === 1,
+        `record reload: the first battle() sends nothing, the second runs the stage pass once, stage flag 9 already 1 (T w254 f3132 / f3977): pass ${pass}, flag 9 ${C.flag9}`); }
+    // the music natives are heard on a record's reload (no opening to wait for)
+    { const mus = []; const F4 = { v: { ...rec.sflags } };
+      const D = mk(F4, { globalFlags: Uint8Array.from(rec.gflags), settle: false, music: () => ({ playMusic3: n => mus.push(n), changeMusicVol() {}, stopMusic() {} }) });
+      D.run(40);
+      ok(mus.includes('bgm_001'), `record reload: main's playMusic3 reaches the music (${mus})`); }
     // the stage start's path is unchanged without a record
     const php0 = { hp: 300 }; let rb0 = null;
     restoreCheckpoint({ php: php0, rebuildEnemies: (...a) => { rb0 = a; return null; }, handoff: HO });

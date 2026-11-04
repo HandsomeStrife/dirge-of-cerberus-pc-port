@@ -53,7 +53,8 @@ export function endVolume(now, t0) { return 0x7f - Math.min((now - t0) >> 5, 0x7
 export class GameOver {
   // D: loadPauseData(pause.json merged with gameover.json: layouts.gameover, the 0x4c01 / 0x4c02 messages,
   //    seq6, endKinds); null = the timing only (no menu)
-  constructor(D = null) { this.D = D; this.reset(); }
+  // status: { s64: status +0x64, settled: P+0x118 bit 0x100, state: P+0x104 } (worker 0255; absent in the timing-only tests)
+  constructor(D = null) { this.D = D; this.status = null; this.reset(); }
   reset() {
     this.wm = 2; this.t = 0; this.w4c = 0;        // FUN_00334590 +0x2c / +0x2e, DAT_0046e290 + 0x4c
     this.started = false;                          // DAT_0047dbb4
@@ -100,13 +101,24 @@ export class GameOver {
     if (this.seq) this.seqFrame(now);
     if (this.menu) this.menuFrame(now);
   }
-  // FUN_00334590, the cases on the page's path (2, 3, 9)
+  // FUN_00334590, the cases on the page's path (2, 3, 9; worker 0255: 5, 6 with status +0x64 bit 3 / 2, the Phoenix Down)
   worldMode(dead, step) {
     switch (this.wm) {
       case 2:
         if (dead) {                                // FUN_00316cf8 != 0 (HP == 0)
           this.events.push('deathCamera');         // FUN_0032a420(CAM, 1, 0, 0) + FUN_00328720(CAM): play.js -> player.js FollowCamera.startDeath
-          this.t = DEATH_WAIT; this.wm = 3;
+          // FUN_0055f0e0(P, 3) / (P, 2): state 5, the timer as it was (T w255_phoenix: record 790). FUN_00326068(0x14): not on the page
+          if (this.status && (this.status.s64() & 0xc)) this.wm = 5;
+          else { this.t = DEATH_WAIT; this.wm = 3; }
+        }
+        break;
+      case 5:                                      // FUN_00326068(1) clear on the page. P+0x118 bit 0x100 -> FUN_00560d80, state 0x16, camera message 0x7d3
+        if (this.status && this.status.settled()) { this.events.push('revive'); this.wm = 6; }
+        break;
+      case 6:                                      // P+0x104 left 0x16 -> HP, flags, status 0 (play.js -> items.js), FUN_00241760(0, 3, 0), FUN_00328750
+        if (this.status && this.status.state() !== 0x16) {
+          this.events.push('reviveEnd');
+          this.ref(0, 3); this.killed = false; this.wm = 2;
         }
         break;
       case 3:

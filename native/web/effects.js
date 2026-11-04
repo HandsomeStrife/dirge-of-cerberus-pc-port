@@ -2199,7 +2199,11 @@ function vuSprite(X, rec, rgba, C, Dm, out, tex, proj, em) {
     const q = 0x40 + 6 * s;
     // GUESS: the masked V2-16 corners take z = 0.0, w = 1.0 from the VIF row registers (STROW is
     // set elsewhere in the effect pass; not decoded)
-    const corners = [0, 1, 2, 3].map(c => [f(mem.i(q + c, 0) / 16), f(mem.i(q + c, 1) / 16), 0, 1]);
+    // Past 16 sprites the corner table runs into the colour (+0xa0) and TEX0 (+0xc0) tables, which the stream unpacks after it
+    // (a0093's 24-sprite records). The program reads the whole qword (instr 346-355: LQ, ITOF4.xy, z and w as they are): there z
+    // and w are small integers, as floats denormal = 0.0, so w = 0 and the corner fails the tests below. T: w258 b120, no such
+    // sprite in the dump.
+    const corners = [0, 1, 2, 3].map(c => [f(mem.i(q + c, 0) / 16), f(mem.i(q + c, 1) / 16), 0, mem.full(q + c) ? 0 : 1]);
     const u0 = [f(mem.i(q + 4, 0) / 4096), f(mem.i(q + 4, 1) / 4096)], u1 = [f(mem.i(q + 5, 0) / 4096), f(mem.i(q + 5, 1) / 4096)];
     const uv = [[u0[0], u0[1]], [u1[0], u0[1]], [u0[0], u1[1]], [u1[0], u1[1]]];
     const recCol = [0, 1, 2, 3].map(i => mem.b(0xa0 + 2 * s, i));
@@ -2339,7 +2343,7 @@ function xform4(m, v) { const o = [0, 0, 0, 0]; for (let j = 0; j < 4; j++) o[j]
 // usn = imm & 0x4000, TOPS-relative = imm & 0x8000 (the record's addresses are all TOPS-relative)
 function parseVif(F, rec, size, warn) {
   const q = new Map();
-  const put = (addr, k, val) => { const r = q.get(addr) ?? [0, 0, 0, 0]; r[k] = val; q.set(addr, r); };
+  const put = (addr, k, val) => { const r = q.get(addr) ?? [0, 0, 0, 0]; r[k] = val; if (k >= 2) r.full = true; q.set(addr, r); };
   let o = rec;
   const end = rec + size;
   while (o < end) {
@@ -2363,6 +2367,7 @@ function parseVif(F, rec, size, warn) {
   return {
     i: (a, k) => (q.get(a) ?? [0, 0, 0, 0])[k], b: (a, k) => (q.get(a) ?? [0, 0, 0, 0])[k] & 0xff,
     w: (a, k) => (q.get(a) ?? [0, 0, 0, 0])[k],
+    full: a => !!q.get(a)?.full,                                // an unpack wrote this qword's z / w
   };
 }
 

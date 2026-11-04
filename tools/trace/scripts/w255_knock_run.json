@@ -1,0 +1,1 @@
+{"name": "w255_knock_run", "frames": 420, "log_from": 90, "doc": "worker 0255: a live knock-down while running: TRACE_HIT=100:8:50:-1,0 (a blast's flags 8, FUN_005618d0(P, dir, 0, 0)). TRACE_FIELDSET=revive TRACE_CALLLOG=w255 TRACE_LOG_AT=A5000", "events": [{"from": 10, "to": 130, "lx": 0.6, "ly": -1.0}]}

@@ -44,7 +44,8 @@ Clocks: DAT_0046b308 = play seconds (FUN_00242a50, every frame from FUN_00247428
 while DAT_0046b310; FUN_00242980 sets it: stage load on, the system pause / event pause FUN_00376ee0 off);
 DAT_0046b304 += 1 in FUN_00242938 (FUN_003fdb48(3): the game over).
 Section start FUN_0031db30 (via FUN_003fdaa0 when stat 14 changed): clears all but stat 14, +0 = DAT_0046b308,
-+8 = DAT_0046b304, stat 7 = 0. A Restart (FUN_00247508 0x13) does not reset them in story mode.
++8 = DAT_0046b304, stat 7 = 0. A Restart does rewind the stats (worker 0254, correcting an earlier line here): the clocks stay, the stats and
+totals become the record's (FUN_00311fa0 -> FUN_0031d4d8) or zero at the stage start (FUN_0030f3d8 -> FUN_0031dae8). notes/checkpoint-research.md 'The Restart invariant'.
 Save (sea-of-flames.p2s): block 0xa09b00, start 11, play 53 s, stats {0: 3, 1: 3, 2: 3, 7: 9, 14: 1, 52: 2}, PTR 1.
 
 ## The counters (T: w232 call log, TRACE_CALLLOG=results over w217_r02_barrier from r02_walkway)

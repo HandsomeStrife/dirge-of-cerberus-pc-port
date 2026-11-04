@@ -58,12 +58,16 @@ try {
     await wait(3000);
     const f = P.follow, dir = [0, 1, 2].map(j => f.at[j] - f.eye[j]);
     const hits = window.__rayCast(f.eye, dir, 4).hits.map(h => ({ name: h.name, dist: h.dist }));
-    return { eye: f.eye, at: f.at, camChunks: P.follow.rays.chunks(), slots: P.light.stream.loaded(), hits,
+    // what the rays themselves see: the wall's ray through the page's own object, with the stream's slots, then with chunk 3 gone
+    const R = f.rays, seg = () => { const h = R.segment([f.at[0], f.at[1], -560], [f.at[0], f.at[1], -530]); return h ? +h.point[2].toFixed(3) : null; };
+    const wallHit = seg(), ch = R.chunks; R.chunks = () => [0, 1, 2]; const wallOff = seg(); R.chunks = ch;
+    return { wallHit, wallOff, eye: f.eye, at: f.at, camChunks: P.follow.rays.chunks(), slots: P.light.stream.loaded(), hits,
              dir: Math.atan2(dir[0], dir[2]) };
   }, [FEET, HEADING, WANT]);
   console.log('eye', r.eye.map(v => +v.toFixed(2)).join(', '), ' slots', r.slots.join(','), ' first hits', JSON.stringify(r.hits.slice(0, 2)));
   ok(Math.abs(r.dir - WANT) < 0.05, `camera turned to the report's direction (${r.dir.toFixed(3)} vs ${WANT.toFixed(3)})`);
   ok(r.camChunks.slice().sort().join() === '0,2,3', `camera rays test the loaded slots: [${r.camChunks}] (FUN_0054fc38 -> FUN_0026a320)`);
+  ok(r.wallHit !== null && Math.abs(r.wallHit + 542.75) < 0.05 && r.wallOff === null, `the page's rays hit chunk 03's wall with it loaded (z ${r.wallHit}), not with slots 0 / 1 / 2 (${r.wallOff})`);
   ok(r.eye[2] <= -542.75 + 1e-3, `eye stopped by chunk 03's wall: z ${r.eye[2].toFixed(2)} <= -542.75 (in front of occluder plane z -540)`);
   ok(r.hits.length > 0 && r.hits[0].dist > 20, `centre ray reaches the square: first hit ${r.hits[0] ? r.hits[0].name + ' at ' + r.hits[0].dist.toFixed(1) : 'none'} (> 20 u)`);
   ok(errs.length === 0, `no page errors${errs.length ? ': ' + errs[0] : ''}`);

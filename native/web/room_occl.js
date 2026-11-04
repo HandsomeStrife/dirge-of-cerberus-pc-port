@@ -24,7 +24,8 @@
 //
 // createRoomOccl(scene.occl) -> { frame(V, loaded), dropped(chunk), inside(pts, n), count, volumes, version }
 //   frame: V = Float32Array(16) row-vector world -> view (cameraView(cam).toViewMatrix()), loaded = the chunks of the
-//   loaded slots in slot order (AreaStream.loaded(), or every chunk). Allocates nothing.
+//   loaded slots in slot order (AreaStream.loaded(), or every chunk), fov = the rendered camera's horizontal fov in degrees
+//   (default the gameplay 73.5). Allocates nothing.
 //   dropped(chunk): Uint8Array per tree node, 1 = not drawn (occluded or under an occluded node); null = no tree.
 //   inside(pts, n): FUN_00269978 on n points (flat xyz) against this frame's volumes (the stage effects' cull).
 
@@ -32,13 +33,9 @@ const f = Math.fround;
 const RING = [1, 0, 3, 1, 2, 3, 0, 2];       // the side planes' edges (a, b): ring 0 -> 1 -> 3 -> 2
 const MAXV = 15;                                  // FUN_0026c878: if (0xe < DAT_0046bff8) return
 // display struct 0x4fc7d0 (z128): FUN_0040d478's arguments
-const SCR_W = 448, FOV = 73.5, AY = 1.5;          // +0x2e8, +0x300, +0x2f8 (output.js uses the same)
-const SCRZ = f(SCR_W * 0.5 / Math.tan(FOV * 0.008726647));  // +0x304 (FUN_0040d670; save 299.97235)
+const SCR_W = 448, FOV = 73.5, AY = 1.5;          // +0x2e8, +0x300 (the gameplay fov), +0x2f8 (output.js uses the same)
 const SCR_H = 512, NEAR = 1, FAR = 30000;          // +0x2ec, max(+0x2c, +0x308), +0x30c
-// FUN_00263a48: view -> clip (x, y scales; z row) and FUN_00263c70: view -> screen (x, y scales; w = z)
-const CLX = f(SCRZ / SCR_W), CLY = f(SCRZ / SCR_H);
 const CLZ = f((FAR + NEAR) / (FAR - NEAR)), CLW = f((FAR * NEAR * -2) / (FAR - NEAR));
-const SX = SCRZ, SY = f(AY * SCRZ);               // screen: x' = SX x + cx z, y' = SY y + cy z, w = z (cx, cy cancel)
 
 export function createRoomOccl(data) {
   const byChunk = new Map();
@@ -53,6 +50,17 @@ export function createRoomOccl(data) {
   const t = new Float32Array(16);                 // scratch: view-space corners / edge vectors
   const st = { count: 0, version: 0 };
   const eye = new Float32Array(3);
+  // FUN_003ee1d8 (the rendered view) -> FUN_0040d470: +0x300 = view +0x40, the live fov (CAM+0x170 or the event camera's); the
+  // display's frame FUN_0040ce28: +0x304 = 448 / 2 / tan(+0x300 x 0.008726647) (save 299.97235), then FUN_0040d478's matrices.
+  // FUN_00263a48: view -> clip (x, y scales; z row) and FUN_00263c70: view -> screen (x, y scales; w = z)
+  let lastFov = null, CLX = 0, CLY = 0, SX = 0, SY = 0;   // screen: x' = SX x + cx z, y' = SY y + cy z, w = z (cx, cy cancel)
+  function setFov(fov) {
+    if (fov === lastFov) return;
+    lastFov = fov;
+    const SCRZ = f(SCR_W * 0.5 / Math.tan(fov * 0.008726647));
+    CLX = f(SCRZ / SCR_W); CLY = f(SCRZ / SCR_H); SX = SCRZ; SY = f(AY * SCRZ);
+  }
+  setFov(FOV);
 
   // a world point through V (row vector), view space into t[o..o+2]
   function toView(V, x, y, z, o) {
@@ -125,7 +133,8 @@ export function createRoomOccl(data) {
     return false;
   }
 
-  function frame(V, loaded) {
+  function frame(V, loaded, fov = FOV) {
+    setFov(fov);
     // FUN_002610e0: the eye = row 3 of the inverse of the rigid V = -(R t)
     for (let j = 0; j < 3; j++) eye[j] = -f(f(f(V[4 * j] * V[12]) + f(V[4 * j + 1] * V[13])) + f(V[4 * j + 2] * V[14]));
     // FUN_00269868

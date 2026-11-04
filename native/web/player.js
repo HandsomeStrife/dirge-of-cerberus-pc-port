@@ -55,13 +55,14 @@
 // With no actions registered every code path is the game's locomotion.
 // ================================================================
 import * as THREE from 'three';
-import { Jump, stickMode, enterState, airState, HIT_STATE, DEAD_STATE } from './jump_core.js';
+import { Jump, FallMotion, stickMode, enterState, airState, moveAngle, HIT_STATE, DEAD_STATE, REVIVE_STATE } from './jump_core.js';
 
 // ---------------------------------------------------------------- timing
 export const TICK = 1 / 50;                       // one PAL game frame (s): play.js's loop step
 const DAT_0046E400 = 4.0;                          // ladder camera pull-back (RAM; FUN_00328640)
 const DAT_0046E4C0 = 0.2;                          // its ease rate per tick (FUN_0032ace0 l.1748)
 const DAT_0046E4D4 = 1.5;                          // camera ray start, back along the forward axis in view 1 (FUN_0032ace0)
+const DAT_0046E4E0 = 1.0, DAT_0046E4E4 = 2.5, DAT_0046E4E8 = 0.1;   // the pre-probes' margin, least side offset, wall margin (FUN_0032ace0 l.1820-1990; ELF)
 export const STEP = 1.1999999284744263;           // DAT_004eeb24: ticks per frame (f32 of 1 x 1.2)
 export const DT = 0.019999999552965164;           // DAT_004eeb28 = STEP x 0.016666668 (s)
 export const BODY_FLAGS = 0x236;                  // body+0xac (C+0x45c) in z128: bits 1 2 4 5 9 (T: k_push17 FUN_0034c388 log)
@@ -263,6 +264,10 @@ export class PlayerController {
     this.prev = { ...this.pos };
     this.prevHeading = this.heading;
     const ctx = this.ctx;
+    // FUN_00331f08: at HP 0 FUN_003320c0 and FUN_00333150 are skipped: no edge reaches the ladder or the jump (worker 0255)
+    if (this.hpZero()) {
+      input = { ...input, pressed: new Set(), cross: false };
+    }
     ctx.input = input;
 
     // actions: 60 Hz ticks from an accumulator (1 or 2 per frame)
@@ -295,6 +300,8 @@ export class PlayerController {
           // FUN_00538ec8 / FUN_00538fa0), whose chain isn't decoded; see notes/fidelity-audit.md
           if (res.locomotion && this.onGround && this.P.state === 9) enterState(this.P, 2);
           this.active = null; a.exit(ctx);
+          // the top / bottom exits' FUN_00539078 / FUN_005391c8 and the fall's FUN_00538aa0, dead: state 7 (worker 0255)
+          if (this.hpZero() && this.onGround && !this.fallDead) this.enterDead(0x20209);
         }
       }
       this.ticks++;
@@ -302,6 +309,12 @@ export class PlayerController {
     }
     ctx.input = input;
     if (owned) this.locate();                     // an action moved him off the body's polygon
+    if (this.fallDead && !this.active) {
+      this.fallDead = false;
+      enterState(this.P, 8);                      // (the page's ladder held 9)
+      this.jump.motion = new FallMotion(0x25);
+      this.startFall(0);
+    }
     // weapon (aim.js): camera update + input (FUN_0032ace0 / FUN_003320c0) before the intent
     // (the camera and FUN_00579570 run in every state, FUN_005786e8; actions pause the buttons and clips)
     if (this.weapon && this.weaponHook) this.weaponHook.pre(input, !!this.active);
@@ -310,8 +323,9 @@ export class PlayerController {
     // gate FUN_00577230 and FUN_00575768 (jump_core.js takeOff), before the stick writes.
     // input.cross: the pad's ✕ edge (trace replays); the page's ✕ is Space (ladder.js KEY).
     const cross = input.cross ?? !!(input.pressed && input.pressed.has(CROSS_KEY));
-    this.jump.takeOff(this, cross, { ladder: owned || ate || !!this.active });
+    this.jump.takeOff(this, cross, { ladder: owned || ate || !!this.active, c564: this.weaponHook && this.weaponHook.c564 ? this.weaponHook.c564() : 0 });
     this.stickInput(input);                       // FUN_00333150: runs in every state
+    if (this.P.state === 0x11 && !this.hpZero()) this.knockInput(cross);
     stickMode(this, this.stickW);                 // FUN_00333150: P+0x29c (the back jump's turn-round bit)
     // FUN_005786e8: FUN_00578748 (intent), FUN_00579570 (weapon) and FUN_005799f0 run only while his status HP is not
     // 0 (FUN_00316cf8). hpZero: the page's status (play.js php.hp), false without one.
@@ -439,6 +453,8 @@ export class PlayerController {
       mag = input.run ? KEY_RUN : KEY_WALK;       // GUESS: keyboard mapping
       v = { x: input.x / len * mag, y: 0, z: input.z / len * mag };
     }
+    // FUN_00333150 LAB_00333b08: C+0x564 bit 0x4000000 (the get-up class 0x37's first 40 ticks): FUN_00574920(P, 0), no stick
+    if (this.jump.motion && this.jump.motion.lock) { v = null; mag = 0; }
     this.stickW = { x: v ? v.x : 0, z: v ? v.z : 0, mag };
     const st = P.state;
     if (st === 8 || st === 9 || (st >= 0x1f && st <= 0x21)) {
@@ -768,7 +784,7 @@ export class PlayerController {
     const cut = this.loadC(s.state);
     this.frames = s.frame;                        // inside that frame again (event frame numbers)
     const r = this.hitBranch(h);
-    if (r === 'big' || r === 'death') {
+    if (r === 'big' || r === 'death' || r === 'knock') {
       s.state = this.saveC();                     // the frame's start now includes this hit
       this.runC(s.loco, s.input, false);          // the draw already ran (a big hit draws the old pose, blend 0)
     } else {
@@ -797,35 +813,102 @@ export class PlayerController {
     const st = P.state;
     // FUN_0055aa88 (air states), or bVar1 with P+0x100 bits 46-47 (FUN_0055bb40 / FUN_0055bb68: states
     // 0x80-0xbf / 1 are not on the page)
+    // The page's ladder action holds P.state at 9 (applyOwned), so it is tested before the air states: the game's ladder states 0xb-0xe are not air states
+    // (FUN_0055aa88), they are FUN_0055a410's (below).
+    if (this.active) return this.ladderHit(deadNow);
     if (airState(st) || (above && P.jumpBits)) {
       if (f118 & 4) return 'none';
-      if (flags & 0xc) { warn('air hit reaction (FUN_005618d0 / FUN_00561270) not translated'); return 'missing'; }
-      if (deadNow) { warn('death in the air (FUN_00561270) not translated'); return 'missing'; }
+      // FUN_00561270(P, dir, 0, 0), alive with flags 4 / 8: FUN_005618d0(P, dir, 0, 2)
+      if (deadNow) return this.knockDown(dir, 0, f118) ? 'knock' : 'none';
+      if (flags & 0xc) return this.knockDown(dir, 2, f118) ? 'knock' : 'none';
       return 'none';
     }
-    // FUN_0055a410: states 10-14 / 0x15 / 0x17 -> nothing unless state 10 (dead: FUN_00562d68). The page's ladder
-    // action stands for the ladder states 0xb / 0xc (player.js ladder GUESS), so a hit on the ladder has no reaction.
-    if (this.active) return 'none';
     if ((flags & 8) && !(f118 & 4)) {
-      if (deadNow) { warn('knock-down death (flags 8: FUN_00561270) not translated'); return 'missing'; }
-      warn('knock-down hit reaction (flags 8: FUN_005618d0 / FUN_00561270) not translated'); return 'missing';
+      if (deadNow) return this.knockDown(dir, this.onGround && !(flags & 1) ? 0 : 2, f118) ? 'knock' : 'none';   // FUN_00561270(P, dir, 0, 0 / 2)
+      if (st === 0xf) return 'none';
+      return this.knockDown(dir, this.onGround && !(flags & 0x40) ? 0 : 2, f118) ? 'knock' : 'none';              // FUN_005618d0(P, dir, 0, 0 / 2)
     }
     if ((flags & 4) && !(f118 & 0x10)) {
       if (st === 0xf) return 'none';
-      if (!this.onGround) { warn('big hit off the ground (FUN_005618d0 / FUN_00561270 (P, dir, 0, 2)) not translated'); return 'missing'; }
+      if (!this.onGround && deadNow) return this.knockDown(dir, 2, f118) ? 'knock' : 'none';                     // FUN_00561270(P, dir, 0, 2)
+      if (!this.onGround) return this.knockDown(dir, 2, f118) ? 'knock' : 'none';                                // FUN_005618d0(P, dir, 0, 2)
       if (deadNow) return this.bigDeath(dir, f118, f28) ? 'death' : 'none';   // FUN_00561138
       this.bigHit(dir, f118, f28);
       return 'big';
     }
     if ((flags & 2) && !(f118 & 8)) {
       if (st === 0xf) return 'none';
-      if (!this.onGround) { warn('small hit off the ground (FUN_00561270 / FUN_005618d0 (P, dir, 0, 0)) not translated'); return 'missing'; }
+      if (!this.onGround && deadNow) return this.knockDown(dir, 0, f118) ? 'knock' : 'none';                     // FUN_00561270(P, dir, 0, 0)
+      if (!this.onGround) return this.knockDown(dir, 0, f118) ? 'knock' : 'none';                                // FUN_005618d0(P, dir, 0, 0)
       if (deadNow) return this.death(dir, f118, f28) ? 'death' : 'none';     // FUN_00560fc8
       warn('small hit flinch (FUN_00561570) for the player not translated'); return 'missing';
     }
     // no flag 2 / 4 / 8 (or masked by P+0x118): FUN_003419c0 != 0x36 and dead -> FUN_00560fc8
     if (deadNow) return this.death(dir, f118, f28) ? 'death' : 'none';
     return 'none';
+  }
+
+  // FUN_00561270 -> FUN_005618d0(P, dir, 0, k) (worker 0255; T w255_phoenix_air, shot in the jump's wind-up at HP 1, f788; the alive caller is not on
+  // the page yet). P+0x118 bits 4 / 0x10000 -> 0. P+0x156 counts the hits off the ground; under DAT_0046ed98 = 15 ticks since P+0x164 -> 0; six in a row -> k = 2.
+  // Vt+0x2f4 event 0x29 (no script). The angle dir / facing within 130 deg (hit from behind): state 0x10, turn to dir, else 0xf, turn to -dir; FUN_003533e0;
+  // C+0x1c0 &= ~0x200. DAT_0046e298 bit 13: T = 11 + r; k 1: d = 22 + r, n = 5 + (int)(3 r); k 0: d = 27 + r, n = 7 + (int)(9 r); else (or more than 24 above
+  // the ground) d = 17 + r, n = 4 (three / two draws of FUN_0040b5c0). The rise DAT_004ef388[n] = n + 8 (n >= 5), 4 (FUN_0056aba8), 0 with 12 hits and more than 10
+  // above, or more than 30 above. FUN_00353280(d, T, rise, 0.5, C, dir) + mover 10 (FUN_0034f178: FUN_00357168(rise)), FUN_0034e960(C, 4).
+  // T: f12 27.01 rise 22, speed 255 u/s down by 27 a frame to 30, then c_st_bl0 7 frames, state 0x10 at 15 above the ground. L: FUN_0034b2c8's C+0xe0, FUN_0056ab30's P+0x188.
+  // FUN_00333150, state 0x11 (worker 0255). Class 0x3a / 0x35's first 8 ticks (C+0x568 bit 0x2000000): ✕ -> FUN_005763b8: on the ground FUN_003533e0, FUN_00575768(P, 0). L: the other button
+  // (id 0x10, FUN_00576110: no key on the page). C+0x79c bit 0x100 and a stick over 0.3: P+0x100 bits 42-43 = 1 / 2 by the stick's side of his facing (FUN_00260fe8 < 0: 2) and state 2: the
+  // roll-up; else the bits 0. T w255_knock_hold: stick held, record 189 state 2, c_rev_r, 3.1 u along the side, control back at 224.
+  knockInput(cross) {
+    const P = this.P, m = this.jump.motion;
+    if (m && m.tech && cross && this.onGround) { this.C.slide = null; this.jump.takeOff(this, true, { force: true }); return; }
+    const S = this.stickW;
+    if (!m || !m.rollOk || S.mag <= 0.3) { P.revSide = 0; return; }
+    P.revSide = moveAngle(this.C.face, { x: S.x, z: S.z }) > 0 ? 2 : 1;
+    this.jump.enter(this, 2);
+  }
+  // A hit on the ladder (FUN_00565480: FUN_0055a410's states): only a dead hit in state 10 acts (FUN_00562d68 -> FUN_00562d30: state 0x17, the jump-off); mount states 0xb / 0xc wait for
+  // their class's done event (FUN_00538ec8 / FUN_00538fa0: dead -> 0x17). actions/ladder.js `die`. T w255_ladder_climb, w255_ladder_mount.
+  ladderHit(deadNow) {
+    if (deadNow && this.active.die) this.active.die(this.ctx);
+    return 'none';
+  }
+  // class 0x25 FUN_0059a428's end: row 0x18 and the done event -> FUN_00538e68: state 8; FUN_00538e28: motion 0x22 (T: 567 state 8, h_jp2). The landing: FUN_00538aa0 -> 7.
+  ladderDeathFall() {
+    this.fallDead = true;
+  }
+  knockDown(dir, k, f118) {
+    const P = this.P, C = this.C, r = () => (this.rng ? this.rng() : 0.5);
+    if ((f118 & 4) || (f118 & 0x10000)) return false;
+    P.airHits = this.onGround ? 0 : ((P.airHits ?? 0) + 1) & 0xff;
+    const now = Math.trunc(this.frames * STEP);
+    if (P.t164 != null && now - P.t164 < 15) return false;
+    if (P.airHits >= 6) k = 2;
+    const u = norm3({ x: dir[0], y: dir[1], z: dir[2] });
+    const a = moveAngle(C.face, u), behind = Math.abs(a) < 2.268928;
+    C.slide = null;
+    this.setTurn(0.25, behind ? u : { x: -u.x, y: -u.y, z: -u.z });
+    this.onGround = false;
+    const T = f32(r() + 11.0), above = f32(this.body.gy - this.pos.y);
+    if (above > 24.0) k = 2;
+    let d, n;
+    if (k === 1) { d = f32(22.0 + r()); n = Math.trunc(r() * 3.0) + 5; }
+    else if (k === 0) { d = f32(27.0 + r()); n = Math.trunc(r() * 9.0) + 7; }
+    else { d = f32(r() + 17.0); n = 4; }
+    let rise = n === 4 ? 4.0 : n + 8.0;
+    if ((P.airHits >= 12 && above > 10.0) || above > 30.0) rise = 0;
+    const v = f32(f32(f32(d + d) / T) - 0.5);
+    C.slide = { dir: u, v, dv: f32(v / T), end: 0.5, mover: 10 };
+    this.startFall(rise);
+    C.rotMode = 4;
+    this.jump.enter(this, behind ? 0x10 : 0xf);
+    this.setStance(0);                            // FUN_005392b8 / FUN_00539390
+    P.t164 = now;
+    return true;
+  }
+  // FUN_0059cbe8 (class 0x35, a low knock-down's landing): FUN_003533e0, FUN_003531e0(15, 30, C, -facing), mover 9
+  knockBack() {
+    const f = this.C.face, v = f32(30.0 / 30.0);
+    this.C.slide = { dir: { x: -f.x, y: -f.y, z: -f.z }, v, dv: f32(v / 30.0), end: 0 };
   }
 
   // FUN_00560fc8(P, dir): the death. C+0xe8 set: FUN_003533e0 (movers off: the page's slide); the slide distance
@@ -867,6 +950,15 @@ export class PlayerController {
     if ((f118 & 0x8000) || (f118 & 0x10000)) return false;
     if (!this.jump.enter(this, DEAD_STATE)) return false;
     this.setStance(2);
+    return true;
+  }
+
+  // FUN_00560d80's FUN_003533e0 and FUN_0055b8e0(P, 0x16, 0, 0) (P+0x118 bits 0x800 / 0x10000 clear), whose enter FUN_00539a10:
+  // FUN_00565bd0(P, 0), FUN_00565d78(P, 0) (worker 0255; T w255_phoenix record 1005)
+  revive() {
+    this.C.slide = null; this.C.groundSpeed = 0;   // FUN_003533e0 (the death's mover 0xb goes)
+    if (!this.jump.enter(this, REVIVE_STATE)) return false;
+    this.setStance(0);
     return true;
   }
 
@@ -932,6 +1024,16 @@ export class PlayerController {
   // 'Vincent at HP 0').
   slideTick() {
     const S = this.C.slide;
+    if (S.mover === 10) {
+      // FUN_003515e8: the speed set this frame is the old one. Off the ground C+0x320 -= C+0x324 x step, held at 0.5; on the ground capped at 0.5, then
+      // -= DAT_0046f480 = 0.0125 x step, held at 0. T: 30 u/s, on the ground 0.9 u/s less a frame.
+      this.setMove(S.v, S.dir);
+      let dv = S.dv, end = S.end;
+      if (this.onGround) { if (end < S.v) S.v = end; dv = f32(0.0125); end = 0; }
+      S.v = f32(S.v - f32(dv * STEP));
+      if (S.v < end) S.v = end;
+      return;
+    }
     if (S.mover === 0xb) {
       let rx = 0, rz = 0;
       const m = this.jump.motion, K = this.jump.clock;
@@ -1322,10 +1424,13 @@ export class SpeedAnimator {
     const prevKey = this.head.key, first = this.cur === -1;
     const key = (this.table || GAME.loco)[idx].key;
     let frame = 0;
-    if (!first) frame = Math.min(Math.max(this.head.frame * 2, 0), this.frames[key] * 2 - 1) * 0.5;  // FUN_005a8fd0
+    const T = this.table || GAME.loco;
+    // FUN_00346860: cVar1 != -1, or C+0x568 bit 0x40000 (the reload class's holster, T.carry; the first pick clears it):
+    // FUN_00345590 -> FUN_00345448, the old clip's frame
+    if (!first || T.carry) frame = Math.min(Math.max(this.head.frame * 2, 0), this.frames[key] * 2 - 1) * 0.5;  // FUN_005a8fd0
+    T.carry = false;
     // a table's blend0: the C+0x591 its installer left (FUN_00346860 sets none on a first pick of row 0: the reload class
     // FUN_005980f8's FUN_00340bb8(C, 1, 5)); noLoop: flags 0x86 instead of 0x87 (C+0x564 bit 0x40000; worker 0246)
-    const T = this.table || GAME.loco;
     const len = (idx === 0 && !first ? GAME.blendToIdle : (idx === 0 && T.blend0 != null ? T.blend0 : GAME.blendFrames)) + 1;
     this.out = { key: prevKey, frame: this.head.frame, prevFrame: this.head.frame, loop: this.head.loop !== false };
     this.head = { key, frame, prevFrame: frame, loop: !T.noLoop };
@@ -1633,7 +1738,17 @@ export function cameraRays(buf) {
              Math.min(tri[2], tri[5], tri[8]), Math.max(tri[2], tri[5], tri[8]));
     T.push(tri); count++;
   }
-  const rays = { count, chunks: () => CAM_COL_FILES, segment };
+  // objects: FUN_005449f0's objects other than the stage's map (probe 6: +0x28 bit 0, +0x38 bit 6): (a, b) -> nearest { point, normal }
+  // or null (play.js: enemy_ai cameraObjects; the map itself is in the grid's root cell: probe6 below)
+  const rays = { count, chunks: () => CAM_COL_FILES, segment, objects: null, probe6 };
+  // FUN_005449f0(mgr, 6, hit, n, a, b): every listed object with +0x38 bit 6, each by its vt+0x17c, the nearest to a. T: the stage
+  // object (vt 0x58c9e0, +0x38 0x44a) is in cell 0 of the grid +0x1170 (route RAM), so the map (FUN_0054fc38) is one of them
+  function probe6(a, b) {
+    const m = segment(a, b), o = rays.objects ? rays.objects(a, b) : null;
+    if (!m || !o) return m || o;
+    const d = (p) => (p[0] - a[0]) ** 2 + (p[1] - a[1]) ** 2 + (p[2] - a[2]) ** 2;
+    return d(o.point) < d(m.point) ? o : m;
+  }
   // segment a->b: nearest hit {point, normal} (double-sided, as col.segment) over the loaded slots' chunks
   // (FUN_0026a320: every loaded slot, the nearest hit kept)
   function segment(a, b) {
@@ -1748,6 +1863,7 @@ export class FollowCamera {
   // blends from the old eye by the weapon system's ramp CAM+0x17c (FUN_0032ace0 l.2088), and the distance is measured
   // from that eye (the in branch: CAM+0x1c0 = 1000). p: as tick()
   battleReset(p, s) {
+    this.setBack(false);                          // FUN_00324e70: FUN_00328640(CAM, 0), before FUN_00329f68
     this.low = false;
     this.resetAngles(s);
     this.tick(p);
@@ -1974,6 +2090,39 @@ export class FollowCamera {
     wc.a1a4 = t < 0.5 ? -0.75 * easeSin(t + t) : -0.75;
   }
 
+  // FUN_0032ace0 l.1820-1990: the look point's rotated pivot pr (in place), before the eye rays. S = the view-axis point.
+  // (1) Its side part (along M row 0, FUN_0025a778(0, ..): the projection) when >= DAT_0046e4e4: a ray from the axis out past it,
+  // FUN_005449f0 probe 6 (objects + the map): a hit nearer than side + DAT_0046e4e0 pulls pr's x / z in to the hit less the margin.
+  // (2) The map alone (vt+0x17c, probe 6) from the base point at pr's height to the look point: pushed out along the hit's normal
+  // by the depth + DAT_0046e4e8
+  preProbes(base, pr, eoff, M, f23) {
+    const v = [eoff[0] + pr[0], eoff[1] + pr[1], eoff[2] + pr[2]], fw = M[2], R0 = M[0];
+    const rl = len3(R0) || 1, rn = [R0[0] / rl, R0[1] / rl, R0[2] / rl], ds = rn[0] * v[0] + rn[1] * v[1] + rn[2] * v[2];
+    const side = [rn[0] * ds, rn[1] * ds, rn[2] * ds], sl = len3(side);
+    const S = [0, 1, 2].map(j => base[j] + v[j] - fw[j] * f23);
+    if (DAT_0046E4E4 <= sl) {
+      const dir = side.map(c => c / sl), a = [0, 1, 2].map(j => S[j] - side[j]), b = [0, 1, 2].map(j => S[j] + dir[j] * DAT_0046E4E0);
+      const h = this.rays.probe6 ? this.rays.probe6(a, b) : this.rays.segment(a, b);
+      if (h) {
+        const d = len3([h.point[0] - a[0], h.point[1] - a[1], h.point[2] - a[2]]);
+        if (d < sl + DAT_0046E4E0) {
+          const t = Math.max(d - DAT_0046E4E0, 0);
+          pr[0] += dir[0] * t - side[0]; pr[2] += dir[2] * t - side[2];   // y as it was
+        }
+      }
+    }
+    const from = [base[0], base[1] + pr[1], base[2]], to = [base[0] + pr[0], base[1] + pr[1], base[2] + pr[2]];
+    const h = this.rays.segment(from, to);
+    if (h) {
+      const n = h.normal, nl = len3(n) || 1, nn = [n[0] / nl, n[1] / nl, n[2] / nl], e = [h.point[0] - to[0], h.point[1] - to[1], h.point[2] - to[2]];
+      const dn = nn[0] * e[0] + nn[1] * e[1] + nn[2] * e[2];
+      let c = [nn[0] * dn, nn[1] * dn, nn[2] * dn];
+      const l = len3(c);
+      if (0.001 < l) c = c.map(x => x / l * (l + DAT_0046E4E8));
+      pr[0] += c[0]; pr[1] += c[1]; pr[2] += c[2];
+    }
+  }
+
   // the eye for this frame (FUN_0032ace0 from the matrix build on); ctx = null: no
   // collision or easing (reset)
   place(base, old, ctx) {
@@ -2003,6 +2152,16 @@ export class FollowCamera {
     const d0 = this.d0 || [0, 0, 0];
     const piv = [T.pivot[0] + d0[0], T.pivot[1] + d0[1] + a4, T.pivot[2] + d0[2] + (pf > 0 ? -4.0 : -3.0) * pf];   // DAT_0046e4dc / 0x46e4d8
     const pr = vm(piv, RY);
+    // the ray start's distance along the forward axis (fVar23, l.1788): from the offset through RX alone
+    let f23 = 1.0;
+    if (ctx && this.rays) {
+      const offz = vm(off, RX)[2];
+      f23 = Math.abs(RX[2][2]) < 0.001 ? 1.0 : (offz + T.pivot[2]) / RX[2][2];
+      // FUN_0032ace0 l.1792: view 1 (FUN_0032a0f0() == 1) starts the rays DAT_0046e4d4 (1.5, ELF
+      // and save-state RAM) further back along the forward axis
+      if (ctx.view1 !== false) f23 += DAT_0046E4D4;
+      this.preProbes(base, pr, eoff, M, f23);       // FUN_00326500() true (DAT_0046b2fc = 2, the region)
+    }
     const at = [base[0] + pr[0], base[1] + pr[1], base[2] + pr[2]];                    // CAM+0xf0
     let eye = [at[0] + eoff[0], at[1] + eoff[1], at[2] + eoff[2]];
     if (!ctx) return { eye, at, M };
@@ -2010,11 +2169,6 @@ export class FollowCamera {
     // eye and the corners of a 6 x 6 square around it; the nearest hit pulls the eye in
     // to the same fraction, then forward by 3 sin(angle to the wall) (DAT_0046e440 = 3)
     if (this.rays) {
-      const offz = vm(off, RX)[2];
-      let f23 = Math.abs(RX[2][2]) < 0.001 ? 1.0 : (offz + T.pivot[2]) / RX[2][2];
-      // FUN_0032ace0 l.1792: view 1 (FUN_0032a0f0() == 1) starts the rays DAT_0046e4d4 (1.5, ELF
-      // and save-state RAM) further back along the forward axis
-      if (ctx.view1 !== false) f23 += DAT_0046E4D4;
       const fw = M[2];
       const S0 = [eye[0] - fw[0] * f23, eye[1] - fw[1] * f23, eye[2] - fw[2] * f23];
       let best = null;
@@ -2028,6 +2182,12 @@ export class FollowCamera {
           const sc = dh / len3([S0[0] - end[0], S0[1] - end[1], S0[2] - end[2]]);
           best = { d: dh, p: [0, 1, 2].map(j => h.point[j] - o[j] * sc), n: h.normal };
         }
+      }
+      // FUN_00544f90's second cast: FUN_005449f0(mgr, 6, hit, n, S, eye), kept when nearer S than the map's result
+      const ho = this.rays.probe6 ? this.rays.probe6(S0, eye) : null;
+      if (ho) {
+        const sq = q => (q[0] - S0[0]) ** 2 + (q[1] - S0[1]) ** 2 + (q[2] - S0[2]) ** 2;
+        if (!best || sq(ho.point) < sq(best.p)) best = { p: ho.point, n: ho.normal };
       }
       // CAM+0x1e8 0x80 at the end of FUN_0032ace0 (l.2488): a hit this frame (iStack_178, l.2029)
       this.hit = !!best;

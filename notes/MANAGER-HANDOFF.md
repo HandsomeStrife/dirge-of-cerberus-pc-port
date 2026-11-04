@@ -50,9 +50,7 @@ Use read-only `general-purpose` agents, one per group; send the fixes to a fresh
 
 ### 2. Walk the real level in PCSX2
 
-No save state has Vincent walking past the stairs. `tools/trace/route.py` is the walker (worker 0217, fixed by 0221); it stalls
-on enemies at the top of the stairs because its aim doesn't converge. Runs longer than about 1000 frames overflow the hook
-log. HP poke for survival is documented in `notes/route-states.md`.
+**Part 1 done (worker 0253, 2026-11-04):** walked states with GS dumps in every chunk, table in `notes/route-states.md`, with what each stretch needs (three cardkeys, a door, Dragonfly). Awake-dog traces there too.
 
 Goal: walked states (not teleports) in every chunk on the route 02 -> 03 -> 04 -> 05 -> 06 -> 07/08 -> 09 -> 0b, each with
 a GS dump, indexed in `notes/route-states.md`. Teleported states freeze Vincent and don't fire triggers.
@@ -208,9 +206,7 @@ Also tidy: `test_ambient_page` still ignores 404s on `game_state.js` / `stage_in
 ## PCSX2 tracing
 
 - `notes/pcsx2-headless-setup.md`, `tools/trace/`: `trace.py`, `grab_gs.py`, `calllog.py`, `fields.py`, `route.py`, `scripts/*.json`. Outputs in `tools/trace/out/` are gitignored.
-- **Fragile:** the `pcsx2trace` user unit's `EnvironmentFile` points at a dead session's scratchpad:
-  `/tmp/claude-1000/-srv-games-dirge-port/0015469a-5b75-4630-a185-669daa611724/scratchpad/trace.env`. Traces only run with
-  `TRACE_SCRATCH` set to that folder (or `--scratch`). If /tmp gets cleaned, tracing breaks. Worth fixing early: move it somewhere durable.
+- The `pcsx2trace` user unit's environment is `tools/trace/out/env/` (gitignored; worker 0253). No `TRACE_SCRATCH` needed.
 - The game's clock is real time, so page frames and trace frames differ by load times; the HANDOFF entries say how each comparison handles it.
 - Answering the memory-card box and the map screen after scene_save: `tools/trace/scripts/w229_rescue.json`.
 - Reaching the boss: stage flag 0 = 36 + global flag 19 = 1 (`r0b_boss2` is mid-fight).

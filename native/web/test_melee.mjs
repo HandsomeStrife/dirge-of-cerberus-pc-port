@@ -204,15 +204,17 @@ function world({ ppos = [0, 0, 0], at = [0, -9, -3], c1, every, rec = 44, mutVol
 }
 {
   // other types: e048 (record 28, zone set 4: m_atk, marker 8 = bone 13) builds the same sphere; e030's shape-2
-  // volumes (zone set 8, 1 / 2) are not translated (warned, no object)
+  // volumes (zone set 8, 1 / 2): FUN_00541310's sector fields (record +0x30 height, +0x34 outer, +0x38 inner, +0x3c degrees)
   const e48 = world({ rec: 28 });
   e48.W.t.makeAttack(e48.a, e48.T, 0); e48.W.tick(1.2, e48.player.pos, e48.player.pos);
   ok(e48.player.hp === 731, `e048 m_atk volume (zone set ${data.records[28].zones}, marker 8): hit, HP ${e48.player.hp}`);
   const e30 = world({ rec: 7 });
   e30.W.t.makeAttack(e30.a, e30.T, 1);
-  ok(e30.W.attackObjs.length === 0, `e030 volume 1 (shape 2, FUN_0057bc00): not built (${e30.W.attackObjs.length})`);
+  const sec = e30.W.attackObjs[0];
+  ok(sec && sec.shape === 2 && sec.h === 8 && sec.outer === 19 && sec.inner === 8 && Math.abs(sec.ang - Math.PI / 2) < 1e-5 && sec.marker === 0, `e030 volume 1 (shape 2): height ${sec?.h}, radii ${sec?.inner} .. ${sec?.outer}, ${sec?.ang} rad, marker ${sec?.marker}`);
   e30.W.t.makeAttack(e30.a, e30.T, 0);
-  ok(e30.W.attackObjs.length === 1 && e30.W.attackObjs[0].marker === 4 && e30.W.attackObjs[0].dmg === 100, `e030 volume 0 (shape 1, marker 4, damage ${e30.W.attackObjs[0]?.dmg} (100)): built`);
+  const sph = e30.W.attackObjs[1];
+  ok(sph && sph.marker === 4 && sph.dmg === 100, `e030 volume 0 (shape 1, marker 4, damage ${sph?.dmg} (100)): built`);
 }
 {
   // W+0x56 scales the record's damage: (50 + 0.5) x 0.01 x 120 = 60.6 -> 60 -> Vincent's defence

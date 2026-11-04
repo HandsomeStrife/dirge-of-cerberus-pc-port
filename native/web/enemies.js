@@ -316,6 +316,16 @@ export async function setupEnemies({ root, litPatch, light, extra = [] }) {
       const a = actors.find(x => x.model === model && x.side.clips[clip]);
       return a ? clipRootSpeed(a.side.clips, clip) : null;
     },
+    // FUN_00344468 (the idle table's turn speeds, FUN_00345f30): the root's row 2 at frame 0 and at the last frame, the angle
+    // between them (FUN_00260fe8) x 60 / frames (FUN_005ad6e8 = 2 x the count). Only |rate / this| is read (FUN_00346f10).
+    rootTurn(model, clip) {
+      const tr = this.rootTrack(model, clip);
+      if (!tr || !tr.n) return null;
+      const row2 = ([x, y, z, w]) => [2 * (x * z + w * y), 2 * (y * z - w * x), 1 - 2 * (x * x + y * y)];
+      const u = row2(tr.q[0]), v = row2(tr.q[tr.n - 1]);
+      const d = Math.max(-1, Math.min(1, u[0] * v[0] + u[1] * v[1] + u[2] * v[2]));
+      return Math.acos(d) * 60 / (2 * tr.n);
+    },
     // the root bone's track of a model's clip (enemy_hit.js rootTrack) for enemy_ai's root motion (FUN_005ad730)
     rootTrack(model, clip) {
       const key = model + '/' + clip;
@@ -344,13 +354,15 @@ export async function setupEnemies({ root, litPatch, light, extra = [] }) {
         const s = ai && ai.actors.find(x => x.rec === a.rec);
         // body matrix: the AI's body C+0x20 facing (enemy_ai turnBody, FUN_0034de50) and C+0x30
         // position, drawn as at setup (play.js bodyYaw: rotation.y = atan2(face.x, face.z) + pi)
-        if (s) { a.body.position.set(...s.pos); a.body.rotation.y = Math.atan2(s.face[0], s.face[2]) + Math.PI; }
+        // worker 0259: under C+0x564 bit 4 (motion class 0x42) the pose's bone 1 keeps its rotation: the body has none of its own
+        if (s) { a.body.position.set(...s.pos); a.body.rotation.y = s.C && (s.C.f564 & 4) ? 0 : Math.atan2(s.face[0], s.face[2]) + Math.PI; }
         const has = c => !!(a.lp.clips[c] && a.side.clips[c]);
         if (!a.head) a.head = { clip: a.clip, frame: a.frame, loop: true };
         // first frame under the AI: its body's clip as it stands (no request yet, no blend)
         if (s && a.req === undefined) {
           a.req = s.C.req;
-          if (has(s.C.clip) && s.C.clip !== a.head.clip) a.head = { clip: s.C.clip, frame: 0, loop: s.C.loop !== false };
+          // worker 0259: a body loaded after its class 0x42 clip started takes the running frame (its pose's bone 1 rotation goes with a.pos)
+          if (has(s.C.clip) && s.C.clip !== a.head.clip) a.head = { clip: s.C.clip, frame: s.C.f564 & 4 && s.C.mp ? s.C.mp.frame ?? 0 : 0, loop: s.C.loop !== false };
         }
         if (s && s.C.req !== a.req) {
           a.req = s.C.req;

@@ -303,6 +303,7 @@ def _enemy_fields(k):
     ] + ([  # TRACE_EVARS=1 (worker 0204): the script timers and vars
         (p + "a3c", A, 0x3C, "u32", "D", "object +0x3c / +0x3e script timers (cmd 0x106, FUN_0053e868)"),
         (p + "vars", A, 0xA0, "bytes:16", "D", "object +0xa0 script vars 0-7 (cmd 0x104 / 0x105)"),
+        (p + "c590", C, 0x590, "u32", "D", "C+0x590 low 4 bits = the hit area (FUN_0055d390; worker 0259)"),
     ] if __import__("os").environ.get("TRACE_EVARS") else [])
 
 
@@ -656,7 +657,21 @@ if __import__("os").environ.get("TRACE_SIBOX"):
                        ("sb_stats", None, _b + 0xFF0, "bytes:216", "D", "box +0xff0 stats copy"),
                        ("sb_1028", None, _b + 0x1028, "u32", "D", "box +0x1028")]
 
+# Opt-in set for the Phoenix Down revive (TRACE_FIELDSET=revive, worker 0255; notes/items-research.md 'The revive'): the game
+# over set's world mode + status flags +0x64, P+0x118, the head clip, the class object and C+0x1c0 / C+0x564.
+REVIVE_FIELDS = [f for f in GAMEOVER_FIELDS if f[0] in ("step", "pad_held", "p_state", "motion", "p_hp", "wmode", "w_4c", "end_type", "end_state", "ref_1dc")] + \
+                [f for f in FIELDS if f[0] in ("matrix", "ground_speed", "mp_head")] + [f for f in AIM_FIELDS if f[0] == "p_weapon"] + [
+    ("ps_64", None, 0x9606A4, "u32", "D", "Vincent's status +0x64 (FUN_0055f3b0's flag bits)"),
+    ("p_118", "P", 0x118, "u32", "D", "P+0x118 (bit 0x100: state 7's event 0xd, the corpse settled)"),
+    ("c_1c0", "C", 0x1C0, "u32", "D", "C+0x1c0"),
+    ("c_564", "C", 0x564, "bytes:8", "D", "C+0x564 / +0x568"),
+    ("c_cls", "C", 2000, "u32", "D", "C+2000 = the motion class object"),
+    ("cam_1e8", "CAM", 0x1E8, "u32", "D", "CAM+0x1e8 (0x400000: the death camera)"),
+]
+
 FIELDSET = __import__("os").environ.get("TRACE_FIELDSET")
+if FIELDSET == "revive":
+    FIELDS = REVIVE_FIELDS
 if FIELDSET == "results":
     FIELDS = RESULTS_FIELDS
 if FIELDSET == "items":

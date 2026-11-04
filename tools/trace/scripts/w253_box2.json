@@ -1,0 +1,1 @@
+{"name":"w253_box2","frames":420,"doc":"worker 0253: r06_door3 stopped on the save box's second question (CANCEL selected): left + cross = continue without saving, cross for the map screen.","events":[{"from":10,"to":15,"buttons":["left"]},{"from":30,"to":35,"buttons":["cross"]},{"from":130,"to":135,"buttons":["cross"]},{"from":230,"to":235,"buttons":["cross"]}]}

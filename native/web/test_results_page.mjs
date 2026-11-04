@@ -90,6 +90,17 @@ try {
   ok(byId[0x8] && byId[0x7] && byId[0x7] !== byId[0x8], 'a label and the section name are drawn (text from the user\'s disc)');
   const prims = await pg.evaluate(() => (window.__play.stageInfo.draw() || []).length);
   ok(prims > 50, `the Status screen draws ${prims} primitives`);
+  // worker 0258: the Status box's effects on the menu managers (menu_fx.js) draw on the real page. RESULTS_SHOT: <png>.fx.json holds
+  // the layer's sprites for a comparison with the w232 / w241 GS dumps
+  const fxs = await pg.evaluate(() => {
+    const si = window.__play.stageInfo, L = si.fxLayer, last = (L && L.last) || [];
+    const q = last.filter(s => s.verts && !s.line && s.tex);
+    return { ids: si.fx ? si.fx.title.fx.emitters.map(e => (e.id >>> 0).toString(16)) : [], mgr: si.fx ? [...si.fx.slots.values()].map(e => e.mgr.toString(16)) : [],
+      n: q.length, lines: last.filter(s => s.line).length, clear: !!(L && L.depthClear.visible), age: si.fx && si.fx.title.fx.emitters[0] ? si.fx.title.fx.emitters[0].age : null,
+      sprites: q.map(s => ({ tag: s.tag, id: (s.id >>> 0).toString(16), tex0: '0x' + s.tex.tex0[1].toString(16) + s.tex.tex0[0].toString(16).padStart(8, '0'), v: s.verts.map(v => [v.gs[0], v.gs[1], v.rgba]) })) };
+  });
+  ok(fxs.ids.length > 0 && fxs.n > 0 && fxs.clear, `the Status box's effects run and draw: ${fxs.ids.length} emitters (${fxs.ids.join(', ')}), ${fxs.n} sprites, ${fxs.lines} lines, age ${fxs.age}`);
+  if (process.env.RESULTS_SHOT) fs.writeFileSync(process.env.RESULTS_SHOT + '.fx.json', JSON.stringify(fxs));
   if (process.env.RESULTS_SHOT) { await pg.screenshot({ path: process.env.RESULTS_SHOT }); console.log('saved', process.env.RESULTS_SHOT); }
   // ✕ when the box takes it (a hold to jump to, or mode 1: the wait), until it closes: the rows' and the points' fast-forward
   // and next part; then parts D and FUN_003c73f0's screen run out by themselves

@@ -181,3 +181,11 @@ trace of recs 67 / 68 (trigger 57) or 20 / 21. Not needed for the ladder-top pai
   its corpse removed (400 ticks), walked to the corpse: no page error). Dan's nginx log: e030 loaded 09:24:02, g041 (gold,
   soldier 60's drop) 09:24:05, his R report 09:24:18 (the page was running then). report.js now logs page errors into the
   report (meta.json `errors`), so the next crash report carries the stack.
+
+## Reactivation (worker 0256, 2026-11-03)
+
+FUN_00559748's off path leaves the object's matrix +0x60..+0x9c (FUN_00558bb8 -> FUN_00588330 only detaches the body). The on path builds a new
+body (FUN_00588270) and FUN_00588430 places it at +0x60 / +0x90, so the actor comes back where it stood, not at the placement. There is no placement branch:
+FUN_00343cd8 (status flag 0x1a) copies an 8-byte name to C+0x7c0. T (route RAM): 46 at r02_climb (-835.85, -148.89, -936.55), off at r03_spot2 with the same
++0x90, row 2 and no body; back on after a teleport to r02_climb's spot (tools/trace/route.py from r03_spot2, state w0256_back): bit 0 set, a new body, C+0x30 and
++0x90 unchanged; placement (-913.14, -140.16, -892.35). 47 likewise. The teleport means Vincent did not walk the way; the switch itself is the game's.

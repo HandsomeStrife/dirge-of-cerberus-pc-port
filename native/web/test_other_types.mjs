@@ -213,5 +213,49 @@ const enter = (W, player, k) => {
   }
 }
 
+// 7. worker 0259: the hit area and the reaction rows (FUN_0055d390; FUN_00598950's table 0x5a3b10; the death row = the same table + 6). T: w259_e036 (r07_beat, e036 shot by the walker,
+// tools/trace/out, gitignored): C+0x590 low 4 bits per hit 1 5 1 | 1 4 1 4 1 5 with m_stbd0 throughout, the kill in area 5 -> m_stllf0, e001's timer 0 = 140 counts one a frame.
+{
+  const { W } = world();
+  W.t.send(W.objects.get(ID(80)), -2, 0x108, [0, 0, 0, 0]); W.tick(1.2, far, far);
+  const a = W.objects.get(ID(80));
+  W.runEvent(a, 0x13);                                                    // the path's end: damage on, brain mode 5
+  ok(a.ai.mode === 5, `event 0x13: brain mode ${a.ai.mode} (T: 5)`);
+  a.pos = [0, 0, 0]; a.face = [0, 0, 1];
+  const zones = data.zones[String(data.records[80].zones)];
+  ok(zones[2].area === 0 && zones[6].area === 2 && zones[10].area === 4, 'ai.json zones: the area nibble (part 2 -> 0, 6 -> 2, 10 -> 4)');
+  const R = 0x1e;
+  const shot = (part, sign, hit = 0) => {                                  // x in the actor's frame = -face.z dx + face.x dz: sign x -> dx = -sign
+    a.f19c = zones[part]; a.part = part;
+    W.t.hitEnemy(a, { damage: 31, kind: 0, dir: [0, 0, 1], shooter: 0x16, f148: 0, hit, f120: 0x800 }, [-sign, 10, 0]);
+    return a.C.f590;
+  };
+  // the first hit: bit 0x10000 clear: the zone's area + 1
+  ok(shot(2, 1) === 1, `part 2, no flinch: area ${a.C.f590} (zone 0 + 1)`);
+  ok(shot(6, 1) === 3, `part 6, no flinch: area ${a.C.f590} (zone 2 + 1)`);
+  // under the flinch (C+0x564 bit 0x10000): T's sequence, side by side
+  a.C.f564 |= 0x10000; a.C.f590 = 1;
+  const seq = [[1, -1], [6, 1], [6, 1], [4, -1], [2, 1], [6, -1], [0, -1]].map(([p, sg]) => shot(p, sg));
+  ok(seq.join(' ') === '5 1 4 1 4 1 5', `bit 0x10000: by side and the old area: ${seq.join(' ')} (5 -> 6 x < 0, 1 -> 5 x < 0, 1 -> 4 x >= 0, 4 -> 2 x >= 0, 2 -> 3 x >= 0, else 1)`);
+  const C = a.C;
+  C.f564 |= 0x10000; C.f590 = 5; a.f19c = zones[6];
+  W.t.hitEnemy(a, { damage: 31, kind: 0, dir: [0, 0, 1], shooter: 0x16, f148: 0, hit: 0, f120: 0x800 }, [1, 10, 0]);
+  ok(C.f590 === 6, `old 5, x < 0: area ${C.f590}`);
+  C.f590 = 4; W.t.hitEnemy(a, { damage: 31, kind: 0, dir: [0, 0, 1], shooter: 0x16, f148: 0, hit: 0, f120: 0x800 }, [-1, 10, 0]);
+  ok(C.f590 === 2, `old 4, x >= 0: area ${C.f590}`);
+  C.f590 = 2; W.t.hitEnemy(a, { damage: 31, kind: 0, dir: [0, 0, 1], shooter: 0x16, f148: 0, hit: 0, f120: 0x800 }, [-1, 10, 0]);
+  ok(C.f590 === 3, `old 2, x >= 0: area ${C.f590}`);
+  // a flinch takes its row from the table (area 1 -> 0x25 m_stbd0), a kill the row 6 on (area 5 -> 0x2e m_stllf0)
+  const rows = data.stances['30'].motions;
+  ok(rows[0x25] === 'm_stbd0' && rows[0x2e] === 'm_stllf0', 'e036 rows 0x25 m_stbd0, 0x2e m_stllf0');
+  ok(data.model_clips.e036.m_stbd0 > 0 && data.model_clips.e036.m_stllf0 > 0, 'model_clips e036 has them');
+  C.f564 &= ~0x10000; a.hp = 200; a.f144 = -1000; C.motion = null;
+  a.f19c = zones[2]; a.part = 2;
+  W.t.hitEnemy(a, { damage: 31, kind: 0, dir: [0, 0, 1], shooter: 0x16, f148: 0, hit: 1, f120: 0x800 }, [-1, 10, 0]);
+  ok(C.motion && C.motion.cls === R && C.clip === 'm_stbd0', `flinch in area 1: class 0x${(C.motion && C.motion.cls || 0).toString(16)}, clip ${C.clip} (T m_stbd0)`);
+  C.f564 |= 0x10000; C.f590 = 1; a.hp = 4; a.f19c = zones[0]; a.part = 0;
+  W.t.hitEnemy(a, { damage: 31, kind: 0, dir: [0, 0, 1], shooter: 0x16, f148: 0, hit: 1, f120: 0x800 }, [1, 10, 0]);
+  ok(a.hp === 0 && C.f590 === 5 && C.clip === 'm_stllf0', `the kill at x < 0 from area 1: area ${C.f590}, clip ${C.clip} (T m_stllf0)`);
+}
 console.log(fails ? `${fails} FAILED` : 'all ok');
 process.exit(fails ? 1 : 0);

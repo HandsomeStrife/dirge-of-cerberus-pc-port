@@ -46,7 +46,8 @@ DATA=$REPO/native/web/data
 # phases 4-7, the landing FUN_00599aa0, the air shot FUN_00596830) and the second / back jumps
 # (c_wjp*, c_bj*, c_bwj*). The _au/_ad partners aren't played.
 # c_std: the standing hit (class 0x3f); c_st_fa0: the death (class 0xb, held at its end).
-PACK_JUMP=h_jp0,h_jp1,h_jp2,h_jp3,h_jp4,h_div,h_jp0_a,h_jp1_a,h_jp2_a,h_jp3_a,h_jp4_a,c_wjp0,c_wjp1,c_wjp2,c_bj0,c_bj1,c_bj2,c_bwj0,c_bwj1,c_bwj2,c_std,c_st_fa0
+# c_st_bl0 .. c_rev_r: the knock-down (FUN_005618d0: classes 0x33-0x3a, rows 0xa8, 0xab-0xb1, 0xe3, 0xe4).
+PACK_JUMP=h_jp0,h_jp1,h_jp2,h_jp3,h_jp4,h_div,h_jp0_a,h_jp1_a,h_jp2_a,h_jp3_a,h_jp4_a,c_wjp0,c_wjp1,c_wjp2,c_bj0,c_bj1,c_bj2,c_bwj0,c_bwj1,c_bwj2,c_std,c_st_fa0,c_st_bl0,c_bl_0,c_bl_1,c_bl_ht0,c_jp_fa0,c_fl_0,c_fl_1,h_rev_0,c_rev_l,c_rev_r
 PACK_LADDER=c_ld_d,c_ld_u,c_ld_jp,c_ld_fa0,c_ld_lid,c_ld_rid,c_ld_del,c_ld_uel,c_ld_dml,c_ld_uml,c_ld_der,c_ld_uer,c_ld_dmr,c_ld_umr,h_ld_del,h_ld_uel,h_ld_der,h_ld_uer
 PACK_SHOOT=h_wk_a,h_rn_a,h_sq_a,h_st_a,h_sq_f,h_st_f,h_wk_ad,h_rn_ad,h_sq_ad,h_st_ad,h_sq_fd,h_st_fd,h_wk_rd,h_rn_rd,h_sq_rd,h_st_rd,h_swtch,h_wk_au,h_rn_au,h_sq_au,h_st_au,h_sq_fu,h_st_fu,h_fwk_rd,h_sqm_rd,h_frn_rd,h_brn_a,h_brn_au,h_brn_ad,h_lrn_a,h_lrn_au,h_lrn_ad,h_rrn_a,h_rrn_au,h_rrn_ad
 # GUESS: the static Vincent in index.html is clip h_st frame 91, the clip frame nearest the hero
@@ -225,6 +226,7 @@ tail -n 1 "$LOGS/web_room.log"
 step "collision (DCOL v2 with the walk mesh)"
 run collision make -C "$REPO/native/assets/collision" CC="$CC_FOUND" KEL="$NOPATH" z128web
 cp "$REPO/native/assets/collision/out/web/z128_collision.bin" "$DATA/z128_collision.bin"
+cp "$REPO/native/assets/collision/out/web/z128_collision.bin.shade" "$DATA/z128_walk_shade.bin"   # corner shades: floor_shade.js
 echo "ok"
 
 step "room visibility probe (cid +0x58 class-0x80 packets + surface tables, FUN_00264ee0)"
@@ -268,7 +270,7 @@ step "enemy e027 (z128 soldier): skinned glb per variant + r_gst idle -> data/en
 # r_gwk / r_grn (+ m_*): the walk / run rows 9 / 0x10 of the locomotion table (motion state 8, path walking);
 # r_sq_a / r_sq_f / m_sq_*: crouched aim / fire (brain mode 1's posture change, motions 0x78 / 0x7b);
 # r_atk_0 / m_atk: the attack tables' play-clip commands (zone sets 7 / 6, ai.json attacks)
-run enemy_e027 $PY export_web_enemy.py export --model e027 --out "$DATA/enemies" --clips r_gst,r_gst_lk,r_st_a,r_st_f,r_stlld0,r_stlaf0,r_stbf0,m_gst,m_st_a,m_st_f,m_stlld0,m_stlaf0,m_stbf0,r_sq_a,r_sq_f,m_sq_a,m_sq_f,r_atk_0,m_atk,r_gwk,r_grn,m_gwk,m_grn
+run enemy_e027 $PY export_web_enemy.py export --model e027 --out "$DATA/enemies" --clips r_gst,r_gst_lk,r_st_a,r_st_f,r_stlld0,r_stlaf0,r_stbf0,m_gst,m_st_a,m_st_f,m_stlld0,m_stlaf0,m_stbf0,r_sq_a,r_sq_f,m_sq_a,m_sq_f,r_atk_0,m_atk,r_gwk,r_grn,m_gwk,m_grn,r_para00,r_para10,r_para01,r_para11,r_para02,r_para12,r_para03,r_para13,m_sthd0,m_stbd0,m_stlad0,m_strad0,m_strld0,m_sthf0,m_straf0,m_stllf0,m_strlf0,r_sthd0,r_stbd0,r_stlad0,r_strad0,r_strld0,r_sthf0,r_straf0,r_stllf0,r_strlf0
 [ -s "$DATA/enemies/e027.glb" ] || fail "data/enemies/e027.glb missing after the enemy export (log: $LOGS/enemy_e027.log)"
 grep '^wrote' "$LOGS/enemy_e027.log" | sed "s#$REPO/##" | cut -c1-160
 echo "ok"
@@ -276,15 +278,17 @@ echo "ok"
 step "z128's other enemy types (stage section 1: e048, e030, e036, e023, e024, e001) -> data/enemies"
 # Same decode as e027; one idle clip each (GUESS which idle the game starts: enemies.js IDLE, notes/enemy-model.md),
 # e048 / e030: the clips of the motions enemy_ai.js requests (their stance rows and attack tables, ai.json model_clips)
-E048_CLIPS=r_gst,r_gst_lk,r_st_a,r_st_f,r_stlld0,r_stlaf0,r_stbf0,m_gst,m_gst_lk,m_st_a,m_st_f,m_stlld0,m_stlaf0,m_stbf0,r_sq_a,r_sq_f,m_sq_a,m_sq_f,m_atk,r_atk
-E030_CLIPS=st_a,look,stld0,stbf0,jp0,jp1,jp2,atk_0,atk_1,atk_2,atk_3,b_stp,st_btl
+E048_CLIPS=r_gst,r_gst_lk,r_st_a,r_st_f,r_stlld0,r_stlaf0,r_stbf0,m_gst,m_gst_lk,m_st_a,m_st_f,m_stlld0,m_stlaf0,m_stbf0,r_sq_a,r_sq_f,m_sq_a,m_sq_f,m_atk,r_atk,m_gwk,m_grn,m_sthd0,m_stbd0,m_stlad0,m_strad0,m_strld0,m_sthf0,m_straf0,m_stllf0,m_strlf0,r_gwk,r_grn,r_sthd0,r_stbd0,r_stlad0,r_strad0,r_strld0,r_sthf0,r_straf0,r_stllf0,r_strlf0
+E030_CLIPS=st_a,look,stld0,stbf0,jp0,jp1,jp2,jp3,jp4,atk_0,atk_1,atk_2,atk_3,b_stp,st_btl,lhtn,rhtn,wk_a,rn_a,stbd0,sthf0,stlf0
 # worker 0230: e036 runs the soldiers' AI (enemy_ai AI_TYPES): its stance-0x1e rows and attack clip (ai.json model_clips)
-E036_CLIPS=m_gst,m_gst_lk,m_st_a,m_st_f,m_stlld0,m_stbf0,m_stlaf0,m_sq_a,m_gwk,m_grn,m_atk_0
+E036_CLIPS=m_gst,m_gst_lk,m_st_a,m_st_f,m_stlld0,m_stbf0,m_stlaf0,m_sq_a,m_gwk,m_grn,m_atk_0,m_sthd0,m_stbd0,m_stlad0,m_strad0,m_strld0,m_sthf0,m_straf0,m_stllf0,m_strlf0
 # e001: its stance-0x10 rows and attack clip (m001 0765004b; ai.json model_clips)
-E001_CLIPS=a_st,a_atk_1,a_stlld0,a_dead,a_wk,a_rn,n_ude
+E001_CLIPS=a_st,a_atk_1,a_stlld0,a_dead,a_wk,a_rn,n_ude,a_lhtn,a_rhtn,a_sthd0,a_stbd0,a_stlad0,a_strad0,a_strld0
+# worker 0259: e023's flight clips (script 29 / 180 cmd 0x19b, motion class 0x42; bone 1 carries the world path; notes/other-types.md)
+E023_CLIPS=idle,sp0_0,sp1_0,ms4_0,mv4_0,eva_0,evb_0,ms0_1,mv0_1,ms1_2,mv1_2,sp2_2,sp3_2,sp2_3,ms2_3,mv2_3,sp4_3,sp0_4,sp1_4,ms3_4,mv3_4
 # worker 0231: e024 (the z128 boss) also takes the clips its overlay brain sets by name (FUN_00344840; notes/boss-research.md)
 E024_CLIPS=idle,l_trn,r_trn,atk_sp1,atk_sp2,atk_sp3,idl_lean,lean,lean_idl
-for mc in e048:$E048_CLIPS e030:$E030_CLIPS e036:$E036_CLIPS e023:idle e024:$E024_CLIPS e001:n_st,$E001_CLIPS; do
+for mc in e048:$E048_CLIPS e030:$E030_CLIPS e036:$E036_CLIPS e023:$E023_CLIPS e024:$E024_CLIPS e001:n_st,$E001_CLIPS; do
   m=${mc%%:*}
   run enemy_$m $PY export_web_enemy.py export --model $m --out "$DATA/enemies" --clips ${mc#*:}
   [ -s "$DATA/enemies/$m.glb" ] || fail "data/enemies/$m.glb missing after the enemy export (log: $LOGS/enemy_$m.log)"

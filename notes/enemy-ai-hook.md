@@ -794,7 +794,7 @@ Part 3 of soldier walking: the nav-graph path follower, wired to action layers 2
   Where the game gives a detached body's list back was not found in two passes, so the page stops the mover there
   (PM.stopAll): GUESS, audit 'Actor deactivation: everything else'.
 - navLeg: a malformed list (list[i + 2] not in the graph) now takes the missing-node warning path (was a throw).
-- Cone comment: FUN_00260f54's out[0] / out[1] are compared with 40 / 30 deg; which one is the yaw is guessed.
+- Cone comment: FUN_00260f54's out[0] / out[1] are compared with 40 / 30 deg; which one is the yaw is now decoded, see 'Pitch decoded' under 'Mode 3: the dogs'.
 - Tests (test_nav_walk, new hand cases): flinch / death on a walking path and with a queued search pending
   (counts back, slot free, C.list untouched by later service updates), switch-off + 3 on / off cycles, per-frame
   tracking, event 5's node, closed first link (flags 1), the corner `near` test, the 40-step budget, layer 2's
@@ -1069,6 +1069,7 @@ Review fixes (worker 0187):
 - Mover 0xb's FUN_00356278(C+0x370, body): left out (no reader of body+0xa0 on the page).
 
 ## Mode 3: the dogs (worker 0252, 2026-11-03; Dan's "enemy AI at the bottom section seems to not work")
+- **Trace of awake dogs now exists** (worker 0253): notes/route-states.md 'Awake dogs' (w253_dog, w253_dog2, states r03_predog / r03_dogawake). `brain3` not yet checked against it.
 - **Translated** FUN_00361690 (brain mode 3, script 222's dogs, e030) as enemy_ai.js `brain3`, a state-by-state
   translation (states 0-0xb, fall-throughs kept). Reused: setCombatLayer (FUN_0035f9a0), setActorState (FUN_0055b8e0),
   PM.setTurn (FUN_0034e960), PM.approachStart (FUN_00353110 + FUN_0034edf0(C, 3)), navPath / navPathTo (FUN_0055a628 /
@@ -1091,8 +1092,12 @@ Review fixes (worker 0187):
   Useful for that run: trigger 63 object 0x952470 (record 0x10a08a0), dog 65 object 0x93ce20 (vars +0xa0: poke
   0x93cecc = 0x10000 for var 7 = 1), Vincent's copies P+0x90 0x133a70, C+0x30 / 0x40 / 0x50 / 0x60 0x919590.., body
   0x919910 / 0x919920, MP+0x40 0x14d81c0.
-- **Open:** the attack pitch convention (FUN_00260f54, VU; the decomp drops the registers and port/recomp's COP2 ops are
-  stubs): at the dog's stop distance Vincent's aim point sits on entry 2's +4 limit, so a dog that arrives in state 10
-  may never bite (test_dog_page prints KNOWN). Motion state 4 (the dog's walk / run clips) and the idle table: it glides
-  in st_a. Attack ops 3 / 6 / 7 / 8 / 9 (jumps) and shape-2 volumes (atk_2's bite: no damage). The target's +0x15a
-  (GUESS 0) and actor +0x188 (GUESS 1). Fidelity-audit rows 'e030 brain mode 3' and after.
+- **Pitch decoded (worker 0256; was open):** FUN_00260f54 from the raw words with the VU macro ops: out[0] = atan2(-y, hypot(x, z)), out[1] = atan2(x, z); with row 1 = (0, -1, 0) the pitch of a point above is negative, so at the dog's stop distance Vincent's aim point is entry 2's -4 of [-4, 4): it bites (page: `attack 87 2` at 12.5 u, state 7). Also: FUN_0034b070's copy has w = 1.0 (0x34b078 `vmove.w vf1, vf0`), so state 4's FUN_0034b110 argument is always 1.0, not the speed.
+- **Shape 2 decoded (worker 0256):** atk_2's volumes 1 / 2 are annular sectors (FUN_0025dce0): height +0x30 about row 1, radii +0x38 .. +0x34, opening +0x3c deg about local +z, tested at Vincent's feet + 8 u up with radius 5. The opening's direction is the marker bone's row 2 negated (local row 2 = table[4] = -z).
+- **Motions (worker 0256):** motion 3 with rows 7 / 8 installs the idle table: C+0x224 > 0.2 lhtn, < -0.2 rhtn, else st_a (a rising atan2(x, z) is negative). Moving -> motion 4 (FUN_005940e0): the angle facing -> move under 30 deg goes straight to 8; 30-150 plays the looped turn clip until timer 5 and within 90 deg. Motion 8 outside 90 deg -> 4. Clips lhtn, rhtn, wk_a, rn_a, jp3, jp4 were missing from the export (build_web.sh E030_CLIPS; AI_MOTIONS 7, 8).
+- **Attack ops (worker 0256):** see fidelity-audit. Op 6's FUN_00565bd0 sets C+0x1d4 back to status +0x70 (70; script 222's 0x155(75) made it 75) and clears the gun bit, for every melee attacker.
+- **Against the game (worker 0256; test_dog_ai 11 / 12).** w253_dog2 from f97 with the trace's 16 AIs on the scheduler: stop f109 (T f110), 2.1 u off; turn f122 (T f122); atk_2 f131 (T f135); length 57 (57); volumes +15 / +26 (HP T +16 / +27); walk speeds identical; walk ends f220 (f220), 1.5 u off. w253_dog: bodies f90, 59 / 60 mode 1 f228, dog mode 3 f477 (T f478).
+- **The scheduler matters:** FUN_00365008 runs the queue head once on a frame with no due AI. r03_dogawake has 16 AIs and a dog runs on its interval; on `?warp=dogs` only a few are active, so the brain runs nearly every frame and reacts faster (the 'attacks at once' look). Not a bug in the scheduler; a warp test can't show the game's cadence.
+- **Wall bits (worker 0256):** FUN_00357d48 sets C+0x1c0 0x40000 | 0x80000 on a wall hit between 45 and 135 deg to the edge (collision.js wall45); FUN_0034c388's start clears 0x400, 0x40000, 0x80000, 0x100000 on every move, after the mover tick (PM.moveStart), and so does FUN_0034bd10 entering mode 0xc. They were never set on the page, so a dog (or soldier) slid on along a wall forever; brain3 now returns to a nav path.
+- **b_stp (worker 0256; T: w0256_bstp, tools/trace/out/w0256, r03_dogawake f400-1199, Vincent standing):** the back-step ran after 3 of 7 attacks; its steps 2.58 / 3.61 / 3.61 / 2.57 u at 129 / 181 u/s and 37.3 u in all are the page's to the digit. FUN_00344608's end resets C+0x6d0 to identity on every clip request: without it a root attack after b_stp jumped back the whole 37 u in one frame on the page.
+- **Open:** the free nav run: from T f0 the page goes state 5 at f83 (T f97; the AI's phase, d38 49 vs T 51 at the check), hits the wall at z -678.8 and recovers by nav, 14 u off the trace at f97 and later (T's path passes x -1500). FUN_0035a440's actor-actor writes (0x40000 | 0x400, 0x100000; T f224-232, dog pushed 0.3 u) are not translated. No trace of atk_0 / atk_1. The target's +0x15a (GUESS 0) and actor +0x188 (GUESS 1). Fidelity-audit rows 'e030 brain mode 3' and after.

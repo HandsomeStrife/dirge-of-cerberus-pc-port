@@ -152,7 +152,7 @@ for (const bit of [0x20, 0x40]) {
     ai.playerShot([0, -9, -60], [0, -9, 60], straight);
     const b = ai.bullets[ai.bullets.length - 1], ev = [];
     for (let i = 0; i < 6; i++) ev.push(...ai.tick(1.2, [0, 0, -200], [0, 0, -200]));
-    return { a, b, flinch: ev.includes(`clip ${a.id} r_stlld0`) };
+    return { a, b, flinch: ev.some(e => new RegExp(`^clip ${a.id} r_st[a-z]+d0$`).test(e)) };   // the row by the hit area (FLINCH_ROW, worker 0259)
   };
   const c = run(0);
   ok(c.a.hp < 100 && c.flinch && c.a.s148 > 0 && !(c.b.f120 & 0x60000), `zone flags 0: hit (HP ${c.a.hp}), flinch ${c.flinch}, stagger ran, bullet +0x120 0x${c.b.f120.toString(16)}`);
@@ -183,8 +183,8 @@ for (const nearFirst of [false, true]) {
 // HP, and its stance's clip rows (FUN_00564228). Shot dead in the head with one straight pellet each,
 // posed in its own stand clip at frame 0. e048 record 28 (w003 class 3: stance 0x1f, r_*), record 24
 // (class 2: stance 0x1e, m_*), e030 record 7 (stance 0x23, size 6 / 12).
-for (const [k, model, stand, size, deathClip] of [[28, 'e048', 'r_st_a', [5, 18], 'r_stbf0'], [24, 'e048', 'm_st_a', [5, 18], 'm_stbf0'],
-                                                  [7, 'e030', 'st_a', [6, 12], 'stbf0']]) {
+for (const [k, model, stand, size, deathClip] of [[28, 'e048', 'r_st_a', [5, 18], 'r_sthf0'], [24, 'e048', 'm_st_a', [5, 18], 'm_sthf0'],   // worker 0259: part 0's zone area 1 + 1 = 2, no flinch: row 0x2a (L: no T of a clean head kill)
+                                                  [7, 'e030', 'st_a', [6, 12], 'sthf0']]) {
   const rec = data.records[k];
   const sideP = D(`enemies/${model}.json`), binP = D(`enemies/${model}_local.bin`);
   if (!existsSync(sideP) || !existsSync(binP)) { console.log(`SKIP ${model}: data/enemies/${model}.* missing`); continue; }
@@ -322,9 +322,9 @@ for (const [k, model, stand, size, deathClip] of [[28, 'e048', 'r_st_a', [5, 18]
       return { a, ev, clips, bits, push };
     };
     const r = run(7, 0, P), id = r.a.id, mine = r.ev.filter(e => e.startsWith(`clip ${id} `));
-    const flinched = r.clips.indexOf('stld0');
+    const flinched = r.clips.indexOf('stbd0');                       // this shot's zone: area 1, row 0x25 (FLINCH_ROW)
     ok(r.a.hp > 0 && flinched >= 0 && r.a.C.clip === 'st_a' && r.clips.slice(flinched).includes('st_a') && !r.ev.includes(`clip ${id} null`),
-       `e030 #7: non-lethal hit (HP ${r.a.hp}) -> flinch stld0 -> back to row 1 ${r.a.C.clip} (st_a); clip events ${mine.join(', ')}`);
+       `e030 #7: non-lethal hit (HP ${r.a.hp}) -> flinch stbd0 -> back to row 1 ${r.a.C.clip} (st_a); clip events ${mine.join(', ')}`);
     // unpinned: the hit wakes #67 from state 2 (gun bit clear). The flinch's busy bit (enter 0x5988b8)
     // holds the brain in state 1, so state 3's enter (FUN_005380a0, sets the bit) runs only after the
     // flinch: its end asks row 1 (r_gst), then state 3 raises the gun (motion 5 -> r_st_a). No trace
@@ -334,7 +334,7 @@ for (const [k, model, stand, size, deathClip] of [[28, 'e048', 'r_st_a', [5, 18]
        `e027 #67 woken (gun bit ${g.a.C.gun}): flinch -> row 1 r_gst, then state 3 -> r_st_a (events ${ge.join(', ')})`);
     // an empty row (e030 has no 0x40): with the bit forced on, no 'clip <id> null' event and the clip is kept
     const e = run(7, 1, P);
-    ok(!e.ev.some(x => x.endsWith(' null')) && e.a.C.clip === 'stld0', `e030 #7 bit forced on: row 0x40 empty -> no null clip event, keeps ${e.a.C.clip}`);
+    ok(!e.ev.some(x => x.endsWith(' null')) && e.a.C.clip === 'stbd0', `e030 #7 bit forced on: row 0x40 empty -> no null clip event, keeps ${e.a.C.clip}`);
     // gun bit held clear: the clip after the flinch is row 1. #67 starts in its real state (2); the
     // flinch's enter 0x5988b8 sets C+0x564 bit 0x8000 (busy), which holds the brain in state 1, so the
     // wake's 2 -> 3 (motion 5) waits for the flinch's end.

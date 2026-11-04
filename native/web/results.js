@@ -120,6 +120,15 @@ export class SectionStats {
   }
   // FUN_0031dac0
   clearTotals() { this.total.fill(0); }
+  // FUN_0031d9c0 (FUN_0031dbc8, the game over's stage-loop end): the 54 section stats, stat 14 too, and +0, +4, +8
+  clearSection() { this.sect.fill(0); this.start = 0; this.end = 0; this.koStart = 0; }
+  // FUN_0031d4d8's write branch (FUN_00311fa0, the status block of a scene_save's record): +0 .. +0xe8 and the totals
+  // +0xe8 .. +0x1c0. The taken words (+0x1c0) are items.js's. +0x290 / +0x294 / word 0xa5 are not in the block.
+  block() { return { start: this.start, end: this.end, koStart: this.koStart, sect: this.sect.slice(), total: this.total.slice() }; }
+  // FUN_0031d4d8's read branch
+  readBlock(b) { this.start = b.start; this.end = b.end; this.koStart = b.koStart; this.sect.set(b.sect); this.total.set(b.total); }
+  // FUN_003fda68 (FUN_00400778, the stage load): the section the next endSection closes
+  markSection() { this.mark = this.get(STAT.SECTION); }
   // FUN_00242a50 (every game frame, FUN_00247428): whole seconds of the ms clock while running
   tick(ms) {
     const s = Math.trunc(ms / 1000);
@@ -505,6 +514,20 @@ export function createResults({ stageInfo = null, gil = null, warn = m => consol
   })();
   R.frame = ms => stats.tick(ms);                                       // FUN_00242a50
   R.gameOver = () => stats.gameOver();                                  // FUN_00242938
+  // A Restart (checkpoint.js, 'The Restart invariant'). b: the record's block (FUN_0030f688(stage, 2, rec + 0x100)), null at the
+  // stage start. The clocks DAT_0046b308 / DAT_0046b304 stay: FUN_00400778 case 0 skips FUN_00242990 / FUN_00242970 under the
+  // mode bits 0xd / 0xe, and FUN_0030f3d8 does not touch them. A reload is a new stage program: no Zone.exit, no Status box.
+  R.reload = b => {
+    if (b) { stats.readBlock(b); stats.markSection(); }           // FUN_00311fa0 -> FUN_0031d4d8, FUN_003fda68
+    else {
+      stats.clearTotals(); stats.clearSection();                  // FUN_0030f3d8 -> FUN_0031dae8
+      // GUESS: stat 14 back to 1 at once (not decoded; see notes/fidelity-audit.md 'Restart'). T w254: setSectionStat(14, 1)
+      // (FUN_003a53e0 -> FUN_0031d6b8, the only caller with these args) some 66 frames after the reload, from a script not in
+      // ev0100's packs. Without it the mark (1) never matches and the level end's FUN_003fdb00 does nothing.
+      stats.set(STAT.SECTION, 1);
+    }
+    R.exit = null; R.box = null; R.ended = false; R.log.push(b ? 'reload record' : 'reload start');
+  };
   R.endSection = () => { stats.sectionEnd(); R.log.push('endSection'); };   // FUN_003a26a8 -> FUN_003fdb00
   R.calc = vm => {                                                      // FUN_003a55e8
     if (!R.D) { warnOnce('calcdata', 'results: no data/results.json: Intermission.calc() left out', warn); return; }

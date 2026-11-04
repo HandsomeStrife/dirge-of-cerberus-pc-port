@@ -56,6 +56,28 @@ try {
     ok(s.ai.length === 3, `52-54 are AI actors (${s.ai.join(' ')})`);
     ok(s.bodies.length === 3, `52-54 bodies drawn (${s.bodies.join(' ')})`);
     ok(s.area2 && [46, 47, 48, 49].every(k => s.on.includes(k)), '46-49 still on (area 2 is area 0\'s neighbour)');
+    // worker 0256: area 2 off and on again (walked away and back): soldier 46 comes back where he stood, drawn there, not at his
+    // placement (FUN_00559748's off path leaves +0x90, FUN_00588430 builds the body from it; T: route RAM r03_spot2 / r02_climb)
+    const moved = [-880.5, -140.16, -905.5];
+    const off = await pg.evaluate(moved => {
+      const A = window.__play.enemyAI, a = A.actors.find(x => x.rec === 46);
+      a.pos = moved.slice(); a.face = [0, 0, 1]; a.hp = 61;
+      A.areaSwitch(2, false);
+      return { still: A.actors.some(x => x.rec === 46), kind: A.objects.get(46 + 22).kind };
+    }, moved);
+    ok(!off.still && off.kind === 'record', `area 2 off: 46 gone (${off.kind})`);
+    await pg.waitForFunction(() => !window.__play.enemies.actors.some(a => a.rec === 46), null, { timeout: 30000 }).catch(() => null);
+    await pg.evaluate(() => window.__play.enemyAI.areaSwitch(2, true));
+    await pg.waitForFunction(() => window.__play.enemies.actors.some(a => a.rec === 46), null, { timeout: 60000 }).catch(() => null);
+    const t1 = await pg.evaluate(() => window.__play.stats.ticks);
+    await pg.waitForFunction(t1 => window.__play.stats.ticks > t1 + 3, t1, { timeout: 60000 }).catch(() => null);
+    const back = await pg.evaluate(() => {
+      const P = window.__play, a = P.enemyAI.actors.find(x => x.rec === 46), d = P.enemies.actors.find(x => x.rec === 46);
+      return { pos: a ? a.pos.slice() : null, hp: a ? a.hp : -1, body: d ? [d.body.position.x, d.body.position.y, d.body.position.z] : null };
+    });
+    const dd = (p, q) => Math.hypot(p[0] - q[0], p[2] - q[2]);
+    ok(back.pos && dd(back.pos, moved) < 3 && back.hp === 61, `46 back at ${back.pos} (near ${moved}), HP ${back.hp} (61)`);
+    ok(back.body && dd(back.body, back.pos) < 0.01, `46's body drawn at ${back.body}`);
     // report.js: an uncaught error goes into the report's error log (meta.json `errors`)
     await pg.evaluate(() => { setTimeout(() => { throw new Error('worker 0251 test throw'); }, 0); });
     await new Promise(r => setTimeout(r, 500));

@@ -44,8 +44,7 @@ and posts it message 1; e036's event 2 (var1 0) sets var1 = 1 and starts path 84
   0x11a = FUN_0054b508 (+0x28 bit 12); 0x113 = +0x36 period: code -2 -> case 0xd1 -> manager event 0x16 -> FUN_0053fde8 case 0x17
   -> vt+0x22c FUN_0054cca8 = script event 0x18, again while it returns 0; 0x114 -> FUN_0053fb80 -> manager event 2 -> FUN_0054ddf8
   -> FUN_0054dec0 (a timed routine: script function r0 of the script at +0x42, called with the step count; it returns the delay to
-  the next step (code -4); < 1 ends it with event 0x1b). **Not translated**: which script +0x42 is (an object read through VM +0x20)
-  and the function lookup FUN_00371490 (VM +0xc table) were not decoded in two attempts; no stage script has events 5 / 6.
+  the next step (code -4); < 1 ends it with event 0x1b). Decoded by worker 0259: see 'The helicopter's fight'.
 - FUN_005661e8: 0x19e = FUN_0035f9a0 (combat layer r0), 0x19f = FUN_0035f540 (action layer), 0x1a0 = FUN_0035fc10, 0x1a3 =
   FUN_00317420 (HP = (short) r0 clamped to [0, max]), 0x19b / 0x19a = FUN_00344840(C, clip) + FUN_00341780(C, 0x42 / 0x41) (an
   event motion), 0x19d = FUN_00569870 (a weapon object at the actor: weapon r0, r1 > 0 -> bone r2 / r3), 0x1a9 = FUN_00340de0.
@@ -57,6 +56,35 @@ and posts it message 1; e036's event 2 (var1 0) sets var1 = 1 and starts path 84
 - No PCSX2 trace of any of these fights: route states stop in chunk 02 (route-states.md); trigger 71 is at the chunk 02 -> 03
   stairs top (r02_climb is at their foot), trigger 18 in chunk 07. A trace needs a walk up from r02_climb (route.py) or a
   teleport + chunk stream.
-- The helicopter's strafing (script 112 event 0x18 / script 180: 0x19d at 134-137, 0x191, 0x190 prop 124), its event motions
-  (0x19b 'srch00'), its sounds (0x126), e001's routines (0x114).
+- The helicopter's strafing in the later beats (script 112 event 0x18 / script 180: 0x19d at 134-137, 0x191, 0x190 prop 124), its sounds (0x126). Script 29's fight: done, below.
 - Corpse fade draw. (Done in the review round: every mgr +0x20 reader is on S.mgr20; see HANDOFF.)
+
+## The helicopter's fight (worker 0259, 2026-11-04; D + T)
+
+Traces (`tools/trace/out/`, gitignored): **w259_heli** (r06_market, Vincent stands, f0-759; `TRACE_POKE=960660=270f TRACE_FIELDSET=enemy TRACE_ERECS=31 TRACE_ENEMIES=1 TRACE_EVARS=1 TRACE_LOG_AT=a0000`), **w259_heli2** (same, f820-1419, `TRACE_LOG_AT=b6000`).
+
+**What ends it (decoded; route-states.md's open question).** Script 29 event 8 (a hit that did damage): HP (cmd 0x138) <= 20000 (0x4e20) with var 1 != 3 -> var 1 = 3, **timer 0 = 240**, bits 3 / 5 / 0xd on +0x118, the gauge at 0, a sound, routine 39. Event 1 (timer 0's end, manager event 0xd) -> flag 0 = 16 (`0xb(0, 0x10)`) and the gauge out. The death event 0x17 takes the same way. HP starts at 21600 with a gauge of max 1600 (event 0x23, flag 0 == 13), so the fight is **1600 points of damage, not 21600**; the two earlier "13 -> 16 at HP 172" runs had HP poked to 200, under the line from the first hit. Easy / hard (0xa6 / 0xa7): gauge 2800. Timer: FUN_0053e868 takes the whole part of the step, 1 a frame on PAL (T: e001's timer 140 -> 102 in 38 frames, w259_e036), so 240 frames.
+
+**Flight: motion class 0x42 (cmd 0x19b).** FUN_005661e8 case 0x19b: FUN_00344840(C, r0, 0, 0), FUN_00341780(C, 0x42, 0), actor state 1. Class 0x42 = FUN_00592918 (the compare tree) -> vtable 0x5a4970: enter FUN_0059e640 (C+0x564 |= 0x4000 | 0x200000, C+0x568 |= 0x80000), leave FUN_0059e6a0, update FUN_0059e730: phase 0 the matrix = identity with rows 1 and 2 negated at the origin, FUN_00341750(C, 1) (0x400000), no blend, FUN_003448c0(C, 0, 0) plays C+0x640 once; phase 1 FUN_003460d8 -> done bit. FUN_003449a0 -> FUN_00340c00 copies 0x400000 to C+0x564 bit 4, and FUN_00343160 then takes the matrix from the root bone (FUN_005ad9c0, FUN_0034aae0). **The clips hold the path in world space (bone 1).** T: C+0x30 within 1.21 u of bone 1 at frame 13.05 + 0.6 x f over 760 frames; C+0x20 = minus the bone's row 2 (within 0.012). The clip list: `E023_CLIPS` (076505cb.bin, 21 clips).
+
+**The next leg: script event 0x16.** The done bit -> FUN_00343160: C+0x564 bit 0x20 clear -> set, FUN_00341af0 -> FUN_00341988 (listener C+0x7d4, code 0) -> FUN_005887a0 -> event 0x16 (T: sp0_4 -> ms4_0 at f861; C+0x30 reads 0 for that one frame, phase 0's matrix). Event 0x16 picks by var 0 (the place), rand and var 2: clips, routines 6.. and 0x21.. (`0x114`), combat layer 2 (0x19e), the drop of records 81-86 (messages 0 / 1).
+
+**Timed routines: cmd 0x114, the part worker 0230 could not decode.** FUN_0054cd70 case 0x114 -> FUN_0053fb80 (manager event 2) -> FUN_0054ddf8 -> FUN_0054dec0. r0 is a function **index**: FUN_00371490 = table end (VM +0x14) + [VM +0xc][r0] x 8, VM +0xc = script + [+4], the area stage_events.py calls globals. Scripts hold functions past their event table. ai.json `script_fns` (script -> index -> function; export_web_triggers.py). A routine runs with r0 = step; its result is the next step's clock from the start (+0x48), < 1 ends it (event 0x1b), except 0 at step 0; delayed code -4 -> manager event 0x17 -> FUN_0054dec0. enemy_ai `routineStart`, `routineStep`. **This switches on every script's routines (24 scripts)**, e001's included.
+
+**Other commands translated:** 0x138 (HP), manager 0xa2 (record's HP == 0), manager 4 (an effect at manager +0x260), 0x14b (an effect at the body: L), 0x19d (a weapon shot, FUN_00569870 through shootMarker), 0x1aa (C+0x568 bit 0x100000, reader not looked at).
+
+**Rockets.** Routine 6 / 7: `0x19d(25, 1, 4, 0xf / 0x10)`, from markers 15 / 16 (the pods); weapon 25: damage 80, homing bit. T w259_heli2: Vincent -78 at about f1340 (the game's zone scaling not compared).
+
+**The paratroopers (records 81-86, scripts 159-164).** Event 2: `0x40(3)`, 0x10e, 0x108, 0x19b r_para*, 0x1aa. These clips land them in the market in world space through the same class; event 0x16 then gives brain mode 5. Clips added: 076506cd.bin (disc.py INPUTS, build_web.sh). Not checked against a trace: no drop was logged (rand in event 0x16). See HANDOFF.
+
+**Left out, warned:** 0x126 / 0x127 (FUN_00341458 / FUN_00341518: a looping sound on the body, the rotor: the page's `sound` has one-shots at a fixed place and no stop), 0x1a9 (FUN_00340de0 -> FUN_00340d30, the C+0x7e0 object). Effect attachment: at the body's position (L).
+
+## e036's fight (worker 0259; D + T)
+
+**w259_e036** (r07_beat, replay of w217_r07_e036, f0-309; `TRACE_POKE=960660=270f TRACE_FIELDSET=enemy TRACE_ERECS=80,1 TRACE_ENEMIES=2 TRACE_EVARS=1`). Before: page vs T with the page's old rule: clip wrong on every flinch and the kill; position off by up to 16 u when a coin flip differs (see below).
+
+**The hit area (FUN_0055d390), the reaction rows.** From FUN_0055db50 while the victim lives. C+0x590 low 4 bits: with C+0x564 bit 0x10000 clear, the zone record's word bits 8-11 + 1 (ai.json `zones[].area`), or by height with no zone (> 0.7 h: 2; > 0.3 h: 3 / 4 by x, else 1; lower 5 / 6). With the bit set (the flinch's FLINCH_BITS): by side and old area. T: e036's area per hit 1, 5, 1 | 1, 4, 1, 4, 1, 5 matches this table with the hit sides inferred. **The flinch's row** = FUN_00598950's jump table 0x5a3b10: 1 -> 0x25, 2 -> 0x24, 3 -> 0x26, 4 -> 0x27, 5 -> 0x28, 6 -> 0x29, else 0x25. Its blend: previous class == this class -> FUN_00340bb8(C, 1, 5), else none; FUN_00340bb8(C, 1, -1) after. **The death row: the same table + 6: L**, the writer was not found in two attempts (the class's own row 0xac is not it; no code has an immediate 0x2e). Three T points: #66 area 3 r_stlaf0, #67 area 1 (5 -> 1 under the flinch) r_stbf0, e036 area 5 m_stllf0. **Clean head kill (area 2 -> row 0x2a *_sthf0): no T.** All the rows are exported now (AI_MOTIONS, build_web.sh lists).
+
+**Largest errors now** (node replay of T's hits, positions from the page's own flinches): flinch and death clips equal when the side matches (the replay has no real hit point: the hit side x is unknown, so areas under bit 0x10000 are not compared in the replay; the table is tested against T's sequence in test_other_types); flinch coin flips differ (one FUN_0040b5c0 draw, no shared RNG state): 16 u after 7 extra flinches at worst. Brain mode 5 fire times: T m_st_f f87, f99; page f79, f84, f93 in the same stretch (RNG), not compared further.
+
+Tests: new test_heli (node, 30+), test_heli_page, test_other_types block 7, test_enemy_hits (expectations by area). Mutants: 19 / 19 killed but one equivalent ('event 0x16 every frame': every 0x19b script replaces the class in the event, or clears var 2; killed in no test). Baseline `test_death`, `test_hit_reaction`, `test_knock` crash on a missing `ladderHit` in player.js: another worker's work in progress, not this.

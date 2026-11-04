@@ -368,6 +368,7 @@ export class Collision {
     if (ab !== null) air = true;
     let mx = dx, my = s3 ? body.state3.dy : 0.0, mz = dz;
     let prev = null, hit = false;
+    this.wall45 = false;                                         // FUN_00357d48's C+0x1c0 bits 0x40000 | 0x80000 (read by enemy_ai walkBody)
     for (let it = 0; it < NAV_PASSES; it++) {
       if (!this._inside(P, x, y, z)) [x, y, z] = this._clamp(P, x, y, z);   // FUN_0035d788
       const L = Math.sqrt(mx * mx + my * my + mz * mz);
@@ -450,6 +451,9 @@ export class Collision {
       }
       const a = P.v[e], b = P.v[(e + 1) % P.nv];
       let ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2];
+      // 0x35846c: FUN_00261038(the move left, the edge FUN_0035d6e0) in (pi / 4, 3 pi / 4): against the wall, not along it
+      const lm = Math.sqrt((mx * mx + my * my + mz * mz) * (ux * ux + uy * uy + uz * uz));
+      if (lm > 0.0) { const ang = Math.acos(Math.max(-1, Math.min(1, (mx * ux + my * uy + mz * uz) / lm))); if (0.7853982 < ang && ang < 2.3561945) this.wall45 = true; }
       let keepY = 0;
       if (air) { uy = 0.0; keepY = my; my = 0.0; }               // state 2: horizontal slide
       const lu = Math.sqrt(ux * ux + uy * uy + uz * uz);

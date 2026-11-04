@@ -24,10 +24,13 @@ const ok = (c, m) => { console.log((c ? 'ok   ' : 'FAIL ') + m); if (!c) fails++
 for (const file of files) {
   if (!existsSync(file)) { console.log('SKIP (no trace)', file); continue; }
   ran++;
-  const R = readFileSync(file, 'utf8').trim().split('\n').slice(1).map(l => JSON.parse(l)).map(r => {
+  const raw = readFileSync(file, 'utf8').trim().split('\n').slice(1).map(l => JSON.parse(l));
+  if (!raw[0].c_tab) { console.log('SKIP (not a TRACE_FIELDSET=reloadrun trace: no c_tab)', file); ran--; continue; }
+  const R = raw.map(r => {
     const w = Buffer.from(r.p_weapon, 'hex'), mh = Buffer.from(r.mp_head, 'hex'), L = r.mp_layers[mh[8]];
     const tab = Buffer.from(r.c_tab, 'hex');
     return { f: r.frame, st: w.readInt32LE(0x14), speed: r.ground_speed, clip: L.clip, frame: L.frame, loop: (L.lflags & 1) === 1,
+             c564: Buffer.from(r.c_564, 'hex').readUInt32LE(0) & 0x24000,
              rows: [0, 1, 2].map(i => tab.readInt32LE(i * 0x18)) };
   });
   const r0 = R.findIndex((r, i) => i > 0 && r.st === 9 && R[i - 1].st !== 9);   // the record after the reload request
@@ -45,13 +48,15 @@ for (const file of files) {
   const ctl = makeClipControl({ core, anim, ctrl, motions: MOTIONS, step: STEP });
   ctl.clips();                                             // the aimed table (quadrant 1) at the start
   anim.cur = R[start].clip === anim.table[2]?.key ? 2 : 1;
-  const bad = [], known = [];
+  const bad = [], known = [], badGate = [];
   let maxDf = 0, reloadClip = null, sawNoLoop = false;
   for (let i = start; i + 1 < R.length && i < r0 + 70; i++) {
     const nx = R[i + 1];
     ctrl.C.groundSpeed = nx.speed;                          // C+0x1d8 of this frame (FUN_0034c388 runs before the class)
     if (nx.st === 9 && R[i].st !== 9) core.events.push({ type: 'reload' });
     ctl.clips(); anim.gameFrame(ctrl, STEP);
+    // C+0x564 bits 0x4000 / 0x20000 after this frame's logic (FUN_00598000, FUN_005980f8; the KNOWN early hand-back excepted)
+    if (ctl.c564() !== nx.c564 && !(/_rd$/.test(nx.clip) && /_a$/.test(anim.head.key))) badGate.push(`${nx.f}: ${ctl.c564().toString(16)} / ${nx.c564.toString(16)}`);
     const got = anim.head.key, gf = anim.head.frame;
     (DUMP[path.basename(file, '.jsonl')] ||= []).push({ f: nx.f, page: got, pf: gf, game: nx.clip, gf: nx.frame, speed: nx.speed });
     if (got === nx.clip) {
@@ -67,8 +72,9 @@ for (const file of files) {
   ok(reloadClip === want && sawNoLoop, `${name}: the reload plays ${reloadClip} (trace ${want}) without a loop (layer flags 0x86)`);
   ok(maxDf < 1e-4, `${name}: the reload clip's frames equal (max diff ${maxDf.toExponential(2)})`);
   ok(known.length <= 2, `${name}: KNOWN early hand-back at records ${known.join(', ')} (<= 2)`);
+  ok(badGate.length === 0, `${name}: C+0x564 bits 0x4000 / 0x20000 every record (${badGate.slice(0, 4).join(' | ') || 'all equal'})`);
 }
-if (!ran) console.log('SKIP: no traces');
+if (ran <= 0) console.log('SKIP: no traces');
 if (process.env.RELOAD_DUMP) (await import('node:fs')).writeFileSync(process.env.RELOAD_DUMP, JSON.stringify(DUMP));
 console.log(fails ? `${fails} FAILED` : 'all ok');
 process.exit(fails ? 1 : 0);

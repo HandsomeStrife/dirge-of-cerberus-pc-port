@@ -73,6 +73,8 @@ typedef struct {
     int32_t  nbr[4];     /* neighbour polygon index in cid_mesh.polys, -1 = none */
     uint16_t flags;      /* face record +0x04                                    */
     uint16_t word6;      /* face record +0x06 (meaning not decoded)              */
+    uint32_t word0;      /* face record +0x00: bits 0-3 vertex count, bits 8-31 a 6-bit
+                          * shade per corner (FUN_005ae1f0: the standing actor's MP+0x450) */
     uint8_t  nv;         /* 3 or 4                                               */
     uint32_t off;        /* payload offset of the face record (neighbour key)    */
     uint32_t raw_nbr[4]; /* neighbour pointers as stored (payload offsets)       */

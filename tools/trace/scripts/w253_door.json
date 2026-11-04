@@ -1,0 +1,1 @@
+{"name":"w253_door","frames":260,"doc":"worker 0253: at the chunk 06 door (trigger 12): turn the camera about 180 degrees (rx), walk forward into the door, cross.","events":[{"from":5,"to":92,"rx":1.0},{"from":95,"to":160,"ly":-1.0},{"from":160,"to":165,"ly":-1.0,"buttons":["cross"]},{"from":165,"to":200,"ly":-1.0},{"from":200,"to":205,"ly":-1.0,"buttons":["cross"]}]}

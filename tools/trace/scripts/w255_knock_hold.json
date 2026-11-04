@@ -1,0 +1,1 @@
+{"name": "w255_knock_hold", "frames": 420, "log_from": 90, "doc": "worker 0255: w255_knock_run with the stick held to the end: when the get-up class 0x37 gives the stick back. TRACE_HIT=100:8:50:-1,0", "events": [{"from": 10, "to": 420, "lx": 0.6, "ly": -1.0}]}

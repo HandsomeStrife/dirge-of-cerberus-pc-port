@@ -93,7 +93,8 @@ def chain_headers(buf, pay, warn=None):
     Decoded from the game code (2026-10-26, worker 0051):
     - FUN_0026ccc8 walks the bone tree's draw objects; each chain's object sits 0xb0 bytes
       before its first packet: 9 V4-32 bbox points, then +0x90 qword count (DMA ref, sent by
-      FUN_00265bf0 as 0x30000000|count to obj+0xb0), +0x96 byte, +0x97 sort bucket,
+      FUN_00265bf0 as 0x30000000|count to obj+0xb0), +0x96 env slot (FUN_00265560: the chain's
+      matrices, fog ramp and FOGCOL = DAT_004e62b0 + slot * 0x120), +0x97 sort bucket,
       +0x98 s16 texture slot (-1 = none), +0x9a s16, +0x9c (runtime: BMD header +0x10 table),
       +0xa4 self pointer, +0xa9 second-pass mode, +0xaa visibility group, +0xab 2nd slot.
     - FUN_0026ce60 binds TEX = table[+0x98], the table at BMD header +0x10 holding
@@ -129,5 +130,5 @@ def chain_headers(buf, pay, warn=None):
         out[c] = dict(slot=slot, entry=(table[slot] if 0 <= slot < ntex else None),
                       group=buf[o + 0xaa], pass2=buf[o + 0xa9], slot2=buf[o + 0xab],
                       flags=struct.unpack_from('<H', buf, o + 0x94)[0], bucket=buf[o + 0x97],
-                      aref=buf[o + 0xa8])
+                      aref=buf[o + 0xa8], env=buf[o + 0x96])
     return out, table

@@ -132,6 +132,7 @@ const frames = (ctx, clip) => (ctx.motions[clip] ? ctx.motions[clip].frames : 16
 export function ladderAction({ airgrab = AIRGRAB } = {}) {
   load();
   let L = null;           // the ladder in use
+  let dying = false;      // worker 0255: killed on the ladder (die)
   let ph = null;          // phase: { kind, clip, t, len, rate, from, to, hFrac, vFrac, ... }
   let hand = 'l';         // which hand the idle is on ('l' -> c_ld_lid)
   let done = false;
@@ -390,6 +391,13 @@ export function ladderAction({ airgrab = AIRGRAB } = {}) {
         res.onGround = true; res.vy = 0; res.done = true;
         return res;
       }
+      if (k === 'jump' && dying) {               // class 0x25's end: the page's fall takes over in state 8 (player.js)
+        ctx.ctrl.ladderDeathFall();
+        res.onGround = false; res.done = true;
+        return res;
+      }
+      // the mount's done event dead: state 0x17 (FUN_00538ec8 / FUN_00538fa0)
+      if (dying && (k === 'mountBottom' || k === 'mountAir' || k === 'mountTop')) { jumpOff(ctx, s.pos); return res; }
       if (k === 'jump') {
         // c_ld_jp, then c_ld_fa0 while he falls (research section 3, conf. L). The fall
         // is the physics body's (player.js startFall / FUN_00357168 with h = 0, mode-0xc
@@ -405,7 +413,15 @@ export function ladderAction({ airgrab = AIRGRAB } = {}) {
       next(ctx, s.pos);
       return res;
     },
+    // worker 0255: killed on the ladder (FUN_00565480): on the rungs (state 10) FUN_00562d30 starts the jump-off at once: state 0x17, class 0x25 = row 0xa2 c_ld_jp (T w255_ladder_climb
+    // 560-566); in the mount it starts when the mount ends (T w255_ladder_mount 534). The exits' states 0xd / 0xe have no dead branch: they end on foot, see player.js.
+    die(ctx) {
+      if (dying || !ph) return;
+      dying = true;
+      if ((ph.kind === 'idle' || ph.kind === 'up' || ph.kind === 'down') && ctx.anim?.has('c_ld_jp')) jumpOff(ctx, { ...ctx.ctrl.pos });
+    },
     exit(ctx) {
+      dying = false;
       // CAM+0x1c8 off when the action ends (CAM+0x1c4 then eases to 0 on its own, l.1748):
       //  - the top exit's end: leaving 0xd, exit hook FUN_00573a38 -> FUN_00577110 (traced)
       //  - the bottom exit's end: already off since it started (FUN_00576f98, next() above)

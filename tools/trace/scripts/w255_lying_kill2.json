@@ -1,0 +1,1 @@
+{"name": "w255_lying_kill2", "frames": 620, "log_from": 90, "doc": "worker 0255: w255_knock_run, then a second TRACE_HIT while he lies in state 0x11 (flags 2). TRACE_FIELDSET=revive TRACE_CALLLOG=w255 TRACE_LOG_AT=A5000", "events": [{"from": 10, "to": 130, "lx": 0.6, "ly": -1.0}]}

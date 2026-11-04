@@ -58,5 +58,42 @@ const list = (W, rs) => rs.filter(r => active(W, r));
   ok(!active(W, 52), 'area 0 on again -> dead 52 stays off');
   ok(active(W, 53), '... while 53 comes back');
 }
+// a soldier switched off stands where he was when he comes back, with his HP and facing (FUN_00559748's off path leaves +0x60..+0x9c,
+// FUN_00588270 -> FUN_00588430 builds the body from them; T: route RAM below). 46 is off at r03_spot2 at the +0x90 and row 2 it had
+// at r02_climb, not the placement.
+{
+  const { W, A } = world();
+  A.frame([-860.09, -142.12, -607.09]);
+  const a = W.actors.find(x => x.rec === 46);
+  a.pos = [-835.85, -148.89, -936.55]; a.face = [-0.07, 0, 1.0]; a.hp = 77;
+  A.frame([-1300, 0, -600]); A.frame([-1507.3, -0.06, -573.5]);
+  const off = W.objects.get(46 + 22);
+  ok(off.kind === 'record' && off.p90[0] === -835.85, `46 off: +0x90 kept (${off.p90})`);
+  A.frame([-860.09, -142.12, -607.09]);
+  const b = W.actors.find(x => x.rec === 46);
+  ok(b && b !== a && b.pos[0] === -835.85 && b.pos[2] === -936.55 && b.face[0] === -0.07 && b.face[2] === 1.0, `46 back: a new actor at ${b && b.pos}, facing ${b && b.face} (not the placement ${data.records[46].pos})`);
+  ok(b && b.hp === 77, `46 back: HP ${b && b.hp} (77)`);
+  ok(b && b.C.t2b0[0] === Math.fround(-835.85 - 0.07), `46 back: no turn queued (C+0x2b0 = facing + position, ${b && b.C.t2b0})`);
+  // a second round: the move survives a new off / on
+  b.pos = [-840, -148, -930];
+  A.frame([-1300, 0, -600]); A.frame([-1507.3, -0.06, -573.5]); A.frame([-860.09, -142.12, -607.09]);
+  const c = W.actors.find(x => x.rec === 46);
+  ok(c && c.pos[0] === -840 && c.pos[2] === -930, `46 again: at ${c && c.pos}`);
+}
+// a record moved while off (cmd 0x10e) is built there, and keeps that through an off / on
+{
+  const { W } = world();
+  const t = W.objects.get(46 + 22);
+  W.setActive(t, 1, 1);
+  W.setActive(W.objects.get(46 + 22), 0, 1);
+  const r = W.objects.get(46 + 22);
+  r.p90 = [-800, -140, -800]; r.p90set = true; r.face80 = null;
+  W.setActive(r, 1, 1);
+  const a = W.objects.get(46 + 22);
+  ok(a.kind === 'actor' && a.pos[0] === -800 && a.face[0] === data.records[46].face[0], `moved record built at ${a.pos}, placement facing`);
+  W.setActive(a, 0, 1);
+  W.setActive(W.objects.get(46 + 22), 1, 1);
+  ok(W.objects.get(46 + 22).pos[0] === -800, 'the move survives an off / on');
+}
 console.log(fails ? `${fails} FAILED` : 'all passed');
 process.exit(fails ? 1 : 0);

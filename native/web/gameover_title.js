@@ -67,12 +67,22 @@ export function createTitle(fed, { rng = null, warn = console.warn, id = TITLE_I
 
 // EffectLayer for the title: the sprites from title.sprites(), drawn after the 3D effects' meshes.
 // output (worker 0202): the output stage (output.js), for the type 35 glows: its renderer and the previous frame.
+// screen (worker 0258): the output stage for the screen-fixed draw alone (the menu boxes, menu_fx.js: no glows, no kept frame).
+// FUN_002e3300: camera 1's draws use the 2D camera's own view and projection, nothing of camera 0, so they are fixed on the
+// screen. The quads are written once a game frame in the view space of a fixed camera (view2d: the identity) and drawn through
+// the gameplay projection of the current output mode (proj2d), not the render camera's matrices: those interpolate between
+// game frames (follow.update), the death camera moves them and an event camera replaces them, fov included.
 export class TitleLayer extends EffectLayer {
-  constructor(THREE, title, { output = null } = {}) {
+  constructor(THREE, title, { output = null, screen = output } = {}) {
     super(THREE, { sprites: () => title.sprites(), warn: m => title.fx.warn(m) });
     this.group.name = 'gameover-title';
     this.title = title;
     this.output = output;
+    this.view2d = new THREE.Camera();
+    this.proj2d = { value: new THREE.Matrix4() };
+    this.fit = new THREE.PerspectiveCamera();
+    this.fitOutput = screen;
+    this.vp = new THREE.Vector4();
     // the glows draw after every title sprite (w198 g4: all type-10 sprites, then the glows; sortObjects = false, so
     // scene-graph order): their own group, moved to the end of the title's group each update (the sprite pool grows)
     this.glowGroup = new THREE.Group(); this.glowGroup.name = 'gameover-title-glows';
@@ -85,16 +95,40 @@ export class TitleLayer extends EffectLayer {
     const clear = this.depthClear = new THREE.Mesh(g, new THREE.MeshBasicMaterial({
       transparent: true, depthTest: false, depthWrite: false, colorWrite: false }));
     clear.name = 'gameover-title-depth-clear'; clear.frustumCulled = false; clear.visible = false;
-    clear.onBeforeRender = renderer => { renderer.state.buffers.depth.setMask(true); renderer.clearDepth(); };
+    clear.onBeforeRender = (renderer, scene, camera) => { this.fitProj(renderer, camera); renderer.state.buffers.depth.setMask(true); renderer.clearDepth(); };
     this.group.add(clear);
   }
   // the title's textures draw bilinear (TEX1 0x61 on every title TEX0 in w198 g4: 2e00 / 3000 / 2f00 / 37c0); the 3D
   // effects' EffectLayer stays nearest
   texture(t) { return this.linearTexture(t); }
-  update(camera) {
+  // the gameplay projection (fitCamera(.., null)) of the page camera (output.gameCam). Full mode: the game draws these and the
+  // menus into one frame buffer, so the x scale is the menu draw's (output.js drawHud's kx, h / 319.125 for a GS column; the
+  // fov's is h / 341.33, 1.0695 less); y is already its ky. camera: only without an output stage (its projection as is).
+  fitProj(renderer, camera) {
+    const out = this.fitOutput;
+    if (!out) { if (camera) this.proj2d.value.copy(camera.projectionMatrix); return; }
+    const c = this.fit, g = out.gameCam;
+    c.userData.fov0 = g.userData.fov0; c.near = g.near; c.far = g.far;
+    out.fitCamera(c);
+    this.proj2d.value.copy(c.projectionMatrix);
+    if (!out.native) {
+      renderer.getCurrentViewport(this.vp);
+      this.proj2d.value.elements[0] = 2 * (4 / 3) * this.vp.w / out.cols * PROJ.fx / this.vp.z;
+    }
+  }
+  screenFixed(m) {
+    if (m && !m.uniforms.proj2d) {
+      m.uniforms.proj2d = this.proj2d;
+      m.vertexShader = 'uniform mat4 proj2d; ' + m.vertexShader.replace('projectionMatrix * modelViewMatrix', 'proj2d');
+    }
+    return m;
+  }
+  material(t, alpha) { return this.screenFixed(super.material(t, alpha)); }
+  lineMaterial(alpha) { return this.screenFixed(super.lineMaterial(alpha)); }
+  update() {
     // before the draw pass: the frame copy has to be on from the title's first frame (output.js keep runs in render)
     if (this.output) this.output.keepFrame = this.title.fx.emitters.length > 0;
-    super.update(camera);
+    super.update(this.view2d);
     this.group.remove(this.glowGroup); this.group.add(this.glowGroup);
     // GUESS: FUN_002e2398(5) tests layer 5's draw entries (FUN_002e1e40 / FUN_002e2048); which of the title's
     // particles registers one is not traced, so the page clears while the title's emitter lives (see
@@ -109,8 +143,8 @@ export class TitleLayer extends EffectLayer {
   // then the page is drawn at each box (ST 0.01 .. 0.99, bilinear, REPEAT: CLAMP 0), MODULATE with the glow's RGBA
   // (texel x colour / 128), alpha test GREATER 0, the GS ALPHA blend. Texel centres: page pixel p samples at p + 0.5
   // (output.js GUESS: GS sample point = GL pixel centre). The title's draws all pass the depth test after layer 5's
-  // clear (TitleLayer.depthClear), so the glow is drawn without one. Screen points go through the page camera at the
-  // glow's view depth (as title.sprites()), so the copy reads the prev frame where the scene drew that point.
+  // clear (TitleLayer.depthClear), so the glow is drawn without one. Screen points go through proj2d at the glow's view depth
+  // (as title.sprites()): the draw-back lands where the sprites do and the copy reads the prev frame at that same pixel.
   glows(list, camera) {
     const THREE = this.THREE, out = this.output, prev = out && out.prevFrame && out.prevProj ? out.prevFrame : null;
     this.gpool ??= [];
@@ -121,12 +155,13 @@ export class TitleLayer extends EffectLayer {
     camera.updateMatrixWorld();
     const v3 = new THREE.Vector3();
     // GS screen (X, Y) at view depth z (camera-0 projection PROJ, as title.sprites) -> world / prev-frame UV
+    this.fitProj(out.renderer);
     const world = (X, Y, z) => v3.set((X - PROJ.cx) * z / PROJ.fx, -(Y - PROJ.cy) * z / PROJ.fy, -z).applyMatrix4(camera.matrixWorld).clone();
     // the copy's texel: the game copies FBP 112 at the same screen pixels it draws at, so the copy is tied to the screen,
-    // not the world: the GS screen point as a view-space point (camera-0 projection PROJ, as title.sprites) through the
-    // projection the kept frame was rendered with (output.prevProj, with its view offset: fbRT in native mode, the canvas
-    // in full mode), with no camera pose (a moving / interpolated camera does not shift it)
-    const uvOf = (X, Y, z) => { const w = v3.set((X - PROJ.cx) * z / PROJ.fx, -(Y - PROJ.cy) * z / PROJ.fy, -z).applyMatrix4(out.prevProj); return [(w.x + 1) / 2, (w.y + 1) / 2]; };
+    // not the world: the GS screen point as a view-space point (camera-0 projection PROJ, as title.sprites) through proj2d,
+    // the same place in the kept frame (fbRT in native mode, the canvas in full mode) as the draw-back on the screen, whatever
+    // camera or fov drew that frame
+    const uvOf = (X, Y, z) => { const w = v3.set((X - PROJ.cx) * z / PROJ.fx, -(Y - PROJ.cy) * z / PROJ.fy, -z).applyMatrix4(this.proj2d.value); return [(w.x + 1) / 2, (w.y + 1) / 2]; };
     const r = out.renderer, rt0 = r.getRenderTarget(), ac = r.autoClear;
     list.forEach((s, i) => {
       const G = this.gpool[i], z = s.z;
@@ -227,7 +262,7 @@ export class TitleLayer extends EffectLayer {
       transparent: true, depthTest: false, depthWrite: false, side: THREE.DoubleSide,
       blending: THREE.CustomBlending, blendEquation: eq, blendSrc: THREE.OneFactor, blendDst: dst,
     });
-    const per = new WeakMap(), m = { get: G => { let x = per.get(G); if (!x) { x = proto.clone(); per.set(G, x); } return x; } };
+    const per = new WeakMap(), m = { get: G => { let x = per.get(G); if (!x) { x = this.screenFixed(proto.clone()); per.set(G, x); } return x; } };
     this.gmats.set(alpha, m);
     return m;
   }

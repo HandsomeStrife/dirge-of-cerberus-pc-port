@@ -67,7 +67,8 @@ AI_CLIPS = ('r_gst', 'r_gst_lk', 'r_st_a', 'r_st_f', 'r_stlld0', 'r_stlaf0', 'r_
 # 0x2c the flinch / death rows the k_hits12 trace shows (r_stlld0 / r_stbf0 / r_stlaf0), 0x78 crouched aim
 # (motions 0x18 / 0x16 / 0xf: FUN_005978e8 / FUN_005971d8 / FUN_00597c60) and 0x7b crouched fire (0xf),
 # 0x09 / 0x10 the walk / run rows of the locomotion table (motion state 8, FUN_00594f98 -> FUN_00345b58(C, 1, 9, 0x10))
-AI_MOTIONS = (0x00, 0x01, 0x02, 0x40, 0x57, 0x28, 0x2b, 0x2c, 0x78, 0x7b, 0x09, 0x10)
+AI_MOTIONS = (0x00, 0x01, 0x02, 0x40, 0x57, 0x28, 0x2b, 0x2c, 0x78, 0x7b, 0x09, 0x10, 0x07, 0x08,
+              0x24, 0x25, 0x26, 0x27, 0x29, 0x2a, 0x2d, 0x2e, 0x2f, 0x19, 0x1a)   # worker 0259: all the flinch rows FUN_00598950 and death rows
 STANCE_FILE = '06800009.bin'      # z128's 'bmd' file (stage 0x0680, k 9)
 
 
@@ -88,7 +89,9 @@ def triggers(d):
             inv=[f32s(d, r + 0x40 + 16 * i, 4) for i in range(4)],
             lo=f32s(d, r + 0x80, 3), hi=f32s(d, r + 0x90, 3),
             script=struct.unpack_from('<h', d, r + 0xa0)[0],
-            flags=SE.u32(d, r + 0xa4), shape=d[r + 0xaa]))
+            flags=SE.u32(d, r + 0xa4), shape=d[r + 0xaa],
+            # +0xa8: the parent area (FUN_00547f50 -> FUN_0053b920 / FUN_0054c550); -1 = none. Read for the camera's box objects (worker 0257)
+            area=struct.unpack_from('<h', d, r + 0xa8)[0]))
     # resolved activations / wakes for the save (stage_events.activations: difficulty 1, flag0 = 0;
     # informational: the page runs the scripts themselves in enemy_ai.js's VM)
     nscr = len(SE.scripts(d))
@@ -211,6 +214,35 @@ def script(d, si):
     return ev
 
 
+def script_fns(d):
+    """worker 0259: the functions of each script by function INDEX, for cmd 0x114's timed routine: FUN_0054dec0 ->
+    FUN_003714b0 -> FUN_00371490: function header = table end (VM +0x14) + [VM +0xc][index] x 8; VM +0xc = script + [+4]
+    (FUN_0036fd58), the area stage_events.py calls globals. Only indices past the event functions."""
+    out = {}
+    for si, b in enumerate(SE.scripts(d)):
+        gb = b + SE.u32(d, b + 4)
+        gs, ft = SE.u32(d, b + 8), SE.u32(d, b + 0xc)
+        te = gb + gs + ft
+        offs = [SE.s32(d, gb + i) for i in range(0, gs, 4)]
+        evs = {SE.s32(d, gb + gs + i + 4) for i in range(0, ft, 8)}
+        ends = sorted(set(offs))
+        end_all = b + SE.u32(d, b)
+        fns = {}
+        for k, off in enumerate(offs):
+            if off in evs:
+                continue
+            f = te + off * 8
+            nxt = [x for x in ends if x > off]
+            end = te + nxt[0] * 8 if nxt else end_all
+            code = f + SE.u32(d, f + 4) + SE.u32(d, f + 0xc)
+            ins = SE.disasm(d, code, end)
+            data = d[f + SE.u32(d, f + 4): f + SE.u32(d, f + 4) + SE.u32(d, f + 0xc)]
+            fns[str(k)] = dict(locals=SE.u32(d, f + 8), code=[[op, imm] for _i, op, imm in ins], data=data.hex())
+        if fns:
+            out[str(si)] = fns
+    return out
+
+
 def records(d):
     sec = SE.sections(d)
     o0, c0, s0 = sec[0]
@@ -299,7 +331,10 @@ def attacks(d, i):
                             tol=struct.unpack_from('b', d, e + 0xd)[0], pitch=struct.unpack_from('<H', d, e + 0xe)[0]))
     used = [c[2] for e in entries for k in e['kf'] for c in k['cmds'] if c[0] == 2 and c[2] >= 0]
     HV = T + SE.u32(d, T + 0x24)
-    return dict(alt=alt, entries=entries, names=names,
+    # T +0x28: the shot points op 3 names (16 B, count s16 T+0xe; FUN_003481e0 case 3 -> 0x56a228): xyz in the actor's frame, +0xc n, +0xd marker
+    SP, nsp = T + SE.u32(d, T + 0x28), struct.unpack_from('<h', d, T + 0xe)[0]
+    points = [list(struct.unpack_from('<3f', d, SP + 16 * v)) + list(struct.unpack_from('<2b', d, SP + 16 * v + 0xc)) for v in range(max(nsp, 0))]
+    return dict(alt=alt, entries=entries, names=names, points=points,
                 volumes=[hit_volume(d, HV + 64 * v) for v in range(max(used) + 1)] if used else [])
 
 
@@ -485,7 +520,9 @@ def zone_set(d, i, n):
     # fx (worker 0193): the record's word bits 12-15, signed: FUN_0055db50 / FUN_0056c3f0 pass
     # (*(actor +0x19c) << 16) >> 28 to FUN_003361b8 (!= 0: the wall-impact table by that material)
     return [dict(scale=d[z + 16 * k], flags=struct.unpack_from('<H', d, z + 16 * k + 2)[0],
-                 fx=((d[z + 16 * k + 1] >> 4) ^ 8) - 8) for k in range(n)]
+                 fx=((d[z + 16 * k + 1] >> 4) ^ 8) - 8,
+                 # worker 0259: FUN_0055d390: C+0x590 low 4 bits = ((word << 20) >> 28) + 1, the word's bits 8-11, signed: the hit area
+                 area=((d[z + 16 * k + 1] & 15) ^ 8) - 8) for k in range(n)]
 
 
 def lock_bone(d, i):
@@ -520,7 +557,7 @@ def clip_frames():
     return res
 
 
-def model_clips(recs, st, atk):
+def model_clips(recs, st, atk, scr=None):
     """{model: {clip: frames}} for the AI_MOTIONS rows of every (model, stance) pair the records use,
     from the model's own motion files (export_web_enemy.clip_file: only disc.py INPUTS). A row whose
     clip no listed file holds is left out (printed)."""
@@ -540,6 +577,29 @@ def model_clips(recs, st, atk):
                 continue
             cbuf, CP = E.V.find_clip(f, c)
             res[c] = int(E.AR.clip_frames(cbuf, CP))
+    # worker 0259: the clips the records' scripts play with cmd 0x19b (motion class 0x42: helicopter flights, the paratroopers)
+    if scr:
+        for r in recs:
+            if r['model'] not in AI_TYPES:
+                continue
+            res = out.setdefault(r['model'], {})
+            for fn in scr.get(str(r['script']), {}).values():
+                data = bytes.fromhex(fn.get('data') or '')
+                code = fn['code']
+                for i, (op, imm) in enumerate(code):
+                    if op != 38 or imm != 0x19b:
+                        continue
+                    refs = [code[j][1] for j in range(max(i - 8, 0), i) if code[j][0] == 37]
+                    c = data[refs[-1] * 8:refs[-1] * 8 + 8].split(b'\0')[0].decode('latin-1') if refs else ''
+                    if not c or c in res:
+                        continue
+                    try:
+                        f = E.clip_file(r['model'], c)
+                    except SystemExit:
+                        print('WARN %s cmd 0x19b clip %s: no listed motion file holds it' % (r['model'], c))
+                        continue
+                    cbuf, CP = E.V.find_clip(f, c)
+                    res[c] = int(E.AR.clip_frames(cbuf, CP))
     # the attack clips (the play-clip commands of the model's attack tables, ai.json attacks)
     for r in recs:
         if r['model'] not in AI_TYPES or r['zones'] < 0 or not atk.get(str(r['zones'])):
@@ -640,8 +700,8 @@ def main():
     atk = {str(r['zones']): attacks(d, r['zones']) for r in recs if r['zones'] >= 0 and r['model'] in AI_TYPES}
     os.makedirs(out, exist_ok=True)
     res = dict(format='enemy-ai-2', stage=os.path.basename(stage), triggers=trig, records=recs,
-               weapons=weapons(d), scripts=scr, clips=clip_frames(), hitboxes=boxes,
-               zones=zone_sets(d, recs, boxes), stances=st, model_clips=model_clips(recs, st, atk), attacks=atk,
+               weapons=weapons(d), scripts=scr, script_fns=script_fns(d), clips=clip_frames(), hitboxes=boxes,
+               zones=zone_sets(d, recs, boxes), stances=st, model_clips=model_clips(recs, st, atk, scr), attacks=atk,
                sizes={str(r['zones']): zone_size(d, r['zones']) for r in recs if r['zones'] >= 0},
                lock_bones={str(r['zones']): lock_bone(d, r['zones']) for r in recs if r['zones'] >= 0},
                paths=paths(d), locators=locators(d), areas=areas(d), nav=nav_graph(d), markers={m: markers(m) for m in boxes}, se=se_tables(elf),

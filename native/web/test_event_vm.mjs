@@ -331,6 +331,14 @@ ok(warns.some(w => w.includes('KerberosActor.setpos_l')), 'untranslated natives 
       }
       return { win, r, at };
     };
+    // worker 0257: a window opened under Skip is hidden (FUN_00383408: FUN_003b7118(box, 1)): nothing of it is drawn
+    {
+      const fr = []; for (let k = 960; k < 1040; k++) fr.push(k);
+      const un = runWin({ frames: fr }), sk = runWin({ frames: Array.from({ length: 60 }, (_, k) => 121 + k), skipAt: 120 });
+      const shown = (R) => Object.values(R.at).filter(x => x.keys.length);
+      ok(shown(un).some(x => x.prims.length > 0), 'unskipped: an open window draws');
+      ok(shown(sk).length > 0 && shown(sk).every(x => x.prims.length === 0), `Skip before a window's open_l: it exists (${shown(sk).length} frames) and draws nothing`);
+    }
     const { win, at } = runWin({ frames: [180, 240, 980] });
     ok(win.log.map(x => x.join(' ')).join('|') === '126 open 1 MES_10109VN1|191 close 1|226 open 2 MES_10109VN2|286 close 2|966 open 3 MES_10110SK|1036 close 3',
       'scr001 opens three kind-4 windows and closes each (open_l / close_l)');

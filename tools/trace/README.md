@@ -34,9 +34,9 @@ python3 -I tools/trace/summarize.py --diff out/b_walk.jsonl out/b_walk2.jsonl
    private Xvfb (:97) started by `pcsx2_service.sh`. PCSX2 must run as a systemd user unit,
    because the Claude Code Bash tool kills a PCSX2 launched from a command (see the setup
    notes). The unit `~/.config/systemd/user/pcsx2trace.service` sets
-   `XDG_CONFIG_HOME=<scratch>/cfg` (its own PCSX2.ini: BIOS folder, `EnablePINE = true`,
+   `XDG_CONFIG_HOME=tools/trace/out/env/cfg` (its own PCSX2.ini: BIOS folder, `EnablePINE = true`,
    `Renderer = 12`). It reads `PCSX2_DIR`, `ISO`, `STATEFILE` and `LOG` from
-   `<scratch>/trace.env`; `trace.py` rewrites STATEFILE per run and starts and stops the
+   `tools/trace/out/env/trace.env`; `trace.py` rewrites STATEFILE per run and starts and stops the
    unit. The unit file text is at the end of this README. The save state was written by
    PCSX2 2.8.2 (savestate version 0x9a59); 2.9.127 loads it.
 
@@ -174,8 +174,8 @@ Notes on the log:
 Description=PCSX2 DoC trace oracle (dirge-port tools/trace)
 [Service]
 Type=simple
-Environment=XDG_CONFIG_HOME=<scratch>/cfg
-EnvironmentFile=<scratch>/trace.env
+Environment=XDG_CONFIG_HOME=/srv/games/dirge-port/tools/trace/out/env/cfg
+EnvironmentFile=/srv/games/dirge-port/tools/trace/out/env/trace.env
 ExecStart=/srv/games/dirge-port/tools/trace/pcsx2_service.sh
 KillSignal=SIGKILL
 TimeoutStopSec=5
@@ -218,7 +218,7 @@ notes/effects-research.md 'Bullet end, floors, soldier hits'.
 Set `menusnd`: `menu_play` (FUN_003e1d90 -> FUN_003e9e60: name, x, y), `menu_req` (FUN_003e9ed0 -> FUN_003e7850: id, pan,
 vol), `se_send`, `se_pause` / `bgm_vol` (FUN_00241f40 -> FUN_003e86e0 / FUN_003ed7d0), `bvol_send` (FUN_003ed8e0 ->
 FUN_0041af80). Script w194_menusnd (pause, cursor, box, cancel, resume; `log_from` 260: the call log covers all 400 frames).
-Run with `TRACE_SCRATCH` = the unit's scratch dir (the `EnvironmentFile` path) and the sandbox off. notes/audio-research.md "Menu sounds".
+Run with the sandbox off. notes/audio-research.md "Menu sounds".
 
 ### Sound call log (TRACE_CALLLOG=sound3, worker 0172)
 Set `sound3` logs every new SE: `play_name` (FUN_0033cc90 -> FUN_003e8e18: sdb name, emitter position, slot), `slot_open`
@@ -252,8 +252,7 @@ With `TRACE_FIELDSET=enemy`, `TRACE_LOCK=1` adds the camera's lock state (`cam_1
 `cam_a0` = CAM+0xa0..0xff), `p_8`, `p_272`, `p_vel`, `p_st64`, `hud_60`, `ret_1b0` and per soldier `a38`,
 `par`, `c764`, `vel` (fields.py has the meanings). `TRACE_ENEMIES=n` traces only the first n soldiers
 (default 7) so more frames fit in the log (n = 2: about 189 frames). The call log needs room of its own
-and doesn't fit next to these. Runs need the service's scratch dir as TRACE_SCRATCH (the one in
-~/.config/systemd/user/pcsx2trace.service). Scripts: k_lock13 (lock, swing off, re-lock), k_lock14
+and doesn't fit next to these. Scripts: k_lock13 (lock, swing off, re-lock), k_lock14
 (locked shot kills #66, reticle rests on the corpse).
 
 ### Push into the step (TRACE_PUSHSTEP=1, TRACE_CALLLOG=pushstep, TRACE_POKE; worker 0158)

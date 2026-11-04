@@ -165,6 +165,15 @@ if (occlData && existsSync(SF) && !process.env.ROOM_OCCL) {
   // unloaded chunks build nothing
   O = createRoomOccl(data([quad(100)])); O.frame(V, [5]);
   ok(O.count === 0, 'a chunk not loaded gives no volume');
+  // worker 0257: the fov (FUN_003ee1d8 -> display +0x300 -> FUN_0040ce28's +0x304): the wall of the size test at the gameplay 73.5
+  // and an event camera's narrower / wider view. Screen cross scales with fov: at 73.5 a 200-unit wall at z 6300 is under 4096
+  O = createRoomOccl(data([quad(6300, 100)]));
+  O.frame(V, [0]); const fv = O.count; O.frame(V, [0], 10); const nv = O.count; O.frame(V, [0], 73.5); const bv = O.count;
+  ok(fv === 0 && nv === 1 && bv === 0, `the fov reaches the size test: 73.5 none (${fv}), fov 10 a volume (${nv}), back at 73.5 none (${bv})`);
+  // the clip planes too: a wall right of the frustum at 73.5 is inside at fov 120
+  O = createRoomOccl(data([quad(100, 25, 180)]));
+  O.frame(V, [0]); const c73 = O.count; O.frame(V, [0], 120); const c120 = O.count;
+  ok(c73 === 0 && c120 === 1, `the fov reaches the clip planes: 73.5 none (${c73}), 120 a volume (${c120})`);
   // frame() allocates nothing: the same arrays after many frames
   const vol = O.volumes, dr = O.dropped(0); for (let i = 0; i < 100; i++) O.frame(V, [0]);
   ok(O.volumes === vol && O.dropped(0) === dr, 'frame() keeps its arrays');

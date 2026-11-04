@@ -111,3 +111,10 @@ stick. What game-state bit 11 (free_usercontrol(1) / set_usercontrol(0), FUN_003
   is stack data) and E5 (0x818c0400: type 113, FUN_002d4250's frame-buffer passes); its step [500, 3000, -3, 0x27] is
   command 0x1a with arg 0x27 for kind 0x1e (a layout, likely the stage name: not decoded). event_rt.js still drops
   displayStageInfo(0). No hold to add: scr001 checks isDisplayStageInfo(0) once (no wait loop).
+
+## Objective box (worker 0258, 2026-11-03)
+- FUN_003c6600 case 0x1a, kind 0x1f: FUN_003c5d10(box, 0x479168, 0): third argument 0, no language rect override. Widget 2 (rect 20, 214, 472 x 16, flags 0x212: centred, outline) gets sprintf('%s', FUN_003fd578(DAT_0047a388[+0x10b8])) through vt+0xd4 FUN_003d7218 (FUN_003d0380, then the measure FUN_003cf2e0 the centring needs).
+- +0x10b8 = +0xff0 + 4 x 0x32: stat 0x32, copied by FUN_003c54f8 (section stat, or the total when stat 14 == 0x10). Writers: manager cmd 0x46 (FUN_00545b20 -> FUN_0031d698), setSectionStat. Table: 40 kelstr ids at 0x47a388 (rows 0 and 1 are the same text).
+- Opening it in PCSX2 without the route: TRACE_POKE=47db6c=1,4fadbc=0 (FUN_003fdb48's two writes that matter; FUN_003fdf00 then reads a0093 and opens box 0x1f). Script w258_box31, grabs 40 / 120. RAM: stat 0x32 = 0 ('Protect the civilians!').
+- Compare: tools/trace/out/w258 (gitignored): b120.gs, fx120.json; data/stage_info_k1_ref.json. The text is exact; the panel's type 26 and parented particles are not drawn yet.
+- The box's close: FUN_003fdd58 -> FUN_003b6978 -> vt+0x34 (table 0x4a5ee0) FUN_003b7930 -> FUN_003d4588(box, 100, 0): +0x25 == 0 (RAM: w258 b40 / b120, w220 open330, +0x10 = 0x9104) -> FUN_003d4630, +0x10 |= 1. FUN_003dd9f8 then skips the box's update; FUN_003de938 (in FUN_003dce38, after FUN_002efe98, before the draw) calls vt+0xc FUN_003c5428 -> FUN_003c5cc0. No 100 ms close for these boxes (FUN_003d51c0 is the +0x25 != 0 path).

@@ -42,6 +42,7 @@
 !native/web/actions/*.js
 !native/assets/collision/*.mjs
 !tools/trace/scripts/*.json
+!tools/trace/*.mjs
 !tools/hygiene_allow.txt
 
 # ----------------------------------------------------------------------------

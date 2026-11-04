@@ -110,16 +110,23 @@ if (!existsSync(FILE)) {
   check(Math.abs(cam.dist - d) < 1e-3, 'battleReset: CAM+0x1c0 = 1000 -> the measured distance at once (' + cam.dist.toFixed(3) + ' / ' + d.toFixed(3) + ')');
 }
 
-// play.js wiring: stageCameraReset = battleReset then battleHandBack; follow.messages() right after the frame's follow.tick;
-// the rays take the area stream's slots
+// worker 0257: what battleReset does with the camera's other inputs. FUN_00324e70: FUN_00328640(CAM, 0) before FUN_00329f68 (a battle()
+// during a climb drops the ladder's pull-back); noUser (play.js stageCameraReset, under set_usercontrol(0)): mouse counts fed before
+// stage.tick are spent and turn nothing (FUN_0032ace0 l.437-441). play.js's wiring itself is run by test_npc_page (the mouse moves
+// through the beat, forward within 2e-4 of T; ramp after the message) and test_market_cam_page (the slots).
 {
-  const src = readFileSync(new URL('./play.js', import.meta.url), 'utf8');
-  const f = src.slice(src.indexOf('function stageCameraReset'), src.indexOf('function hideForIntro'));
-  const iR = f.indexOf('follow.battleReset('), iH = f.indexOf('follow.battleHandBack(');
-  check(iR > 0 && iH > iR && !/follow\.reset\(/.test(f), 'play.js stageCameraReset: battleReset -> battleHandBack (no plain reset)');
-  const t = src.indexOf("follow.tick({ pos: ctrl.pos"), mm = /^\s*follow\.messages\(\);/m.exec(src.slice(t)), m = mm ? t + mm.index : -1;
-  check(t > 0 && m > t && !src.slice(t, m).includes('ctrl.step('), 'play.js: follow.messages() after the frame\'s follow.tick, before ctrl.step');
-  check(/camRays\.chunks = \(\) => light\.stream\.slots\.filter\(sl => sl\.loaded\)\.map\(sl => sl\.chunk\)/.test(src), 'play.js: the camera rays test the stream\'s loaded slots');
+  const mk = () => { const c = new FollowCamera(null, cameraRays(ab)); c.weapon = new WeaponSystem(J('./data/aim/weapon.json'), null); return c; };
+  const pos = { x: -1417, y: -98.6, z: -1100 }, p = { pos, want: { x: 0, y: 0, z: 0 }, facing: { x: 0, y: 0, z: 1 }, state: 0, stick: 0, pad: null };
+  const c = mk(); c.reset(pos, { yaw: 1, pitch: 0 });
+  c.setBack(true);
+  c.battleReset(p, { yaw: 1, pitch: 0 });
+  check(c.backTarget === 0, 'battleReset: FUN_00328640(CAM, 0): the ladder pull-back target cleared');
+  const m = mk(); m.reset(pos, { yaw: 1, pitch: 0 }); m.addMouse(80, 30);
+  m.battleReset({ ...p, noUser: true }, { yaw: 1, pitch: 0 });
+  check(m.yaw === 1 && m.idle !== -20, `noUser: the counts are spent, no turn (yaw ${m.yaw}, idle ${m.idle})`);
+  const u = mk(); u.reset(pos, { yaw: 1, pitch: 0 }); u.addMouse(80, 30);
+  u.battleReset(p, { yaw: 1, pitch: 0 });
+  check(u.yaw !== 1 && u.idle === -20, `without noUser the same counts turn the camera (yaw ${u.yaw.toFixed(4)}, idle ${u.idle}): what stageCameraReset's noUser prevents`);
 }
 console.log(fails ? fails + ' FAILED' : 'all ok');
 process.exit(fails ? 1 : 0);
