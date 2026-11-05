@@ -71,5 +71,27 @@ const pressAt = (w, k, O) => { w.W.triggers[k].active = true; const c = w.W.gimm
   player.pos = [-1100, -0.06, 444]; ok(S(T, 0x186) === 0, 'trigger 166: Vincent away: 0');
   ok(W.t.send(null, -2, 9, [58, 3, 0, 0]) === 0 && gflags[58] === 3 && W.t.send(null, -2, 0xa, [58, 0, 0, 0]) === 3, 'cmd 9 writes global 58, 0xa reads it');
   player.hp = 0; W.t.send(null, -2, 9, [58, 9, 0, 0]); ok(gflags[58] === 3, 'cmd 9 refused with Vincent finally dead (as cmd 0xb)'); }
+// 0x188: record r0's point in the box, its own record. 0x1a5 / 0x1a6: +0x110 low nibble, on an actor and on an idle record, kept through its activation. 0x191: only an active record's object becomes the target
+{ const w = mkG(), { W } = w, S = (o, c, r = [0, 0, 0, 0]) => W.t.send(o, -2, c, r), T = W.triggers[166];
+  W.setActive(W.objects.get(72 + 22), 1); W.setActive(W.objects.get(73 + 22), 1);
+  const a72 = W.objects.get(72 + 22), a73 = W.objects.get(73 + 22);
+  a72.pos = [-990, -0.06, 444]; a73.pos = [-1100, -0.06, 444];
+  ok(S(T, 0x188, [72, 0, 0, 0]) === 1, 'trigger 166: record 72 in the box: 0x188 1');
+  ok(S(T, 0x188, [73, 0, 0, 0]) === 0, 'trigger 166: record 73 away: 0x188 0');
+  ok(S(T, 0x188, [255, 0, 0, 0]) === 0, 'trigger 166: no such record: 0x188 0');
+  a72.f110 = 0x120; S(a72, 0x1a5, [7, 0, 0, 0]);
+  ok(S(a72, 0x1a6) === 7 && a72.f110 === 0x127, `0x1a5 sets the low nibble, the rest stays (${a72.f110.toString(16)}); 0x1a6 reads 7`);
+  const idle = W.objects.get(75 + 22); S(idle, 0x1a5, [5, 0, 0, 0]);
+  ok(S(idle, 0x1a6) === 5, '0x1a5 on an idle record: 0x1a6 reads 5');
+  W.setActive(idle, 1); ok(S(W.objects.get(75 + 22), 0x1a6) === 5, 'its activation keeps it (the same object)');
+  const q = W.objects.get(113 + 22);
+  a73.target = null; a73.f118 &= ~3;
+  S(a73, 0x191, [113, 0, 0, 0]);
+  ok(!(q.flags28 & 1) && a73.target === null, 'record 113 idle: 0x191 leaves no target');
+  W.setActive(q, 1);
+  const n = W.objects.get(113 + 22); S(a73, 0x191, [113, 0, 0, 0]);
+  ok(a73.target === n && (a73.f118 & 3) === 3, '0x191 on the active NPC: it is his target');
+  let threw = null; try { for (let i = 0; i < 300; i++) W.tick(1.0, w.player.pos, w.player.pos); } catch (e) { threw = e; }
+  ok(!threw, `300 frames with an NPC as a target: no throw${threw ? ': ' + threw.message : ''}`); }
 console.log(fails ? `${fails} FAILED` : 'all ok');
 process.exit(fails ? 1 : 0);

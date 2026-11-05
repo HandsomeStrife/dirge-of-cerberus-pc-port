@@ -617,6 +617,8 @@ export function createEnemyAI(opts) {
     // their event 3's cmd 0x16a(1) (w223_npc95 RAM f826; bit 0 bullets test it, bit 2 clear never lockable, bit 9 push-out).
     // GUESS: the same value from the activation on (its constructor / FUN_00559748 writer is not read; 0x16a sets 0x210 again)
     if (NPC_TYPES.has(rec.model)) a.f38 = 0x391;                            // = NPC_PROBE_BITS
+    // worker 0264: a kept stance 1 keeps its height: FUN_00565bd0 wrote +0x30 = +0x174 and off never clears it
+    if (a.stance === 1) a.size.h = f(a.size.h0 * f(0.6));
     // worker 0230: FUN_00564228 'e023' (0x65303233): FUN_00340ac0(C, 0x19), actor +0x118 |= 0x80801c (the same for e024)
     if (rec.model === 'e023') a.f118 = (a.f118 | 0x80801c) >>> 0;
     // the body listener's node event (FUN_0034fad0 -> C+0x540 event 3 -> FUN_005690c8 case 3): FUN_00588550 case 3 posts
@@ -906,7 +908,7 @@ export function createEnemyAI(opts) {
         const eye = c.eye, d = sub3(mgr260.slice(0, 3), eye), l = len3(d), s = 0.1 < l ? f(l - 0.1) : 0.1, end = [0, 1, 2].map(j => f(eye[j] + f(f(d[j] / l) * s)));
         return +!(viewRay(eye, end) || cameraObjects(eye, end));
       }
-      // worker 0264: read for a value and left at 0: 0xa4 (FUN_00242c28 == 0; 0 is right, RAM DAT_0046b328 = 1 in the save and every route state); 0x44 (+0xfac: an id table of shape 7 triggers, only passed to 0x109). notes/fidelity-audit.md
+      // worker 0264: read for a value and left at 0: 0xa4 (FUN_00242c28 == 0; 0 is right, RAM DAT_0046b328 = 1 in the save and every route state); 0x44 (+0xfac: the section-22 placed sounds' object ids, FUN_00548788; script 0 passes them to 0x108 / 0x109: on / off, not done through scripts on the page). notes/fidelity-audit.md
       // GUESS: other manager commands are skipped (return 0, the script goes on)
       warnOnce(`enemy_ai: manager cmd 0x${cmd.toString(16)} not translated (skipped)`);
       return 0;
@@ -1028,8 +1030,9 @@ export function createEnemyAI(opts) {
         const q = cmd === 0x186 ? P : objects.get(r[0] + ID_BASE), q0 = q && (q.pos || q.p90);
         return q0 ? +inBox(xform(t.t.inv, [q0[0], Math.fround(q0[1] - 7), q0[2]]), t.t.lo, t.t.hi) : 0;
       }
-      // FUN_005661e8 case 0x1a6: +0x110 & 0xf (worker 0264)
-      case 0x1a6: return (t.f110 ?? 0) & 0xf;
+      // FUN_005661e8 cases 0x1a5 / 0x1a6: +0x110 low nibble = r0, read (worker 0264). The same object off and on: an inactive record holds it in `kept`
+      case 0x1a5: { const v = r[0] & 0xf; if (t.kind === 'record') t.kept = { ...t.kept, f110: ((t.kept && t.kept.f110) ?? 0) & ~0xf | v }; else t.f110 = ((t.f110 ?? 0) & ~0xf) | v; return 0; }
+      case 0x1a6: return ((t.kind === 'record' ? t.kept && t.kept.f110 : t.f110) ?? 0) & 0xf;
       case 0x14c: case 0x14d:
         if (!(t.kind === 'actor' || (t.kind === 'record' && buildsActor(data.records[t.rec])))) {
           warnOnce(`enemy_ai: object cmd 0x${cmd.toString(16)} to a non-actor not translated (skipped)`); return 0;
@@ -1062,6 +1065,14 @@ export function createEnemyAI(opts) {
           events.push(`f38 ${t.id} 0x${t.f38.toString(16)}`);
         } else warnOnce(`enemy_ai: object cmd 0x16a on ${t.kind} ${t.id} (+0x38 not modelled) not translated (skipped)`);
         return 0;
+      // FUN_005661e8 case 0x191 (worker 0264): target record r0's object, only if it is active (FUN_0053b978, +0x28 bit 0; else no change) -> FUN_0035fc98. Scripts 24, 25, 26, 51 event 0x18: alive(NPC) (0xa1) ? 0x191 : 0x193
+      case 0x191: {
+        const q = objects.get(r[0] + ID_BASE);
+        if (!q || !(q.flags28 & 1)) return 0;
+        if (t.kind === 'actor' && t.ai) setTarget(t.ai, q);
+        else if (t.kind === 'record') warnOnce(`enemy_ai: cmd 0x191 on inactive record ${t.rec} (FUN_00562f50) not kept`);
+        return 0;
+      }
       case 0x193:                                                                // FUN_005661e8 0x193 (FUN_0053bb08 = the player)
         if (t.kind === 'actor' && t.ai) setTarget(t.ai, P);
         // worker 0237: no AI (+0x184 0: an inactive record, e.g. 81-86 at event 0x23) -> FUN_00562f50(actor, player id):

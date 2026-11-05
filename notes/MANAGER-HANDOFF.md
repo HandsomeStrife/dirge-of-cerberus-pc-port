@@ -10,6 +10,16 @@ Read first: `CLAUDE.md`, the newest ~30 entries of `notes/HANDOFF.md`, `notes/fi
 HEAD when this was written: 9e1ff04 on `main`, clean, pushed. Remote: `git@github.com:HandsomeStrife/dirge-of-cerberus-pc-port.git`.
 Next worker number: **dirge-worker-0253**.
 
+## Where it stopped (2026-11-05, wind-down)
+
+Dan asked for a wind-down on 2026-11-04. All workers are retired; next worker number: **dirge-worker-0265**.
+
+- **The level has not been played deck to results.** `test_level_run_page` is red. The bot's furthest run passed e036, rv_toujou and wro_kaisetu and ran out of rounds near chunk 08. Gate 3, chunk 0b, the boss and results were never reached on foot; they pass only from warps (`test_heri_kita_page`, `test_results_page`).
+- **Blocker:** ammo. The Shop is decoded (`notes/shop-research.md`, `native/web/shop.js`) but unwired and never compared with the game, and the bot's aim wastes rounds, so how much of the shortage is the game's isn't known.
+- **Last full suite:** 43 page tests ok, node clean. `test_scr005_page` failed on a read of `__play.stage` before its declaration; the declaration has moved (other `__play` getters such as stageLib, checkpointRec still have that window). `test_warp_page` failed `stairs: the warp ran`, not explained. A rerun of both died from low system memory, so **neither has passed since**. Page tests that ran before worker 0264's last edits (0x191, 0x1a5, height) also need a rerun; see its list in `notes/HANDOFF.md`.
+- **Next:** rerun those on a quiet machine, then wire the Shop. Then walk the bot on through chunk 0b.
+- **Not done from "The work":** effects in events, block drift, rv_matiawase's 200-frame hold and memory-card box, door walls (Vincent passes shut doors), laptop-size memory run in the market, and all of step 5's list below.
+
 ## Dan's rules
 
 - **Everything is based on a decompile of the game.** Decode, translate, cite addresses (`// FUN_xxxxxxxx`), check against

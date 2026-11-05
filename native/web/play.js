@@ -849,6 +849,9 @@ async function main() {
   const bodyRecs = new Set();                        // records the AI activated (onActivate): their bodies go at a Restart
   const startBodies = new Set(enemies ? enemies.actors.map(a => a.rec) : []);   // the bodies drawn at the start   // aiOpts / wakeSave: rebuilt by the Restart (checkpoint.js)
   let gameHud = null;                                // the game's HUD (hud.js), set up below; enemyAI's hudHit reads it
+  let stage = null, stageData = null, createStage = null, stageGs = null, stageSi = null;
+  let stagePaused = false;                        // worker 0257: main's events' event pause (stageEventKey)
+  let stageRes = null;                            // results.js (worker 0232): the section stats, the level end's Status screen
   try {
     if (enemies) enemies.mpHead = vin.body;            // newer actors draw before older ones (enemies.js add)
     aiOpts = ENEMY_AI && aiData && enemies ? { data: aiData, player: php, rand: () => aiRng.rand(), log: m => console.log(m), damage: ENEMY_DMG, chunkAnims,
@@ -1463,9 +1466,6 @@ async function main() {
     pressed.clear(); mouse.dx = mouse.dy = 0; drag = null;
     if (!on) { clock.getDelta(); acc = 0; }
   }
-  let stage = null, stageData = null, createStage = null, stageGs = null, stageSi = null;
-  let stagePaused = false;                        // worker 0257: main's events' event pause (stageEventKey)
-  let stageRes = null;                            // results.js (worker 0232): the section stats, the level end's Status screen
   // opening: main runs alongside it (first_event waits for the hand-off, then main reads the opening's +0x156c);
   // else from the save / a hand-off already past (skip: that +0x156c)
   let stagePassWarned = false;

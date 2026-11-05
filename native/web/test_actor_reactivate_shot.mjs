@@ -24,12 +24,13 @@ const rec = data.records[50];
   for (let i = 0; i < 300 && !targeted; i++) { W.tick(1.0, player.pos, player.pos); targeted = !!(a.f118 & 2); }
   ok(targeted && (a.f118 & 1) && !!a.aim120, `it took a target: +0x118 ${a.f118 & 3}, +0x120 ${a.aim120 && a.aim120.map(Math.round)}`);
   const kept = a.aim120.slice();
-  a.s148 = 1234; a.s150 = 7; a.s152 = 9; a.sphase = 2; a.part = 4; a.f144 = 555; a.stance = 1; a.f110 = 3;
+  a.s148 = 1234; a.s150 = 7; a.s152 = 9; a.sphase = 2; a.part = 4; a.f144 = 555; a.stance = 1; a.size.h = Math.fround(a.size.h0 * Math.fround(0.6)); a.f110 = 3;
   W.setActive(a, 0);
   ok(W.objects.get(a.id).kind === 'record' && W.objects.get(a.id).f118 & 1, 'off: the record keeps bit 0');
   W.setActive(W.objects.get(a.id), 1);
   const b = W.actors.find(x => x.rec === 50);
   ok(b && b.s148 === 1234 && b.s150 === 7 && b.s152 === 9 && b.sphase === 2 && b.part === 4 && b.f144 === 555 && b.stance === 1 && b.f110 === 3, 'on again: the stagger sums, last part, flinch frame, stance and +0x110 kept (FUN_00558790 once; FUN_00559748 writes none)');
+  ok(b && Math.abs(b.size.h - b.size.h0 * 0.6) < 1e-3, `on again crouched: height 0.6 x standing, as stance 1 (FUN_00565bd0; ${b && b.size.h} of ${b && b.size.h0})`);
   ok(b && (b.f118 & 3) === 3 && b.target === player, `on again: bits 0, 1 and the target kept (FUN_00559748) (${b && b.f118 & 3}, ${b && b.target === player})`);
   ok(b && b.aim120 && b.aim120.every((v, i) => v === kept[i]), `on again: +0x120 is the kept point (${b && b.aim120 && b.aim120.map(Math.round)})`);
   // a shot request (FUN_003605d8): the line that threw. His burst's timer calls it whatever brought him back on
