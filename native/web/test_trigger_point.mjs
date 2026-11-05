@@ -38,5 +38,18 @@ const fired = (W, id) => W.events.some(e => e.startsWith(`event ${id} `));
 { const { W, player } = world(2);
   let x = -1085; while (x > -1120) { const old = [x, -60, -590]; x -= 1.2; player.pos = [x, -60, -590]; W.tick(1.2, old, player.pos); }
   ok((W.eventFlags[0] | 0) === 2, `feet above the box's top (y -60 - 7 < -58.5): no event (${W.eventFlags[0] | 0})`); }
+// review: the 7 itself. Feet 5 below trigger 160's floor reach it only 7 up (3 up stays outside); feet 8 below don't even 7 up
+{ const { W, player } = world(2); let x = -1085;
+  while (x > -1120) { const old = [x, 5, -590]; x -= 1.2; player.pos = [x, 5, -590]; W.tick(1.2, old, player.pos); }
+  ok((W.eventFlags[0] | 0) === 4, `feet y +5: only 7 up reaches the box (floor -0.41): the event runs (${W.eventFlags[0] | 0})`); }
+{ const { W, player } = world(2); let x = -1085;
+  while (x > -1120) { const old = [x, 8, -590]; x -= 1.2; player.pos = [x, 8, -590]; W.tick(1.2, old, player.pos); }
+  ok((W.eventFlags[0] | 0) === 2, `feet y +8: 7 up is still under the floor: no event (${W.eventFlags[0] | 0})`); }
+// review: the old end is 7 up too. Trigger 166 (flags 3, floor -0.21, x -990 +- 15.6): walked through with feet y -0.06, one enter and one exit: with the old end left at the feet he reads as outside every frame, entering again each tick
+{ const { W, player } = world(2); const ev = [];
+  let x = -1020; while (x < -960) { const old = [x, -0.06, 444]; x += 1.2; player.pos = [x, -0.06, 444]; W.tick(1.2, old, player.pos); ev.push(...W.events.filter(e => /^event t166 /.test(e))); }
+  const n13 = ev.filter(e => / ev 13 /.test(e)).length, n14 = ev.filter(e => / ev 14 /.test(e)).length;
+  ok(n13 === 1, `trigger 166: one enter (${n13})`);
+  ok(n14 === 1, `trigger 166: one exit (${n14})`); }
 console.log(fails ? `${fails} FAILED` : 'all ok');
 process.exit(fails ? 1 : 0);

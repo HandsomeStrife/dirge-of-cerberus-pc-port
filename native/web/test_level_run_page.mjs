@@ -9,6 +9,8 @@
 //      LEVEL_HOLD=<seconds>       after LEVEL_UNTIL stay in place that long, sampling memory (a real-time soak)
 //      LEVEL_EVENTS=play|skip     main's events and the opening: watch them (default) or Start + ✕ as a player does
 //      LEVEL_SITTING=<seconds>    browser lock hold (default 1500; a released tab is earlyoom's first choice here, three of three): then the game's pause, lock released, tab frozen until the next hold
+//      LEVEL_RESTARTS=<n>         give up after n Restarts on one goal (default 4)
+//      LEVEL_MEM=<MB>             start once this much memory has held for 2 min (default 7000)
 //      LEVEL_OUT=<dir>            log + screenshots (default tools/trace/out/w264)
 //      WEBDIR=<dir>               serve another copy (mutation runs)
 // Mouse look: under pointer lock CDP's mouse moves arrive with movementX / Y = 0 (Chromium takes them from the OS path), so the bot sends the
@@ -31,7 +33,7 @@ const LOCK = path.join(ROOT, 'tools/trace/out/.browser.lock');
 const [vw, vh, vd] = (process.env.LEVEL_VIEW || '480x360').match(/\d+(\.\d+)?/g).map(Number);
 const UNTIL = process.env.LEVEL_UNTIL || null, HOLD = +(process.env.LEVEL_HOLD || 0);
 const EVENTS = process.env.LEVEL_EVENTS || 'play', SITTING = +(process.env.LEVEL_SITTING || 1500);
-const QUERY = process.env.LEVEL_QUERY || '';
+const QUERY = process.env.LEVEL_QUERY || '', RESTARTS = +(process.env.LEVEL_RESTARTS || 4);   // a record holds the rounds it was saved with: the same fight again won't go differently, and others wait for the browser lock
 mkdirSync(OUT, { recursive: true });
 const LOGF = path.join(OUT, `run_${Date.now()}.log`);
 const t0 = Date.now();
@@ -242,7 +244,7 @@ async function wedgeCheck() { if (!wedge.p || Math.hypot(S.pos[0] - wedge.p[0], 
   throw new Error(`wedged at ${S.pos.map(Math.round)}`); }
 
 // ---- system states the bot answers before anything else; returns true when it handled the frame
-const stats = { deaths: 0, stucks: 0, restarts: 0, events: [], kills: 0, shots: 0 }; let lastEvLog = 0, evSince = 0, wasEv = false;
+const stats = { refused: [], deaths: 0, stucks: 0, restarts: 0, events: [], kills: 0, shots: 0 }; let lastEvLog = 0, evSince = 0, wasEv = false;
 async function systems() {
   if (pageDead) throw new Error('the page throws every frame');
   await sittingCheck();
@@ -369,11 +371,11 @@ goal('gate front', { to: [-1732, 0, -356], done: s => f0(11)(s) || key(s), near:
 // so a player who turns back down the alley gets the door; soldier 147 comes out and his drop is the key (nearItem walks onto it)
 goal('look back', { to: [-1732, 0, -366], look: [-1700.7, -12, -945], lookRec: 150, done: s => f0(11)(s) || key(s), hunt: 147, until: s => (seen147 && !seen147.alive) || key(s), near: 5 });
 goal('drop', { toFn: () => seen147 ? [seen147.pos[0], 0, seen147.pos[2]] : null, done: s => f0(11)(s) || key(s), until: key, near: 4 });
-goal('gate1', { to: [-1732, 0, -356], face: [-1739, -351], done: f0(11), use: true, near: 6 });   // script 202 ev 0x11
+goal('gate1', { to: [-1732, 0, -356], face: [-1739, -351], done: f0(11), use: true, card: true, near: 6 });   // script 202 ev 0x11
 goal('east', { to: [-728, 0, -37], done: f0(11), near: 12 });
 goal('west', { to: [-1420, 0, 684], done: s => f0(13)(s) || key(s), near: 12 });
 goal('key2', { to: [-1888, 0, 1085], done: s => f0(13)(s) || key(s), near: 5 });               // placed item
-goal('gate2', { to: [-1302, 0, 842], face: [-1305, 851], done: f0(13), use: true, near: 6 });  // script 199
+goal('gate2', { to: [-1302, 0, 842], face: [-1305, 851], done: f0(13), use: true, card: true, near: 6 });  // script 199
 goal('past gate2', { to: [-1368, -40, 1102], done: f0(13), near: 10 });
 goal('door', { to: [-1327, 0, 1134], face: [-1327.5, 1140], done: f0(13), use: true, near: 6 });   // trigger 12: ✕ facing the door
 goal('past door', { to: [-1328, 0, 1205], done: f0(13), until: f0(13), near: 8 });             // trigger 14: flag 0 = 13, heri_toujou
@@ -382,7 +384,7 @@ goal('chunk07', { to: [-1949, -44, 1594], done: f0(20), until: f0(20), near: 3 }
 goal('e036', { to: [-1830, -44, 1575], done: f0(24), until: f0(24), fightOnly: true, near: 15 });
 goal('box spot', { to: [-697.4, 0, 881.5], done: s => f0(36)(s) || key(s), near: 6 });         // r08_box
 goal('key3 box', { to: [-697.4, 0, 881.5], shoot: 72, done: s => f0(36)(s) || key(s), near: 8 });     // Cardkey 3 is in box prop 72 (-703, -6, 857.5); nearItem walks onto it
-goal('gate3', { to: [-510, 0, 802], face: [-478, 801], use: true, done: f0(36), near: 6 });    // script 211
+goal('gate3', { to: [-510, 0, 802], face: [-478, 801], use: true, card: true, done: f0(36), near: 6 });    // script 211
 goal('chunk09', { to: [-80, -40, 606], done: f0(36), near: 12 });
 goal('chunk0b', { to: [407, -100, 1471], done: f0(36), until: f0(36), near: 8 });              // script 35
 goal('boss', { to: null, boss: true, big: /e024/, done: s => s.exit });
@@ -476,7 +478,8 @@ try {
       }
       await wait(30);
     }
-    if (S.restarts !== lastRestarts) { lastRestarts = S.restarts; stats.restarts++; seen147 = null; lastHp = 780; log(`Restart #${S.restarts}: back at ${S.pos.map(Math.round)}, flag0 ${S.flags[0]}, g1 ${S.gflag1}`); await read(); gi = G.findIndex(q => !q.done || !q.done(S)); continue; }
+    if (S.restarts !== lastRestarts) { lastRestarts = S.restarts; stats.restarts++; seen147 = null; g.deaths = (g.deaths || 0) + 1; if (g.deaths >= RESTARTS) throw new Error(`${g.deaths} Restarts on '${g.name}' (rounds ${S.loaded}/${S.inv.ammo}, flag0 ${S.flags[0]})`); lastHp = 780; log(`Restart #${S.restarts}: back at ${S.pos.map(Math.round)}, flag0 ${S.flags[0]}, g1 ${S.gflag1}`); await read(); gi = G.findIndex(q => !q.done || !q.done(S)); continue; }
+    if (g.card && S.inv.key >= keyAt) { stats.refused.push(g.name); log(`GATE REFUSED: '${g.name}' still has the key after ${usedN} ✕ (${keyAt} -> ${S.inv.key})`); }
     log(`goal '${g.name}' done at ${S.pos.map(Math.round)} in ${((Date.now() - startT) / 1000).toFixed(0)} s, ticks ${S.ticks}`);
     if (UNTIL && g.name === UNTIL) { reached = g.name; break; }
     gi++;
@@ -494,6 +497,7 @@ const lostEv = await pg.evaluate(() => window.__lost).catch(() => null);
 log('context events', JSON.stringify(lostEv));
 appendFileSync(LOGF, `warnings ${JSON.stringify([...warnSeen])}\n`);
 ok(errs.length === 0, `no page errors (${errs.length}${errs.length ? ': ' + errs.slice(0, 2).join(' | ').slice(0, 300) : ''})`);
+ok(stats.refused.length === 0, `every card gate took its key (${stats.refused.length ? 'refused: ' + stats.refused.join(', ') : 'none refused'})`);
 ok(!runError, `the bot was not stopped (${runError ? runError.message : ''})`);
 if (!UNTIL) ok(reached === 'exit', `the results screen and Zone.exit reached (${reached})`);
 await pg.close().catch(() => {}); await browser.close().catch(() => {}); srv.kill(); lockDrop();

@@ -90,7 +90,7 @@ follow the same pattern; regenerate them rather than copying.
 counter (0x30 short) is in range (≤ 4 / ≤ 5) and object command 0x177 returns true — i.e. pools that activate one
 at a time from the same spot. All are > 1500 u from the save. 203–211 share one placement
 and are activated by trigger 213, which is itself unarmed (0x20000) until script 0 arms it at flag0 == 24 on diff3.
-0x177 = FUN_005661e8 case 0x177: (+0x28 & 1) ^ 1, not active (worker 0264; on the page since then). The meaning of each counter: not decoded.
+0x177 = FUN_0054cd70 case 0x177: (+0x28 & 1) ^ 1, not active (worker 0264; on the page since then). The meaning of each counter: not decoded.
 
 ## 3. Do the woken ladder-top soldiers (#66 / #67, recs 44 / 45) move? **No.**
 

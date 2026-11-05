@@ -288,6 +288,7 @@ try {
     ok(b.s64 === 0 && b.hp === 780 && b.slot0 === '-1,0', `Phoenix Down revived him, pause Restart: status ${b.s64}, HP ${b.hp}, state ${b.st}, slot 0 ${b.slot0}`);
   }
   { // 4. the level end's last half second (main: endSection, displayStageInfo(2), sleep 500, Zone.exit)
+    await handBack();
     await call('fake/KerberosIntermission', 'endSection', '()V', []);
     await call('fake/KerberosEvent', 'displayStageInfo', '(I)V', [2]);
     const e0 = await pg.evaluate(() => { const R = window.__play.results; return { mark: R.stats.mark, total0: R.stats.total[0] }; });
@@ -350,7 +351,7 @@ try {
     await load();
     await pg.evaluate(() => { const P = window.__play, W = P.enemyAI, G = P.stage.globalFlags, g0 = G.slice(), f0 = { ...W.eventFlags }, F = W.eventFlags;
       for (const k of Object.keys(F)) delete F[k];
-      for (const [k, v] of [[0, 13], [2, 1], [46, 1], [63, 1]]) F[k] = v;
+      for (const [k, v] of [[0, 13], [2, 1], [42, 1], [46, 1], [63, 1]]) F[k] = v;   // 42: deb_jump's help box for flag 2 = 1 has been shown
       G.fill(0); for (const [k, v] of [[0, 1], [1, 12], [18, 1]]) G[k] = v;
       const vm = P.stage.rt.vm; vm.natives['fake/KerberosZone.scene_save(I)V'](vm, [2]);
       for (const k of Object.keys(F)) delete F[k]; Object.assign(F, f0); G.set(g0); });

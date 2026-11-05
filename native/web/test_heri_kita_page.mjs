@@ -35,19 +35,24 @@ const CASES = [
   { warp: 'herilasted', ev: ['heri_lasted', 'kita_ev0145'], shown: ['p000', 'e024', 'p001', 'n043', 'p005'], win: 'kita_ev0145', box: true, after: R => R.log.some(x => x[1] === 'endSection') },
 ];
 // the level's end: the Status box comes up over the event's black (displayStageInfo(2)), the fade doesn't cover it, ✕ closes it and the page stops (Zone.exit(181))
-async function statusBox(pg, name) {
+async function statusBox(pg, name, fadedOut = false) {
   await pg.waitForFunction(() => window.__play.results.box && window.__play.stageInfo.kind >= 0, null, { timeout: 300000, polling: 200 });
   // the box's timeline swaps layouts (title, points, rows); the rows are up by step 60 (test_results_page)
   await pg.waitForFunction(() => { const b = window.__play.results.box; return b.screen && b.step >= 60; }, null, { timeout: 120000, polling: 200 }).catch(() => null);
   await pg.waitForTimeout(3000);
-  const s = await pg.evaluate(() => { const P = window.__play, B = P.results.box; return { fade: P.output.fade, rows: B.texts ? B.texts().length : -1, kind: P.stageInfo.kind, step: B.step, screen: !!B.screen, table: !!B.table, closed: B.closed, state: P.stageInfo.state, now: P.stageInfo.now, start: B.start, mode: B.mode, hold: B.hold, ticks: P.stats.ticks, exit: P.results.exit }; });
+  const s = await pg.evaluate(() => { const P = window.__play, B = P.results.box; return { fade: P.output.fade, rows: B.texts().length, kind: P.stageInfo.kind, step: B.step, screen: !!B.screen, table: !!B.table, closed: B.closed, state: P.stageInfo.state, now: P.stageInfo.now, start: B.start, mode: B.mode, hold: B.hold, ticks: P.stats.ticks, exit: P.results.exit }; });
   const shot = await pg.screenshot({ type: 'jpeg', quality: 80 });
   if (SHOT) fs.writeFileSync(path.join(SHOT, name + '_box.jpg'), shot);
-  const lit = await pg.evaluate(async b64 => { const im = new Image(); im.src = 'data:image/jpeg;base64,' + b64; await im.decode(); const c = document.createElement('canvas'); c.width = im.width; c.height = im.height; const g = c.getContext('2d'); g.drawImage(im, 0, 0); const d = g.getImageData(0, 0, c.width, c.height).data; let n = 0; for (let i = 0; i < d.length; i += 4) if (d[i] + d[i + 1] + d[i + 2] > 60) n++; return n / (d.length / 4); }, shot.toString('base64'));
-  // black with the debug text alone: 0.016; the rows on black: 0.052
-  ok(s.fade < 1 || lit > 0.03, `${name}: the fade doesn't cover the Status box`, JSON.stringify(s) + ' lit ' + lit.toFixed(3));
-  ok(lit > 0.03, `${name}: the Status box is on screen`, 'lit ' + lit.toFixed(3));
-  ok(s.rows !== 0, `${name}: the Status box has its rows`, JSON.stringify(s));
+  ok(s.rows > 0, `${name}: the Status box has its rows`, JSON.stringify(s));
+  // after heri_lasted the screen is black (fade 1), so only the box can light its rectangle (the rows, 960 x 540: x 170..560, y 145..390; the debug text is above it).
+  // Skipped into, the fade is 0 and the world lights it: the rows are the check there
+  if (fadedOut) {
+    const lit = await pg.evaluate(async b64 => { const im = new Image(); im.src = 'data:image/jpeg;base64,' + b64; await im.decode(); const c = document.createElement('canvas'); c.width = im.width; c.height = im.height; const g = c.getContext('2d'); g.drawImage(im, 0, 0);
+      const x = Math.round(im.width * 170 / 960), y = Math.round(im.height * 145 / 540), w = Math.round(im.width * 390 / 960), h = Math.round(im.height * 245 / 540), d = g.getImageData(x, y, w, h).data;
+      let n = 0; for (let i = 0; i < d.length; i += 4) if (d[i] + d[i + 1] + d[i + 2] > 60) n++; return n / (d.length / 4); }, shot.toString('base64'));
+    ok(s.fade === 1, `${name}: the fade is at 1 under the box`, JSON.stringify(s));
+    ok(lit > 0.05, `${name}: the fade doesn't cover the Status box: its rectangle is lit`, 'lit ' + lit.toFixed(3));
+  }
   for (let i = 0; i < 12 && !(await pg.evaluate(() => { const P = window.__play; return !!P.results.exit && P.stageInfo.kind < 0; })); i++) { await pg.keyboard.press('Space'); await pg.waitForTimeout(1500); }
   const e = await pg.evaluate(() => window.__play.results.exit);
   ok(e && e[0] === 181, `${name}: ✕ closes it, Zone.exit(181)`, JSON.stringify(e));
@@ -167,7 +172,7 @@ try {
       ok(a0 && !a0.bit && a1 && a0.cls === 0x42, `${C.warp}: after the hand-back the bit is clear and it is in its flight class`, JSON.stringify(a0));
       ok(a1 && Math.hypot(a1.pos[0] - a0.pos[0], a1.pos[2] - a0.pos[2]) > 1 && (a1.frame !== a0.frame || a1.clip !== a0.clip), `${C.warp}: its AI runs after the hand-back: it flies on`, JSON.stringify([a0, a1]));
     }
-    if (C.box) await statusBox(pg, C.warp);
+    if (C.box) await statusBox(pg, C.warp, true);
     ok(!errs.length, `${C.warp}: no page errors`, errs.slice(0, 3).join(' | '));
     console.log('     warnings: ' + [...new Set(warns.filter(w => /event actor|motion file|not exported/.test(w)))].slice(0, 8).join(' | '));
     await pg.close();

@@ -691,6 +691,18 @@ def main():
     # worker 0209: the barrels' scripts (section 15 +0x44: events 3 / 0x17, props.js through enemy_ai's VM)
     import export_web_props as PROPS
     want |= {r['script'] for r in PROPS.records(d, PROPS.types(d)) if r['script'] >= 0}
+    # worker 0264: the placed items' scripts (section 15 +0x44, class byte 2 of section 14's type, as export_web_items.py): their event 0x47 runs at the
+    # pickup (items.js). z128: 200, 245, 256, the three Cardkeys: 200 sets manager short 65, which gate 2's script 199 asks for
+    o14, n14, s14 = SE.sections(d)[14]
+    o15, n15, s15 = SE.sections(d)[15]
+    for r in range(n15):
+        t = struct.unpack_from('<i', d, o15 + r * s15 + 0x40)[0]
+        if not 0 <= t < n14:
+            t = 0
+        if d[o14 + t * s14 + 0x14] == 2:
+            sc = struct.unpack_from('<h', d, o15 + r * s15 + 0x44)[0]
+            if sc >= 0:
+                want.add(sc)
     scr = {str(s): script(d, s) for s in sorted(want) if 0 <= s < nscr}
     boxes = {m: hitboxes(m) for m in BOX_TYPES if any(r['model'] == m for r in recs)}
     # Vincent's part boxes (player vt+0x17c = FUN_0055bda8 too: the enemy bullets' part test): z128 draws

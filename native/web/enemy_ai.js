@@ -597,6 +597,8 @@ export function createEnemyAI(opts) {
       stance: 0, f110: 0,                        // +0x100 bits 40-41 stance / +0x110 reaction nibbles (0 for z128's soldiers, §10.3)
       part: -1, f144: -0x7fffffff,               // +0x142 last part hit, +0x144 frame of the last flinch clip
       s148: -0x7fffffff, s150: 0, s152: 0, sphase: 0,   // stagger FUN_0055d950: +0x148 time, +0x150 / +0x152 sums, phase (+0x150 bits 40-43)
+      // worker 0264: all of these belong to the object (FUN_00558790, once): FUN_00559748 / FUN_00558bb8 write none of them, so off / on keeps them
+      ...(prev && prev.kind === 'record' && prev.kept ? prev.kept : null),
       // body C (+0x300 mover mode and its slide; C+0x1c0 move flags)
       // C+0x664 stance / C+0x808 flags / C+0x7fc rows: FUN_00564228 -> FUN_00340ac0 at activation
       C: { f564: init.f564 ?? 0, speed: 0, s214: 0, aim: null, t2b0: null, motion: null, clip: null,
@@ -791,6 +793,18 @@ export function createEnemyAI(opts) {
       if (cmd === 0x3a || cmd === 0x3f) return slot(r[0] + ID_BASE);   // object id of section-1 record r0 (manager +0x3b2; -1 after a delete)
       if (cmd === 0x3d) return trigObj(r[0]);                  // object id of section-8 trigger r0 (manager +0x7b0)
       if (cmd === 0xc) return EVFLAGS[r[0]] ?? 0;              // event flag r0 (FUN_003ff738)
+      // FUN_00545b20 cases 0xa / 9: global flag r0 (DAT_0050db20, FUN_0037cea0), set unless the player is finally dead as cmd 0xb (FUN_0037ce60) (worker 0264). The stage controller's table (opts.globalFlags).
+      // T: route RAM global 58 = 1 after key 1, 2 after key 2 (scripts 243 / 246 / 200); 56, 57, 59 are counted the same way
+      if (cmd === 0xa || cmd === 9) {
+        const g = opts.globalFlags && opts.globalFlags();
+        if (!g) { warnOnce('enemy_ai: manager cmd 9 / 0xa: no opts.globalFlags (the stage controller): 0'); return 0; }
+        if ((r[0] >>> 0) >= 0x40) return 0;
+        if (cmd === 0xa) return g[r[0]];
+        if (!(P && deadFinal(P))) g[r[0]] = r[1] & 0xff;
+        return 0;
+      }
+      // FUN_00545b20 case 0xa1: FUN_0053b978 (record r0's object, manager +0x3b2; none: 0) -> its status (FUN_0055a370) +0x20 >= 1 (worker 0264)
+      if (cmd === 0xa1) { const q = objects.get(r[0] + ID_BASE); return +(!!q && q.hp >= 1); }
       // FUN_00545b20 cases 0x33 / 0x32 (the card gates' scripts 199, 202, 211, 221, 244; worker 0264): FUN_0031f0b0 the slot of item r0. 0x33: its count, no slot 0.
       // 0x32: FUN_0031eb60 takes r1 of it, all of it when r1 < 0; returns the amount, no slot 0. Without these every gate read 0 keys and refused
       if (cmd === 0x33 || cmd === 0x32) {
@@ -892,6 +906,7 @@ export function createEnemyAI(opts) {
         const eye = c.eye, d = sub3(mgr260.slice(0, 3), eye), l = len3(d), s = 0.1 < l ? f(l - 0.1) : 0.1, end = [0, 1, 2].map(j => f(eye[j] + f(f(d[j] / l) * s)));
         return +!(viewRay(eye, end) || cameraObjects(eye, end));
       }
+      // worker 0264: read for a value and left at 0: 0xa4 (FUN_00242c28 == 0; 0 is right, RAM DAT_0046b328 = 1 in the save and every route state); 0x44 (+0xfac: an id table of shape 7 triggers, only passed to 0x109). notes/fidelity-audit.md
       // GUESS: other manager commands are skipped (return 0, the script goes on)
       warnOnce(`enemy_ai: manager cmd 0x${cmd.toString(16)} not translated (skipped)`);
       return 0;
@@ -1004,8 +1019,17 @@ export function createEnemyAI(opts) {
         return 0;
       // FUN_005661e8 case 0x14c / 0x14d: set / clear actor +0x118 bit r0 (r0 < 0x20). Script 109 (record 45)
       // event 3 sets bit 28 (0x10000000: never pushed by FUN_00542ab8).
-      // FUN_005661e8 case 0x177: (+0x28 & 1) ^ 1 = not active (worker 0264). The soldier pools ask it before activating the next one (script 104 event 2: chunk 07's 75-79, then the corpse count -> e036); skipped it read 0 and no one came
-      case 0x177: return (t.flags28 & 1) ^ 1;
+      // FUN_0054cd70 cases 0x176 / 0x177: +0x28 & 1, active; ^ 1, not active (worker 0264). The soldier pools ask 0x177 before activating the next one (script 104 event 2: chunk 07's 75-79, then the corpse count -> e036);
+      // skipped it read 0 and no one came. Scripts 52-54 event 1 ask 0x176 before their cmd 0x125 message. A trigger's activity is .active on the page (setActive), an item's bit is f28
+      case 0x176: case 0x177: { const on = t.t ? (t.active ? 1 : 0) : ((t.flags28 ?? t.f28 ?? 0) & 1); return cmd === 0x176 ? on : on ^ 1; }
+      // FUN_00551d08 (triggers) cases 0x186 / 0x188 -> FUN_00552330: is Vincent / record r0 in this box: FUN_005635e0's point (feet, 7 up) through FUN_005507a0 (worker 0264). L: an inactive record's point is its kept +0x90
+      case 0x186: case 0x188: {
+        if (!t.t) { warnOnce(`enemy_ai: cmd 0x${cmd.toString(16)} on ${t.kind} ${t.id} (the trigger class only) skipped`); return 0; }
+        const q = cmd === 0x186 ? P : objects.get(r[0] + ID_BASE), q0 = q && (q.pos || q.p90);
+        return q0 ? +inBox(xform(t.t.inv, [q0[0], Math.fround(q0[1] - 7), q0[2]]), t.t.lo, t.t.hi) : 0;
+      }
+      // FUN_005661e8 case 0x1a6: +0x110 & 0xf (worker 0264)
+      case 0x1a6: return (t.f110 ?? 0) & 0xf;
       case 0x14c: case 0x14d:
         if (!(t.kind === 'actor' || (t.kind === 'record' && buildsActor(data.records[t.rec])))) {
           warnOnce(`enemy_ai: object cmd 0x${cmd.toString(16)} to a non-actor not translated (skipped)`); return 0;
@@ -1267,7 +1291,7 @@ export function createEnemyAI(opts) {
         const j = S.q.indexOf(t.ai); if (j >= 0) S.q.splice(j, 1);           // FUN_003659d8 unlink
         stopFire(t.ai);                                                     // FUN_0035e6f8 -> FUN_00360820
       }
-      objects.set(t.id, { kind: 'record', id: t.id, rec: t.rec, script: t.script, vars: t.vars, t3c: t.t3c, flags28: 0, f118: t.f118 | 0, target: t.target, aim120: t.aim120, ai: null, hp: t.hp,
+      objects.set(t.id, { kind: 'record', id: t.id, rec: t.rec, script: t.script, vars: t.vars, t3c: t.t3c, flags28: 0, f118: t.f118 | 0, target: t.target, aim120: t.aim120, kept: { stance: t.stance, f110: t.f110, part: t.part, f144: t.f144, s148: t.s148, s150: t.s150, s152: t.s152, sphase: t.sphase }, ai: null, hp: t.hp,
         p90: t.pos ? Array.from(t.pos) : null, p90set: !!t.pos, face80: t.face ? Array.from(t.face) : null });   // +0x90 and row 2 (+0x80) kept
     }
     events.push(`deactivate rec ${t.rec}`);

@@ -113,7 +113,7 @@ getweaponframe 0x3a3330, setdirofbattle_l 0x3a3448, getposx/y/z_l 0x39d488 / 0x3
   test_stage_controller section 5 (+ trace checks; MUTATE=setpos|camset|setdir|bname), test_npc_page (the two beats on the page).
 - **Open**: where the townspeople are after the rescue (not main; roji02_01 / scripts on flag 12?) and whether they are
   drawn; the camera's distance after the reset (DONE by worker 0244, notes/battle-camera.md: the rays test the loaded slots, and battle()'s frame runs an in-place update + two type re-enters); bone 1's offset
-  (GUESS 0); the slot's own drawing while lent (setpos / setmotion not shown during the auto-skipped beat); who clears
+  (GUESS 0); who clears
   Vincent's +0x88 for the p000 hand-back; getmorphstate / getweaponframe / setdirofbattle / loadVincentWeapon,
   getpos / get_battle_camera, the other events' natives.
 

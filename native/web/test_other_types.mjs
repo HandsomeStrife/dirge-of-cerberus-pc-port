@@ -56,7 +56,7 @@ const kill = (W, a) => W.t.hitEnemy(a, { damage: 9999, kind: 0, dir: [1, 0, 0], 
      `e036 woken: a bullet from #${ID(80)}, damage ${b && b.damage} (weapon 8: ${data.weapons[8].damage}), hit ${b && b.hit}`);
 }
 
-// 1c. worker 0264: chunk 07's pool, as trigger 18 starts it (72-74 up). Script 104 event 0x17 counts deaths and at two posts message 1 to 72-79; event 2 asks cmd 0x177 (FUN_005661e8: not active) and an idle record activates itself.
+// 1c. worker 0264: chunk 07's pool, as trigger 18 starts it (72-74 up). Script 104 event 0x17 counts deaths and at two posts message 1 to 72-79; event 2 asks cmd 0x177 (FUN_0054cd70: not active) and an idle record activates itself.
 // With 0x177 skipped no one came, the corpse count stopped at 3 and e036 (at the 8th corpse) never appeared: the level stopped here on the page (test_level_run_page)
 {
   const { W } = world();

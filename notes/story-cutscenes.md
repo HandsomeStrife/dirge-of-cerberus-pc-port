@@ -38,7 +38,7 @@ all in main (pcs 754, 6355, 11079); no event tests it itself.
 Do these per event, in this order; `heri_taijou` / `sk_mituketa2` / `roji02_01` are the worked examples. Scratch tools: a JVM disassembler is easy
 (the export's `classes[..].cp` + `methods[..].code`); `tools/trace/cmp_event_cams.mjs`, `cmp_event_actors.mjs` compare.
 1. **Read it.** Disassemble the event. List its models (`load`), motion files (`loadmotion`), cameras (`Camera.load`), voices (`loadVoice2`), natives.
-   Natives missing: run it headless (`new StageRuntime(data, { autoSkip: false, warn })`, `vm.start(cls, name, desc, [])`): the warnings list them.
+   Natives missing: run it headless (`new StageRuntime(data, { warn })`, `vm.start(cls, name, desc, [])`): the warnings list them.
    C addresses: class registry DAT_004ef498 in any state, 32 slots of 0x38 (+0x10 method count, +0x30 methods of 0x18: +0x0c C function, +0x10 hash
    (FUN_003a8828(desc) << 16 | FUN_003a8828(name))).
 2. **Data.** Models and motion files: `export_web_event_actors.py` FILES / MODELS (reads the stage classes' strings, `--stage`) + tools/byo/disc.py INPUTS.

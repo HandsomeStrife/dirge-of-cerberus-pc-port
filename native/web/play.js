@@ -852,6 +852,7 @@ async function main() {
   try {
     if (enemies) enemies.mpHead = vin.body;            // newer actors draw before older ones (enemies.js add)
     aiOpts = ENEMY_AI && aiData && enemies ? { data: aiData, player: php, rand: () => aiRng.rand(), log: m => console.log(m), damage: ENEMY_DMG, chunkAnims,
+      globalFlags: () => (stage ? stage.globalFlags : null),   // manager cmds 9 / 0xa (FUN_0037ce60 / FUN_0037cea0)
       viewCam: () => { const v = cameraView(renderFxCamera()); return { eye: follow.eye.slice(), toView: v.toView, fov: renderFov() ?? 73.5 }; },   // manager cmd 0xab (FUN_0053da98)
       sound: snd,
       stats: { add: (k, n) => { if (stageRes) stageRes.stats.add(k, n); } },   // FUN_0031d668: the section stats (results.js, worker 0232)
