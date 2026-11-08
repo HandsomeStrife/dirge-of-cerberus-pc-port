@@ -59,12 +59,20 @@ SRC = {
     'z128_a0.fed': 'noPath/06800014.bin',
     'z128_a1.fed': 'noPath/06800114.bin',
     'z128_a2.fed': 'noPath/06800214.bin',
+    # worker 0270: the model FEDs of e023 (Dragonfly) and e024 (the z128 boss), FileCode 0x40000000 | model << 18: their
+    # shots' trails / ends (section 24 +0xac / +0xb0: 0x405c0400 / 0x405c0800, 0x40600400 / 0x40600800) and script effects
+    'e023.fed': 'noPath/076505c3.bin',
+    'e024.fed': 'noPath/07650603.bin',
+    # worker 0269: the EM barrier's model FED (g048 container 07670c03, header code 0x90c00000): its beams (props.js, FUN_002dbc80)
+    'g048.fed': 'noPath/07670c03.bin',
 }
+MODELS = ['e023.fed', 'e024.fed', 'g048.fed']    # linked into the effect manager 0x4ee2e0 next to the resident FEDs (FUN_003366b8 finds them by id)
 STAGE = ['z128_a0.fed', 'z128_a1.fed', 'z128_a2.fed']     # load order (the z128 RAM emitter list)
 
 
 CODE = {'r0001.fed': 0x40000, 'r0000.fed': 0,     # FUN_002e5c60 finds a FED by id & 0xfffc0000 == its FileCode
-        'z128_a0.fed': 0x20000000, 'z128_a1.fed': 0x20040000, 'z128_a2.fed': 0x20080000}
+        'z128_a0.fed': 0x20000000, 'z128_a1.fed': 0x20040000, 'z128_a2.fed': 0x20080000,
+        'e023.fed': 0x405c0000, 'e024.fed': 0x40600000, 'g048.fed': 0x90c00000}
 
 
 def check_fed(b, name):
@@ -125,6 +133,7 @@ def main():
     ids = {'wall': elf_words(a.elf, 0x4a0c68, 28), 'hit': elf_words(a.elf, 0x4a0cd8, 4)}
     ids['feds'] = sorted(n for n in SRC if n.endswith('.fed'))   # worker 0200: play.js fetches only the listed FEDs (no 404)
     ids['stage'] = STAGE                                          # worker 0208: the level manager's FEDs, in load order
+    ids['models'] = MODELS                                        # worker 0270: the model FEDs (effects.js createEffects models)
     if any((x & 0xfffc0000) != 0x40000 for x in ids['wall'] + ids['hit']):
         sys.exit('effect id tables: an id outside FED 0x40000')
     if a.state:

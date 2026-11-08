@@ -17,12 +17,12 @@ import { Light2 } from './area_stream.js';
 
 const DIR = 'data/props/';
 const SCALE_BYTE = 128;                       // MP+0x450 (save RAM, record 17's barrel)
-const LIGHT_POINT = [0, -15, 0];              // MP bbox centre in model space (save RAM)
+const LIGHT_POINT = { e057: [0, -15, 0] };   // MP bbox centre in model space (save RAM, the barrel)
 
 // light 2 (FUN_005ab0b0 + FUN_005ab608, area_stream.js Light2) at the MP bbox centre, at creation and every game frame
 // in sync() (worker 0216; was once, at creation)
 function light2(light, l2, body, U) {
-  const p = new THREE.Vector3(...LIGHT_POINT).applyMatrix4(body.matrix);
+  const p = body.userData.lightPoint.clone().applyMatrix4(body.matrix);
   l2.update(light.pick(p), p);
   U.uL2.value.set(...l2.dir); U.uC2.value.set(...l2.col);
 }
@@ -56,6 +56,10 @@ export async function setupPropsView({ root, props, litPatch, light }) {
     const flip = new THREE.Group(); flip.rotation.x = Math.PI; flip.add(scn);   // glb Y-up -> game -Y-up (enemies.js)
     const body = new THREE.Group(); body.add(flip);
     body.matrixAutoUpdate = false;
+    // GUESS: a model without a measured MP bbox (g048, the EM barrier base: worker 0269) takes its glb's box centre
+    // (game axes: y negated by the flip) for light 2 (not read from RAM; notes/fidelity-audit.md)
+    if (LIGHT_POINT[o.model]) body.userData.lightPoint = new THREE.Vector3(...LIGHT_POINT[o.model]);
+    else { const c = new THREE.Box3().setFromObject(scn).getCenter(new THREE.Vector3()); body.userData.lightPoint = new THREE.Vector3(c.x, -c.y, -c.z); }
     place(o, body);
     if (light && litPatch) {
       const dir = new THREE.Vector3(), col = new THREE.Vector3();

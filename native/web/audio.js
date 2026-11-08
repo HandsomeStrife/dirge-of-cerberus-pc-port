@@ -171,6 +171,29 @@ export function hexBytes(h) {
 }
 
 // ---------------------------------------------------------------------------------------------
+// SeRenderer.snapshot / restore: a deep copy of the tracks / voices (shared references kept), the bank's objects not copied
+const SHARED = new WeakMap();
+function sharedOf(bank, prog) {
+  let S = SHARED.get(bank);
+  if (!S) {
+    S = new WeakSet([bank, bank.data, bank.instruments]);
+    for (const k in bank.instruments) { const i = bank.instruments[k]; if (i && typeof i === 'object') { S.add(i); for (const r of Object.values(i)) if (r && typeof r === 'object') S.add(r); } }
+    SHARED.set(bank, S);
+  }
+  if (prog) S.add(prog);
+  return S;
+}
+function copyRun(o, S, memo = new Map()) {
+  if (o === null || typeof o !== 'object' || S.has(o)) return o;
+  let c = memo.get(o);
+  if (c) return c;
+  if (ArrayBuffer.isView(o)) { c = o.slice(); memo.set(o, c); return c; }
+  c = Array.isArray(o) ? [] : {};
+  memo.set(o, c);
+  for (const k of Object.keys(o)) c[k] = copyRun(o[k], S, memo);
+  return c;
+}
+
 // The SE player. `bank` = { instruments, data: Uint8Array }, `drv` = driver.json.
 export class SeRenderer {
   constructor(drv, bank) {
@@ -182,12 +205,25 @@ export class SeRenderer {
 
   rng() { const r = this.drv.rng[this.rngIndex]; this.rngIndex = (this.rngIndex + 1) & 0xff; return r; }
 
+  // Page aid (event_sound.js EventSeSlots: a stream replayed from a chunk start; not game logic): a copy of the running state.
+  // The driver, the bank (instruments, regions, wave data) and the program are shared (read-only); events kept by length.
+  snapshot() {
+    return { rngIndex: this.rngIndex, masterSe: this.masterSe, prog: this.prog, liveTracks: this.liveTracks, events: this.events,
+      nEvents: this.events ? this.events.length : 0, run: copyRun({ tracks: this.tracks, voices: this.voices, on: this.keyOnQueue, off: this.keyOffQueue }, sharedOf(this.bank, this.prog)) };
+  }
+  restore(s) {
+    const r = copyRun(s.run, sharedOf(this.bank, s.prog));
+    Object.assign(this, { rngIndex: s.rngIndex, masterSe: s.masterSe, prog: s.prog, liveTracks: s.liveTracks, events: s.events ? s.events.slice(0, s.nEvents) : [],
+      tracks: r.tracks, voices: r.voices, keyOnQueue: r.on, keyOffQueue: r.off });
+  }
+
   // Render SE program `prog` (Uint8Array) with the request's volume / pan (FUN_0041a190 a1 / a2).
   // GUESS: maxSeconds = 8 is a page cap on the offline render (the driver plays an endless SE until keyed off).
   // holds: the driver ticks of the pauses' SE holds (GameAudio.setPaused), in SE time. The result's `decay` marks the
   // ticks where a hold would change something (a running track's voice in DECAY, see holdVoices): a cheap test for
   // whether a later hold needs a new render.
-  render(prog, vol = 0x7f, pan = 0x40, maxSeconds = 8, holds = []) {
+  // stop: { tick, time }: request 0x12 (stopFade) at that driver tick (GameAudio.fade)
+  render(prog, vol = 0x7f, pan = 0x40, maxSeconds = 8, holds = [], stop = null) {
     this.start(prog, vol, pan);
     const maxTicks = Math.ceil(maxSeconds * TICK_HZ);
     const L = new Float32Array(maxTicks * TICK_SAMPLES), R = new Float32Array(maxTicks * TICK_SAMPLES);
@@ -196,6 +232,7 @@ export class SeRenderer {
     for (; t < maxTicks; t++) {
       if (this.holdVoices(true)) decay[t] = 1;
       if (holds.includes(t)) this.holdVoices();
+      if (stop && t === stop.tick) this.stopFade(stop.time);
       if (this.tick(t, L, R, t * TICK_SAMPLES)) { t++; break; }
     }
     return { left: L.subarray(0, t * TICK_SAMPLES), right: R.subarray(0, t * TICK_SAMPLES), rate: SPU_RATE, events: this.events,
@@ -581,6 +618,7 @@ function unitXZ(x, z) {
 }
 export const SLOT_FLAGS = {
   HALF: 0x10,        // volume >> 1
+  STOP: 0x20,        // sdb row +0xc bit 3 (FUN_003e9b80): FUN_003e9830 sends the stop request (FUN_003e77f0) for the slot
   FIXED: 0x40,       // volume = flags >> 7 & 0x7f (FUN_003e8bc8 arg 5)
   STREAM: 0x4000,    // sdb row +0xc bit 1 (FUN_003e9b80): volume 112..128, sent through FUN_003eb088 (not ported)
   NOPOS: 0x8000,     // |position| == 0 at open (FUN_003e8bc8): pan 0x40
@@ -642,7 +680,11 @@ export function soundListener(hist, eye, fwd, pos) {
 // bit 3 -> slot 0x20, bit 5 -> slot 0x200000 (no Doppler; the update path is not ported).
 // Not ported: the update requests for slots that keep playing (FUN_003e7718 code 0x11: volume / pan /
 // Doppler pitch of a moving emitter, e.g. the bullet's bsj_063 moved by FUN_00557c68 -> FUN_0033cfc8),
-// slot release FUN_003e8ff8 / stop FUN_0033cf00 (a rendered SE plays to its end).
+// slot release FUN_003e8ff8 / stop FUN_0033cf00 (a rendered SE plays to its end, unless stop() below cuts it).
+// worker 0270: stop(slot) = FUN_0033cf00(slot) -> FUN_003e98e0 / FUN_003e8ff8 -> FUN_003e9830: a slot still pending is dropped;
+// a sent one is freed, and only with slot flag 0x20 (sdb row bit 3) does FUN_003e9830 send the stop request FUN_003e77f0 (request
+// 0x12 -> IOP command 0x2f, SeRenderer.stopFade, time 10: GameAudio.fade). Without it the SE plays to its end (bsj_063 / bsj_064,
+// row flags 0); asj_354 (row flags 8) fades (worker 0266, as event_sound.js EventSeSlots.unset).
 export class SoundEmitters {
   constructor(audio) { this.audio = audio; this.pending = []; this.listener = null; this.log = null; }
   play(name, pos, range = 400.0) {
@@ -651,6 +693,7 @@ export class SoundEmitters {
     // pos null: FUN_0033cbd8, the sound camera's position (DAT_0047d8c0 block +0x30), which is the listener's
     // +0x3810 when the slot is sent (T: w172 bsj_063, pan 0x81 = a zero vector)
     const slot = { name, id: row.id, pos: pos ? [pos[0], pos[1], pos[2]] : null, range: Math.fround(range), flags: 0 };
+    if (row.flags & 8) slot.flags |= SLOT_FLAGS.STOP;   // FUN_003e9b80
     if (pos && Math.sqrt(pos[0] * pos[0] + pos[1] * pos[1] + pos[2] * pos[2]) === 0) slot.flags |= SLOT_FLAGS.NOPOS;
     this.pending.push(slot);
     return slot;
@@ -665,8 +708,18 @@ export class SoundEmitters {
       if (!e.pos) e.pos = L.pos.slice(0, 3);
       const { vol, pan } = emitterVolPan(e, L);
       if (this.log) this.log.push({ name: e.name, id: e.id, vol, pan });
-      this.audio.playId(e.id, vol, pan);
+      if (this.audio.playId(e.id, vol, pan)) e.p = this.audio.playing ? this.audio.playing[this.audio.playing.length - 1] : null;
     }
+  }
+  stop(slot) {
+    if (!slot || slot === -1 || slot.stopped) return;
+    slot.stopped = true;
+    const i = this.pending.indexOf(slot);
+    if (i >= 0) { this.pending.splice(i, 1); return; }
+    // FUN_003e9830 (arg 0): a slot without 0x20 is only freed. 0xb4 instead of 10 is for slot flag 0x20000, which no page slot sets
+    const p = slot.p, A = this.audio;
+    if (!p || !(slot.flags & SLOT_FLAGS.STOP)) return;
+    if (A.fade) A.fade(p, 10);
   }
 }
 
@@ -684,8 +737,15 @@ export class GameAudio {
       // the resident SE block + names (menu sounds; extract.py se_res.json). Optional: an older extract has none.
       const [drv, se, res] = await Promise.all([j('driver.json'), j(`se_z${z}.json`), j('se_res.json').catch(() => null)]);
       if (!res) console.warn('audio: no se_res.json (re-run tools/audio/extract.py): no menu sounds');
+      // the events' SE block (extract.py se_ev100.json, FileCode 0x0c064800): loadSoundEffectEx_l(0, 100, 0) puts it in
+      // block slot 1 (seBlock1). Optional: without it the events' own SEs are silent (warned)
+      const ev = await j('se_ev100.json').catch(() => null);
+      if (!ev) console.warn('audio: no se_ev100.json (re-run tools/audio/extract.py): the events\' own SEs are silent');
+      this.evBlocks = ev ? { [ev.code]: ev } : {};
+      this.zoneCode = 0x6000005 | (zone & 0xff) << 16;   // FUN_00250970: the zone's sep.bin, slot 1 from the stage load (FUN_00402220)
+      this.block1 = null;                                 // null: slot 1 holds the zone's block
       const banks = {};
-      for (const b of new Set([...se.banks, ...((res && res.banks) || [])])) {
+      for (const b of new Set([...se.banks, ...((res && res.banks) || []), ...((ev && ev.banks) || [])])) {
         const n = String(b).padStart(4, '0');
         const [info, buf] = await Promise.all([j(`wave${n}.json`),
           fetch(this.base + `wave${n}.bin`).then((r) => r.arrayBuffer())]);
@@ -700,10 +760,23 @@ export class GameAudio {
   }
 
   // FUN_003e80d8 cases 2 / 0x16 / 0x17: the id is looked up in each loaded SE block (FUN_003e7ed8, DAT_0047d6c8):
-  // the resident block (boot: FUN_003e78a8 request 4, FileCode 0x02810001) and the zone's sep.bin. Their ids don't overlap.
+  // slot 0 the resident block (boot: FUN_003e78a8(mgr, 0, 0x02810001)), slot 1 the zone's sep.bin (FUN_00402220) or,
+  // while an event has swapped it in, the event's block (seBlock1). Slot 0's and the zone's ids don't overlap.
   program(id) {
     const k = String(id);
-    return (this.res && this.res.programs[k]) || (this.se && this.se.programs[k]) || null;
+    const b1 = this.block1 || this.se;
+    return (this.res && this.res.programs[k]) || (b1 && b1.programs[k]) || null;
+  }
+
+  // FUN_003e78a8(mgr, 1, code, 0) = request 4 -> FUN_003e79a8(1, code): the file replaces SE block slot 1 (the same code
+  // again does nothing). Codes: the zone's sep.bin (this.zoneCode) or an event block (evBlocks). Returns false for a file
+  // the page has no export of (slot 1 then holds nothing: its SEs are silent).
+  seBlock1(code) {
+    if (code === this.zoneCode) { this.block1 = null; return true; }
+    const b = this.evBlocks && this.evBlocks[code];
+    this.block1 = b || { programs: {} };
+    if (!b) console.warn('audio: SE block 0x' + (code >>> 0).toString(16) + ' not exported (tools/audio/extract.py --event): its SEs are silent');
+    return !!b;
   }
 
   // FUN_003eb970 -> FUN_003eb868: sdb slot 0 (the resident names ressddb.bin, FUN_00244db0) first, then slot 1 (the
@@ -732,6 +805,7 @@ export class GameAudio {
     if (this.sePaused === on) return;
     this.sePaused = on;
     if (!this.ctx) return;
+    if (this.eventSe) this.eventSe.setPaused(on);  // the event SEs' streams (event_sound.js EventSeSlots): the same hold
     const now = this.ctx.currentTime;
     for (const p of this.playing || []) {
       if (p.flags & 0xc0) continue;                // menu sounds (0x58 / 0x59) and asj_033 (0x80) play on
@@ -757,11 +831,32 @@ export class GameAudio {
     if (!p.prog || !this.drv || !this.banks[p.bank]) return false;
     const rd = new SeRenderer(this.drv, this.banks[p.bank]);
     rd.rngIndex = p.rngStart;
-    const out = rd.render(p.prog, p.vol, p.pan, 8, p.holds);
+    const out = rd.render(p.prog, p.vol, p.pan, 8, p.holds, p.stop);
     const buf = this.ctx.createBuffer(2, out.left.length, SPU_RATE);
     buf.copyToChannel(out.left, 0); buf.copyToChannel(out.right, 1);
     p.buf = buf; p.decay = out.decay;
     this.rerenders = (this.rerenders || 0) + 1;
+    return true;
+  }
+
+  // Request 0x12 on a playing SE (FUN_003e77f0 -> FUN_003e80d8 -> IOP command 0x2f, SeRenderer.stopFade): rendered again from its
+  // start (same random-table counter, its holds) with the fade begun at the driver tick it has reached, and played on from there.
+  // A held one (paused) gets the new buffer and resumes with it.
+  fade(p, time = 10) {
+    if (!p || p.stop || !p.prog || !this.ctx || !this.drv || !this.banks[p.bank]) return false;
+    const held = p.held !== false && p.held !== undefined;
+    const off = held ? p.held : Math.min(Math.max(this.ctx.currentTime - p.at, 0), p.buf.duration);
+    p.stop = { tick: Math.floor(off * TICK_HZ), time };
+    const rd = new SeRenderer(this.drv, this.banks[p.bank]);
+    rd.rngIndex = p.rngStart;
+    const out = rd.render(p.prog, p.vol, p.pan, 8, p.holds || [], p.stop);
+    const buf = this.ctx.createBuffer(2, out.left.length, SPU_RATE);
+    buf.copyToChannel(out.left, 0); buf.copyToChannel(out.right, 1);
+    p.buf = buf; p.decay = out.decay;
+    if (!held) {
+      if (p.src) { try { p.src.onended = null; p.src.stop(); } catch (e) { /* not started */ } }
+      this.startSource(p, off);
+    }
     return true;
   }
 
@@ -795,10 +890,10 @@ export class GameAudio {
     if (!rd) return null;
     // A render depends on (program, vol, pan) and the driver's random-table counter rd.rngIndex (FUN_0000a870,
     // advanced by op 0x78 and the randomised pitch / volume / pan / ADSR), and costs a few ms on the main thread.
-    // Keep rendered buffers keyed by all four; a hit reuses the buffer and moves the counter to where that render
+    // Keep rendered buffers keyed by all four (the program's bytes, not its id); a hit reuses the buffer and moves the counter to where that render
     // left it, so the output is the same as rendering again (a page cache, not game logic).
     const rngStart = rd.rngIndex;
-    const key = `${id}:${vol}:${pan}:${rd.rngIndex}`;
+    const key = `${hex}:${vol}:${pan}:${rd.rngIndex}`;   // the program, not the id: an id can name another program in an event's block
     this.cache ??= new Map();
     let ent = this.cache.get(key);
     if (ent) { this.cache.delete(key); this.cache.set(key, ent); rd.rngIndex = ent.rngEnd; }

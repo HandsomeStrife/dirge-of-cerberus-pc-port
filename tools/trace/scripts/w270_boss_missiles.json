@@ -1,0 +1,1 @@
+{"name":"w270_boss_missiles","frames":2200,"log_from":2125,"doc":"worker 0270: route r0b_box4 (w259_boss_box4c's run), no input: the state-6 homing volley (f2147) and its hit on Vincent (f2190), with the missile call log. TRACE_POKE=960660=270f TRACE_LOG_AT=b6000 TRACE_CALLLOG=missile, --state tools/trace/out/route/r0b_box4.p2s; grab_gs at 2170, 2186.","events":[]}

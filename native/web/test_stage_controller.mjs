@@ -22,7 +22,7 @@ if (MUT) {
     preempt: ["if (++n > this.budget) return 'preempted';", "if (++n > 5e6) throw new Error('step limit');"],
     opening: ["const a = !R.beforeOpening && o().area && o().area();", "const a = o().area && o().area();"],
     skipinit: ["this.skip = o.skip ?? 0;", "this.skip = 0;"],
-    bit6: ["if (gs) { gs.set(6); gs.set(2); }", "if (gs) { gs.set(2); }"],
+    bit6: ["    if (gs) gs.set(6);\n", "\n"],
     card: ["return this.running && !this.battle && !this.skipOff && !this.cardOn;", "return this.running && !this.battle && !this.skipOff;"],
     wait: ["if (o.openingDone && !o.openingDone()) return block(() => o.openingDone(), end);", ""],
     // worker 0229 (battle actors): the hand-back's place (row 3 = setpos), the camera reset's view (main's Camera.set),

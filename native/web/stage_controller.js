@@ -160,7 +160,10 @@ export class StageRuntime extends EventRuntime {
     const si = this.o.stageInfo && this.o.stageInfo();
     if (si && si.isDisplay(-1)) return;
     this.cardOn = false;
-    if (this.cardSaved) this.skipOff = true;
+    // worker 0265: FUN_003fdd58 clears the bit only when it was clear at FUN_003fdb48 (DAT_0047db80 == 0 -> FUN_003e0cc8(0)); else it
+    // leaves it as it is. It used to set skipOff here, which undid deb_jump's enableSkip(1) after its help box (this runs after the
+    // script's poll saw the card gone): no event could be Skipped after the first help box
+    if (!this.cardSaved) this.skipOff = false;
   }
 
   // FUN_00372f70 (the Skip choice): event_rt.js's (its +0x156c guard, the event sounds' and windows' skip; worker 0222)
@@ -176,8 +179,10 @@ export class StageRuntime extends EventRuntime {
     // FUN_003e9ed0: last frame's event SEs go out (event_sound.js; as event_rt.js frame, worker 0248)
     if (this.sePending && this.sePending.length) this.seSent = sendEventSe(this, this.sound && this.sound.audio ? this.sound.audio() : null);
     this.lentUpdate();                                                  // the statuses' update (main thread, before the VM window)
-    if (!this.vm.done) this.vm.run();                                   // the VM thread's time this frame
+    // FUN_003fdd58 runs on the main thread (FUN_003fdf00, first in the frame) when the card stops, before the VM thread can see it
+    // gone: the Skip bit is back before the script's own enableSkip (worker 0265)
     this.cardStep();
+    if (!this.vm.done) this.vm.run();                                   // the VM thread's time this frame
     this.clock = (this.clock + dtMs) >>> 0;                              // FUN_003798a0
     for (const c of this.slots.slice()) {                                // FUN_00377c68's slot loop, slots in order
       let fin = false;
@@ -246,6 +251,8 @@ export class StageRuntime extends EventRuntime {
     // FUN_00324e70(FUN_0037cee8() != 0): with DAT_004b8ac8 bit 5 clear (FUN_002419d8(5) == 0 in the z128 states;
     // player.js DAT_004B8AC8) its second branch runs: FUN_00319190 (each status takes the slot named after it), then
     // the camera reset FUN_00329f68 -> FUN_003285d0 (angles from render view 1's forward)
+    // worker 0265: FUN_00324e70 first clears game-state bits 5 and 4 (FUN_00326040; outside its DAT_0046e290 test)
+    if (gs) { gs.clear(5); gs.clear(4); }
     this.handBackAll();
     // worker 0240: then FUN_005453b0, the stage-load pass: its per-status loop and FUN_005459d8 (script event 0x23 to every
     // object: the z128 boss's HP / gauge / activation at stage flag 0 = 36). T w240_boss (w231_boss4's route): f1373
@@ -254,6 +261,9 @@ export class StageRuntime extends EventRuntime {
     // hand-back (FUN_00319190) stays (the page's settle and hand-off rely on it); +0x1528 stays set for FUN_004012c0 case 9, whose
     // FUN_00326da8 (camera re-enter, message 0x7d5) runs once the stage program does, after the stage init: follow.battleHandBack
     const first = !this.stageObj;
+    // worker 0265: FUN_00324e70 -> FUN_0033c060 with DAT_0046e290 +0x58 and +0x44 set: the reticle's kind from the HUD mode
+    // again (after the reticle off of event mode or set_usercontrol(0)); its order against the stage-load pass is L (no visible effect)
+    if (this.stageObj && this.o.reticle) this.o.reticle.sync();
     if (!this.stageObj) this.log.push([this.frameNo, 'battle: no stage object yet (FUN_00324e70: nothing)']);
     else if (this.o.stagePass) this.o.stagePass();
     else this.warnOnce('stage: battle()\'s stage-load pass FUN_005453b0 (event 0x23) not wired');
@@ -264,6 +274,11 @@ export class StageRuntime extends EventRuntime {
     if (this.o.cameraReset) this.o.cameraReset(this.view, first); else this.warnOnce('stage: battle()\'s camera reset (FUN_00329f68) not wired');
     this.warnOnce('stage: FUN_00324e70\'s player calls (FUN_00578548, FUN_00574928, FUN_0034b2c8, FUN_00331ab0 ...) left out');
     this.cams.forEach(c => { c.active = false; });
+    // worker 0265: with +0x156c != 0 (a skipped event: its fades and main's did nothing, FUN_003736c8) and n < 1, FUN_0037cf30 kills
+    // the fade particle: FUN_002f2218 -> FUN_002f4678 -> FUN_002f4420(0x50b504) (DAT_0050b504, made by FUN_002f4480 / FUN_002f4578),
+    // so the room shows again. +0x1558 bit 43 cleared (not kept on the page). Its FUN_002f4848 / FUN_002f4ac8 (particles 0x50b50c /
+    // 0x50b510) are not on the page. With n >= 1 the fade is kept (main's battle(3000) after a skipped heri_taijou)
+    if (this.skip !== 0 && n < 1 && this.fade) { this.fade = null; this.log.push([this.frameNo, 'battle: skipped event, fade killed']); }
     this.skip = 0;
     this.battle = true;
     this.battleTimer = n > 0 ? n : 0;
@@ -316,11 +331,24 @@ export class StageRuntime extends EventRuntime {
   // FUN_0037e048(ev, n): event mode: +0x9864 = n, waits (the stream FUN_00267358, +0x1560, ...), bit 37 cleared,
   // game-state bit 2 set (FUN_00326018(2))
   enterEvent(n) {
-    this.warnOnce('stage: FUN_0037e048\'s waits and calls (FUN_003e9950, FUN_0037ddd0, FUN_005a6d70, FUN_0037dbf8, FUN_003e8888 / FUN_003e6538 ...) left out');
+    this.warnOnce('stage: FUN_0037e048\'s waits and calls (FUN_003e9950, FUN_0037ddd0, FUN_005a6d70, FUN_0037dbf8, FUN_003e8888 ...) left out');
     const gs = this.o.gameState && this.o.gameState();
     // FUN_002419d8(0) == 0 (DAT_004b8ac8 bit 0: 0 in the z128 states): FUN_0037dc78(ev, 1), FUN_0037def0(ev, 1) ->
     // FUN_00325b10(1): game-state bit 6, the AI paused (enemy_ai FUN_00365008); then FUN_00326018(2)
-    if (gs) { gs.set(6); gs.set(2); }
+    if (gs) gs.set(6);
+    // worker 0265: FUN_00324ca0 (between the two): game-state bits 5 and 4 set (FUN_00326018); with the stage object (DAT_0046e290)
+    // and FUN_002419d8(5) == 0, FUN_0033c1a8 when DAT_0046e290 +0x44 (the reticle's owner: the weapon) != 0: the reticle off
+    // (aim_core reticleOff = FUN_003b03e8). Its other calls (FUN_005a7338, FUN_00324d90, FUN_00312408 / FUN_00312660,
+    // FUN_00545330, FUN_00331a40, FUN_00349438, game-state bit 0) are left out (warned)
+    if (gs) { gs.set(5); gs.set(4); }
+    if (this.stageObj) {
+      if (this.o.reticle) this.o.reticle.off(); else this.warnOnce('stage: event mode\'s reticle off (FUN_0033c1a8) not wired');
+      this.warnOnce('stage: FUN_00324ca0\'s FUN_005a7338, FUN_00324d90, FUN_00312408 / FUN_00312660, FUN_00545330, FUN_00331a40 left out');
+    }
+    if (gs) gs.set(2);
+    // (+0x9864 & 1) == 0: FUN_003e8888(mgr, 0) (not translated) and FUN_003e6538: the placed-sound table released (playBgSound's
+    // entries from the last event's end, and the stage's placed sounds; ambient.js releaseAll; worker 0266)
+    if (!(n & 1)) { const bg = this.sound && this.sound.bg && this.sound.bg(); if (bg && bg.releaseAll) bg.releaseAll(); }
     this.battle = false;
     this.log.push([this.frameNo, 'event ' + n]);
     if (this.o.onMode) this.o.onMode('event');
@@ -385,6 +413,9 @@ export class StageRuntime extends EventRuntime {
       'fake/KerberosEvent.isDemo()Z': () => 0,                                     // FUN_0039fc60 (retail play)
       // displayStageInfo_l (FUN_0039e8e8) / isDisplayStageInfo (FUN_0039e9c8 -> FUN_003fdd30): worker 0220's stage_info.js
       'fake/KerberosEvent.displayStageInfo_l(ILjava/lang/String;)V': (vm, [k, s]) => {
+        // worker 0265: a page-load hold while stage_info.js fetches its data (a warp reaches deb_jump's box in its first frames)
+        const si0 = o().stageInfo && o().stageInfo();
+        if (si0 && si0.loading) return block(() => !si0.loading, () => R.vm.natives['fake/KerberosEvent.displayStageInfo_l(ILjava/lang/String;)V'](vm, [k, s]));
         log('stageinfo ' + k + ' ' + str(s));
         const si = o().stageInfo && o().stageInfo();
         if (si) {

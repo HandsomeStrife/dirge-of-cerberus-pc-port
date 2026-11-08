@@ -10,6 +10,10 @@ Writes (all game-derived; native/web/data/** is excluded by .gitignore):
   waveNNNN.bin     SPU-ADPCM sample area of data/sound2/waveNNNN.wd (what the IOP uploads to SPU RAM)
   waveNNNN.json    instruments -> regions (32-byte records, fields named in notes/audio-research.md)
   se_zNNN.json     sdb.bin names -> SE id, and the SE programs of the zone's sep.bin (hex)
+  se_evNNN.json    the event SE block of event file group NNN (--event, default 100 = z128's ev0100): FileCode
+                   0x0c000800 + NNN x 0x1000 (FUN_002508b0), loaded into SE block slot 1 over the zone's sep.bin by
+                   loadSoundEffectEx_l(0, NNN, 0) (FUN_003825e8 -> FUN_003e78a8(mgr, 1, code, 0)); its names are rows of
+                   the zone's sdb.bin (asj_041 .., asj_154 ..)
   se_res.json      the resident SE block data/sound2/resident.bin (FileCode 0x02810001, loaded at boot by
                    FUN_003e78a8 request 4) and the resident names data/etc/ressddb.bin (0x03100034, sdb slot 0:
                    FUN_00244db0 -> FUN_003eb7a8(0, ...)); "menu" = the menu sound names FUN_003e1d90 plays,
@@ -121,6 +125,7 @@ def main():
     ap.add_argument('--zone', type=int, default=128)
     ap.add_argument('--out', default='native/web/data/audio')
     ap.add_argument('--elf', default='elf/SLES_541.85')
+    ap.add_argument('--event', type=int, nargs='*', default=[100])
     ap.add_argument('--wav')
     ap.add_argument('--bank', type=int, default=0)
     ap.add_argument('--region', type=int, nargs='*', default=[])
@@ -163,7 +168,20 @@ def main():
         print('  no ELF %s: se_res.json without the menu sound names (no menu sounds on the page)' % a.elf)
     json.dump(res, open(os.path.join(a.out, 'se_res.json'), 'w'))
     print('resident: %d programs, %d names, banks %s, menu names %s' % (len(rblk), len(rnames), rbanks, 'menu' in res))
-    banks = sorted(set(banks) | set(rbanks))
+    # the event SE blocks (FUN_003825e8 case 0: FUN_002508b0(b) + c; every z128 event passes b = 100, c = 0)
+    ebanks = set()
+    for ev in a.event:
+        ep = os.path.join(nopath, '%08x.bin' % (ev * 0x1000 + 0xc000800))
+        if not os.path.exists(ep):
+            print('  event %d: no %s (the events\' own SEs stay silent)' % (ev, ep))
+            continue
+        eblk = sep.read_block(open(ep, 'rb').read())
+        eb = sorted({sep.tracks(p)[0] for p in eblk.values()})
+        ebanks |= set(eb)
+        json.dump(dict(event=ev, code=ev * 0x1000 + 0xc000800, banks=eb, programs={str(k): v.hex() for k, v in eblk.items()}),
+                  open(os.path.join(a.out, 'se_ev%03d.json' % ev), 'w'))
+        print('event %d: %d programs, banks %s' % (ev, len(eblk), eb))
+    banks = sorted(set(banks) | set(rbanks) | ebanks)
     for b in banks:
         p = os.path.join(a.kel, 'data/sound2/wave%04d.wd' % b)
         if not os.path.exists(p):

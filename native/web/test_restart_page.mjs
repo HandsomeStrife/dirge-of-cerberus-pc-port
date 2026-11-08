@@ -171,6 +171,11 @@ try {
       window.__woke = new Set(); const t0 = P.restart.count, w = () => { const A = P.enemyAI; if (P.restart.count > t0) for (const a of A.actors) window.__woke.add(a.rec); if (P.restart.count === t0 || !P.ctrl || Math.abs(P.ctrl.pos.x + 889.2) > 1) requestAnimationFrame(w); }; w(); });
     await pg.evaluate(() => { window.__play.results.stats.mark = -1; window.__voiceStops = 0; const v = window.__play.voices; if (v && !v.__spied) { v.__spied = true; const f = v.stopAll.bind(v); v.stopAll = () => { window.__voiceStops++; f(); }; }
       window.__oldPlaced = window.__play.amb.placed; });
+    // an event's SE block in slot 1 and a kept loop at the Restart (loadSoundEffectEx_l(0, 100, 0), setSoundEffectLoop)
+    ok(await pg.evaluate(async () => { const au = window.__play.pauseSound.audio; if (!au || !au.evBlocks) return false;
+      const codes = Object.keys(au.evBlocks); if (!codes.length) return false;
+      const { EventSeSlots } = await import('./event_sound.js'); au.seBlock1(+codes[0]); au.eventSe ??= new EventSeSlots(au);
+      const row = au.row('asj_335'); return !!(row && au.eventSe.play('asj_335', row, au.program(row.id), 0x7f, false)); }), 'an event SE block and a loop set up before the Restart');
     return c;
   };
   const checkRecord = async (how, c0, gilWant, rd = atSave, wantFlags = true) => {
@@ -190,6 +195,8 @@ try {
     ok(c1.play >= c0.play, `${how}: the play clock not rewound (${c0.play} -> ${c1.play}; T w254)`);
     const a = await pg.evaluate(() => { const P = window.__play; return { placedNew: P.amb.placed ? P.amb.placed !== window.__oldPlaced : null, stops: window.__voiceStops, hasV: !!P.voices,
       bodies: P.enemies.actors.map(x => x.rec).filter(k => !P.enemyAI.actors.some(w => w.rec === k)), recs: P.enemyAI.actors.map(x => x.rec).sort((p, q) => p - q).join() }; });
+    const es = await pg.evaluate(() => { const au = window.__play.pauseSound.audio; return { b1: au.block1, live: au.eventSe ? au.eventSe.live.length : 0 }; });
+    ok(es.b1 === null && es.live === 0, `${how}: slot 1 holds the zone's sep.bin again (FUN_00402220) and the event SEs stopped (block ${es.b1 && 'event'}, live ${es.live})`);
     ok(a.placedNew !== false, `${how}: the placed sounds are new objects (FUN_00548788; ${a.placedNew})`);
     ok(!a.hasV || a.stops >= 1, `${how}: the voice channels freed (FUN_003ea5f0; stopAll x ${a.stops})`);
     ok(a.bodies.length === 0, `${how}: no body without its active actor (${a.bodies}; actors ${a.recs}; T w254: 0, 62, 63 have bodies, 41-49 / 66 none)`);
@@ -370,6 +377,9 @@ try {
     await pg.waitForFunction(() => { const P = window.__play; return P && P.intro && P.intro.active && P.sound && P.sound() && window.__items; }, null, { timeout: 180000 });
     const skip = async () => {
       await until(() => window.__play.intro.active && window.__play.intro.rt.frameNo > 60, null, 120000);
+      // worker 0265's stage title card (first_event displayStageInfo(0)) holds the opening and takes no pause input (FUN_003fdb48 ->
+      // FUN_00241760(1, 0, 0)): Enter only after the card's fadein
+      await pg.waitForFunction(() => { const P = window.__play, r = P.intro && P.intro.rt, si = P.stageInfo; return r && r.log.some(x => /^fadein /.test(x[1])) && (!si || si.kind < 0); }, null, { timeout: 300000 });
       await pg.keyboard.press('Enter');
       await until(() => window.__play.intro.paused);
       await pg.waitForTimeout(200);
@@ -378,7 +388,15 @@ try {
       await until(() => window.__play.stats.ticks > 5 && !window.__play.restart.pending, null, 60000);
     };
     ok(await pg.evaluate(() => window.__play.sound().event === true), 'the opening: the load-time start is off');
+    // an event SE still playing at the opening's end (scr001's 50017 runs past main's return): the hand-off is no stage reload,
+    // so musicRestart (handing) leaves the event SE slots alone
+    ok(await pg.evaluate(async () => { const au = window.__play.pauseSound.audio; au.resume();
+      const { EventSeSlots } = await import('./event_sound.js'); au.eventSe ??= new EventSeSlots(au);
+      const row = au.row('asj_335'), hex = row && (au.evBlocks[0xc064800] || {}).programs?.[String(row.id)];
+      window.__handSe = hex ? au.eventSe.play('asj_335', row, hex, 0x7f, false) : null; return !!window.__handSe; }), 'an event SE playing before the hand-off');
     await skip();
+    ok(await pg.evaluate(() => { const au = window.__play.pauseSound.audio; return !!(au.eventSe && au.eventSe.live.includes(window.__handSe)); }),
+      'the opening -> main hand-off leaves it playing (no stage reload: FUN_00402220 does not run)');
     const h = await pg.evaluate(() => window.__play.sound());
     ok(h.event === false && h.on === false, `after the hand-off the opening's gate is closed (event ${h.event}, on ${h.on})`);
     await pg.evaluate(() => { const s = window.__play.soundStop; s(); });

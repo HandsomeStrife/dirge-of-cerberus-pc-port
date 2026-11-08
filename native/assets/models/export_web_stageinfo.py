@@ -13,6 +13,9 @@ Decoded in notes/message-research.md:
   +8 s8 op (>= 0: effect slot, < 0: command (op + 0x1d) of FUN_003c6600), +0xc arg, +0x10 / +0x12 s16 x, y.
   The ✕ in mode 1 steps past the -1 end mark (FUN_003c72f8), so a table holds one more section per mode-1 command
   (op -19 = case 10, op -22 = case 7): the reader keeps that many end marks.
+Kind 0x1e (stage-info 0, the stage title card; worker 0265): steps 0x47a028, layout 0x479190 (widget 4: the title text
+DAT_0047a340[stat 0xe], FUN_003fd578), its effects 0x81740000 / 0x81740400 in a0093.fed (file 0x31000fc for the uk build),
+which export_web_results.py already writes (results.fed).
 Output: kinds, scripts, item effect ids (FUN_003c6f98 table 0x51d090 / 0x47a528), layouts 0x479610 (kind 0x2b) and
 0x479168 (kind 0x1f) with the language's rect override (FUN_003ca488 param_6 table 0x51f9a0 / 0x51f960), the '$' codes
 (FUN_003d1d98 table 0x47abb0, colours DAT_0047a7c0, inline images PTR_0047a990 -> FUN_003d1c90 / FUN_003cb300), the
@@ -35,9 +38,12 @@ from export_web_pause import LOCALE, kelstr_decode, kelstr_keys, kelstr_message 
 
 LANGUAGE = 2                                    # FUN_00242450 for the uk build (as export_web_pause.py)
 KIND_BOX_AT = 0x4a8250                          # FUN_003fdf00: box kind = DAT_004a8250[stage-info kind] (7 bytes)
-SCRIPTS = {0x2b: (0x47a220, 0x51cfd8), 0x1f: (0x47a0a0, 0x47a0a0)}   # (FUN_003e2760() == 0, != 0)
+SCRIPTS = {0x2b: (0x47a220, 0x51cfd8), 0x1f: (0x47a0a0, 0x47a0a0), 0x1e: (0x47a028, 0x47a028)}   # (FUN_003e2760() == 0, != 0); 0x1e: stage-info 0, the stage title card (worker 0265)
 ITEM_FX_AT = (0x47a528, 0x51d090)               # FUN_003c6f98: slot 1's effect id by event flag 55 (12)
-LAYOUTS = {0x2b: (0x479610, 0x51f9a0), 0x1f: (0x479168, None)}   # FUN_003c6600 case 0x1a: script, override table (FUN_003c5d10's third argument; kind 0x1f passes 0)
+LAYOUTS = {0x2b: (0x479610, 0x51f9a0), 0x1f: (0x479168, None), 0x1e: (0x479190, None)}   # FUN_003c6600 case 0x1a: script, override table (FUN_003c5d10's third argument; kind 0x1f passes 0)
+# FUN_003c6600 case 0x1a, kind 0x1e (worker 0265): widget 4's vt+0xcc FUN_003d71b8 -> FUN_003d03a0(id | 0x80000000) = FUN_003fd578(DAT_0047a340[+0x1028]),
+# +0x1028 = stat 0xe (FUN_003c54f8), for stat < 0x11 and an id != -1
+TITLES_AT, TITLES_N = 0x47a340, 0x11
 OBJECTIVES_AT, OBJECTIVES_N = 0x47a388, 0x28     # FUN_003c6600 case 0x1a, kind 0x1f: DAT_0047a388[stat 0x32], kelstr ids (FUN_003fd578)
 COLOURS_AT, CODES_AT, INLINE_AT, IMAGES_AT = 0x47a7c0, 0x47abb0, 0x47a990, 0x47bfc0
 MSG_FILE = 'noPath/0c0641ca.bin'                # ev0100's message file: the one the game had loaded (save RAM equal)
@@ -227,6 +233,7 @@ def main():
     doc['messages'] = messages(os.path.join(a.disc, MSG_FILE), a.elf, elf, MSG_KEYS)
     kelstr = kelstr_decode(open(os.path.join(a.disc, 'data/etc/locale', LOCALE, 'kelstr.bin'), 'rb').read(), kelstr_keys(elf))
     doc['objectives'] = [kelstr_message(kelstr, elf.u32(OBJECTIVES_AT + 4 * i)).hex() for i in range(OBJECTIVES_N)]
+    doc['titles'] = [None if elf.u32(TITLES_AT + 4 * i) == 0xffffffff else kelstr_message(kelstr, elf.u32(TITLES_AT + 4 * i)).hex() for i in range(TITLES_N)]
     fed = open(os.path.join(a.disc, FED_FILE), 'rb').read()
     if fed[:4] != b'FED\x08' or struct.unpack_from('<I', fed, 4)[0] != FED_ID:
         raise SystemExit('%s: not FED %#x' % (FED_FILE, FED_ID))

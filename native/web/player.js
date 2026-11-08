@@ -56,6 +56,8 @@
 // ================================================================
 import * as THREE from 'three';
 import { Jump, FallMotion, stopMove, stickMode, enterState, airState, moveAngle, HIT_STATE, DEAD_STATE, REVIVE_STATE } from './jump_core.js';
+import { objectPass } from './obj_contact.js';
+import { cylinderCross } from './enemy_hit.js';
 
 // ---------------------------------------------------------------- timing
 export const TICK = 1 / 50;                       // one PAL game frame (s): play.js's loop step
@@ -630,10 +632,24 @@ export class PlayerController {
   // to |body+0x40|. T: k_push17 f800-f960, out - in - push <= 1e-4 (log rounding), standing included
   // (in = 0, out = push). Lengths are xyz (vmul + vaddbc); the walk gets x / z (navMove takes no vertical
   // displacement), as before.
+  // Worker 0269: with placed objects (this.contacts(): props.js blockers, the EM barriers) the correction first takes
+  // FUN_0035a440's object pass (obj_contact.js objectPass: their pushes, then the push above, out = in + correction, out
+  // made to slide when it still runs into it); nothing applied -> out = in and FUN_0035a440 returns 0 (no cap below).
   pushIn(mx, my, mz) {
     const q = this.push;
-    if (!q || !(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] > 0)) return [mx, mz];
-    let o = [f32(mx + q[0]), f32(my + q[1]), f32(mz + q[2])];
+    const hasPush = !!q && q[0] * q[0] + q[1] * q[1] + q[2] * q[2] > 0;
+    const objs = this.contacts ? this.contacts() : null;
+    let o;
+    if (objs && objs.length) {
+      const B = this.body, air = B.state >= 2 && B.state <= 5;     // FUN_003577c8: body+0xa8 in 2..5
+      const r = objectPass({ objs, pos: [this.pos.x, this.pos.y, this.pos.z], move: [mx, my, mz], air, push: hasPush ? q : null,
+                             cross: cylinderCross, warn: m => { if (!this._warned) this._warned = new Set(); if (!this._warned.has(m)) { this._warned.add(m); console.warn(m); } } });
+      if (!r.applied) return [mx, mz];
+      o = r.out.map(f32);
+    } else {
+      if (!hasPush) return [mx, mz];
+      o = [f32(mx + q[0]), f32(my + q[1]), f32(mz + q[2])];
+    }
     let ol = Math.hypot(o[0], o[1], o[2]);
     if (ol > 10) { o = o.map(c => f32(c / ol * 10)); ol = 10; }
     const B = this.body, vl = Math.hypot(B.vel.x, B.vel.y, B.vel.z);

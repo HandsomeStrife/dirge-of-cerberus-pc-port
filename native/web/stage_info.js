@@ -18,7 +18,9 @@
 // Not on the page (warned once):
 //   - (worker 0241: the box's effects, slot 0 the panel 0x834c0000, slot 1 the item picture, FED a0211, now run on the
 //     menu managers: menu_fx.js; the parts still left out are effects.js's warnings: type 119's backdrop, children)
-//   - kinds 0 / 4 / 5 (other screens). Kind 1 (worker 0258): layout 0x479168, the objective text DAT_0047a388[stat 0x32].
+//   - kinds 4 / 5 (other screens). Kind 1 (worker 0258): layout 0x479168, the objective text DAT_0047a388[stat 0x32].
+//     Kind 0 (worker 0265): box kind 0x1e, the stage title card: steps 0x47a028, layout 0x479190, widget 4 = DAT_0047a340[stat 0xe],
+//     its effects 0x81740000 / 0x81740400 from a0093 (results.fed); FUN_003fdaa0's stat bookkeeping is left out (warned).
 //   - kind 3 is the game over (gameover.js owns it).
 //   - the menu sounds 0x1d / 0x1e go to the pause's latch when given (opts.menuSound), else they are dropped.
 //   - FUN_003fdf00's gates FUN_002e29e0() > 0 and FUN_00400ee8() (not decoded: taken as open).
@@ -26,8 +28,8 @@
 import { PauseScreen, measureText } from './pause.js';
 import { hexBytes } from './menu_layout.js';
 
-export const BOX_KIND_ITEM = 0x2b, BOX_KIND_OBJECTIVE = 0x1f;
-export const STAT_OBJECTIVE = 0x32;
+export const BOX_KIND_ITEM = 0x2b, BOX_KIND_OBJECTIVE = 0x1f, BOX_KIND_TITLE = 0x1e;   // 0x1e: stage-info 0, the stage title card (worker 0265)
+export const STAT_OBJECTIVE = 0x32, STAT_STAGE = 0xe;
 // MEASURED (w220_box): displayStageInfo at game frame 216 (record 217), states 0 -> 3 in frame 217 (record 218), the box
 // opens in frame 226 (state 5 at record 227): FUN_003fdf00 state 3 waits for the effect file on PCSX2's disc. GUESS: the
 // page loads it with the page and keeps the measured 8 frames in state 3 (as gameover_title.js TITLE_DELAY). notes/fidelity-audit.md 'Stage-info file read'.
@@ -50,8 +52,9 @@ export function loadStageInfoData(sj, pd) {
   for (const [k, v] of Object.entries(sj.messages)) msg[k] = v ? hexBytes(v) : null;
   const inline = sj.inline.map(r => ({ ...r, name: r.name }));
   const objectives = sj.objectives ? sj.objectives.map(hexBytes) : null;     // DAT_0047a388's 40 texts
+  const titles = sj.titles ? sj.titles.map(t => (t ? hexBytes(t) : null)) : null;   // DAT_0047a340's 17 (worker 0265)
   if (!objectives) warnOnce('k1text', 'stage info: data/stage_info.json has no "objectives" (re-run export_web_stageinfo.py): the objective box has no text');
-  return { ...pd, layouts, si: { ...sj, messages: msg, inline, objectives } };
+  return { ...pd, layouts, si: { ...sj, messages: msg, inline, objectives, titles } };
 }
 // FUN_003ca488 with param_7 = param_6[language]: each op 0x0e takes the next 4 shorts of the list instead of its own.
 // The page's builder (menu_layout.js buildLayout) takes them the same way; here the list is written into a copy of the
@@ -260,10 +263,12 @@ class StageBox {
       const k = flags.event(0x37);
       if (k < 0xc) { this.fx[1].id = D.si.itemFx[k]; this.text = flags.text; }
       else warnOnce('fl55', 'stage info: event flag 55 = ' + k + ': FUN_003c6f98\'s number text (fmt 0x4a5e88) not translated');
-    } else if (kind !== BOX_KIND_OBJECTIVE || !T) warnOnce('kind' + kind, 'stage info: box kind 0x' + kind.toString(16) + ' (FUN_003c54f8) not translated');
+    } else if ((kind !== BOX_KIND_OBJECTIVE && kind !== BOX_KIND_TITLE) || !T) warnOnce('kind' + kind, 'stage info: box kind 0x' + kind.toString(16) + ' (FUN_003c54f8) not translated');
     // FUN_003c54f8: +0xff0 = the stats (stat 14 == 0x10: the totals FUN_0031d898; else the section's FUN_0031d7b8);
     // +0x10b8 = stat 0x32, the objective's row of DAT_0047a388 (FUN_003c6600 case 0x1a)
     if (kind === BOX_KIND_OBJECTIVE) this.objective = flags.stat ? flags.stat(STAT_OBJECTIVE) : 0;
+    // +0x1028 = stat 0xe (the stage; 0x10 when the totals are taken): the title's row of DAT_0047a340 (kind 0x1e, worker 0265)
+    if (kind === BOX_KIND_TITLE) this.stage = flags.stat ? flags.stat(STAT_STAGE) : 0;
   }
   // FUN_003c6050 (vt+0x1c), once a frame. cross: FUN_003de918(0, 1), the ✕ edge of this frame
   frame(now, cross) {
@@ -313,6 +318,15 @@ class StageBox {
           const w = this.screen.byId(2);
           const t = this.objective <= 0x27 ? this.D.si.objectives?.[this.objective] : null;   // 0x27 < stat: no text
           if (w && t) { w.str = t; const m = measureText(this.D, w, t); w.tw = m.w; w.th = m.h; w.count = m.count; }   // FUN_003d7218: FUN_003cf2e0 (the centring, flag 0x10)
+          this.c5db0(s, w, now);
+          return 'next';
+        }
+        if (this.kind === BOX_KIND_TITLE) {            // worker 0265: layout 0x479190 (no override), widget 4: vt+0xcc FUN_003d71b8 ->
+          this.screen = new StageInfoScreen(this.D, this.kind, now);   // FUN_003d03a0(w, id | 0x80000000): FUN_003fd578(DAT_0047a340[+0x1028])
+          const w = this.screen.byId(4);
+          const t = this.stage < 0x11 ? this.D.si.titles?.[this.stage] : null;   // stat >= 0x11 or id -1: no text
+          if (w && t) { w.str = t; const m = measureText(this.D, w, t); w.tw = m.w; w.th = m.h; w.count = m.count; }   // vt+0xdc: the measure, as kind 0x1f's
+          if (!this.D.si.titles) warnOnce('titles', 'stage info: data/stage_info.json has no "titles" (re-run export_web_stageinfo.py): the title card has no text');
           this.c5db0(s, w, now);
           return 'next';
         }
@@ -473,6 +487,7 @@ export function createStageInfo({ output = null, pause = null, flags = null, url
   THREE = null, root = null, fxRng = null, resultsUrl = 'data/results.json' } = {}) {
   const si = new StageInfo(null, { flags });
   si.fx = null; si.fxLayer = null;
+  si.loading = true;                               // worker 0265: its data still loading (the stage controller's displayStageInfo waits)
   si.ready = (async () => {
     try {
       const [sj, pj] = await Promise.all([url, pauseUrl].map(u => fetch(u).then(r => (r.ok ? r.json() : null))));
@@ -494,6 +509,7 @@ export function createStageInfo({ output = null, pause = null, flags = null, url
         }
       }
     } catch (e) { console.warn('stage info: bad data, boxes run without a screen', String(e)); }
+    finally { si.loading = false; }                // every path, the early return for missing data too (the controller's hold ends)
   })();
   si.fxBegin = step => { if (si.fx) si.fx.begin(step); };
   si.fxEnd = () => { if (si.fx) { si.fx.end(); si.fxLayer.update(); } };

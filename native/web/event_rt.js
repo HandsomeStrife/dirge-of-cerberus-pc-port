@@ -99,6 +99,8 @@ export class EventRuntime {
     this.actors = opts.actors || null;          // event_actor_rt.js EventActors (worker 0218): the KerberosActor natives
     this.sound = opts.sound || null;            // event_sound.js back ends (worker 0222): music, area, audio, voices
     this.windows = opts.windows || null;        // event_window.js (worker 0222): KerberosWindow open_l / close_l
+    this.stageInfo = opts.stageInfo || null;    // () -> stage_info.js StageInfo (worker 0265): displayStageInfo / isDisplayStageInfo
+    this.stageInfoWait = opts.stageInfoWait || null;   // () -> true while the page still loads it (worker 0265)
     this.skip = 0;                              // +0x156c: 1 at FUN_00372f70 (the Skip choice), 2 from the next frame
     this.skipMode = 0;                          // +0x9860 (setSkipMode bits; read by the load / window commands)
     this.lang = opts.lang ?? 2;                 // FUN_00242450 = PTR_0046b2dc: 2 in the z128 save (the page's language)
@@ -257,9 +259,28 @@ export class EventRuntime {
       'fake/KerberosEvent.unsetSkipMode()V': () => { R.skipMode = 0; R.state.skip = 0; },
       'fake/KerberosEvent.isSkip()Z': () => (R.skip !== 0 ? 1 : 0),        // FUN_003a0d88: +0x156c != 0
       'fake/KerberosEvent.useZone(I)V': (vm, [z]) => { R.state.zone = z; },
-      // the stage title card (FUN_0039e8e8 / FUN_003fdb48; FUN_003fdd30): not on the page -> never showing
-      'fake/KerberosEvent.displayStageInfo_l(ILjava/lang/String;)V': () => { R.warn('event: displayStageInfo (the stage title card) left out'); },
-      'fake/KerberosEvent.isDisplayStageInfo(I)Z': () => 0,
+      // the stage title card (FUN_0039e8e8 -> FUN_00380788 -> FUN_003fdb48; isDisplayStageInfo FUN_0039e9c8 -> FUN_003fdd30): worker 0265,
+      // opts.stageInfo() = stage_info.js (the stage controller binds the same natives to it); without one it never shows (warned)
+      // opts.stageInfoWait() true: the page is still loading stage_info.js or its data; the event holds here until it is up
+      // (a page load wait, as the motion packs': the game's own file read is stage_info.js READ_FRAMES)
+      'fake/KerberosEvent.displayStageInfo_l(ILjava/lang/String;)V': (vm, [k, s]) => {
+        const show = () => {
+          const si = R.stageInfo && R.stageInfo();
+          R.log.push([R.frameNo, 'stageinfo ' + k]);
+          if (si) si.display(k, s == null ? null : String(s)); else R.warn('event: displayStageInfo (stage_info.js) not on the page: left out');
+        };
+        if (R.stageInfoWait && R.stageInfoWait()) return block(() => !R.stageInfoWait(), show);
+        show(); return undefined;
+      },
+      // While the card is up the scripts poll this in a loop (first_event pc 1424-1431) that never yields in the game: the VM thread
+      // (priority 0x5a) spins in the frame's idle time and the answer only changes on the main thread. So a 1 is handed back at the next
+      // frame (the same stand-in as the stage controller's step budget: notes/fidelity-audit.md 'GUESS: the stage VM's steps per frame')
+      'fake/KerberosEvent.isDisplayStageInfo(I)Z': (vm, [k]) => {
+        const cur = () => { const si = R.stageInfo && R.stageInfo(); return si && si.isDisplay(k) ? 1 : 0; };
+        if (!cur()) return 0;
+        const f0 = R.frameNo;
+        return block(() => R.frameNo > f0, cur);
+      },
       'fake/KerberosIntermission.calc()V': () => {},
       // Zone.load_l (method +0x0c of KerberosZone): the stage load FUN_002673d8(zone, a, b): chunk slots 1 / 2 = a / b
       // (worker 0216's area_stream.js; the page's load is at once, its GUESS row). The handle is never busy here.

@@ -13,8 +13,8 @@ Decoded (notes/barrel-research.md):
     +0x15 shape (0 box, 1 sphere, 2 cylinder, 3 cube; FUN_00583b10 / FUN_00584408), +0x16 s16 HP,
     +0x18 / +0x1c / +0x20 sizes (cylinder: radius, height).
   - FUN_00548348 builds one object per section-15 record; manager +0x5b2 [k] = its id (cmd 0x3e).
-Only the e057 type (the barrel) is exported; the other gimmicks (e056 crates, g0xx items / doors)
-are not on the page yet.
+Exported: e057 (the barrel) and g048 (the EM barriers, class 8 = object type 0x13, vt 0x58c630; worker 0269: their
+record +0x50 word, FUN_0054fa48's start state). The other gimmicks (e056 crates, g0xx items) are not on the page yet.
 """
 import json, os, struct, subprocess, sys
 
@@ -23,7 +23,7 @@ sys.path.insert(0, os.path.join(HERE, '..', '..', '..', 'tools'))
 import stage_events as SE  # noqa: E402
 
 SEC14_STRIDE, SEC15_STRIDE = 0x48, 0x90
-MODELS = ('e057',)
+MODELS = ('e057', 'g048')
 # The parent area +0x4c (FUN_00548348 -> FUN_0053b920 / FUN_0054c550) decides when a gimmick is switched on: the page's
 # areas.js (worker 0223; notes/npc-research.md "Areas"), not this exporter.
 
@@ -65,6 +65,7 @@ def records(d, tys):
             rec=k, type=ti, model=ty['name'], m=[[round(x, 6) for x in row] for row in m],
             script=struct.unpack_from('<h', r, 0x44)[0], flags48=struct.unpack_from('<I', r, 0x48)[0],
             f4c=struct.unpack_from('<h', r, 0x4c)[0], f4e=struct.unpack_from('<b', r, 0x4e)[0],
+            f50=struct.unpack_from('<I', r, 0x50)[0],       # FUN_0054fa48 (class 8): bit 0 -> start off (state 0)
             ))
     return out
 

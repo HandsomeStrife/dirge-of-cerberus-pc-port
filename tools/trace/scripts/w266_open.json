@@ -1,0 +1,1 @@
+{"name": "w266_open", "frames": 1500, "log_from": 820, "doc": "worker 0266: voice vs mouth timing in the opening (first_event: startanim 00 on g000, 10110sk). From worker 0210's start1704 state (mid stage load after a Restart), no input. TRACE_FIELDSET=lipsync TRACE_CALLLOG=lipsync TRACE_LOG_AT=A6000", "events": []}

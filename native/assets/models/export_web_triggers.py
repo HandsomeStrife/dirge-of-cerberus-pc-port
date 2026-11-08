@@ -69,7 +69,12 @@ AI_CLIPS = ('r_gst', 'r_gst_lk', 'r_st_a', 'r_st_f', 'r_stlld0', 'r_stlaf0', 'r_
 # 0x09 / 0x10 the walk / run rows of the locomotion table (motion state 8, FUN_00594f98 -> FUN_00345b58(C, 1, 9, 0x10))
 AI_MOTIONS = (0x00, 0x01, 0x02, 0x40, 0x57, 0x28, 0x2b, 0x2c, 0x78, 0x7b, 0x09, 0x10, 0x07, 0x08,
               0x24, 0x25, 0x26, 0x27, 0x29, 0x2a, 0x2d, 0x2e, 0x2f, 0x19, 0x1a,
-              0x3e, 0xa8, 0xab, 0xac, 0xad, 0xae, 0xaf, 0xb0, 0xb1, 0x36, 0x37, 0x38, 0x39, 0x3a, 0x3b)   # worker 0259: the big hit's and the knock-down's rows; before it:   # worker 0259: all the flinch rows FUN_00598950 and death rows
+              0x3e, 0xa8, 0xab, 0xac, 0xad, 0xae, 0xaf, 0xb0, 0xb1, 0x36, 0x37, 0x38, 0x39, 0x3a, 0x3b,   # worker 0259: the big hit's and the knock-down's rows; before it:   # worker 0259: all the flinch rows FUN_00598950 and death rows
+              # worker 0267: motion 9's table rows (FUN_00595440: walk / run ahead, back, left, right) and 0x17's (FUN_00597430,
+              # crouched); their up / down partners (+1 / +2) are not drawn (enemy_ai request: the middle row only)
+              0x60, 0x63, 0x66, 0x69, 0x6c, 0x6f, 0x72, 0x75, 0x7e, 0x81, 0x84, 0x87,
+              # and their up partners (FUN_00345ca8 packs the ones FUN_003455e8 finds; listed for that test, not exported)
+              0x41, 0x61, 0x64, 0x67, 0x6a, 0x6d, 0x70, 0x73, 0x76, 0x79, 0x7f, 0x82, 0x85, 0x88)
 STANCE_FILE = '06800009.bin'      # z128's 'bmd' file (stage 0x0680, k 9)
 
 
@@ -457,7 +462,15 @@ def weapons(d):
                         # record [+0x144] (FUN_00554850 -> FUN_00311600); FUN_00554ea8 reads its +0x78 flags (0x2000 no
                         # effect, 8 at the bullet's object), +0x80 (the floor-hit id, FUN_00335960) and +0xb0 (FUN_00335918)
                         bullet=h(0x7c), f78=SE.u32(d, o + 0x78), fx_floor=struct.unpack_from('<i', d, o + 0x80)[0],
-                        fx_end=struct.unpack_from('<i', d, o + 0xb0)[0]))
+                        fx_end=struct.unpack_from('<i', d, o + 0xb0)[0],
+                        # worker 0270, the record as a bullet's +0x194: +0x84 its model's name (FUN_00553f48 ->
+                        # FUN_00408b30), +0xac its trail effect (FUN_005534f0 -> FUN_003358b8 -> FUN_003366b8), +0xb6
+                        # (signed) the radius bullet +0x2c when +0x78 bit 2 (FUN_00554850), +0x9c the end sound
+                        # (FUN_00554ea8 -> FUN_0033d760)
+                        model=d[o + 0x84:o + 0x8c].split(b'\0')[0].decode('latin-1'),
+                        fx_trail=struct.unpack_from('<i', d, o + 0xac)[0],
+                        f2c=struct.unpack_from('b', d, o + 0xb6)[0],
+                        se_end=d[o + 0x9c:o + 0xa4].split(b'\0')[0].decode('latin-1')))
     return out
 
 

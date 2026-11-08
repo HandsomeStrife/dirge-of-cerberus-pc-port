@@ -26,8 +26,9 @@ const ALL = [
   ['stairs', [['roji01_01', { 0: 2, 1: 4 }, 5, ['n033'], true]]],
   ['stairs', [['heri_tobi', { 0: 4, 1: 7 }, 7, ['e023', 'g043'], false]]],
   ['stairs', [['beast_ev01', { 0: 11, 1: 8 }, 7, ['n028', 'e030', 'n059'], false]]],
-  ['helpme', [['help_people01', null, 8, ['e030', 'e027'], true], ['help_orei01', { 1: 10 }, null, ['p000', 'n034'], true], ['beast_ev02', { 1: 11 }, null, ['n028', 'p000'], true]], 59],
-  ['citizens', [['help_orei02', { 1: 12, 39: 1, 40: 1, 41: 1 }, null, ['n023', 'n024', 'n026'], true]], 58],
+  // worker 0265: the helpme / citizens warps fire triggers 59 / 58 and set stage flag 1 themselves (warp.js), so these sessions do not
+  ['helpme', [['help_people01', null, null, ['e030', 'e027'], true], ['help_orei01', { 1: 10 }, null, ['p000', 'n034'], true], ['beast_ev02', { 1: 11 }, null, ['n028', 'p000'], true]], null],
+  ['citizens', [['help_orei02', null, null, ['n023', 'n024', 'n026'], true]], null],
   ['market', [['help_orei04', { 0: 24, 1: 28, 32: 1, 33: 1, 34: 1 }, 25, ['n018', 'n042', 'p000'], false]]],
   ['market', [['help_people03', { 0: 24, 1: 29 }, 25, ['n017', 'e027'], true]]],
   ['market', [['help_orei03', { 0: 24, 1: 30, 30: 1 }, 25, ['p000'], true]]],
@@ -76,6 +77,9 @@ if (!want.length || want.includes('opening')) {
   try {
     await pg.goto(`http://127.0.0.1:${port}/play.html?sound=0&enemydmg=0`, { waitUntil: 'load' });
     await pg.waitForFunction(() => window.__play && window.__play.stage && window.__play.stage.rt.frameNo > 2, null, { timeout: 240000, polling: 100 });
+    // worker 0265's stage title card (first_event displayStageInfo(0)) holds the opening and takes no pause input (FUN_003fdb48 ->
+    // FUN_00241760(1, 0, 0)): Enter only after the card's fadein
+    await pg.waitForFunction(() => { const P = window.__play, r = P.intro && P.intro.rt, si = P.stageInfo; return r && r.log.some(x => /^fadein /.test(x[1])) && (!si || si.kind < 0); }, null, { timeout: 300000 });
     await pg.keyboard.press('Enter'); await pg.waitForTimeout(300); await pg.keyboard.press('Space');
     await pg.waitForFunction(() => window.__play.stage.battle && !window.__play.intro.active, null, { timeout: 240000, polling: 200 }).catch(() => {});
     await pg.evaluate(() => { const P = window.__play; P.enemyAI.eventFlags[0] = 2; P.enemyAI.eventFlags[63] = 6; });   // one event and its battle(): the trim

@@ -1,0 +1,10 @@
+{
+"name": "w269_bar1",
+"frames": 150,
+"log_from": 35,
+"doc": "worker 0269: from route state r03_mid2 (Vincent ~10 u south of EM barrier records 56 / 57, gate 153), stick forward into the barrier, then forward-right along it. TRACE_FIELDSET=enemy TRACE_PUSHSTEP=1 TRACE_CALLLOG=pushstep TRACE_CALLLOG_FRAMES=35:150. Control: TRACE_POKE=46f4d0=1 (FUN_0035a440's object pass off).",
+"events": [
+{ "from": 10, "to": 80, "lx": 0.0, "ly": -1.0 },
+{ "from": 81, "to": 150, "lx": 0.7, "ly": -0.7 }
+]
+}

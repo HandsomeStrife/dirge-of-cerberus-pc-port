@@ -16,7 +16,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { TICK, STEP, PlayerController, SpeedAnimator, FollowCamera, cameraRays, KEY_WALK, KEY_RUN, MouseFeed, MOUSE_SENS_DEFAULT, CROSS_KEY, dirAngles } from './player.js';
-import { warpRequest, applyWarp, warpHelp } from './warp.js';   // PAGE AID ?warp= (worker 0249)
+import { warpRequest, applyWarp, applyWarpLate, warpPair, warpHelp } from './warp.js';   // PAGE AID ?warp= (worker 0249)
 import { attachGun } from './gun.js';
 import { loadActions } from './actions/index.js';
 import { initReport } from './report.js';
@@ -36,6 +36,7 @@ import { createEnemyAI, GameRandom } from './enemy_ai.js';
 import { createEffects, EffectLayer, wallImpactId, hitImpactId, cameraView } from './effects.js';
 import { boneRows } from './enemy_hit.js';
 import { restoreCheckpoint, initWorld, sceneSave, loadedPair } from './checkpoint.js';
+import { createShotFx } from './shot_fx.js';
 import { AreaStream, pickLight, loadedGrids, Light2 } from './area_stream.js';
 import { floorScale } from './floor_shade.js';
 import { Areas } from './areas.js';
@@ -72,6 +73,7 @@ const SOUND = params.get('sound') !== '0';
 // starts from the save (no opening, as ?intro=0). ?warp=list prints the names
 const WARP = warpRequest(params);
 let warpPending = WARP && WARP !== 'list' ? WARP : null;
+let warpLate = null;                              // worker 0265: a warp waiting for its pair (warp.js applyWarpLate)
 const INTRO = params.get('intro') !== '0' && !warpPending;
 const PACKS = params.has('packs') ? params.get('packs').split(',').filter(Boolean) : (AIM ? ['ladder', 'jump', 'shoot'] : ['ladder', 'jump']);
 // Placement: the game draws the model with the motion player's matrix MP+0x10 (FUN_005ab8f0
@@ -719,7 +721,8 @@ async function main() {
   // load-time start below stays off. introGate.handing: the hand-off (not a stage reload) keeps them playing.
   let areaSoundHook = null;                        // stage-script manager cmd 6 -> FUN_003e6c88 (AreaSound.play; worker 0212)
   const pauseSound = { audio: null, music: null };   // pause_layer.js: menu sounds + the pause's SE hold / BGM volume
-  const snd = (name, pos, range = 400.0) => { if (sfx) sfx.play(name, pos, range); };
+  const snd = (name, pos, range = 400.0) => (sfx ? sfx.play(name, pos, range) : null);   // worker 0270: the slot (FUN_0033d788's +0x18c handle)
+  const sndStop = slot => { if (sfx && sfx.stop) sfx.stop(slot); };                       // worker 0270: FUN_0033cf00
   if (SOUND) import('./audio.js').then(({ GameAudio, SoundEmitters }) => {
     const au = new GameAudio();
     pauseSound.audio = au;
@@ -773,6 +776,13 @@ async function main() {
         // a new MP for Vincent: no feet up (MP+0x440 bits 16-19), no name yet, no previous position
         if (amb.foot) { amb.foot.test.bits = 0; amb.foot.mat = amb.foot.gait = -1; amb.foot.name = ''; }
         amb.footPrev = null;
+        // the stage reload loads the zone's sep.bin into SE block slot 1 again (FUN_00402220) and frees the SE slots: an event's
+        // block and its kept loops don't outlive a Restart (worker 0266). Not on the opening's hand-off (no stage reload: an
+        // event SE such as scr001's 50017 plays on; the events' own loadSoundEffectEx_l(1, 100) restores the slot)
+        if (!introGate.handing) {
+          if (au.zoneCode !== undefined) au.seBlock1(au.zoneCode);
+          if (au.eventSe) au.eventSe.stopAll();
+        }
       };
       // a stage script's cmd 6 (enemy_ai opts.areaSound): FUN_003e6c88(name, vol). L: before the first gesture it is lost
       areaSoundHook = (n, v) => { if (au.ctx && au.se) { areaOn = true; area.play(n, v); } };
@@ -800,7 +810,10 @@ async function main() {
     // export has no "feds": warned, left out, no 404)
     const fed0 = (ids.feds || []).includes('r0000.fed') ? await get('r0000.fed')
       : (console.warn('effects: data/effects has no r0000.fed (re-run export_web_effects.py): effect 0x1000 left out'), null);
-    fx = createEffects({ fed, fed0, core, warn: m => console.warn(m), twister: ids.twister, rand: ids.rand }); fxIds = ids;
+    // worker 0270: the model FEDs (e023 / e024: their rockets' trails and blasts), linked into the same manager
+    const models = ids.models ? await Promise.all(ids.models.map(get))
+      : (console.warn('effects: ids.json lists no model FEDs (re-run export_web_effects.py): rocket trails and blasts left out'), []);
+    fx = createEffects({ fed, fed0, core, warn: m => console.warn(m), twister: ids.twister, rand: ids.rand, models, models0Feds: [0x90c00000] }); fxIds = ids;   // worker 0269: the EM barriers' beam models (= the w269 dumps)
     fxLayer = new EffectLayer(THREE, fx); fxLayer.deferred = true; root.add(fxLayer.group);
     // worker 0208: z128's area FEDs in the level manager DAT_004ee3c0 (its own engine on the same LCG / VU0 R, reseeded
     // once a frame by the impacts' engine, which FUN_002efc78 runs first): FUN_002f15d0's load spawns their auto-start
@@ -818,6 +831,9 @@ async function main() {
     window.__fx = { fx, layer: fxLayer, ids, stage: fxStage, stageLayer: fxStageLayer };   // for the page tests
   } catch (e) { console.warn(`effects: off (${e.message}; run export_web_effects.py)`); fx = null; }
   let enemyAI = null, aiOpts = null, wakeSave = null;
+  // worker 0270: the shots' models and trails (Dragonfly's rockets, the boss's missiles; shot_fx.js)
+  const shotFx = createShotFx({ root, fx, world: () => enemyAI, litPatch, light, stopSound: sndStop });
+  if (aiData) for (const m of new Set(aiData.weapons.map(w => w.model).filter(Boolean))) shotFx.preload(m);
   // worker 0209: the barrels (data/props/props.json, export_web_props.py): their logic joins each AI world (props.attach)
   const propsData = PROPS && ENEMY_AI && aiData ? await fetch('data/props/props.json').then(r => r.ok ? r.json() : null).catch(() => null) : null;
   if (PROPS && ENEMY_AI && aiData && !propsData) console.warn('props: data/props/props.json missing (run export_web_props.py): no barrels');
@@ -825,8 +841,13 @@ async function main() {
   const roomNodes = createRoomNodes(root);
   if (propsData && !propsData.chunkAnims) console.warn('props: props.json has no chunkAnims (re-export data/props, export_web_props.py): the doors do not open');
   const chunkAnims = propsData && propsData.chunkAnims ? new ChunkAnims(propsData.chunkAnims, { onNode: (c, n, M) => roomNodes.move(c, n, M) }) : null;
+  const g048Json = propsData ? await fetch('data/props/g048.json').then(r => r.ok ? r.json() : null).catch(() => null) : null;   // worker 0269: the beams' bone (bind pose)
   const props = propsData ? createProps({ data: propsData, weapons: aiData.weapons, areas,
-    effect: fx ? { spawn: (id, p, sc) => fx.spawn(id, p, sc), hit: (kind, cls, p) => { const id = hitImpactId(fxIds, kind, cls, fx.warn); if (id >= 0) fx.spawn(id, p); } } : null }) : null;
+    effect: fx ? { spawn: (id, p, sc) => fx.spawn(id, p, sc), hit: (kind, cls, p) => { const id = hitImpactId(fxIds, kind, cls, fx.warn); if (id >= 0) fx.spawn(id, p); },
+                   attached: (id, att) => fx.spawn(id, [0, 0, 0], null, att), softEnd: em => fx.softEnd(em), remove: em => fx.remove(em) } : null,   // worker 0269: the barriers' beams
+    models: { g048: g048Json },
+    // worker 0269: the EM barriers' hum (asj_620) in the placed sounds' slots (ambient.js SlotStreams; none before the audio loads)
+    hum: { open: (n, p, v, o) => (amb.slots ? amb.slots.open(n, p, v, o) : null), close: h => { if (amb.slots) amb.slots.close(h); } } }) : null;
   let propsView = null;
   // worker 0224: the item pickups and drops (data/items/items.json, export_web_items.py); they join each AI world (items.attach)
   const itemsData = ITEMS && ENEMY_AI && aiData ? await fetch('data/items/items.json').then(r => r.ok ? r.json() : null).catch(() => null) : null;
@@ -850,6 +871,7 @@ async function main() {
   const startBodies = new Set(enemies ? enemies.actors.map(a => a.rec) : []);   // the bodies drawn at the start   // aiOpts / wakeSave: rebuilt by the Restart (checkpoint.js)
   let gameHud = null;                                // the game's HUD (hud.js), set up below; enemyAI's hudHit reads it
   let stage = null, stageData = null, createStage = null, stageGs = null, stageSi = null;
+  let stageSiLoading = params.get('stage') !== '0';   // worker 0265: stage_info.js and its data still loading (the opening's title card waits)
   let stagePaused = false;                        // worker 0257: main's events' event pause (stageEventKey)
   let stageRes = null;                            // results.js (worker 0232): the section stats, the level end's Status screen
   try {
@@ -858,6 +880,7 @@ async function main() {
       globalFlags: () => (stage ? stage.globalFlags : null),   // manager cmds 9 / 0xa (FUN_0037ce60 / FUN_0037cea0)
       viewCam: () => { const v = cameraView(renderFxCamera()); return { eye: follow.eye.slice(), toView: v.toView, fov: renderFov() ?? 73.5 }; },   // manager cmd 0xab (FUN_0053da98)
       sound: snd,
+      soundStop: sndStop,                                      // worker 0270: a bullet's own sound (+0x18c) stopped at its delete
       stats: { add: (k, n) => { if (stageRes) stageRes.stats.add(k, n); } },   // FUN_0031d668: the section stats (results.js, worker 0232)
       areaSound: (n, v) => { if (areaSoundHook) areaSoundHook(n, v); },   // stage-script cmd 6 (worker 0212)
       cellMask: (bit, on) => visMask.setScript(bit, on),   // stage-script cmds 0x54 / 0x55 (worker 0208) -> DAT_004e8700 (worker 0225)
@@ -866,6 +889,7 @@ async function main() {
         hit: (kind, cls, p) => { const id = hitImpactId(fxIds, kind, cls, fx.warn); if (id >= 0) fx.spawn(id, p); },   // FUN_003361b8
         spawn: (id, p) => fx.spawn(id, p) } : null,           // FUN_003366b8(id) + FUN_00335020(pos): the bullet-end effect
       props,                                                   // worker 0209: the barrels (props.js)
+      shotFx,                                                  // worker 0270: rocket / missile models and trails (shot_fx.js)
       items,                                                   // worker 0224: the item pickups and drops (items.js)
       // FUN_00567c08: a bullet's hit on Vincent -> the HUD's hit-direction ring (hud.js; gameHud is set up below)
       hudHit: (p, from) => { if (gameHud) gameHud.hit(p, from); },
@@ -1155,12 +1179,18 @@ async function main() {
           roomProbe(renderEye(), renderFxCamera(), renderFov()); if (light) light.stream.frame(ctrl.prev); roomShow();
           // FUN_00265350 (late in FUN_00248110; reads only the slot table): the chunks' scrolling UVs (room.js RoomUVAnim)
           if (uvAnim) uvAnim.frame(light && light.stream.areas.length ? light.stream.loaded() : null, STEP);
+          // worker 0265: the stage title card (stage_info.js, first_event's displayStageInfo(0)): FUN_003fdf00 first in the frame, the
+          // menu managers' effects (FUN_002efc78 / FUN_002efe98) with the others, as in play's frame. No ✕ reaches it here (the card has
+          // no mode-1 step)
+          if (stageSi) { stageSi.frame(false); stageSi.sounds(); stageSi.events.length = 0; }
           if (fx) fx.begin(STEP);
           if (fxStage) fxStage.begin(STEP);
+          if (stageSi) stageSi.fxBegin(STEP);
           if (stage) stage.tick(20);               // main (stage_controller.js): its prelude, then first_event's wait
           intro.tick();
           if (chunkAnims) chunkAnims.frame(light && light.stream.areas.length ? light.stream.loaded() : null, STEP);   // FUN_00265350: the nodes (chunk_anim.js)
           if (fx) { const c = renderFxCamera(), fov = renderFov(); fx.end(null, fov); if (fxStage) fxStage.end(cameraView(c), fov); fxLayer.update(c); if (fxStage) fxStageLayer.update(c); }
+          if (stageSi) stageSi.fxEnd(renderFxCamera());   // worker 0265: the title card's effects (menu_fx.js)
           if (intro.done) endIntro();
         }
         acc -= TICK; n++; continue;                // ended: held (still hidden, the event's last view) until the hand-off
@@ -1179,6 +1209,16 @@ async function main() {
         applyWarp(name, { ctrl, follow, stream: light ? light.stream : null, flags: enemyAI.eventFlags, gflags: stage.globalFlags, cape });
         detached = null; pressed.clear(); mouse.dx = mouse.dy = 0;
         window.__play.warp = { name, tick: stats.ticks };
+        warpLate = name;
+      }
+      // worker 0265: the warp's trigger and late flags once its chunk pair is in (warp.js applyWarpLate)
+      if (warpLate && enemyAI && stats.ticks > window.__play.warp.tick + 1) {
+        const s = light ? light.stream : null, pr = warpPair(warpLate);
+        if (!s || !pr || (!s.busy && pr.every(c => [0, 1, 2].some(i => s.slotChunk(i) === c)))) {
+          applyWarpLate(warpLate, { flags: enemyAI.eventFlags,
+            trigger: t => { const o = enemyAI.triggers.find(x => x.t.idx === t); if (o) enemyAI.runEvent(o, 0xd, [0, 0]); else console.warn('warp: no trigger ' + t); } });
+          warpLate = null;
+        }
       }
       // the camera runs first in the game frame: it follows the player as the last frame
       // left him, and this frame's stick-to-world uses its new matrix (player.js camera notes)
@@ -1233,6 +1273,7 @@ async function main() {
       // FUN_0053b500 -> FUN_00542ab8 (actor push-out) runs before the actors move (T: k_push16, the push of
       // frame f comes from the positions it starts with and moves Vincent in the same frame)
       ctrl.push = enemyAI ? enemyAI.pushOut(pOld) : null;
+      ctrl.contacts = props && enemyAI ? props.blockers : null;           // worker 0269: FUN_0035a440's object pass (the EM barriers)
       ctrl.step(aim(inp, b));
       // worker 0243: FUN_003320c0's item buttons (id 0x1d = D-pad right -> the use request, 0x1e = D-pad left -> the next item;
       // page keys E / Q). The control update is skipped while game-state bit 11 is set (noControl), as for the other buttons.
@@ -1336,6 +1377,7 @@ async function main() {
     // 44 / 66; event 0x23) at clock 0, the placement's clocks and frame, then 41-43 (stand-in) and 45-49 (GUESS (0201):
     // the save's states, wakeSave) as at record 10 (T w204_reload / w240_act)
     // worker 0242: after a scene_save the stage-start stand-ins (41-43's loadPass, wakeSave) are not run (RECORD_WAKE below)
+    shotFx.clear();                                            // worker 0270: the old world's shots go with it
     enemyAI = initWorld(o => createEnemyAI({ ...aiOpts, ...o }), { flags, frame, clock, reload: !!rec, deadRecs: rec ? rec.dead : [], loadRecs: rec ? [] : enemies ? enemies.loadRecs || [] : [],
       wake: rec ? null : w => wakeSave(w, AWAKE.filter(k => k !== 44 && k !== 66)) });
     if (window.__play) window.__play.enemyAI = enemyAI;
@@ -1402,7 +1444,7 @@ async function main() {
     onRequest(r) { if (r === 'restart') restartPending = true; } });
   // worker 0255: what FUN_00334590 reads for the revive
   if (gameOver) gameOver.go.status = { s64: () => php.s64 ?? 0, settled: () => !!ctrl.P.settled, state: () => ctrl.P.state };
-  window.__play = { ctrl, anim, follow, aim: weapon, col, stats, amb, areas, camera, renderer, output, root, vin, light, spawnY: gy,
+  window.__play = { shotFx, ctrl, anim, follow, aim: weapon, col, stats, amb, areas, camera, renderer, output, root, vin, light, spawnY: gy,
                     playerState, camView, report, keys, pressed, motions, packsReady, actionHelp, cape, enemies, enemyAI, php, pause, gameHud, pauseSound, gameOver,
                     sound: () => (soundProbe ? soundProbe() : null), soundStop: () => { if (soundStop) soundStop(); }, restart: { get count() { return restarts; }, get pending() { return restartPending || !!restartHold || restartReady; }, get record() { return checkpointRec; } },
                     intro: { get active() { return !!intro; }, get rt() { return introRt; }, get windows() { return introWin; }, get hudParked() { return !!intro && output.hud !== introHud; }, get ended() { return introEnded; }, get paused() { return !!intro && intro.paused; } },
@@ -1423,6 +1465,9 @@ async function main() {
     if (!intro || intro.done) return;
     if (PAUSE_KEYS.start.includes(e.code)) {
       e.preventDefault();
+      // worker 0265: while a stage-info card is up FUN_003fdb48's FUN_00241760(1, 0, 0) sets DAT_004f3044 0x100: FUN_003de130 takes no
+      // pause input (and FUN_003e0cc8(1): no Skip)
+      if (!intro.paused && stageSi && stageSi.kind >= 0) return;
       intro.pause(!intro.paused);
       if (introWin) introWin.pausePrompt(intro.paused, performance.now());   // the pause's screen (event_window.js, worker 0239)
     } else if (intro.paused && PAUSE_KEYS.cross.includes(e.code)) {
@@ -1509,6 +1554,9 @@ async function main() {
       onEndSection: () => { if (stageRes) stageRes.endSection(); },
       onExit: (z, a, b) => { if (stageRes) stageRes.onExit(z, a, b); },   // the frame loop below stops the world
       hudControl: (b) => { if (gameHud && gameHud.control) gameHud.control(b); },   // set_usercontrol -> FUN_003b01b0 (worker 0248)
+      // worker 0265: event mode's FUN_0033c1a8 (reticle off) and battle()'s FUN_0033c060 (the kind from the mode); null without the weapon
+      // (DAT_0046e290 +0x44 == 0)
+      reticle: weapon ? { off: () => weapon.core.reticleOff(), sync: () => weapon.core.reticleSync() } : null,
       // worker 0261: setVisibleAll(0, b) -> FUN_00408900 on every model; setVisibleModelGroup -> DAT_004e8700 (as stage script cmds 0x54 / 0x55)
       allVisible: (v) => { vin.eventHidden = !v; if (enemies) for (const da of enemies.actors) if (da.body) da.body.visible = v; if (itemsView) itemsView.hideAll = !v; },
       cellMask: (bit, on) => visMask.setScript(bit, on),
@@ -1617,6 +1665,7 @@ async function main() {
     area: () => ({ play: (n, v) => { if (areaSoundHook) areaSoundHook(n, v); } }),
     audio: () => pauseSound.audio,
     voices: () => introVoices,
+    bg: () => amb.placed,                                            // playBgSound / FUN_003e6538: the placed-sound table (ambient.js; worker 0266)
     bgmRow: (n) => { const m = pauseSound.music, r = m && m.meta && m.meta[n]; return r ? parseInt(r.flags, 16) : null; },
   };
   function startIntro() {
@@ -1626,7 +1675,8 @@ async function main() {
                           actorLib: introActors, root, litPatch, light,       // the event's actors (event_actors.js, worker 0218)
                           rand: () => aiRng.rand(),                            // FUN_0040b5c0: the face animations' waits (worker 0248)
                           sound: introSound,                                   // its music / SEs / voices (event_sound.js, worker 0222)
-                          windows: introWin = introWinMod ? introWinMod.createEventWindows({ D: introWinData }) : null });   // subtitles (worker 0239)
+                          windows: introWin = introWinMod ? introWinMod.createEventWindows({ D: introWinData }) : null,   // subtitles (worker 0239)
+                          stageInfo: () => stageSi, stageInfoWait: () => stageSiLoading });   // the stage title card (stage_info.js, worker 0265)
     introGate.event = true;
     introGate.on = true;
     introRt = intro.rt;
@@ -1668,7 +1718,7 @@ async function main() {
       .then(([d, m, GS, SI, RS, SV, LIB, GUN, WIN]) => {
         stageViewMod = SV; stageLib = LIB; stageGun = GUN;
         if (WIN) { stageWinMod = WIN.W; stageWinData = WIN.D; }
-        if (!d) { console.warn('stage: data/event/ev0100_stage.json missing (tools/byo/build_web.sh step stage): no story beats'); return; }
+        if (!d) { stageSiLoading = false; console.warn('stage: data/event/ev0100_stage.json missing (tools/byo/build_web.sh step stage): no story beats'); return; }
         stageData = d; createStage = m.createStageController;
         // worker 0220: the game-state bits (game_state.js) and the stage-info boxes (stage_info.js: FUN_0039e8e8 / FUN_003fdb48)
         stageGs = GS;
@@ -1677,7 +1727,8 @@ async function main() {
         // worker 0232: the section stats from the save (results.js) and the Status box (stage-info kind 2 -> box 0x1d)
         if (RS) stageRes = RS.createResults({ stageInfo: stageSi, gil: () => (items ? items.inventory.gil : 0) });
         if (!stage) startStage(!!intro, intro ? 0 : (introRt ? introRt.skip : 0));   // with the opening, or from the save / a hand-off
-      }).catch(e => console.warn('stage: controller off:', e && e.message));
+        if (stageSi) stageSi.ready.then(() => { stageSiLoading = false; }); else stageSiLoading = false;   // worker 0265
+      }).catch(e => { stageSiLoading = false; console.warn('stage: controller off:', e && e.message); });
     if (!intro) await stageReady;
   }
   requestAnimationFrame(frame);

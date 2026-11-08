@@ -36,7 +36,14 @@ try {
     try { await pg.goto(`http://127.0.0.1:${port}/play.html?sound=0&enemydmg=0`, { waitUntil: 'load' }); break; }
     catch (e) { if (i > 20) throw e; await new Promise(r => setTimeout(r, 250)); }
   }
-  await pg.waitForFunction(() => window.__play && window.__play.intro.rt && window.__play.intro.rt.frameNo > 20, null, { timeout: 120000 });
+  // worker 0265: the stage title card (first_event pc 884 displayStageInfo(0), polled at pc 1428 before its fadein) now holds the
+  // opening for its 4000 ms + the file read; the frames below were measured without it, so they are shifted by its length (the
+  // frames from the card's call to the fadein, from the event's log)
+  const cardLen = async (P = pg) => { await P.waitForFunction(() => window.__play && window.__play.intro.rt && window.__play.intro.rt.log.some(x => /^fadein /.test(x[1])), null, { timeout: 300000 });
+    return P.evaluate(() => { const L = window.__play.intro.rt.log, a = L.find(x => x[1] === 'stageinfo 0'), b = L.find(x => /^fadein /.test(x[1])); return a && b ? b[0] - a[0] : 0; }); };
+  const S = await cardLen();
+  ok(S >= 200 && S <= 215, `the title card holds the opening ${S} frames (8 read + 200 + the close)`);
+  await pg.waitForFunction(n => window.__play && window.__play.intro.rt && window.__play.intro.rt.frameNo > n, 20 + S, { timeout: 120000 });
   const a = await pg.evaluate(() => {
     const P = window.__play, rt = P.intro.rt, v = rt.view, c = P.camera.position;
     return { active: P.intro.active, ticks: P.stats.ticks, view: v && { cam: v.cam, eye: v.eye },
@@ -62,7 +69,7 @@ try {
   // worker 0239: the subtitle windows (event_window.js): MES_10109VN2 opens at page frame 226 (open_l -> command 10 ->
   // FUN_00383408, box kind 4), drawn through the pause layer with the speaker's name (264 sprites = 22 glyphs x 12)
   {
-    await pg.waitForFunction(() => window.__play.intro.rt && window.__play.intro.rt.frameNo >= 240, null, { timeout: 120000 });
+    await pg.waitForFunction(n => window.__play.intro.rt && window.__play.intro.rt.frameNo >= n, 240 + S, { timeout: 120000 });
     const w = await pg.evaluate(() => { const P = window.__play, W = P.intro.windows;
       return W && { keys: W.screens.map(x => x.key), prims: W.draw().length, layer: !!(P.pause && P.pause.layer), hud: P.intro.hudParked && !!P.output.hud, log: W.log.slice() }; });
     ok(w && w.keys.join() === 'MES_10109VN2' && w.prims === 264 && w.layer && w.hud,
@@ -85,7 +92,7 @@ try {
   if (SHOTS) {
     fs.mkdirSync(SHOTS, { recursive: true });
     for (const f of (process.env.TEST_SHOT_FRAMES || '120,450,1000,1600').split(',').map(Number)) {
-      await pg.waitForFunction(n => window.__play.intro.rt && window.__play.intro.rt.frameNo >= n, f, { timeout: 300000 });
+      await pg.waitForFunction(n => window.__play.intro.rt && window.__play.intro.rt.frameNo >= n, f + S, { timeout: 300000 });
       const fr = await pg.evaluate(() => window.__play.intro.rt.frameNo);
       await pg.screenshot({ path: path.join(SHOTS, `page_ev${String(fr).padStart(5, '0')}.png`) });
     }
@@ -104,7 +111,7 @@ try {
   const cams = b.log.filter(x => x.startsWith('camera')).map(x => +x.split(' ')[1]);
   ok(cams.join() === '1,2,3,1,2,3,1,2,1', `camera order ${cams.join()}`);
   ok(b.state.usercontrol === 1 && b.state.battlecontrol === 1 && b.state.battlemode === 1, 'main() ends: battle mode 1, user / battle control on');
-  ok(b.frames > 1500 && b.frames < 1800, `the event lasts ${b.frames} frames`);
+  ok(b.frames - S > 1500 && b.frames - S < 1800, `the event lasts ${b.frames} frames (${b.frames - S} without the title card)`);
   // the hand-off: the Restart path (uncounted), then play ticks from Vincent's hand-off position (T record 10)
   await pg.waitForFunction(() => window.__play.stats.ticks > 30, null, { timeout: 120000 });
   const c = await pg.evaluate(() => {
@@ -193,6 +200,8 @@ try {
     await pg.waitForTimeout(500);
     await pg.keyboard.press('Space');
     await until(() => window.__play.restart.count === 3 && window.__play.intro.active && window.__play.intro.rt.frameNo > 60, null, 120000);
+    // worker 0265: not while the stage title card is up (FUN_003fdb48 -> FUN_00241760(1, 0, 0): no pause input then; play.js ignores Start)
+    await until(() => { const si = window.__play.stageInfo; return !si || si.kind < 0; }, null, 120000);
     await pg.keyboard.press('Enter');
     await until(() => window.__play.intro.paused);
     // worker 0239: the event pause's screen (layout 0x4779c0): the dim, image 0x10c and the ✕ icon (0x36), pulsing
@@ -228,13 +237,29 @@ try {
   {
     const pg3 = await browser.newPage({ viewport: { width: 640, height: 360 } });
     const errs3 = []; pg3.on('pageerror', e => errs3.push(String(e)));
+    // worker 0266: every buffer source's real start (the context time it is heard from, and its offset)
+    await pg3.addInitScript(() => { const o = AudioBufferSourceNode.prototype.start;
+      AudioBufferSourceNode.prototype.start = function (when = 0, off = 0) { (window.__srcStarts ??= []).push({ buf: this.buffer, when, off }); return o.apply(this, arguments); }; });
     await pg3.goto(`http://127.0.0.1:${port}/play.html`, { waitUntil: 'load' });
     await pg3.waitForFunction(() => window.__play && window.__play.intro.rt && window.__play.intro.rt.frameNo > 5, null, { timeout: 120000 });
     await pg3.keyboard.press('ShiftLeft');                // the browser's first gesture (AudioContext)
-    await pg3.waitForFunction(() => window.__play.intro.rt.frameNo > 140, null, { timeout: 300000 });
-    const v = await pg3.evaluate(() => { const r = window.__play.intro.rt, V = r.sound.voices(); return { log: V.log.slice(), out: !!V.out, area: r.lastArea, ctx: !!(window.__play.pauseSound.audio && window.__play.pauseSound.audio.ctx) }; });
+    const S3 = await cardLen(pg3);
+    // playVoice's context time, taken as the event calls it
+    await pg3.evaluate(() => { const V = window.__play.intro.rt.sound.voices(), f = V.play.bind(V);
+      V.play = (n) => { (window.__asked ??= []).push([n, V.au.ctx ? V.au.ctx.currentTime : null]); return f(n); }; });
+    // the first voice (10109vn) itself, or 600 frames past the card (its fetch and decode take real time with sound on)
+    await pg3.waitForFunction(n => { const r = window.__play.intro.rt, V = r.sound.voices(); return (V && V.log.length > 0) || r.frameNo > n; }, 600 + S3, { timeout: 300000 });
+    const v = await pg3.evaluate(async () => { const r = window.__play.intro.rt, V = r.sound.voices(), ch = V.log.length && V.bufs.get(V.log[0]); if (ch && ch.buf) await ch.buf; return { log: V.log.slice(), out: !!V.out, area: r.lastArea, ctx: !!(window.__play.pauseSound.audio && window.__play.pauseSound.audio.ctx) }; });
     ok(v.ctx && v.log[0] === '10109vn' && v.out && v.area && v.area[0] === 'asj_036', `sound on: AudioContext ${v.ctx}, voice ${v.log[0]} started (${v.out}), area ${v.area && v.area[0]}`);
-    await pg3.waitForFunction(() => window.__play.intro.rt.frameNo > 960, null, { timeout: 600000 });
+    // worker 0266: a voice is heard the PCM ring's queue after playVoice (event_sound.js VOICE_PIPE_S, T w266_open: 480 ms)
+    // measured from the audio graph: the voice buffer's source start (when - offset) against the context time at playVoice
+    const vt = await pg3.evaluate(async () => { const E = await import('./event_sound.js'); const V = window.__play.intro.rt.sound.voices();
+      const [n, asked] = (window.__asked || [])[0] || [], ch = n && V.bufs.get(n), buf = ch && ch.buf ? await ch.buf : null;
+      const s = (window.__srcStarts || []).find((x) => buf && x.buf === buf);
+      return { P: E.VOICE_PIPE_S, d: s && asked != null ? s.when - s.off - asked : null }; });
+    const d = vt.d;
+    ok(d !== null && Math.abs(d - vt.P) < 0.005, `the first voice is heard ${d === null ? '?' : (d * 1000).toFixed(1)} ms after playVoice (game: ${(vt.P * 1000).toFixed(1)} ms)`);
+    await pg3.waitForFunction(n => (window.__play.pauseSound.music && window.__play.pauseSound.music.name) || window.__play.intro.rt.frameNo > n, 1300 + S3, { timeout: 600000 });
     const m = await pg3.evaluate(() => window.__play.pauseSound.music && window.__play.pauseSound.music.name);
     ok(m === 'bgm_274', `playMusic2: the music stream is ${m}`);
     ok(errs3.length === 0, `sound on: no page errors (${errs3.slice(0, 2).join(' | ')})`);

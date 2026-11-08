@@ -197,7 +197,9 @@ ok(warns.some(w => w.includes('KerberosActor.setpos_l')), 'untranslated natives 
     const sound = {
       music: () => ({ open: (n, v) => c('open ' + n + ' ' + v), playMusic3: (n, v, x) => c('pm3 ' + n + ' ' + v + ' ' + x), stopMusic: () => c('stop'), changeMusicVol: () => c('vol') }),
       area: () => ({ play: (n, v) => c('area ' + n + ' ' + v) }),
-      audio: () => ({ ctx: {}, se: { names: Object.fromEntries(Object.entries(SE).map(([k, id]) => [k, { id, flags: 32 }])) }, playId: (id, v, p) => c('se ' + id + ' ' + v + ' ' + p) }),
+      // worker 0266: the event SEs play through audio.eventSe (event_sound.js EventSeSlots, fixed pan 0x40) once audio.program finds them
+      audio: () => ({ ctx: {}, se: { names: Object.fromEntries(Object.entries(SE).map(([k, id]) => [k, { id, flags: 32 }])) }, program: () => '00',
+                      eventSe: { play: (name, row, prog, v) => c('se ' + row.id + ' ' + v + ' 64') } }),
       voices: () => ({ load: (n) => { vb.add(n); c('vload ' + n); }, play: (n) => c('vplay ' + n + (vb.has(n) ? '' : ' none')), stopAll: () => { vb.clear(); c('vstop'); } }),
       bgmRow: (n) => bgmFlags[n] ?? null,
     };

@@ -346,8 +346,10 @@ export async function setupHud({ output, player, url = 'data/hud/hud.json', camY
       if (weapon && (weapon.hudMask & 8) && items) { const e = items.selected(); if (e && e[1] !== 0) st.setItem(e[0], e[1]); else st.setItem(-1, 0); }
       if (weapon) weapon.hudMask = 0;
       for (const [p, from] of hits.splice(0)) st.hit(p, from);
-      if (hide) { hide = false; st.hideAll(); }
-      for (const b of control.splice(0)) { if (b) st.show(); else st.hideAll(); }
+      // FUN_003aff20's FUN_003b03e8: hud_core takes kind 5 (the ring), aim_core the reticle's kind and kinds 6 / 7 / 4 (worker 0265)
+      const off = () => { st.hideAll(); if (weapon && weapon.reticleOff) weapon.reticleOff(); };
+      if (hide) { hide = false; off(); }
+      for (const b of control.splice(0)) { if (b) st.show(); else off(); }
       // the screen update's group step (FUN_003d5a80 -> FUN_003d5d10); its order against the stage loop's hide is
       // not decoded but not visible either (both see this frame's clock; at the start t = 0 is the start position)
       st.slideFrame();

@@ -407,6 +407,22 @@ export class WeaponSystem {
     if (k === r.kind) return;
     this.hideKind(r.kind); this.showKind(k); r.kind = k;
   }
+  // FUN_003b03e8 (worker 0265): FUN_003b0440(HUD, 0), then FUN_003b0738 for kinds 5, 6, 7, 4. Run by the HUD's slide-out
+  // FUN_003aff20 (set_usercontrol(0), the game over) and by event mode's FUN_0037e048 -> FUN_00324ca0 -> FUN_0033c1a8
+  // (the same two calls). HUD+0x60 (hud.mode) is left as it was, so FUN_0033ba88 shows the reticle again only at the next
+  // mode change, or battle()'s FUN_00324e70 -> FUN_0033c060 (reticleSync) does
+  reticleOff() {
+    this.setKind(0);
+    for (const k of [5, 6, 7, 4]) this.hideKind(k);
+  }
+  // FUN_0033c060: the kind from HUD+0x60 (the mode) and +0x64 bit 0 (auto-lock: this.lockOn). Mode 0 also drops the locked
+  // and on-target flags (FUN_0033c340(0), FUN_0033c2b8(0)). Mode 2's FUN_003ae8f0 / FUN_003ae8d0 (+0x64 bit 3) are not on the
+  // page (mode 2 is not reachable with this loadout: setHudMode)
+  reticleSync() {
+    const m = this.hud.mode;
+    if (m === 0) { this.setKind(0); this.setLocked(false); this.setOnTarget(false); }
+    else if (m === 1 || m === 2) this.setKind(this.lockOn ? 2 : 1);
+  }
   // the kind's length tables: DAT_00472110 (show / hide), DAT_00472130 (on target), DAT_00472140 (locked)
   lens(k, t = 'len_show') { const K = this.ret && this.ret.kinds[k]; return K ? K[t] : 100; }
   // FUN_003b0490(RET, k, a, to, b, len): from phase a a fresh run of len; from b the reverse of the

@@ -28,6 +28,7 @@ const rz = x => { const r = Math.fround(x); if (!isFinite(r) || r === x || Math.
 const unit3 = v => { const l = len3(v); return l > 0 ? v.map(x => f(x / l)) : [0, 0, 0]; };   // vrsqrt / vmulq (0 -> 0)
 
 export const PROP_KIND = 'prop';
+export const BARRIER_CLS = 8;           // section-14 +0x14 class 8 -> object type 0x13 (FUN_00548348), vt 0x58c630: the EM barriers
 export const EXPL_TIME = 60.0;          // FUN_0057f040: +0xcc = 60.0 (0x42700000): the explosion lives 60 ticks (50 frames)
 export const EXPL_GROW = 0.2;           // FUN_0057f040: +0xd8 = radius x 0.2 per frame (FUN_0057e638)
 export const EXPL_FX_SCALE = 0.1;       // FUN_00336280: effect scale = radius x DAT_0046e534 (0.1)
@@ -83,7 +84,27 @@ export function boxRay(a, b, half, m) {
            normal: [0, 1, 2].map(j => f(f(f(N[0] * m[0][j]) + f(N[1] * m[1][j])) + f(N[2] * m[2][j]))) };
 }
 
-export function createProps({ data, weapons = [], effect = null, areas = null, warn = console.warn } = {}) {
+// worker 0269: a gimmick's model as an effect attachment (FUN_002dbc80's MP +0x3e4 -> +0x10 = the MP): matrix() = MP +0x10 =
+// FUN_005842c8's T(0, +0x1c / 2, 0) (type flag bit 4) x the object matrix; bone(k) = FUN_002db448 = the bone's model-space
+// matrix x that. L: the bones at their bind pose (data/props/<model>.json joints.bind_world_colmajor: column-major = the game's
+// rows; the model has no clips and no local pose file).
+export function modelAttach(o, bind) {
+  const hh = (o.type.flags >> 4) & 1 ? f(o.h * 0.5) : 0, m = o.m;
+  const M = new Float32Array(16);
+  for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) M[4 * i + j] = f(m[i][j]);
+  for (let j = 0; j < 3; j++) M[12 + j] = f(o.pos[j] + f(m[1][j] * hh));
+  M[15] = 1;
+  const bone = k => {
+    const b = bind && bind[k];
+    if (!b) return M;
+    const o4 = new Float32Array(16);
+    for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) o4[4 * i + j] = f(f(f(b[4 * i] * M[j]) + f(b[4 * i + 1] * M[4 + j])) + f(f(b[4 * i + 2] * M[8 + j]) + f(b[4 * i + 3] * M[12 + j])));
+    return o4;
+  };
+  return { matrix: () => M, bone };
+}
+
+export function createProps({ data, weapons = [], effect = null, areas = null, hum = null, models = {}, warn = console.warn } = {}) {
   const warned = new Set();
   const warnOnce = m => { if (!warned.has(m)) { warned.add(m); warn(m); } };
   const types = data.types || {};
@@ -103,6 +124,7 @@ export function createProps({ data, weapons = [], effect = null, areas = null, w
     const ty = types[String(rec.type)];
     const pos = rec.m[3].slice(0, 3).map(f);
     const shape = ty.shape;
+    if (ty.cls === BARRIER_CLS) return makeBarrier(rec, ty, pos);
     if (shape !== 2) warnOnce(`props: record ${rec.rec} shape ${shape} (only the cylinder, 2, is translated): not hittable`);
     return {
       kind: PROP_KIND, id: 'p' + rec.rec, rec: rec.rec, model: rec.model, type: ty, m: rec.m, pos,
@@ -127,6 +149,126 @@ export function createProps({ data, weapons = [], effect = null, areas = null, w
     if ((fl >> 19) & 1) { o.f38 |= 0x181; o.f40 |= 0x70; }
     if ((fl >> 1) & 1) o.f38 |= 0x30;
     if (!((fl >> 11) & 1)) o.f38 |= 4;                              // +0x38 bit 2 (lockable)
+    // shape 0..3 with type flag bit 2 clear (not breakable): +0x28 bit 0x200000 (FUN_0035a440 sweeps the body against it)
+    if (o.type.shape >= 0 && o.type.shape < 4) o.flags28 = (fl & 4) ? (o.flags28 & ~0x200000) : (o.flags28 | 0x200000);
+  }
+
+  // ---- the EM barriers (worker 0269): section-14 class 8 -> object type 0x13 (FUN_00548348 case 8 -> FUN_0053db98 ->
+  // FUN_0054f1c8, vt 0x58c630; model g048). The state byte +0x120: 1 = on (constructor), 2 = switching off, 0 = off.
+  // FUN_0054f540(o, state, quiet): 1 / 2: +0x38 |= 0x70 (bits 4 / 5: FUN_0035a440's object pass, obj_contact.js; bit 6: the
+  // camera), the sound asj_630 (on) / asj_631 (off) at the object (FUN_0054b158) unless quiet; 0: +0x38 low byte and +0x40
+  // bit 6 cleared. Then, on a change or when not quiet, an active barrier's beams (FUN_0054f9d8(o, 0)).
+  function makeBarrier(rec, ty, pos) {
+    return {
+      kind: PROP_KIND, id: 'p' + rec.rec, rec: rec.rec, model: rec.model, type: ty, m: rec.m, pos, barrier: true,
+      script: rec.script, vars: new Int16Array(8), t3c: new Int16Array(2),
+      hp: ty.hp, flags28: 0x8000, f38: 0, f40: 0x170, f48: rec.flags48, f50: rec.f50 ?? 0,
+      st: 1,                                                        // +0x120 = 1 (FUN_0054f1c8)
+      ems: [],                                                      // its beams' emitters (MP +0x3e4 slots +0x1c..)
+      half: ty.size.map(v => f(v * 0.5)),                           // shape 0: the box +-size / 2 (FUN_005861a8 / FUN_00585dc0)
+      r: f(ty.size[0]), h: f(ty.size[1]),                           // props_view: FUN_005842c8's T(0, +0x1c / 2, 0) (type flag bit 4)
+      area: rec.f4c, drawn: false, gone: false,
+    };
+  }
+  // vt+0x2fc FUN_0054fa48(o, 0): FUN_00583d70, +0x38 bit 10 cleared; the record's +0x50 bit 0 -> off (0), else on (1), quiet
+  function barrierFlags(o) {
+    flagBits(o);
+    o.f38 &= ~0x400;
+    barrierState(o, (o.f50 & 1) ? 0 : 1, 1);
+  }
+  function barrierState(o, s, quiet) {
+    const same = o.st === s;
+    o.st = s;
+    if (s === 1 || s === 2) {
+      o.f38 |= 0x70;
+      if (!quiet) W.sound(s === 1 ? 'asj_630' : 'asj_631', o.pos.slice());   // FUN_0054b158 -> FUN_0054ae78: +0x90 (+0x40 bit 7 clear)
+      if (s === 2) humStop(o);
+    } else if (s === 0) {
+      o.f38 &= 0xff00; o.f40 &= ~0x40;
+      humStop(o);
+    }
+    if (same && !quiet) return;
+    if (o.flags28 & 1) beams(o, 0);
+  }
+  // FUN_0054f9d8(o, age) -> FUN_0054f660: state 1 -> FUN_0054f7b8(o, 1) then the four emitters 0x90c00000..3 (record +0x50
+  // bit 1: 0x90c00400..; model g091: 0x916c..) from the model's FED, FUN_002dbc80(age 0 or 50, MP +0x3e4, id, 1); other
+  // states -> FUN_0054f7b8(o, 0): their soft end (FUN_002e7198). Then the hum: Vincent within 80 (FUN_0054f8b0) ->
+  // FUN_0054f918 (state 1: asj_620 looped at the object, FUN_003e8ec8(80.0, ..)).
+  // T: w269_spawn2 (r03_dogawake -> r03_mid, area 1 on at f36): FUN_0054f2b0 -> FUN_0054f9d8(o, 1) -> FUN_0054f660 -> FUN_002dbc80(50, ..)
+  // x 4 -> FUN_002dbce0 -> FUN_002e6290 with age 0 (FUN_002dbce0 does not pass FUN_002dbc80's age on), each spawn an emitter.
+  function beams(o, age) {
+    o.beams = o.st === 1;
+    if (o.st === 1) {
+      beamsOff(o, 1);                                               // FUN_0054f7b8(o, 1): the old ones go at once (FUN_002dc948)
+      const base = (o.f50 & 2) ? 0x90c00400 : 0x90c00000;           // record +0x50 bit 1 (g091's 0x916c.. tables: not on z128)
+      if (o.model !== 'g048') warnOnce(`props: barrier model ${o.model}: its beam ids (0x916c..) not translated`);
+      else if (!effect || !effect.attached) warnOnce('props: no effect engine: the EM barrier beams are not spawned');
+      else for (let i = 0; i < 4; i++) { const em = effect.attached(base + i, modelAttach(o, models[o.model] && models[o.model].joints && models[o.model].joints.bind_world_colmajor)); if (em) o.ems.push(em); }
+    } else beamsOff(o, 0);                                          // FUN_0054f7b8(o, 0): their soft end (FUN_002e7198)
+    if (near(o)) humStart(o);
+  }
+  function beamsOff(o, now) {
+    for (const em of o.ems) { if (now) { if (effect && effect.remove) effect.remove(em); } else if (effect && effect.softEnd) effect.softEnd(em); }
+    if (now) o.ems = [];
+  }
+  // FUN_0054f8b0: Vincent's point (FUN_0053bb08 -> FUN_0054a720: +0x90) within 80 of the object's +0x90 (FUN_0054a888, a distance)
+  function near(o) {
+    const P = W && W.player && W.player.pos;
+    if (!P) return false;
+    return Math.sqrt(f(f(f((P[0] - o.pos[0]) ** 2) + f((P[1] - o.pos[1]) ** 2)) + f((P[2] - o.pos[2]) ** 2))) < 80.0;
+  }
+  // FUN_0054f918: the old hum stopped; record +0x50 bit 2 clear and state 1 -> asj_620 at the object (FUN_0054b158 -> FUN_0033cc48 ->
+  // FUN_0033cc90: a slot whose volume follows the distance), its range 80 (FUN_003e8ec8). The sample loops by itself (sdb).
+  function humStart(o) {
+    humStop(o);
+    if (o.f50 & 4 || o.st !== 1) return;
+    if (!hum) { warnOnce('props: no sound slots (play.js amb.slots): the EM barrier hum asj_620 is not played'); return; }
+    const h = hum.open('asj_620', o.pos.slice(), 0, { fixed: false, range: 80.0 });
+    o.hum = h == null ? null : h;
+  }
+  function humStop(o) { if (o.hum != null && hum) hum.close(o.hum); o.hum = null; }   // FUN_0054f998 -> FUN_0033cf00 (FUN_003e98e0, FUN_003e8ff8)
+  // vt+0x214 FUN_0054f4b0, an active barrier's frame: Vincent out of range -> the hum stops; in range, none playing and state 1 -> it starts
+  function barrierFrame(o) {
+    if (!(o.flags28 & 1) || o.gone) return;
+    if (!near(o)) { if (o.hum != null) humStop(o); }
+    else if (o.hum == null && o.st === 1) humStart(o);
+  }
+  // vt+0x144 FUN_0054f2b0(o, on, p3): FUN_00584018 (the generic activation), then on: FUN_0054f9d8(o, 1) (beams aged 50);
+  // off: FUN_0054fa18 (FUN_0054f7b8(o, 1): the emitters go, and the hum). FUN_0054add0 writes manager queue type 0x18 only
+  // for a script with event 0x54 (the barriers have no script).
+  function activateBarrier(o, on, p3) {
+    activate(o, on, p3);
+    if (on && (o.flags28 & 1)) beams(o, 50);
+    else if (!on) { o.beams = false; beamsOff(o, 1); humStop(o); }    // FUN_0054fa18 -> FUN_0054f7b8(o, 1)
+  }
+  // the barrier's vt+0xc FUN_0054f358 (then FUN_00588b78's cases, as a barrel's)
+  function barrierCmd(t, c) {
+    if (c === 0x18e) {                                              // off: state 2, the delayed code -5 after DAT_0046e940 (36) ticks
+      if (t.st === 1) { barrierState(t, 2, 0); W.delayedPost(t.id, -5, 36); }
+      return 0;
+    }
+    if (c === 0x18f) {                                              // on again: the pending -5 dropped (FUN_0053edb0)
+      if (t.st === 2) W.delayedDrop(t.id, -5);
+      barrierState(t, 1, 0);
+      return 0;
+    }
+    if (c === 0x108) { activateBarrier(t, 1, 0); if (t.flags28 & 1) ev(t, 3); return 0; }   // as a barrel's 0x108 (GUESS row: event 3 at once)
+    if (c === 0x109) { activateBarrier(t, 0, 0); ev(t, 4); return 0; }
+    return undefined;
+  }
+  // FUN_0053f040 code -5 -> vt+0x294 FUN_0054f338: FUN_0054f540(o, 0, 0) (enemy_ai's delayed list)
+  function vt294(o) { if (o.barrier) barrierState(o, 0, 0); }
+  // FUN_0035a440's object list (obj_contact.js): active objects with +0x38 bit 4 or 5 (the barriers, shape 0 boxes with +0x28 bit
+  // 0x200000). L: the game walks grid list 6 (FUN_0036d400) around the body; the box tests reject the far ones the same way.
+  function blockers() {
+    const out = [];
+    for (const o of barrels) {
+      if (!(o.flags28 & 1) || o.gone || !(o.f38 & 0x30)) continue;
+      // MISSING: a barrel (+0x38 bits 4 / 5 from type flag bit 1) is in the game's pass via its untranslated branch (obj_contact.js header)
+      if (!o.barrier) { warnOnce('props: explosive barrels are left out of FUN_0035a440\'s object pass (no +0x28 bit 0x200000: the nearest-point / moving-object branch, FUN_0025d1b8\'s normal, not translated): bodies pass through them'); continue; }
+      out.push({ id: o.id, half: o.half, m: o.m, f38: o.f38 });
+    }
+    return out;
   }
   // FUN_00584018 (vt+0x144): activation. Off -> on is refused for a breakable (type flag bit 2) with HP 0. On: the model
   // (FUN_00583848: the motion player, drawn by props_view), event 3 with param_3; off: event 4 with param_3, model gone.
@@ -142,10 +284,16 @@ export function createProps({ data, weapons = [], effect = null, areas = null, w
   // the object stays active until FUN_0053fde8 serves it at the end of the manager frame (T: w209_barrel f273, +0x28
   // 0x800b -> 0x8800b; the explosion created in that frame still lists the barrel as its 2nd target). FUN_0053e1e0 then
   // calls this (worker 0212: one delete queue, the game's order).
-  function deleted(o) { o.flags28 &= ~1; o.drawn = false; o.gone = true; push(`remove ${o.id}`); }
+  function deleted(o) {
+    o.flags28 &= ~1; o.drawn = false; o.gone = true; push(`remove ${o.id}`);
+    // worker 0269: FUN_0053e1e0's tail calls the object's vt+0x1c(o, 3); a barrier's is FUN_0054f230 -> FUN_0054fa18: its beams
+    // go at once (FUN_0054f7b8(o, 1) -> FUN_002dc948) and its hum stops (FUN_0054f998), then the base FUN_00583798
+    if (o.barrier) { beamsOff(o, 1); humStop(o); }
+  }
 
   function attach(world) {
     W = world;
+    for (const o of barrels) if (o.barrier) { humStop(o); beamsOff(o, 1); }   // a Restart's new world: the old barriers' hums and beams go
     barrels.length = 0; explosions.length = 0; byRec.clear(); camBoxes.length = 0;
     // no script, record +0x48 0: on with their area, or from the stage start without one (T: 22 records against route RAM, notes/battle-camera.md).
     // Their matrix: nodeBoxes (FUN_005877e8)
@@ -153,7 +301,7 @@ export function createProps({ data, weapons = [], effect = null, areas = null, w
     for (const rec of data.camBoxes || []) camBoxes.push({ kind: PROP_KIND, id: 'c' + rec.rec, script: -1, vars: new Int16Array(8), t3c: new Int16Array(2), rec: rec.rec, m: rec.m, rest: rec.m, chunk: rec.chunk, node: rec.node, rec50: rec.rec50, type: rec.type, flags28: 1, hp: rec.type.hp, half: rec.size.map(v => f(v * 0.5)), area: rec.area, on: !parented(rec.area) });
     for (const rec of data.records || []) {
       const o = make(rec);
-      flagBits(o);
+      if (o.barrier) barrierFlags(o); else flagBits(o);
       barrels.push(o); byRec.set(rec.rec, o);
       world.objects.set(o.id, o);
     }
@@ -164,7 +312,7 @@ export function createProps({ data, weapons = [], effect = null, areas = null, w
   }
   const parented = k => (areas ? areas.has(k) : k >= 0);
   // vt+0x14c = FUN_00584220: +0x144(on, 1) unless record +0x48 bit 2
-  function vt14c(o, on) { if (!(o.f48 & 4)) activate(o, on, 1); }
+  function vt14c(o, on) { if (!(o.f48 & 4)) (o.barrier ? activateBarrier : activate)(o, on, 1); }
   // FUN_0054ef68 (area k switched on / off) -> vt+0x14c on its children
   function areaSwitch(k, on) { for (const o of barrels) if (!o.gone && o.area === k) vt14c(o, on); for (const b of camBoxes) if (b.area === k) b.on = !!on; }
 
@@ -185,6 +333,13 @@ export function createProps({ data, weapons = [], effect = null, areas = null, w
 
   // ---- object commands (barrel vt+0xc FUN_00586520, then FUN_00588b78, then FUN_0054cd70); undefined = enemy_ai's generic
   function cmd(t, c, r) {
+    if (t.barrier) {
+      const v = barrierCmd(t, c);
+      if (v !== undefined) return v;
+      // FUN_0054f358 hands the rest to FUN_00588b78, not the barrel's FUN_00586520 (0x14a, 0x130, 0x138, 0x1a3, 0x172..0x175):
+      // those go to enemy_ai's generic cases
+      if (c === 0x14a || c === 0x130 || c === 0x138 || c === 0x1a3 || (c >= 0x172 && c <= 0x175)) return undefined;
+    }
     switch (c) {
       case 0x14a: t.hp = t.type.hp; W.postManager(6, t.id); return 0;   // then manager event 6 -> event 0x21 (FUN_0053fde8 case 7)
       case 0x130: t.hp = 0; activate(t, 0, 0); warnOnce('props: cmd 0x130 manager event 8 not translated'); return 0;   // FUN_00586520
@@ -267,6 +422,7 @@ export function createProps({ data, weapons = [], effect = null, areas = null, w
   function cameraProbe(a, b_) {
     let best = null;
     for (const o of barrels) {
+      if (o.barrier && (o.flags28 & 1) && !o.gone && (o.f38 & 0x40)) warnOnce('props: an EM barrier on the camera probe (+0x38 bit 6, FUN_00584408 shape 0 with its +0x110 margin: not read) is left out');
       if (!(o.flags28 & 1) || o.gone || !(o.f38 & 0x40) || o.type.shape !== 2) continue;
       // FUN_00584408 case 2: probe 6 with +0x110 set (RAM: every barrel) lengthens both ends by fRam0046ef60 = 3 (RAM)
       const up = o.m[1].slice(0, 3), hh = f(f(o.h * 0.5) + 3);
@@ -463,6 +619,7 @@ export function createProps({ data, weapons = [], effect = null, areas = null, w
   // +0xc8 += step; no target left -> FUN_0057ebb8 (one sphere ray a frame, 32 directions: only material-6 walls react,
   // not translated); at +0xcc (60) FUN_0053fa08 removes it.
   function update(step) {
+    for (const o of barrels) if (o.barrier) barrierFrame(o);           // worker 0269: vt+0x214 FUN_0054f4b0 (the hum)
     for (const e of explosions.slice()) {
       if (!(e.c4 & 0x100)) { gather(e); e.c4 |= 0x100; }
       e.d0 = rz(e.d0 + e.d8);
@@ -481,7 +638,7 @@ export function createProps({ data, weapons = [], effect = null, areas = null, w
   function lockTargets() {
     const out = [];
     for (const o of barrels) {
-      if (!(o.flags28 & 1) || o.gone) continue;
+      if (!(o.flags28 & 1) || o.gone || o.barrier) continue;          // a barrier: +0x38 bit 2 clear, never lockable
       const up = o.m[1].slice(0, 3), hh = f(o.h * 0.5);
       out.push({ id: o.id, alive: true, lockable: !!(o.f38 & 4) && !(o.flags28 & 0x400000), probeBits: o.f38,
                  point: o.pos.slice(), losPoint: o.pos.slice(), feet: o.pos.slice(), height: o.h, radius: o.r,
@@ -492,6 +649,7 @@ export function createProps({ data, weapons = [], effect = null, areas = null, w
 
   return {
     barrels, camBoxes, explosions, attach, areaSwitch, update, mgr, cmd, bulletTest, bulletHit, cameraProbe, nodeBoxes, lockTargets, deleted,
+    blockers, vt294,
     id: k => (byRec.has(k) ? byRec.get(k).id : -1),
     get world() { return W; }, get mgr260() { return W ? W.mgr260 : null; },
     t: { boxRay, nearestOnCylinder, insideCylinder, gather, perTarget, explode, damage, bulletFilter, filter },

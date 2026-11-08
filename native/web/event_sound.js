@@ -13,12 +13,25 @@
 // `frame()` (called once per event frame, before the VM window) sends last frame's requests.
 
 import { block } from './event_vm.js';
+import { SeStream } from './music.js';
+import { hexBytes, SPU_RATE, TICK_HZ } from './audio.js';
 
 const f32 = Math.fround;
 
 // FUN_003eacb8(pi / 4): the voice channel's L / R gains (short)(cos / sin(pi / 4) x 4096) = 2896; FUN_003eb330 mixes
 // sample x gain >> 12 into the 48 kHz ring (DAT_0047d714 != 0: stereo; 2 in the sea-of-flames save)
 export const VOICE_GAIN = Math.trunc(f32(f32(Math.cos(f32(0.7853982))) * 4096)) / 4096;
+
+// The voices' way out (worker 0266): FUN_003ed000 mixes each 1024-sample block (21.3 ms at 48 kHz) into the EE PCM ring
+// DAT_0047d754 (8 slots, written while (write + 1) & 7 != read: 7 queued), FUN_003ed8e0 sends the oldest to the IOP's
+// 16-slot buffer (slot DAT_0047d768, sent unless it is the slot playing, FUN_0041ad50: 15 queued). Both stay full
+// (T w266_open / w266_sk: EE 7 queued every frame, IOP 15.25 .. 16.0 slots ahead of its play address), so a block is
+// heard about 6 + 15.5 blocks after it is mixed, and a voice's first samples sit in its second block (FUN_003eab20 mixes
+// nothing for the frame at offset 0; voice.py drops that frame). The mouths (texture animations) are drawn at once.
+// L: 15.5 = the IOP slot's mean fraction played (the trace's play address moves 0.94 slot a frame); the SPU2's own
+// buffering after the IOP buffer is not counted.
+export const VOICE_BLOCK_S = 1024 / 48000;
+export const VOICE_PIPE_S = (6 + 15.5 + 1) * VOICE_BLOCK_S;
 
 // FUN_003eb930(name): the sdb row (FUN_003eb868) has +0xc & 0x84 == 0x84 (bgm.json "flags": bgm_001 0x94 yes,
 // bgm_274 0x04 no)
@@ -30,7 +43,7 @@ export function rowStreamed(flags) { return flags != null && (flags & 0x84) === 
 export class VoicePlayer {
   constructor(audio, base = 'data/audio/voice/') {
     this.au = audio; this.base = base; this.meta = null; this.bufs = new Map(); this.playing = []; this.out = null;
-    this.warned = new Set(); this.log = [];
+    this.warned = new Set(); this.log = []; this.timing = [];
   }
   warnOnce(m) { if (!this.warned.has(m)) { this.warned.add(m); console.warn(m); } }
   init() {
@@ -59,6 +72,7 @@ export class VoicePlayer {
     if (!ctx) { this.warnOnce('voice: ' + name + ' asked for before the first gesture (no AudioContext): lost (L)'); return; }
     const ch = this.bufs.get(name);
     if (!ch) return;                                 // FUN_003eaf10: no channel holds it -> nothing
+    const due = ctx.currentTime + VOICE_PIPE_S;      // heard after the PCM ring's queue (VOICE_PIPE_S)
     ch.buf ??= ch.file.then((ab) => (ab ? ctx.decodeAudioData(ab.slice(0)) : null)).catch((e) => { this.warnOnce('voice: ' + name + ' ' + e); return null; });
     ch.buf.then((buf) => {
       if (!buf || this.bufs.get(name) !== ch) return;    // freed by a Skip while decoding
@@ -67,32 +81,54 @@ export class VoicePlayer {
         // decoder's offset (changeMusicVol does not reach them)
         this.out = ctx.createGain(); this.out.gain.value = 0x7fff / 32768; this.out.connect(ctx.destination);
       }
-      this.start({ name, buf }, 0);
+      // the page's decode is not the game's: a decode later than `due` starts the voice that far in
+      const late = ctx.currentTime - due;
+      // FUN_003eaf10 -> FUN_003ead30: one channel holds the name, so a second playVoice restarts it; what it mixed before
+      // is in the ring and is heard until the new start
+      for (const o of this.playing.filter((x) => x.name === name)) {
+        o.src.onended = null; this.playing = this.playing.filter((x) => x !== o);
+        try { o.src.stop(Math.max(due, ctx.currentTime)); } catch (e) { /* not started */ }
+      }
+      const rec = { name, buf };
+      this.start(rec, Math.max(0, late), Math.max(0, -late));
+      this.timing.push({ name, asked: due - VOICE_PIPE_S, heard: rec.t0 });   // tests: playVoice's time, when offset 0 is heard
     });
   }
-  // one channel's source from `off` seconds in; mono block x gain into L and R: a mono buffer feeds both speakers equally
-  start(rec, off) {
+  // one channel's source, heard `delay` seconds from now from `off` seconds of it; mono block x gain into L and R: a mono
+  // buffer feeds both speakers equally. rec.t0: the context time its offset 0 is (or would be) heard
+  start(rec, off, delay = 0) {
     const ctx = this.au.ctx, src = ctx.createBufferSource(), g = ctx.createGain();
     src.buffer = rec.buf; g.gain.value = VOICE_GAIN;
-    src.connect(g); g.connect(this.out); src.start(ctx.currentTime, off);
-    rec.src = src; rec.t0 = ctx.currentTime - off;
+    src.connect(g); g.connect(this.out);
+    src.start(ctx.currentTime + delay, off);
+    rec.src = src; rec.t0 = ctx.currentTime + delay - off;
     if (!this.playing.includes(rec)) this.playing.push(rec);
     src.onended = () => { this.playing = this.playing.filter((x) => x !== rec); };
     if (this.paused) this.hold(rec);
   }
-  hold(rec) { rec.off = this.au.ctx.currentTime - rec.t0; rec.src.onended = null; try { rec.src.stop(); } catch (e) { /* not started */ } }
+  // what the channel has mixed so far is still in the ring: the voice stops VOICE_PIPE_S after the hold, and the next
+  // start (offset rec.off) is heard VOICE_PIPE_S after it
+  // (this.pausedAt: the pause's time; a voice decoded during the pause has mixed nothing since then)
+  hold(rec) {
+    const now = this.au.ctx.currentTime, end = (this.paused ? this.pausedAt ?? now : now) + VOICE_PIPE_S;
+    rec.off = Math.min(Math.max(0, end - rec.t0), rec.buf.duration); rec.src.onended = null;
+    try { rec.src.stop(end); } catch (e) { /* not started */ }
+  }
   // the event pause: FUN_003ea9f0 sets a loaded channel's +0x1c bit 0x8000 (FUN_003ed000 stops decoding it), FUN_003eaa78 clears it: a voice goes on
   // where it stopped (worker 0261). A source can't pause: stopped at its offset, a new one from there
   pause(on) {
     if (on === !!this.paused) return;
     this.paused = on;
     if (!this.au || !this.au.ctx) return;
-    for (const rec of this.playing) { if (on) this.hold(rec); else this.start(rec, rec.off); }
+    this.pausedAt = this.au.ctx.currentTime;
+    for (const rec of this.playing) { if (on) this.hold(rec); else this.start(rec, rec.off, VOICE_PIPE_S); }
   }
   // FUN_003ea3d0 -> FUN_003ea2c0 per channel: the file (+0x4) and the stream (+0x8) freed: playing voices stop and a
   // later playVoice finds no channel (nothing plays until a new loadVoice2)
+  // The blocks already mixed are in the ring: what was mixed plays on for VOICE_PIPE_S
   stopAll() {
-    for (const v of this.playing) { try { v.src.stop(); } catch (e) { /* not started */ } }
+    const end = this.au && this.au.ctx ? this.au.ctx.currentTime + VOICE_PIPE_S : 0;
+    for (const v of this.playing) { try { v.src.stop(end); } catch (e) { /* not started */ } }
     this.playing = [];
     this.bufs.clear();
   }
@@ -110,10 +146,47 @@ export function soundNatives(R, o = {}) {
   const streamed = (name) => { const f = o.bgmRow ? o.bgmRow(name) : null; if (f == null) warnOnce('event: no sdb flags for ' + name + ' (bgm.json): FUN_003eb930 taken false'); return rowStreamed(f); };
   R.sePending = [];
   return {
-    // loadSoundEffectEx_l(a, b, c) (FUN_003a0be8 -> FUN_00378d40: command 0x10 -> FUN_003825e8): the event's SE bank (worker 0263). Not exported: its names (asj_154 .., asj_334 ..) have no row, so sendEventSe leaves them silent
-    'fake/KerberosSound.loadSoundEffectEx_l(III)I': () => { warnOnce('event: loadSoundEffectEx_l (FUN_003825e8, the event SE bank) not exported: the event\'s own SEs (asj_154 .., asj_334 ..) are silent'); return 0; },
-    // unsetSoundEffect (FUN_0039ff08 -> FUN_003e90d0): stops a looping SE slot; those are the event bank's above, so nothing is playing
-    'fake/KerberosSound.unsetSoundEffect(Ljava/lang/String;)V': () => {},
+    // loadSoundEffectEx_l(a, b, c) (FUN_003a0be8 -> FUN_00378d40: command 0x10, +0x20 a, +0x28 b, +0x2c c; its handle) ->
+    // FUN_003825e8 in the command loop: the file into SE block slot 1 (FUN_003e78a8(mgr, 1, code, 0)), done when the
+    // sound thread's load ends (FUN_003e7310(4) == 0). code: a == 2 and the zone record DAT_0047dbb0 -> FUN_00250a48(zone, b)
+    // (0x0azz00bb); a == 1 -> FUN_00250970(zone) = the zone's sep.bin; else FUN_002508b0(b < 0 ? the event's +0xc : b) + c =
+    // 0x0c000800 + b x 0x1000 + c. The stage's events call (0, 100) at their start (the event block 0x0c064800, whose
+    // programs the zone's sdb names: asj_041 .., asj_154 ..) and (1, 100) at their end (the zone's block back) (worker 0266).
+    // The page's block switch takes no event time (its blocks are fetched with the zone's: 'event loads' row).
+    'fake/KerberosSound.loadSoundEffectEx_l(III)I': (vm, [a, b, c]) => {
+      const au = get('audio');
+      const zoneCode = au && au.zoneCode;
+      let code;
+      if (a === 2) { warnOnce('event: loadSoundEffectEx_l(2, ..): FUN_00250a48\'s zone file (0x0a..) not exported: left out'); code = null; }
+      else if (a === 1) code = zoneCode ?? null;
+      else code = (((b < 0 ? (R.evId ?? 0) : b) * 0x1000 + 0xc000800) + c) >>> 0;   // FUN_0037cdd8: the event's +0xc (>= 0)
+      if (b < 0 && a !== 1 && a !== 2) warnOnce('event: loadSoundEffectEx_l with b < 0: the event\'s own id (+0xc) is not kept by the page (0 taken)');
+      log('sebank ' + a + ' ' + b + ' ' + c + (code != null ? ' 0x' + code.toString(16) : ''));
+      R.seBlock = code;
+      if (code != null) { if (au && au.seBlock1) au.seBlock1(code); else warnOnce('event: no audio: the SE block switch (loadSoundEffectEx_l) left out'); }
+      const h = R.cmd(0x10, { a, b, c });
+      R.slots = R.slots.filter((x) => x.h !== h);                         // done at once (the page's loads take no event time)
+      return h;
+    },
+    // unsetSoundEffect (FUN_0039ff08 -> FUN_003e90d0(mgr, name)): every live slot whose id is the name's sdb row id
+    // (row +0x10; +8 for a stream row) -> FUN_003e9830(slot, 0) (slot flag 0x20 = row bit 3: request 0x12, the stop fade) and
+    // the slot freed. The event SEs' slots are event_sound.js EventSeSlots (wro_kaisetu's loops asj_335 .. 339)
+    'fake/KerberosSound.unsetSoundEffect(Ljava/lang/String;)V': (vm, [s]) => {
+      const name = str(s); log('unset ' + name);
+      const au = get('audio');
+      R.sePending = R.sePending.filter((e) => e.name !== name || e.rel);   // FUN_003e9830 on a slot not sent yet (+0x18 -1): never sent
+      if (au && au.eventSe) au.eventSe.unset(name);
+    },
+    // playBgSound(name, vol) (FUN_0039de38): the position is a zeroed quad (sq zero at 0x39de78; Ghidra drops it) ->
+    // FUN_003e6d70(name, (0, 0, 0), no object, vol): an entry of the 8-entry placed-sound table DAT_004f5920 (ambient.js
+    // PlacedSounds.bgPlayRaw), a zero position = no pan (FUN_003e8bc8 flag 0x8000), volume fixed at vol (FUN_003e8b70;
+    // FUN_003e6ec8 keeps it for an entry without an object). Released by the next event's start (FUN_0037e048 ->
+    // FUN_003e6538, stage_controller.js enterEvent). wro_kaisetu (asj_030, 48) and help_orei02 (asj_031, 48) end with it
+    'fake/KerberosSound.playBgSound(Ljava/lang/String;I)V': (vm, [s, v]) => {
+      const name = str(s); log('bgsound ' + name + ' ' + v);
+      const bg = get('bg');
+      if (bg && bg.bgPlayRaw) bg.bgPlayRaw(name, [0, 0, 0], v); else warnOnce('event: no placed-sound table (ambient.js): playBgSound ' + name + ' left out');
+    },
     // setVoiceBufferType (FUN_003a0ac8 -> FUN_0037fc88(ev, n, 1)): waits for the voice loads to settle (FUN_00400ee8)
     // and re-sizes the voice buffers; the page's buffers are per voice, so nothing changes (loads are at once)
     'fake/KerberosSound.setVoiceBufferType(I)V': (vm, [n]) => { log('voicebuf ' + n); },
@@ -194,17 +267,156 @@ export function soundNatives(R, o = {}) {
 }
 
 // FUN_003e9ed0's send of last frame's event SEs (vol / pan per audio.js emitterVolPan with flags 0x40000 | 0x40: the
-// fixed volume, pan 0x40). The release (FUN_003e8ff8) lets a rendered SE play to its end (audio.js SoundEmitters).
+// fixed volume, pan 0x40), looked up in the SE blocks loaded then (audio.js program: slot 1 = the event's block between
+// the event's loadSoundEffectEx_l(0, ..) and (1, ..)). Played by EventSeSlots below.
 export function sendEventSe(R, audio) {
   const list = R.sePending; R.sePending = [];
   const sent = [];
   for (const e of list) {
     const row = audio && (audio.row ? audio.row(e.name) : audio.se && audio.se.names[e.name]);   // FUN_003eb868
     if (!row || (row.flags & 2)) continue;               // a stream row (FUN_003eb088) is not played by the page
-    sent.push({ name: e.name, id: row.id, vol: e.vol, pan: 0x40 });
-    if (audio.ctx) audio.playId(row.id, e.vol, 0x40);
+    const prog = audio.program ? audio.program(row.id) : null;
+    sent.push({ name: e.name, id: row.id, vol: e.vol, pan: 0x40, found: !!prog });
+    // FUN_003e80d8 finds no block holding the id: nothing plays (the game's silence too)
+    if (!prog && R.warn && !(R.seMissWarned ??= new Set()).has(e.name)) { R.seMissWarned.add(e.name); R.warn('event: SE ' + e.name + ' (id ' + row.id + ') is in no loaded SE block: silent'); }
+    if (audio.ctx && prog) (audio.eventSe ??= new EventSeSlots(audio)).play(e.name, row, prog, e.vol, e.rel);
   }
   return sent;
+}
+
+// The event SEs' emitter slots (FUN_0039ff68 with at == 0: FUN_003e8e18 opens the slot, FUN_003e8a30(.., 1) = 0x40000 (no 3D:
+// pan 0x40), FUN_003e8b70 the fixed volume; FUN_003e9ed0 sends it the frame after: request 2). release != 0 (setSoundEffect)
+// -> FUN_003e8ff8 at once: a row without bit 3 (slot 0x20) is freed and its voice plays to its end; release 0
+// (setSoundEffectLoop) keeps the slot until unsetSoundEffect (FUN_003e90d0 -> FUN_003e9830: slot 0x20 -> request 0x12 =
+// SeRenderer.stopFade(10); without 0x20 the slot is only freed). Skip (FUN_00372f70) stops none of them: its FUN_003e9950
+// touches stream slots only (flag 0x4000). The pause (audio.js setPaused: IOP command 6) holds them as the other SEs.
+// Each plays as a stream (music.js SeStream) rendered a little ahead of the AudioContext clock (a page scheduler, not game
+// logic): the event SEs run up to 14 s (asj_246), too long to render inside one frame.
+// GUESS: own random-table counter per stream (as music.js AreaSound; IOP FUN_0000a870 keeps one for every SE; see notes/fidelity-audit.md)
+const EV_AHEAD_S = 0.2, EV_CHUNK_TICKS = 12;
+export class EventSeSlots {
+  constructor(au) { this.au = au; this.live = []; this.paused = false; this.timer = null; this.log = []; }
+  play(name, row, hex, vol, rel) {
+    const au = this.au, prog = hexBytes(hex), bank = au.banks && au.banks[prog[1] | (prog[2] << 8)];
+    if (!bank || !au.ctx) return null;
+    const s = { name, id: row.id, flags: prog[4], kept: !rel, stop20: !!(row.flags & 8), srcs: [], queue: [], holdTicks: [],
+      args: [au.drv, bank, prog, Math.min(vol, 0x7f), 0x40], next: au.ctx.currentTime + 0.02 };
+    s.stream = new SeStream(...s.args);
+    this.live.push(s);
+    this.log.push({ name, id: row.id, vol, kept: s.kept });
+    this.pump();
+    if (!this.timer) { this.timer = setInterval(() => this.pump(), 25); if (this.timer.unref) this.timer.unref(); }
+    return s;
+  }
+  // FUN_003e90d0: the kept slots with this name's id
+  unset(name) {
+    const row = this.au.row ? this.au.row(name) : null;
+    if (!row) return;
+    for (const s of this.live) {
+      if (!s.kept || s.id !== row.id) continue;
+      s.kept = false;
+      if (s.stop20) this.fadeHeard(s);
+    }
+  }
+  // The stop request (0x12 -> IOP command 0x2f, SeRenderer.stopFade(10)) reaches the track at the tick being heard, not at the
+  // stream's render point (EV_AHEAD_S ahead): the stream is rendered again from the heard chunk's start (its renderer snapshot)
+  // to that tick, faded there, and the chunks scheduled past that point are replaced. The game's pause hold (IOP command 6) is on
+  // the tick heard at the pause (s.holdTicks; the page applied it at the render point, L): a pause the snapshot predates is
+  // applied in the replay at that tick (or at once, for a chunk rendered past it), an unset while paused included.
+  fadeHeard(s) {
+    const ctx = this.au.ctx, now = ctx ? ctx.currentTime : 0, held = this.paused && !(s.flags & 0xc0);
+    let c = null, h = s.stream.t, off = 0;
+    if (!held) {
+      c = s.srcs.find((x) => x.end > now) || null;
+      if (c && c.at <= now) { const x = (now - c.at) * TICK_HZ; h = c.snap.t + Math.floor(x); off = (x - Math.floor(x)) / TICK_HZ; }
+      else if (c) { h = c.snap.t; s.next = c.at; }
+    } else if (s.queue.length) { c = s.queue[0]; h = c.snap.t + Math.floor(c.off * TICK_HZ); }
+    let st = s.stream;
+    if (c) {
+      st = new SeStream(...s.args);
+      st.rd.restore(c.snap.rd); st.t = c.snap.t; st.done = c.snap.done;
+      const pend = s.holdTicks.slice(c.snap.nHolds), t0 = st.t;
+      for (;;) {
+        while (pend.length && pend[0] <= st.t) { pend.shift(); st.rd.holdVoices(); }
+        if (st.t >= h || st.done) break;
+        st.ticks(1);
+      }
+      s.replayed = st.t - t0;                        // tests: the ticks rendered again
+    }
+    st.rd.stopFade(10);
+    s.stream = st;
+    for (const x of s.srcs) { try { x.src.stop(); } catch (e) { /* not started */ } }
+    s.srcs = []; s.queue = [];
+    if (!ctx || held) return;
+    if (s.next < now || off > 0) s.next = now;
+    const k = this.chunk(s);
+    this.sched(s, k.buf, off, k.snap);
+    this.pump();
+  }
+  // the next EV_CHUNK_TICKS of the stream, with the renderer's state at its start (fadeHeard replays from there)
+  chunk(s) {
+    const ctx = this.au.ctx, snap = { t: s.stream.t, done: s.stream.done, nHolds: s.holdTicks.length, rd: s.stream.rd.snapshot() };
+    const { left, right } = s.stream.ticks(EV_CHUNK_TICKS);
+    const buf = ctx.createBuffer(2, left.length, SPU_RATE);
+    buf.copyToChannel(left, 0); buf.copyToChannel(right, 1);
+    return { buf, snap };
+  }
+  pump() {
+    const ctx = this.au.ctx;
+    if (!ctx) return;
+    for (const s of this.live) {
+      if (this.paused && !(s.flags & 0xc0)) continue;
+      {
+        while (!s.stream.done && s.next < ctx.currentTime + EV_AHEAD_S) {
+          const k = this.chunk(s);
+          this.sched(s, k.buf, 0, k.snap);
+        }
+      }
+    }
+    for (const s of this.live) s.srcs = s.srcs.filter((c) => c.end > ctx.currentTime);
+    this.live = this.live.filter((s) => !s.stream.done || s.srcs.length || s.queue.length);
+    if (!this.live.length && this.timer) { clearInterval(this.timer); this.timer = null; }
+  }
+  // snap: the stream's state at the buffer's start (chunk)
+  sched(s, buf, off, snap) {
+    const ctx = this.au.ctx, src = ctx.createBufferSource();
+    src.buffer = buf; src.connect(ctx.destination);
+    const at = Math.max(s.next, ctx.currentTime);
+    src.start(at, off);
+    s.next = at + (buf.duration - off);
+    s.srcs.push({ src, buf, at: at - off, end: s.next, snap });
+  }
+  // IOP command 6 (audio.js setPaused): a held track's timing stops and a voice in decay goes to sustain (SeRenderer.holdVoices);
+  // menu-flagged programs (0x40 / 0x80) play on. The rendered chunks not yet heard are kept and played from where they stopped.
+  // L: the hold reaches the renderer up to EV_AHEAD_S late (the chunks already rendered keep their decay)
+  setPaused(on) {
+    on = !!on;
+    if (on === this.paused) return;
+    this.paused = on;
+    const ctx = this.au.ctx;
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    for (const s of this.live) {
+      if (s.flags & 0xc0) continue;
+      if (on) {
+        const c = s.srcs.find((x) => x.end > now);   // the tick heard now: the game's hold is there
+        s.holdTicks.push(!c ? s.stream.t : c.at <= now ? c.snap.t + Math.floor((now - c.at) * TICK_HZ) : c.snap.t);
+        s.queue = s.srcs.filter((c) => c.end > now).map((c) => ({ buf: c.buf, off: Math.max(0, now - c.at), snap: c.snap }));
+        for (const c of s.srcs) { try { c.src.stop(); } catch (e) { /* not started */ } }
+        s.srcs = [];
+        s.stream.rd.holdVoices();
+      } else {
+        s.next = now;
+        for (const q of s.queue) this.sched(s, q.buf, q.off, q.snap);
+        s.queue = [];
+      }
+    }
+    if (!on) this.pump();
+  }
+  stopAll() {
+    for (const s of this.live) for (const c of s.srcs) { try { c.src.stop(); } catch (e) { /* not started */ } }
+    this.live = [];
+  }
 }
 
 // FUN_00372f70's sound part on Skip: FUN_003e9950 (stream SE slots stopped), FUN_003ea5f0 (the voice channels)

@@ -503,7 +503,7 @@ for (const [side, damage, dist, flight] of VP ? [[0, true, 30, 3], [40, true, 30
   {
     const { W, player } = mk();
     const a44 = W.addActor({ rec: 44, astate: 1 });
-    a44.C.motion = { cls: 6, phase: 0, timer: 0, done: 0, t: 0, next74: 0xe, started: true };
+    a44.C.motion = { cls: 6, phase: 0, timer: 0, done: 0, t: 0, next74: 0xe, started: true, asked: true };   // worker 0267: asked = its row requested (started = phase 0 run)
     const m0 = a44.C.motion, req0 = a44.C.req;
     cross(W, 95);
     let j = 0;

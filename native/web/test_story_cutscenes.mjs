@@ -38,7 +38,7 @@ if (MUT) {
     getpos: ['stage_controller.js', "return a ? a.M[12] : 0; }", "return 0; }"],
     battlecam: ['stage_controller.js', "i === 1 ? f32(v.eye[j] + v.fwd[j])", "i === 1 ? 0"],
     rollraw: ['event_rt.js', 'r1 = crs(fw, raw); v = r1;', 'r1 = crs(fw, r0); v = r1;'],
-    voicepause: ['event_sound.js', 'if (on) this.hold(rec); else this.start(rec, rec.off);', ''],
+    voicepause: ['event_sound.js', 'if (on) this.hold(rec); else this.start(rec, rec.off, VOICE_PIPE_S);', ''],
     plays: ['stage_controller.js', "'ev0103.heri_taijou', ", ''],
     roll: ['event_rt.js', 'if (roll) { ch[6] = ch[7] = ch[8] = null; rollUpSplines(ch, roll.keys, R.eps); }', ''],
     rollsign: ['event_rt.js', 'let deg = f32(-(rs.n', 'let deg = f32((rs.n'],
@@ -199,15 +199,16 @@ const G = (o) => { const g = new Uint8Array(64); for (const k in o) g[k] = o[k];
 }
 // 3g. The event pause holds a voice where it is (FUN_003ea9f0 / FUN_003eaa78): stopped at its offset, the same offset after, no end while held
 {
-  const { VoicePlayer } = await import(pathToFileURL(path.join(base, 'event_sound.js')));
-  const ctx = { currentTime: 10, createGain: () => ({ gain: {}, connect() {} }), createBufferSource() { const n = { connect() {}, start(t, o) { n.started = o; made.push(n); }, stop() { n.stopped = true; } }; return n; } };
+  // worker 0266: what the channel mixed before the pause is still in the PCM ring: heard VOICE_PIPE_S (P) on, and the resume is heard P later
+  const { VoicePlayer, VOICE_PIPE_S: P } = await import(pathToFileURL(path.join(base, 'event_sound.js')));
+  const ctx = { currentTime: 10, createGain: () => ({ gain: {}, connect() {} }), createBufferSource() { const n = { connect() {}, start(t, o) { n.at = t; n.started = o; made.push(n); }, stop(t) { n.stopped = t; } }; return n; } };
   const made = [], V = new VoicePlayer({ ctx }); V.out = {};
-  const rec = { name: 'x', buf: {} };
+  const rec = { name: 'x', buf: { duration: 9 } };
   V.start(rec, 0); ctx.currentTime = 11; V.pause(true);
-  ok(made[0].stopped && Math.abs(rec.off - 1) < 1e-9 && made[0].onended === null, 'paused: source stopped at offset 1, its end not taken as the voice\'s');
+  ok(Math.abs(made[0].stopped - (11 + P)) < 1e-9 && Math.abs(rec.off - (1 + P)) < 1e-9 && made[0].onended === null, 'paused: the source plays on for the ring (P) and stops at offset 1 + P, its end not taken as the voice\'s');
   ctx.currentTime = 50; V.pause(false);
-  ok(made.length === 2 && made[1].started === 1 && V.playing.includes(rec), 'resumed: a new source from offset 1');
-  ctx.currentTime = 51; V.pause(true); ok(Math.abs(rec.off - 2) < 1e-9, 'the offset goes on from there, not from the pause\'s time');
+  ok(made.length === 2 && Math.abs(made[1].started - (1 + P)) < 1e-9 && Math.abs(made[1].at - (50 + P)) < 1e-9 && V.playing.includes(rec), 'resumed: a new source from offset 1 + P, heard P later');
+  ctx.currentTime = 51; V.pause(true); ok(Math.abs(rec.off - (2 + P)) < 1e-9, 'the offset goes on from there, not from the pause\'s time');
 }
 // 3h. scr005: each event from main's own beat (stage flag 1 sub-beats, main's pcs in notes/story-cutscenes.md): it runs, no Skip, its voices finish, main comes back to
 // battle. Flags as a player reaches them (traced route states; the first flag word as in r05_west / r07_toujou)

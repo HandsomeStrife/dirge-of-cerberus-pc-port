@@ -40,9 +40,10 @@ const open = async q => {
 // the layer's state: emitters and what its meshes would draw
 const layer = pg => pg.evaluate(() => {
   const si = window.__play.stageInfo, L = si.fxLayer;
-  let vis = 0, lines = 0;
-  L.group.traverse(o => { if (o.visible && o !== L.group && o !== L.glowGroup && o !== L.depthClear) { if (o.isLine) lines++; else if (o.isMesh) vis++; } });
-  return { emitters: si.fx.title.fx.emitters.length, slots: si.fx.slots.size, vis, lines, clear: L.depthClear.visible };
+  // the event-fade veil (menu_fx.js, worker 0265) is always in the group, its alpha from output.fade: not a box effect
+  let vis = 0, lines = 0; const names = [];
+  L.group.traverse(o => { if (o.visible && o !== L.group && o !== L.glowGroup && o !== L.depthClear && o.name !== 'event-fade') { if (o.isLine) lines++; else if (o.isMesh) { vis++; if (vis <= 3) names.push((o.name || o.type) + (o.parent && o.parent.name ? '<' + o.parent.name : '')); } } });
+  return { emitters: si.fx.title.fx.emitters.length, slots: si.fx.slots.size, vis, lines, clear: L.depthClear.visible, names };
 });
 try {
   { // 1 + 2
@@ -128,6 +129,9 @@ try {
     const pg = await open('enemydmg=0&sound=0');
     await pg.waitForFunction(() => window.__play && window.__play.intro.active && window.__play.stageInfo, null, { timeout: 400000 });
     await pg.evaluate(() => window.__play.stageInfo.ready);
+    // worker 0265's stage title card (first_event displayStageInfo(0)) holds the opening and takes no pause input (FUN_003fdb48 ->
+    // FUN_00241760(1, 0, 0)): Enter only after the card's fadein
+    await pg.waitForFunction(() => { const P = window.__play, r = P.intro && P.intro.rt, si = P.stageInfo; return r && r.log.some(x => /^fadein /.test(x[1])) && (!si || si.kind < 0); }, null, { timeout: 300000 });
     await pg.keyboard.press('Enter');                // the event pause: Skip
     await pg.waitForFunction(() => window.__play.intro.paused, null, { timeout: 60000 });
     await pg.keyboard.press('Space');
@@ -148,9 +152,12 @@ try {
     await pg.keyboard.press('Space');
     await pg.waitForFunction(n0 => window.__play.restart.count > n0 || window.__play.intro.active, n, { timeout: 60000 });
     await pg.waitForTimeout(2000);
-    const L = await layer(pg);
     const active = await pg.evaluate(() => window.__play.intro.active);
     ok(active, 'Restart replays the opening');
+    // the replayed opening shows its own title card (worker 0265: its effects run through fxEnd while it is up): checked after it
+    await pg.waitForFunction(() => { const P = window.__play, r = P.intro && P.intro.rt, si = P.stageInfo; return !P.intro.active || (r && r.log.some(x => /^fadein /.test(x[1])) && si.kind < 0 && si.fx.slots.size === 0); }, null, { timeout: 300000 });
+    await pg.waitForTimeout(600);
+    const L = await layer(pg);
     ok(L.emitters === 0 && L.vis === 0 && L.lines === 0 && !L.clear, `the opening runs without the box's effects (${JSON.stringify(L)})`);
     ok(pg.errs.length === 0, 'no page errors' + (pg.errs.length ? ': ' + pg.errs[0] : ''));
     await pg.close();

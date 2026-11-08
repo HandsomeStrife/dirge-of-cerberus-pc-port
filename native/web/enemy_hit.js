@@ -1,6 +1,7 @@
 // Bullet vs actor geometry for enemy_ai.js (pure: no three.js). Translations, addresses per function:
 //   cylinderHit  FUN_0055bda8's capsule step: FUN_0025c0f8 (segment vs the actor's cylinder), then
 //                FUN_0025c770 (segment start inside it)
+//   fatCapsuleHit FUN_0055c480: the fat bullet's (+0x120 bit 0x800) test on Vincent (worker 0270)
 //   partTest     FUN_005ad118 -> FUN_0030baa0: the segment against the model's part boxes ('mkd'
 //                chunk box array, ai.json hitboxes), closest box wins; -1 = none
 //   modelPose    the local-pose compose of player.js SpeedAnimator.poseLocal (FUN_005a9db0 at one
@@ -73,6 +74,15 @@ export function partTest(boxes, boneWorld, p0, p1) {
 // Returns null or { point } (L: the point is the first crossing along the segment; the game tries
 // the end discs before the side, which gives the same point for a segment that enters once).
 export function cylinderHit(r, p0, p1, A, B) {
+  const c = cylinderCross(r, p0, p1, A, B);
+  if (c !== undefined) return c;
+  const ax = sub(B, A), L = len(ax), u = mul(ax, 1 / L), w0 = sub(p0, A), h0 = dot(w0, u), wp = sub(w0, mul(u, h0));
+  if (len(wp) <= r && h0 >= 0 && h0 <= L) return { point: p0.slice() };   // FUN_0025c770
+  return null;
+}
+// FUN_0025c0f8 alone (the crossing; cylinderHit above adds FUN_0025c770): { point }, undefined for no crossing, null for a
+// zero-length axis (worker 0270: split out for FUN_0055c480)
+export function cylinderCross(r, p0, p1, A, B) {
   const ax = sub(B, A), L = len(ax);
   if (!(L > 0)) return null;
   const u = mul(ax, 1 / L), d = sub(p1, p0);
@@ -92,8 +102,41 @@ export function cylinderHit(r, p0, p1, A, B) {
     if (s >= 0 && s <= 1 && h >= 0 && h <= L) ss.push(s);
   }
   if (ss.length) return { point: add(p0, mul(d, Math.min(...ss))) };
-  if (len(wp) <= r && h0 >= 0 && h0 <= L) return { point: p0.slice() };   // FUN_0025c770
-  return null;
+  return undefined;
+}
+
+// worker 0270: FUN_0025c770(r, p, A, B): p inside the cylinder A..B (distance to the axis line <= r, axis coordinate in [0, L])
+export function insideCylinder(r, p, A, B) {
+  const ax = sub(B, A), L = len(ax);
+  if (!(L > 0)) return false;
+  const u = mul(ax, 1 / L), w = sub(p, A), h = dot(w, u);
+  return len(sub(w, mul(u, h))) <= r && h >= 0 && h <= L;
+}
+
+// worker 0270: FUN_0025d1b8(r, out, n, p, A, B): the point of the capsule A..B (radius r) for p. u = unit(B - A), s =
+// FUN_002614f4 (p's axis coordinate), foot = A + u s, q = |foot - p|. s < 0: q < r -> p + u (-s) (onto the bottom disc), else
+// A + unit(p - A without its u part) r (FUN_00260e28); s in [0, L]: foot + unit(p - foot) r; s > L: q < r -> p + u (L - s), else
+// B + unit(p - B without its u part) r. (Its return value and normal are not read by FUN_0055c480.)
+export function capsulePoint(r, p, A, B) {
+  const ax = sub(B, A), L = len(ax), u = mul(ax, 1 / L);
+  const s = dot(sub(p, A), u), foot = add(A, mul(u, s)), q = len(sub(foot, p));
+  const rim = E => { const w = sub(p, E), v = sub(w, mul(u, dot(w, u))), n = len(v); return add(E, mul(v, r / n)); };
+  if (s < 0) return q < r ? add(p, mul(u, -s)) : rim(A);
+  if (s <= L) { const v = sub(p, foot), n = len(v); return add(foot, mul(v, r / n)); }
+  return q < r ? add(p, mul(u, L - s)) : rim(B);
+}
+
+// worker 0270: FUN_0055c480 (player vt+0x184, the fat bullet's test; FUN_005442d8 with bullet +0x120 bit 0x800): rad = bullet
+// +0x2c, the capsule FUN_0055bc90 A (feet) .. B, radius R (P+0x2c). e = unit(B - A) x rad; A' = A - e, B' = B + e;
+// FUN_0025c0f8(R + rad, p0, p1, A', B'); else FUN_0025c770(R, p0) or FUN_0025c770(R, p1) -> the point FUN_0025d1b8(R, p0, A', B').
+export function fatCapsuleHit(rad, R, p0, p1, A, B) {
+  const ax = sub(B, A), L = len(ax);
+  if (!(L > 0)) return null;
+  const e = mul(ax, rad / L), A2 = sub(A, e), B2 = add(B, e);
+  const c = cylinderCross(R + rad, p0, p1, A2, B2);
+  if (c) return c;
+  if (!insideCylinder(R, p0, A2, B2) && !insideCylinder(R, p1, A2, B2)) return null;
+  return { point: capsulePoint(R, p0, A2, B2) };
 }
 
 // ---------------------------------------------------------------- pose (for tests / headless use)

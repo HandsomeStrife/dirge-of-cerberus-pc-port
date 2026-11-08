@@ -180,6 +180,26 @@ export class PlacedSounds {
     this.table[k] = { h, e, vol, pos: e.sp.centre };
   }
 
+  // FUN_003e6d70(name, pos, 0, vol): an entry without an object (event_sound.js playBgSound: pos (0, 0, 0)); FUN_003e6ec8
+  // keeps its volume at vol (entry +8). Nothing but FUN_003e6538 (releaseAll) frees it (worker 0266)
+  bgPlayRaw(name, pos, vol) {
+    const k = this.table.findIndex((t) => t === null);
+    if (k < 0) return -1;
+    const h = this.be.open(name, pos, vol);
+    if (h === null || h === undefined) return -1;
+    this.table[k] = { h, e: null, name, vol, pos: pos.slice(0, 3) };
+    return k;
+  }
+
+  // FUN_003e6538 (the event start FUN_0037e048, mode bit 0 clear): every entry released (FUN_003e8ff8) and emptied. The
+  // objects' +0xe0 bit 0 stays as it is, so a placed sound still 'playing' is not opened again until it stops (FUN_0057d4f8)
+  releaseAll() {
+    for (let k = 0; k < 8; k++) {
+      const t = this.table[k];
+      if (t) { this.be.close(t.h); this.table[k] = null; }
+    }
+  }
+
   // FUN_003e64b0
   bgStop(e) {
     for (let k = 0; k < 8; k++) {
@@ -199,7 +219,7 @@ export class PlacedSounds {
     for (let k = 7; k >= 0; k--) {
       const t = this.table[k];
       if (!t) continue;
-      t.vol = distVolume(soundDistance(t.e.o, t.e.sp, Lv));                         // PTR_0047d6b0 = -1: no cap
+      if (t.e) t.vol = distVolume(soundDistance(t.e.o, t.e.sp, Lv));                // PTR_0047d6b0 = -1: no cap (no object: entry +8)
       this.be.setVol(t.h, t.vol);
     }
     for (const e of this.objs) {
@@ -212,7 +232,7 @@ export class PlacedSounds {
     }
   }
 
-  playingNames() { return this.table.filter(Boolean).map((t) => t.e.o.name); }
+  playingNames() { return this.table.filter(Boolean).map((t) => (t.e ? t.e.o.name : t.name)); }
 }
 
 // FUN_003415d8(C, kind) -> the cue index (null when the table / material gives none). foot: ambient_z128.json foot.
@@ -288,15 +308,18 @@ export class SlotStreams {
   }
   warnOnce(m) { if (!this.warned.has(m)) { this.warned.add(m); console.warn(m); } }
   row(name) { const se = this.au.se, res = this.au.res; return (res && res.names[name]) || (se && se.names[name]) || null; }
-  open(name, pos, vol) {
+  // worker 0269: { fixed: false } = a gameplay SE kept as a slot (FUN_0033cc90 -> FUN_003e8e18 without FUN_003e8b70: the volume
+  // from the distance), { range } = FUN_003e8ec8 (slot +0x20); the EM barrier's hum (props.js)
+  open(name, pos, vol, { fixed = true, range = 400.0 } = {}) {
     const r = this.row(name);
     if (!r) { this.warnOnce('ambient: no sdb row for ' + name + ' (not played)'); return null; }
-    let flags = this.FIXED | ((Math.min(vol, 0x7f) & 0x7f) << 7);                       // FUN_003e8b70
+    let flags = fixed ? this.FIXED | ((Math.min(vol, 0x7f) & 0x7f) << 7) : 0;          // FUN_003e8b70
+    if (Math.hypot(pos[0], pos[1], pos[2]) === 0) flags |= 0x8000;                    // FUN_003e8bc8: |position| == 0 -> no pan (playBgSound)
     if (r.flags & 8) flags |= 0x20;
     if (r.flags & 0x20) flags |= 0x200000;
     else this.warnOnce('ambient: ' + name + ': Doppler pitch updates (FUN_00009320) not translated');
     const h = this.next++;
-    this.slots.set(h, { name, id: r.id, pos: pos.slice(0, 3), range: 400.0, flags, sent: false, vol: -1, pan: -1, stream: null });
+    this.slots.set(h, { name, id: r.id, pos: pos.slice(0, 3), range: Math.fround(range), flags, sent: false, vol: -1, pan: -1, stream: null });
     return h;
   }
   setVol(h, vol) { const s = this.slots.get(h); if (s) s.flags = (s.flags & ~0x3f80) | ((vol & 0x7f) << 7); }   // FUN_003e8f70

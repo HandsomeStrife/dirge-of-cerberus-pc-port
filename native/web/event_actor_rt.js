@@ -391,6 +391,11 @@ export class EventActors {
       'fake/KerberosActor.loadVincentWeapon_l(I)V': (vm, [id]) => { T.create('weapon', id); T.log.push([R.frameNo, 'loadVincentWeapon ' + id]); },
       // setVisible_l (FUN_003a3478 -> FUN_0037ede8): +0xa8 bit 49; setClip_l (FUN_003a3518 -> FUN_0037ef08): bit 52
       'fake/KerberosActor.setVisible_l(IZ)V': (vm, [id, v]) => { const a = A(id); if (a) a.visible = !!v; },
+      // set_footnoise_l(id, b) (FUN_0039e2a0 -> FUN_0037ed60): the slot's MP +0x428 bit 3 (set b != 0, else clear), the gate of
+      // the MP's footfall sounds (FUN_005ae828 / FUN_005ae738). An event-loaded model starts with it clear (FUN_00380370); a lent
+      // actor keeps its gameplay MP's. Kept on the slot (a.footnoise); the page plays no event actor's footfalls, so the stage's
+      // only use (help_orei04: off for three actors) changes nothing heard (worker 0266)
+      'fake/KerberosActor.set_footnoise_l(IZ)V': (vm, [id, b]) => { const a = A(id); if (a) a.footnoise = !!b; },
       // hide_model_l(id, n, b) (FUN_003a11d0 -> FUN_0037aa20(ev, id, n, -1, b)): MP+0x180 bit n set (b 0) / clear (b != 0);
       // FUN_005b2ef8 skips the model's smd list entry n while its bit is set (worker 0261; event_actors.js applyMask)
       'fake/KerberosActor.hide_model_l(IIZ)V': (vm, [id, n, b]) => {

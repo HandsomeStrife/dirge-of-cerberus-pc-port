@@ -6,8 +6,8 @@
 // What is on the page: the event VM and its timing (wait / sleep / setTimer), the event cameras (keys, splines,
 // move, active, set, setfov), the fades' levels, the event's actors and their clips (event_actor_rt.js / event_actors.js,
 // worker 0218; Vincent's own event actor p000 left out). The subtitle windows and the event pause's screen are
-// event_window.js (worker 0239; drawn by play.js). Left out (warned once by event_rt.js / event_vm.js): focus
-// blur, the effect sequences, the stage title card. Music, the area sound, the event SEs and the voices
+// event_window.js (worker 0239; drawn by play.js). The stage title card is stage_info.js's (worker 0265). Left out (warned
+// once by event_rt.js / event_vm.js): focus blur, the effect sequences. Music, the area sound, the event SEs and the voices
 // (event_sound.js) and ✕ skip (event_rt.js requestSkip) are on (worker 0222). The page's gameplay bodies
 // are hidden while it plays.
 
@@ -21,7 +21,8 @@ import { EventActors } from './event_actor_rt.js';
 export const FRAME_MS = 20;
 
 export function createIntro({ data, camera, output, canvas, zoneLoad = null, warn = (m) => console.warn(m),
-                              actorLib = null, root = null, litPatch = null, light = null, sound = null, windows = null, rand = null }) {
+                              actorLib = null, root = null, litPatch = null, light = null, sound = null, windows = null, rand = null,
+                              stageInfo = null, stageInfoWait = null }) {
   // the event's actors (worker 0218): their natives and update (event_actor_rt.js), drawn by event_actors.js
   let view = null, clipFrames = null;
   if (actorLib && root) clipFrames = (m, n, c) => { const p = actorLib.models[m] && actorLib.models[m].packs[n]; return p && p.info.clipFrames[c] != null ? p.info.clipFrames[c] : null; };
@@ -30,7 +31,8 @@ export function createIntro({ data, camera, output, canvas, zoneLoad = null, war
     texAnims: (m) => (actorLib.models[m] && actorLib.models[m].info.texanim ? actorLib.models[m].info.texanim.anims : null),
     residentFiles: (m) => (actorLib.models[m] && actorLib.models[m].info.resident) || [], rand }) : null;
   // sound (event_sound.js back ends: music / area / audio / voices) and windows (event_window.js), worker 0222
-  const rt = new EventRuntime(data, { warn, zoneLoad, actors, sound, windows });
+  // stageInfo: () -> stage_info.js, the stage title card (displayStageInfo(0) at first_event pc 884; worker 0265)
+  const rt = new EventRuntime(data, { warn, zoneLoad, actors, sound, windows, stageInfo, stageInfoWait });
   rt.start();
   if (actors) view = import('./event_actors.js').then(m => (view = m.createEventActorView({ root, lib: actorLib, rt, litPatch, light, warn })));
   // GUESS: the fade particle's draw (system-FED emitters 2..5, not decoded) as a black layer with opacity

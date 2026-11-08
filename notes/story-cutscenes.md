@@ -204,3 +204,52 @@ All wiring was taken out; the natives still warn as left out. A scratch copy of 
 ## Block start drift: not done (worker 0261)
 
 Findings stand as in 'Open' (two scratch tries failed). Added by the review: beast_ev01's camera 2 shot (f793-917) runs 125 frames in the game against 90 on the page, which `--jump 5` split into pieces: its last stretch holds 35 frames longer in the game (f850-917 against 33). Not explained. Its f850 aim error (4.4 u) is a fast pan (25-30 u a frame) with the clock off by a fraction: not a defect.
+
+## Event sounds and mouths vs voices (worker 0266, 2026-11-08)
+
+Dan's reports: "some sounds are missing from the cutscenes" and "dialogue still doesn't line up with the mouth movement".
+
+**Event SEs (the main gap).** Every event's foley track (asj_041 .., asj_154 .., asj_181 .., asj_246 .., asj_301 .., 162
+setSoundEffect calls in the stage's classes) was silent: the names have rows in the zone's sdb (asj_154 = id 50026), but
+their programs are not in the zone's sep.bin. loadSoundEffectEx_l(a, b, c) (FUN_003a0be8 -> FUN_00378d40: command 0x10 ->
+FUN_003825e8) loads them: a 0 -> FUN_002508b0(b) + c = 0x0c000800 + b x 0x1000 + c; every event passes (0, 100) at its start
+= file **0x0c064800** (177 programs, bank 0), and (1, 100) at its end = FUN_00250970(zone) = the zone's sep.bin; a 2 ->
+FUN_00250a48 (unused here). FUN_003e78a8(mgr, 1, code, 0) = request 4 -> FUN_003e79a8: the file **replaces SE block slot 1**
+(the zone's, loaded there by FUN_00402220); slot 0 is the resident block (FUN_00244db0). So inside an event the zone's
+gameplay SEs are not found, as in the game. Page: extract.py se_ev100.json, audio.js `seBlock1` / `program`.
+- setSoundEffect (release 1) frees the slot at once and the SE plays to its end (rows 0x20); setSoundEffectLoop (release 0,
+  wro_kaisetu's asj_335 .. 339, rows 0x28 with bit 3 = stop on release) keeps it until unsetSoundEffect (FUN_0039ff08 ->
+  FUN_003e90d0 -> FUN_003e9830: request 0x12, the fade). Skip (FUN_00372f70) stops none of them (FUN_003e9950 = stream slots,
+  flag 0x4000). The event SEs run up to 14 s, so the page streams them (event_sound.js `EventSeSlots`, SeStream).
+- **playBgSound(name, vol)** FUN_0039de38: the position is zeroed by `sq zero, 0(a1)` at 0x39de78 (Ghidra drops it) ->
+  FUN_003e6d70(name, origin, no object, vol): an entry of the placed-sound table DAT_004f5920, no pan (|pos| 0 -> flag 0x8000),
+  volume fixed at vol (FUN_003e6ec8 keeps entry +8 for an entry without an object). The next event start (FUN_0037e048 with
+  mode bit 0 clear) releases the whole table (FUN_003e6538), the stage's placed sounds included. wro_kaisetu ends with asj_030,
+  help_orei02 with asj_031 (zone programs, played after the (1, 100)).
+- **set_footnoise_l(id, b)** FUN_0039e2a0 -> FUN_0037ed60: MP+0x428 bit 3, the gate of the footfall test FUN_005ae828. Event-
+  loaded models start with it clear (FUN_00380370), lent actors keep their gameplay MP's (set at hand-back, FUN_00376938).
+  help_orei04 only turns it off; the page plays no event actor's footfalls, so nothing changes. **Open:** lent actors' footfalls
+  in events (Vincent / soldiers walking in an event clip) are not played on the page.
+- flushSoundEffect (main pc 10975, after heri_lasted) FUN_0039dd10 -> FUN_003e6fc8 (the area / surface sound re-send): still
+  left out (unknown native warning).
+- Natives addresses from the registry in RAM (method entry +0xc, hash +0x10; state w263 rv10): set_footnoise_l 0x39e2a0,
+  playBgSound 0x39de38, loadSoundEffectEx_l 0x3a0be8, unsetSoundEffect 0x39ff08, flushSoundEffect 0x39dd10, playVoice2 0x3a0880.
+
+**Mouths vs voices.** Only first_event (the opening: startanim "00" on g000, 10110sk) and sk_mituketa2 (startanim "00", never
+stopped; 10401sk .. 10404sk) animate mouths (texanm flipbooks, drawn at once). The voices go out through the PCM ring:
+FUN_003ed000 mixes a 1024-sample block (21.3 ms) into the EE ring DAT_0047d754 (8 slots, 7 queued when full), FUN_003ed8e0
+sends the oldest into the IOP's 16-slot buffer unless the slot is playing (FUN_0041ad50; DAT_0047d768). FUN_003eab20 mixes
+nothing for a voice's offset-0 frame. Traces (TRACE_FIELDSET=lipsync, TRACE_CALLLOG=lipsync; scripts w266_open, w266_sk):
+| | startanim 00 | playVoice | EE queued at the voice's first block | IOP slots ahead |
+|---|---|---|---|---|
+| T w266_open (first_event) | f1365 | 10110sk f1388 (+23) | 7 | 15.25 .. 16 |
+| T w266_sk (sk_mituketa2) | f1587 | 10401sk f1991 (+404), 10402sk f2376 (+789) | 7 | 15.25 .. 16 |
+| page (node, sk_mituketa2) | f879 | +372, +736 | - | - |
+Every frame of both windows has the EE ring full and the IOP 15.25 .. 16 slots ahead, so a voice is heard **6 + 15.5 + 1 =
+22.5 blocks = 480 ms** after playVoice, while its mouths start at once. The page played the voice at once (plus its decode):
+the voice came **about 480 ms early** against the mouths (less the browser's decode time). Fixed: event_sound.js `VOICE_PIPE_S` (start, the event pause's hold and
+Skip's stop all act through the queue: what was mixed plays on for 480 ms).
+**Still off (largest errors):** the event clock between the mouth and the voice: opening +19 frames on the page vs +23 (the
+loadchrs(1, 5) before `sleep(393)` waits for its load in the game: the known 'event loads' row); sk_mituketa2 +372 / +736 vs
++404 / +789 (32 and 53 frames short: the known short shots / block start drift, not looked into here). Not compared against
+PCSX2 audio output: the delay is read from the ring state, the SPU2's own buffering is not counted.

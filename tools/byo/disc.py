@@ -223,6 +223,9 @@ INPUTS = {
     '076506cd.bin': '106921e6007653eeb13f6a9405999804f8eddf2fcaf36b95818af688def53757',   # e027 clips: the paratroopers' r_para* (script 159-164 cmd 0x19b; worker 0259)
     '07650e41.bin': '46566553c97b678893e7553b809cfe8a298853752e891944157beb8b81bac65e',   # e057 barrel model (export_web_enemy, props_view.js)
     '07650e42.bin': '9d3f285ec76e66595b0eb125e913f1e8aa8067d698a2a88783d0b3d0c0d2d313',   # e057 barrel texture
+    '07670c01.bin': '6ed77efb07bb047e54f95bb0d53e43408c8d4774750f37213730641d6c226c74',   # g048 EM barrier base model (props_view.js)
+    '07670c02.bin': '7ca4184dbc244063d6e863e80429a910fd70d92a76a6ed765c411dfdf97846af',   # g048 texture
+    '07670c03.bin': '43c8179e4e8e4d64650f3efcf4f375f1fc5d2772a75720802610677b296cf2fb',   # g048 model FED (the beams; export_web_effects.py)
     '07670981.bin': '29488b3854b64387414f742e9e79a13e455e7f65378727b658918a62911975e6',   # g038 item model (export_web_enemy, items_view.js)
     '07670982.bin': 'a61a83b5d70a5a4b75b5ef098e1de2e1036bb22f9b7fd63da607f6ea0717b51a',   # g038 texture
     '076709c1.bin': '543fb3436e543a7cb8c131460fc39e231e2647b3ecff4a62c347537fa5df7e1b',   # g039 item model
@@ -253,6 +256,8 @@ INPUTS = {
     '076505c1.bin': '93001dd18f2fa985cdf4e3b9450fc501ddc75a46ca0b8fb469622b49308e9dbd',   # e023 model
     '076505c2.bin': 'da9383366d3e7fa868dd29fc864578768df6d8fce151db46aad0df7e415d5e42',   # e023 textures
     '076505cb.bin': '7d4db9a7df0711a70591419d89999c39375de040debe43f7502f96a8d77523b0',   # e023 clips m001 (idle)
+    '076505c3.bin': 'ef039f472fd5e9997b9d203ad715295a7b5d7f9bec2d0509b18a04194921bd43',   # e023 FED 0x405c0000 (rocket trail / blast; worker 0270)
+    '07650603.bin': '46ed3259747042be8ca230c925c4aa6604ae6c2313e9d7b3f9dd52f77b609431',   # e024 FED 0x40600000 (missile trail / blast; worker 0270)
     '07650601.bin': '82a80ce24910de40f55b4a801421593f89fedbd76dc6f75ed78735dd18cc48a9',   # e024 model
     '07650602.bin': '3b36abb7fa20c0f4091ef12a72f51e802670500fa1900d6e3c662e65666d2bc0',   # e024 textures
     '07650600.bin': 'a140a2f1c369a3bb4fed25726533947e8242ddb32e21b9cbbfa2e1c3cf3da8ae',   # e024 clips m000 (idle)
@@ -285,6 +290,8 @@ INPUTS = {
     # z128 sound: SE programs sep.bin (06zz0005) and names sdb.bin (06zz0008) for tools/audio/extract.py / bgm.py
     '06800005.bin': '519b914c16e6ab40592cb59c7a5f1270b772c65dc62778cd5cb08c0e3cc8ce28',
     '06800008.bin': 'e5854eb93c8e80479cda8935879d40dbdbab5fc5dbb5e81793c8227028bfeb3d',
+    # the events' SE block (FileCode 0x0c064800: loadSoundEffectEx_l(0, 100, 0), FUN_003825e8; worker 0266)
+    '0c064800.bin': '28153c633aa9d31e1382eb0c80986a76e9c2e49a009fcd9efd4bf56890aa70a0',
     # z128's area FEDs: the stage fire / smoke / embers (export_web_effects.py, worker 0208)
     '06800014.bin': '290b9e553387611a48cffa0aed1764563f3662a67bb5bd9371d3fda182860369',
     '06800114.bin': '0a54e64bbe31df21d5739aa27a6a41f28a40a7939c1221bf9ff81ae0c57651ec',

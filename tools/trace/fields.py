@@ -25,7 +25,7 @@ def resolve_bases(mem):
     """Player P: FUN_0053bb08(DAT_0046e880) -> entry *(M+0x18) of the table at M+0x1164
     (FUN_0053e040) -> vtable+0x94 (here 0x579ae8, `move v0,a0`) -> FUN_00333150 calls
     vtable+0x9c (0x579b18, `move v0,a0`). Both getters return `this`, checked below."""
-    if FIELDSET in ("event", "evactor", "stage"):    # absolute addresses only (worker 0210: states taken mid stage load have no player)
+    if FIELDSET in ("event", "evactor", "stage", "lipsync"):    # absolute addresses only (worker 0210: states taken mid stage load have no player)
         return {}
     m = u32(mem, G_OBJTAB)
     idx = u32(mem, m + 0x18)
@@ -674,7 +674,23 @@ REVIVE_FIELDS = [f for f in GAMEOVER_FIELDS if f[0] in ("step", "pad_held", "p_s
     ("cam_1e8", "CAM", 0x1E8, "u32", "D", "CAM+0x1e8 (0x400000: the death camera)"),
 ]
 
+# Opt-in set for voice vs mouth timing (TRACE_FIELDSET=lipsync, worker 0266; notes/story-cutscenes.md 'Mouths and voices'):
+# the event clock, the six voice channels DAT_004f7c38 (+4 file, +8 stream, +0xc size, +0x10 read offset: +0x60 a decoded
+# frame, FUN_003eab20; +0x1c bit 1 playing), the EE PCM ring DAT_0047d754 = 0x1fa0000 (u16 write / read slot of 8, FUN_003ed000 /
+# FUN_003ed8e0), the IOP slot sent next DAT_0047d768 (of 16) and the IOP's play address reply (*DAT_00510bc8 = 0x5107c0;
+# FUN_0041ad50: (reply & 0xffffff - DAT_00510388[1]) / DAT_005103a0[1] = the slot playing).
+LIPSYNC_FIELDS = [f for f in FIELDS if f[0] in ("step",)] + [
+    ("ev_clock", None, EV + 0x9848, "bytes:20", "D", "+0x9848 clock .. +0x9858 paused total"),
+] + [("ev_vc%d" % i, None, 0x4F7C38 + 0x40 * i, "bytes:32", "D", "voice channel %d" % i) for i in range(6)] + [
+    ("pcm_ring", None, 0x1FA0000, "bytes:8", "D", "+0 u16 write slot, +2 u16 read slot, +4 u32 frames"),
+    ("iop_next", None, 0x47D768, "u32", "D", "DAT_0047d768: the IOP slot sent next"),
+    ("iop_reply", None, 0x5107C0, "u32", "D", "*DAT_00510bc8: IOP play address (& 0xffffff)"),
+    ("iop_base", None, 0x510388, "bytes:8", "D", "DAT_00510388[0..1]: IOP buffer base per channel"),
+]
+
 FIELDSET = __import__("os").environ.get("TRACE_FIELDSET")
+if FIELDSET == "lipsync":
+    FIELDS = LIPSYNC_FIELDS
 if FIELDSET == "revive":
     FIELDS = REVIVE_FIELDS
 if FIELDSET == "results":

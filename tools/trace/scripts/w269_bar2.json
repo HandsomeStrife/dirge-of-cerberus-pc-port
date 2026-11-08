@@ -1,0 +1,11 @@
+{
+"name": "w269_bar2",
+"frames": 150,
+"log_from": 35,
+"doc": "worker 0269: from route state r03_mid2: stick back (+x) along EM barrier 56, then right (+z) into its face, then right+back to slide along it. TRACE_CALLLOG=pushstep TRACE_CALLLOG_FRAMES=35:150.",
+"events": [
+{ "from": 10, "to": 30, "lx": 0.0, "ly": 1.0 },
+{ "from": 31, "to": 100, "lx": 1.0, "ly": 0.0 },
+{ "from": 101, "to": 150, "lx": 0.7, "ly": 0.7 }
+]
+}

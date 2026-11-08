@@ -104,5 +104,17 @@ export function createMenuFx(feds, { rng = null, warn = console.warn } = {}) {
 export function menuFxLayer(THREE, mfx, { output = null } = {}) {
   const L = new TitleLayer(THREE, mfx.title, { screen: output });
   L.group.name = 'menu-box-effects';
+  // worker 0265: the event fade (output.fade; GUESS row 'the event fade's draw') is a particle of the effect managers, which draw
+  // before the menu managers (FUN_002efe98's order), so these effects (the stage title card over the opening's black) are drawn
+  // over it: the veil is drawn here, first in the group, and output.js skips its own for that frame
+  if (output) {
+    const veil = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.ShaderMaterial({
+      uniforms: { a: { value: 0 } }, transparent: true, depthTest: false, depthWrite: false,
+      vertexShader: 'void main() { gl_Position = vec4(position.xy, 0.0, 1.0); }',
+      fragmentShader: 'uniform float a; void main() { gl_FragColor = vec4(0.0, 0.0, 0.0, a); }' }));
+    veil.frustumCulled = false; veil.name = 'event-fade';
+    veil.onBeforeRender = () => { veil.material.uniforms.a.value = Math.min(1, Math.max(0, output.fade)); output.fadeDrawn = true; };
+    L.group.add(veil); L.group.children.unshift(L.group.children.pop());
+  }
   return L;
 }

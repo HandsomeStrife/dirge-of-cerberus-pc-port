@@ -191,6 +191,23 @@ SETS["pushstep"] = [
          copy=[cp("a1", 0, 4), cp("a2", 0, 4), cp("a0", 0x80, 4), cp("a0", 0xB0, 4)]),
 ]
 
+# worker 0269: what spawns the EM barriers' beams. FUN_0054f540 / FUN_0054f2b0 -> FUN_0054f9d8 (a0 = the barrier: +0x20 id, +0x120
+# state, +0x28) -> FUN_0054f660 (a1 = the age flag) -> FUN_002dbc80 (f12 = age, a1 = effect id) -> FUN_002dbce0; FUN_002dbce0's
+# FUN_002e6290 (f12 age, a1 id; v0 = emitter or < 1) and FUN_002e7898 (a1 emitter, a2 the attachment); the other FUN_002dbce0 callers.
+SETS["beams"] = [
+    dict(id=60, kind="site", where=(0x54F540, 0x54F660, 0x54F9D8), name="state_to_9d8", copy=[cp("a0", 0x20, 1), cp("a0", 0x120, 1), cp("a0", 0x28, 1), cpr("a1")]),
+    dict(id=61, kind="site", where=(0x54F2B0, 0x54F334, 0x54F9D8), name="act_to_9d8", copy=[cp("a0", 0x20, 1), cp("a0", 0x120, 1), cp("a0", 0x28, 1), cpr("a1")]),
+    dict(id=62, kind="site", where=(0x54F9D8, 0x54FA14, 0x54F660), name="9d8_to_660", copy=[cp("a0", 0x20, 1), cp("a0", 0x120, 1), cpr("a1")]),
+    dict(id=63, kind="site", where=(0x54F660, 0x54F7B8, 0x2DBC80), name="660_to_bc80", copy=[cpr("a1")]),
+    dict(id=64, kind="site", where=(0x2DBC80, 0x2DBCDC, 0x2DBCE0), name="bc80_to_bce0", copy=[cpr("a1"), cpr("a2")]),
+    dict(id=65, kind="site", where=(0x2DBCE0, 0x2DBDA8, 0x2E6290), name="bce0_spawn", copy=[cpr("a1"), cpr("a2")]),
+    dict(id=66, kind="site", where=(0x2DBCE0, 0x2DBDA8, 0x2E7898), name="bce0_attach", copy=[cpr("a1"), cpr("a2")]),
+    dict(id=67, kind="site", where=(0x2DC4B0, 0x2DC5A0, 0x2DBCE0), name="dc4b0_bce0", copy=[cpr("a1")]),
+    dict(id=68, kind="site", where=(0x2DC5A0, 0x2DC634, 0x2DBCE0), name="dc5a0_bce0", copy=[cpr("a1")]),
+    dict(id=69, kind="site", where=(0x2DC6C0, 0x2DC7C8, 0x2DBCE0), name="dc6c0_bce0", copy=[cpr("a1")]),
+    dict(id=70, kind="site", where=(0x2DC840, 0x2DC944, 0x2DBCE0), name="dc840_bce0", copy=[cpr("a1")]),
+]
+
 # worker 0165: the melee hit volume. FUN_00569dc0 (owner event 4 op 2) -> FUN_00541310(mgr, record);
 # the attack object's update vt+0x214 = FUN_0057a330 (vtable 0x58f9f0); the sphere test FUN_0057b8b8 ->
 # target vt+0x19c FUN_0055c5f8 -> FUN_0025db68(r, R, centre, a, b); the hit FUN_0057a428 -> FUN_0057a830;
@@ -531,6 +548,11 @@ SETS["evsound"] = [SETS["stage"][0], SETS["stage"][1], SETS["stage"][2], SETS["s
     dict(id=244, kind="site", where=(0x383408, 0x3837D0, 0x3B6AB8), name="ev_window_text", copy=[cp("a2", 0, 6)]),
     dict(id=245, kind="site", where=(0x3736C8, 0x3737C0, 0x2F21D8), name="ev_fadein", copy=[]),
     dict(id=246, kind="site", where=(0x3736C8, 0x3737C0, 0x2F21F8), name="ev_fadeout", copy=[]),
+]
+# worker 0266: voice vs mouth timing: the evsound set + setanim_l FUN_0039cfe0 -> FUN_00376510(ev, id, name (packed, low
+# word), on) (startanim / stopanim)
+SETS["lipsync"] = SETS["evsound"] + [
+    dict(id=247, kind="site", where=(0x39CFE0, 0x39D058, 0x376510), name="ev_setanim", copy=[cpr("a1"), cpr("a2"), cpr("a3")]),
 ]
 # worker 0232: the section stats (notes/results-research.md): every FUN_0031d668(stat, n) (stat += n), FUN_0031d698
 # (stat = v) and FUN_0031d6d8 (total = v) call in the ELF, with the caller's return address (ra = site + 8).

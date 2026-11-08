@@ -127,8 +127,12 @@ try {
   const at = await q.pg.evaluate(() => [window.__play.ctrl.pos.x, window.__play.ctrl.pos.z].map(Math.round).join());
   ok(sl.loaded === ALL && sl.shown === ALL, `?ladder=1 (at ${at}): every chunk drawn and scanned`, `${sl.loaded} / ${sl.shown}`);
   await hold(q.pg, { x: -1498, y: -27, z: 1242 }, 10);
+  // (on the ladder its code pulls him back when the hold ends, into box 24 (6, 12) or (6, 8): either is a box pair). Moving
+  // boxes unloads the old chunk that frame and loads the new one at the next FUN_00267970 (area_stream.js progress), so sample
+  // once no load is in flight and the room has drawn a frame since (the first frame after the hold is mid-switch: 0,6)
+  await until(q.pg, () => { const s = window.__play.light.stream; return s.busy === 0 && !s.all; }, null, 30000).catch(() => {});
+  await q.pg.evaluate(async () => { const P = window.__play, t0 = P.stats.ticks; while (P.stats.ticks < t0 + 2) await new Promise(r => setTimeout(r, 50)); });
   const sl2 = await state(q.pg);
-  // (on the ladder its code pulls him back between holds, into box 24 (6, 12) or (6, 8): either is a box pair)
   ok(['0,6,8', '0,6,12'].includes(sl2.loaded) && sl2.shown === sl2.loaded, 'then a box: its pair loaded, the aid ends, the room draws the pair', `${sl2.loaded} / ${sl2.shown}`);
   ok(q.errs.length === 0, 'no page errors (ladder)' + (q.errs.length ? ': ' + q.errs.slice(0, 2).join(' | ') : ''));
   await q.pg.close();

@@ -32,6 +32,7 @@
 // param +0x1d >= 2, the emitter fade (those are simulated but not drawn),
 // the cull on the impacts' manager, the depth buckets (FUN_002e1c90: depth-sorted order).
 
+import { T59, T60 } from './effects_ribbon.js';
 const f = Math.fround;
 const ANG = f(11.377778);          // FUN_00275850: degrees x 11.377778 = 4096 units per turn
 const PCT = f(0.01);               // FUN_002760d8: scale percent x 0.01
@@ -76,6 +77,25 @@ function scaleM(v) { const m = new Float32Array(16); m[0] = v[0]; m[5] = v[1]; m
 // FUN_002d82d0(out, in, rot, pos, order): jump table 0x49f4c0; order 0 = FUN_002d7ff0: Z, then Y,
 // then X (FUN_002d7e80 / 7d80 / 7c90), then FUN_002d7fc0 adds pos to row 3. Orders 1-5 (FUN_002d8060 /
 // 80d0 / 8150 / 81d0 / 8250) are not translated: null (the caller does not draw; notes/effects-research.md).
+// worker 0270: FUN_002d86e0(out, in): rows 0-2 each times 1 / sqrt(row . row) (VSQRT, VDIV; w scaled too), row 3 kept
+function rowsUnit(M) {
+  const o = Float32Array.from(M);
+  for (let r = 0; r < 3; r++) {
+    const k = f(1 / f(Math.sqrt(f(f(f(M[4 * r] * M[4 * r]) + f(M[4 * r + 1] * M[4 * r + 1])) + f(f(M[4 * r + 2] * M[4 * r + 2]) + f(M[4 * r + 3] * M[4 * r + 3]))))));
+    for (let j = 0; j < 4; j++) o[4 * r + j] = f(M[4 * r + j] * k);
+  }
+  return o;
+}
+// worker 0270: FUN_002d9cd0(out, M): the order-0 angles back from a rotation (eulerT's inverse). x = -atan2(m9, m10)
+// (FUN_0045b8a8), y = asin(m8) (FUN_0045b7a8); c = cos(y) (FUN_0045b428): c == 0 -> x = -atan2(m6, m5), z = 0; else
+// z = -asin(m4 / c), pi - z when m0 < 0 (3.141592). Each x 651.8988 (4096 / 2pi).
+function matrixAngles(M) {
+  let x = f(-f(Math.atan2(M[9], M[10]))), z = 0;
+  const y = f(Math.asin(M[8])), c = f(Math.cos(y));
+  if (c === 0) x = f(-f(Math.atan2(M[6], M[5])));
+  else { z = f(-f(Math.asin(f(M[4] / c)))); if (M[0] < 0) z = f(f(3.141592) - z); }
+  return [f(x * f(651.8988)), f(y * f(651.8988)), f(z * f(651.8988)), 0];
+}
 function eulerT(m, rot, pos, order) {
   if (order !== 0) return null;
   let o = rotZ(m, rot[2]); o = rotY(o, rot[1]); o = rotX(o, rot[0]);
@@ -290,6 +310,8 @@ function put(v, o, a) { for (let i = 0; i < a.length; i++) v[o + i] = a[i]; }
 // (+0x28 / +0x2c) (asm 0x274438.., 0x275858.., 0x2760e0.., 0x272190..). Translated: bits 1 / 2 / 4 of types 1 / 2 / 3.
 const spawnArg = (X, bits) => { const S = X.sp; if (S && (S.flags & ~7)) X.warn(`effects: spawn parameter flags 0x${S.flags.toString(16)} (bits past 7) not translated`); return S && (S.flags & bits) ? S : null; };
 const T = {};
+// worker 0269: types 59 (a path node) and 60 (the jagged ribbon) for the EM barrier's beams (effects_ribbon.js; notes/ribbon-research.md)
+T[59] = T59; T[60] = T60;
 // type 1 position: FUN_00274430 init (spawn flag 1: +0x10 = the given position, 4 words), FUN_00274488 transition
 T[1] = {
   init(X, a, o) { const v = X.p.v; put(v, o + 4, rd4(X.F, a)); const S = spawnArg(X, 1); if (S) put(v, o + 4, S.pos); put(v, o, v.slice(o + 4, o + 8)); },
@@ -811,7 +833,7 @@ function drawModel(X, mi, kind, uvo, view, out, tex, proj, dz = null) {
   // within 0.075 %). The impacts' floor model (0x45400 E20) still does not match w206_floor (a RAM-restored replay of 0-5
   // frames: 22 page triangles against the dump's 10, 4-17 px off, no RGBA match; cause not decoded), so the impacts' engine
   // keeps them off (warned, fidelity-audit row).
-  if (em.cat !== 1 && !X.models0) { X.warn('effects: type 11 / 20 models of camera-0 emitters (FUN_002f5c50) not checked for this manager (w206_floor mismatch): not drawn'); return; }
+  if (em.cat !== 1 && !X.models0 && !(X.models0Feds && X.models0Feds.has(em.F.code))) { X.warn('effects: type 11 / 20 models of camera-0 emitters (FUN_002f5c50) not checked for this manager (w206_floor mismatch): not drawn'); return; }
   const m = tbl + F.u32(tbl + 4 * mi);
   const mf = F.u32(m);
   const flags = kind | ((mf & 2) ? 0 : 0x10) | ((mf & 1) ? 0 : 8);
@@ -1610,7 +1632,7 @@ function angleFade(em, r, am, view) {
 // FileCodes 0x20000000 | area << 18), in load order; `cull` = run FUN_002ea6a0's emitter cull in end(view) (`hidden`: the
 // cell numbers whose bit is set in DAT_004e8710 = DAT_004e86f0 | DAT_004e8700, from a save state: tests; `mask`: the live
 // mask object, room_vis.js createVisMask, shared with the room, worker 0225)
-export function createEffects({ fed, fed0 = null, core, warn = console.warn, twister = null, rand = null, rng = null, proj = PROJ, reseed = true, stage = [], cull = false, hidden = null, hiddenScript = null, mask = null, occl = null, models0 = false } = {}) {
+export function createEffects({ fed, fed0 = null, core, warn = console.warn, twister = null, rand = null, rng = null, proj = PROJ, reseed = true, stage = [], cull = false, hidden = null, hiddenScript = null, mask = null, occl = null, models0 = false, models = [], models0Feds = [] } = {}) {
   const rngGiven = !!rng;
   rng ??= new EffectRng(undefined, undefined, twister, rand);
   const F0 = parseFed(fed);
@@ -1621,6 +1643,9 @@ export function createEffects({ fed, fed0 = null, core, warn = console.warn, twi
   for (const [k, t] of parseFedTextures(F)) tex.set(k, t);    // FUN_002eba88: the FED's own TIM2 images
   const stageFeds = stage.map(b => parseFed(b));
   for (const S of stageFeds) { feds.set(S.code, S); for (const [k, t] of parseFedTextures(S)) tex.set(k, t); }
+  // worker 0270: model FEDs (e023 / e024, FileCode 0x40000000 | model << 18) linked into the same manager: ids are found by
+  // FileCode (FUN_002e5c60), so FUN_003366b8 reaches their shots' trails and ends. No auto-start pass (not stage FEDs).
+  for (const b of models) { const M = parseFed(b); feds.set(M.code, M); for (const [k, t] of parseFedTextures(M)) tex.set(k, t); }
   // DAT_004e8710 = DAT_004e86f0 | DAT_004e8700 (FUN_00269410). Script cmds 0x54 / 0x55 (FUN_00545b20 -> FUN_002693a8 /
   // FUN_00269368) clear / set bits of DAT_004e8700 only: cellMask(bit, on), wired from enemy_ai.js. DAT_004e86f0 is the
   // room's camera probe (FUN_00264ee0, room_vis.js, worker 0225): with `mask` (createVisMask) both halves are the live
@@ -1645,7 +1670,9 @@ export function createEffects({ fed, fed0 = null, core, warn = console.warn, twi
   let counter = 0;                            // mgr +0x8c
   let phase = 0xc;                            // mgr +0xb0 (0xc after the draw, 5 in the logic, 9 after FUN_002efe98)
   // one context object, refilled per channel call (no handler keeps it or calls back into ctx)
-  const X0 = { F, em: null, p: null, d: 0, rng, warn: warnOnce, models0, sp: null, child: null };
+  // worker 0269: models0Feds = FED codes whose camera-0 models this engine draws although models0 is off (checked against their
+  // dumps: g048's beams 0x90c00000, test_barrier_fx)
+  const X0 = { F, em: null, p: null, d: 0, rng, warn: warnOnce, models0, models0Feds: new Set(models0Feds), sp: null, child: null };
   // FUN_002e9268(0.0, ctx, tag, init) (type 18, worker 0241): FUN_002e8ea8 with the current particle as the parent, then
   // the context's particle / descriptor (+0xa8 / +0xac) restored
   X0.child = (tag, init) => { const em = X0.em, p = X0.p, d = X0.d; const q = spawnParticle(em, 0, tag, p, init); X0.F = F; X0.em = em; X0.p = p; X0.d = d; return q; };
@@ -1653,7 +1680,7 @@ export function createEffects({ fed, fed0 = null, core, warn = console.warn, twi
 
   // FUN_002e62b0 (via FUN_002e6290, param_3 = id): FED by id & 0xfffc0000, group (id >> 10) & 0x7f,
   // entry id & 0x1ff -> FUN_002e63d0(age 0, mgr, fedobj, group +8, entry param record, 0)
-  function spawn(id, pos, scale = null) {
+  function spawn(id, pos, scale = null, attach = null) {
     if (noRand && !rngGiven) return null;                      // no rand(): left out (warned at load)
     F = feds.get((id & 0xfffc0000) >>> 0) ?? null;                // FUN_002e5c60
     if (!F) { F = F0; warnOnce(`effects: no FED for id 0x${id.toString(16)}`); return null; }
@@ -1680,6 +1707,7 @@ export function createEffects({ fed, fed0 = null, core, warn = console.warn, twi
     // caller's FUN_002e7660(flag 1): +0x120 = pos (FUN_00335f40 / FUN_003361b8)
     em.p120 = [f(pos[0]), f(pos[1]), f(pos[2]), 1];
     if (scale) em.p140 = [f(scale[0]), f(scale[1]), f(scale[2]), f(scale[3] ?? 1)];   // FUN_002e7660 flag 4: +0x140 (worker 0209: FUN_00336280's radius x 0.1)
+    if (attach) em.attach = attach;                            // worker 0269: FUN_002dbce0 -> FUN_002e7898 (+0x30), no FUN_002e7660
     emitters.push(em);
     // FUN_002e63d0's tail by the manager state (+0xb0) at the call. Bullets end in the game logic
     // between FUN_002efe00 (state 5) and FUN_002efe98 (state 9); both run FUN_002ea040(1.0) on the
@@ -1866,6 +1894,7 @@ export function createEffects({ fed, fed0 = null, core, warn = console.warn, twi
       em.col = em.p150.slice();
       return;
     }
+    if (mode === 1 && em.attach) { attachMatrix(em); return; }          // worker 0269: FUN_002e80e0 (+0x30 set by FUN_002e7898)
     if (mode >= 2) { em.noDraw = `param record mode +0x1d = ${mode} (FUN_002e7cd0)`; return; }
     const p80 = [0, 1, 2].map(i => f(em.p120[i] + F.f32(r + 0x10 + 4 * i)));
     const r90 = [0, 1, 2].map(i => f(em.p130[i] + F.f32(r + 0x20 + 4 * i)));
@@ -1873,6 +1902,34 @@ export function createEffects({ fed, fed0 = null, core, warn = console.warn, twi
     em.m = eulerT(scaleM(em.scale), r90, p80, em.d4);
     if (!em.m) { em.noDraw = `emitter rotation order ${em.d4} (FUN_002d82d0)`; em.m = ident(); }
     em.col = em.p150.slice();                                  // +0xb0 = +0x150
+  }
+
+  // FUN_002e80e0(em, param, param + 0x10, em + 0xe0) (worker 0269): an emitter attached to a model (em.attach = { matrix() =
+  // MP +0x10, bone(k) = FUN_002db448 }, FUN_002dbce0 -> FUN_002e7898). The descriptor at param +8 (L: an offset from the record,
+  // 0x80 in g048's FED): +10 a hold (u16 <= int(age): computed once more, then +2 |= 4 and kept), +6 the bone (kinds 0x2000 | 1 / 2:
+  // the MP's rotation and +0x120 instead, not translated), +0 bit 0x20 (the +0x2c attachment: not translated). +0x80 = +0x120 +
+  // param +0x10, +0x90 / +0xa0 as the plain path, M = S . Euler0 + T (FUN_002d84f0, FUN_002d7ff0). Param +4 bit 0x20: M's 3x3
+  // times the MP's (FUN_002d83e0), row 3 through the bone (FUN_002d8578); clear: M . bone (FUN_002d8368). Bits 0x40 / 0x10 and
+  // the +0x34 attachment: not translated (not drawn). Then FUN_002e84a8(.., 0) (+0xc0: the lighting class; effects.js keeps none).
+  // T: r03_mid2 RAM, the 8 barrier emitters' +0xe0 (test_barrier).
+  function attachMatrix(em) {
+    const r = em.param, ds = r + F.u32(r + 8), hold = F.u16(ds + 10);
+    if (hold !== 0 && hold <= Math.trunc(em.age)) { if (em.flags & 4) return; em.flags |= 4; }
+    const b6 = F.u16(ds + 6), k = ((b6 & 0x7000) === 0x2000 && (b6 & 0x3ff) < 3) ? b6 & 0x3ff : 0;
+    const pf = F.u16(r + 4);
+    if (k || (F.u16(ds) & 0x20) || (pf & 0x40) || em.attach.second) { em.noDraw = 'an attached emitter path (FUN_002e80e0: bone kind / +0x2c / +0x34 / param +4 bit 0x40)'; return; }
+    if (pf & 0x10) warnOnce('effects: attached emitter depth (FUN_002e80e0 param +4 bit 0x10, FUN_002db1f0) not translated');
+    const p80 = [0, 1, 2].map(i => f(em.p120[i] + F.f32(r + 0x10 + 4 * i)));
+    const r90 = [0, 1, 2].map(i => f(em.p130[i] + F.f32(r + 0x20 + 4 * i)));
+    em.scale = [0, 1, 2].map(i => f(em.p140[i] * F.f32(r + 0x30 + 4 * i)));
+    let M = eulerT(scaleM(em.scale), r90, p80, 0);
+    const B = em.attach.bone(b6);
+    if (pf & 0x20) {
+      M = mul33(em.attach.matrix(), M);
+      const t = xform(B, [M[12], M[13], M[14]]); M[12] = t[0]; M[13] = t[1]; M[14] = t[2];
+    } else M = mul44(B, M);
+    em.m = M;
+    em.col = em.p150.slice();
   }
 
   // FUN_002eacc8 on list 1: kind 7 (the once list +0x4c, flag 4), FUN_002eb1d0 (keyframe events),
@@ -2108,7 +2165,15 @@ export function createEffects({ fed, fed0 = null, core, warn = console.warn, twi
   }
   // FUN_002e6920(mgr, em, 0): the emitter and its particles go at once (the boxes' FUN_003c5c50 / FUN_003c5cc0)
   function remove(em) { const i = emitters.indexOf(em); if (i >= 0) emitters.splice(i, 1); }
-  return { spawn, begin, end, update, sprites, emitters, rng, fed: F0, feds, tex, warn: warnOnce, reset, stageLoad, softEnd, remove, cellMask, cells: () => mask ? mask.bits() : [...new Set([...hiddenSet, ...scriptCells])].sort((a, b) => a - b) };
+  // worker 0270: FUN_002e7660(mgr, em, {flags 0x10, M}): +0xe0 = M, FUN_002d86e0 (rows 0-2 to unit length), FUN_002d9cd0(+0x130,
+  // +0xe0) (the rotation angles, 4096 a turn), +0x120 = row 3. M: 16 floats, row r at [4r .. 4r + 3] (the game's row vectors).
+  // The matrix itself is rebuilt from +0x120 / +0x130 at the next FUN_002e7cd0 (emitterMatrix).
+  function setMatrix(em, M) {
+    if (!em) return;
+    em.p130 = matrixAngles(rowsUnit(M));
+    em.p120 = [M[12], M[13], M[14], M[15]];
+  }
+  return { spawn, begin, end, update, sprites, emitters, rng, fed: F0, feds, tex, warn: warnOnce, reset, stageLoad, softEnd, remove, setMatrix, cellMask, cells: () => mask ? mask.bits() : [...new Set([...hiddenSet, ...scriptCells])].sort((a, b) => a - b) };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -2180,6 +2245,22 @@ function viewMatrix(X, M, mode, view, s, _) {
   if (mode === 0) {                                           // world-oriented: . E . view
     o = mul44(em.m, o);
     return view.toViewMatrix ? mul44(view.toViewMatrix(), o) : (X.warn('effects: world-oriented sprites need view.toViewMatrix'), null);
+  }
+  if (mode === 2) {                                           // worker 0269: the axis billboard (the EM barrier's beams)
+    // FUN_002d83e0(T, view, E): T = E . view (3x3); FUN_00444ad0 normalises T row 1 (the emitter's y in view space); row 0 =
+    // (r1.y, -r1.x, 0) normalised (in the screen plane); row 2 = FUN_00444a88(r0, r1) normalised; FUN_002d8368(out, B, S):
+    // S . B; FUN_002d83e0(out, out, M): M . (S . B), row 3 = M's; then as mode 1: rows x emitter +0xa0, row 3 . E . view
+    if (!view.toViewMatrix) { X.warn('effects: billboard mode 2 needs view.toViewMatrix'); return null; }
+    const T = mul33(view.toViewMatrix(), em.m);
+    const nrm = v => { const l = f(Math.sqrt(f(f(f(v[0] * v[0]) + f(v[1] * v[1])) + f(v[2] * v[2])))); return v.map(x => f(x / l)); };
+    const r1 = nrm([T[4], T[5], T[6]]), r0 = nrm([r1[1], f(-r1[0]), 0]);
+    const r2 = nrm([f(f(r0[1] * r1[2]) - f(r0[2] * r1[1])), f(f(r0[2] * r1[0]) - f(r0[0] * r1[2])), f(f(r0[0] * r1[1]) - f(r0[1] * r1[0]))]);
+    const B = new Float32Array([...r0, 0, ...r1, 0, ...r2, 0, T[12], T[13], T[14], 1]);
+    o = mul33(mul44(B, scaleM([s, s, s])), M);
+    for (let r = 0; r < 3; r++) for (let j = 0; j < 4; j++) o[4 * r + j] = f(o[4 * r + j] * em.scale[r]);
+    const t = view.toView(xform(em.m, [o[12], o[13], o[14]]));
+    o[12] = t[0]; o[13] = t[1]; o[14] = t[2]; o[15] = 1;
+    return o;
   }
   X.warn(`effects: billboard mode ${mode} (FUN_002e3498) not translated`);
   return null;
@@ -2603,7 +2684,7 @@ export class EffectLayer {
 }
 
 // for the tests: the matrix helpers
-export const _internals = { eulerT, scaleM, sincos, T };
+export const _internals = { eulerT, scaleM, sincos, T, matrixAngles, rowsUnit };
 
 // Effect ids at the game's call sites, read from the user's ELF by the exporter (data/effects/ids.json):
 // FUN_00336040 table 0x4a0c68 [material * 2 + floor]; FUN_003363d0 table 0x4a0cd8 [(bullet +0x150 >> 16) & 3].

@@ -130,7 +130,10 @@ export function createOutputStage(renderer, { enabled = true, msaa = false, nati
   function drawHud(w, h, nat) {
     const a = renderer.autoClear;
     renderer.autoClear = false;
-    if (stage.fade > 0) { fadeMat.opacity = Math.min(1, stage.fade); renderer.render(fadeScene, qCam); }
+    // worker 0265: a menu-effect layer (menu_fx.js) that draws the veil in the scene, just before the menu managers' effects, sets
+    // stage.fadeDrawn for that frame (FUN_002f4480's particle draws before the menu managers: the stage title card stays above it)
+    if (stage.fade > 0 && !stage.fadeDrawn) { fadeMat.opacity = Math.min(1, stage.fade); renderer.render(fadeScene, qCam); }
+    stage.fadeDrawn = false;
     renderer.autoClear = a;
     if (!stage.hud) return;
     renderer.autoClear = false;
@@ -186,6 +189,7 @@ export function createOutputStage(renderer, { enabled = true, msaa = false, nati
     // = (4/3 h / 425.5), the CRTC's 4:3 picture); full mode also passes side (widehud, below)
     hud: null,
     fade: 0,                                           // the event fade's level, 0..1 (intro.js, stage_view.js)
+    fadeDrawn: false,                                  // the veil was drawn in the scene this frame (menu_fx.js; worker 0265)
     // set the camera's projection for this mode (call at start and on resize). fovGame (event cameras, worker 0210):
     // the game's horizontal fov in degrees, FUN_003edce0: screen distance = DAT_004fcab8 (448) / 2 / tan(fov x
     // 0.008726647); null = the gameplay projection (SCRZ)

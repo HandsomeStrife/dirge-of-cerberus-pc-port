@@ -87,10 +87,41 @@ try {
       ok(rr[0].d15 < 0.01, `rocket 1 leaves marker 15 (${rr[0].d15?.toFixed(3)} u off; marker 16 ${rr[0].d16?.toFixed(0)}, marker 17 ${rr[0].d17?.toFixed(0)})`);
       ok(rr[1].d16 < 0.01, `rocket 2 leaves marker 16 (${rr[1].d16?.toFixed(3)} u off; marker 15 ${rr[1].d15?.toFixed(0)}, marker 17 ${rr[1].d17?.toFixed(0)})`);
     }
+    // worker 0270 (Dan: 'dragonfly boss fight missiles don't fire'): the rockets are drawn as the game draws them. Each live rocket has its record's
+    // model w011 placed at the bullet (FUN_00554058: rows 0 / 2 negated, row 3 = +0x90) and its trail 0x405c0400 (e023's FED) on the bullet's matrix
+    // (FUN_00557c68 -> FUN_002e7660 flag 0x10); then one reaches Vincent (the fat test, FUN_0055c480), the blast 0x405c0800 spawns and both go.
+    const drawn = await pg.waitForFunction(() => {
+      const P = window.__play, A = P.enemyAI, live = [...P.shotFx.live.entries()].filter(([b]) => b.shooter === 53);
+      if (live.length < 2 || !live.every(([, v]) => v.body && v.em)) return null;
+      window.__rkB = live.map(([b]) => b);                                  // kept for the hit's point below
+      return live.map(([b, v]) => {
+        const e = v.body.matrix.elements, M = A.bulletMatrix(b);   // in root's space (game coordinates, as enemies.js bodies)
+        return { model: v.name, pos: Math.hypot(e[12] - b.pos[0], e[13] - b.pos[1], e[14] - b.pos[2]), row2: Math.hypot(e[8] + M[8], e[9] + M[9], e[10] + M[10]), row0: Math.hypot(e[0] + M[0], e[1] + M[1], e[2] + M[2]), row1: Math.hypot(e[4] - M[4], e[5] - M[5], e[6] - M[6]),
+          trail: v.em.id, trailAt: Math.hypot(v.em.p120[0] - b.pos[0], v.em.p120[1] - b.pos[1], v.em.p120[2] - b.pos[2]), inFx: window.__fx.fx.emitters.includes(v.em) };
+      });
+    }, null, { timeout: 60000, polling: 100 }).then(h => h.jsonValue()).catch(() => null);
+    ok(drawn && drawn.every(r => r.model === 'w011' && r.pos < 0.01 && r.row2 < 1e-5 && r.row0 < 1e-5 && r.row1 < 1e-5), `the rockets are drawn: model ${drawn?.map(r => r.model)}, at the bullet (${drawn?.map(r => r.pos.toFixed(3))} u), rows 0 / 2 negated, row 1 kept (FUN_00554058)`);
+    ok(drawn && drawn.every(r => r.trail === 0x405c0400 && r.trailAt < 0.01 && r.inFx), `each has its trail 0x${drawn?.[0]?.trail?.toString(16)} in the effect engine at the bullet (${drawn?.map(r => r.trailAt.toFixed(3))} u)`);
     if (process.env.HELI_SHOT) {
-      await pg.evaluate(() => { const P = window.__play, h = P.enemyAI.objects.get(53); P.follow.debugLook = h.pos; });
+      await pg.evaluate(() => { const P = window.__play, b = P.enemyAI.bullets.find(x => x.shooter === 53); if (b) P.follow.debugLook = b.pos; });
+      await new Promise(r => setTimeout(r, 300));
       await pg.screenshot({ path: process.env.HELI_SHOT });
     }
+    const hit = await pg.waitForFunction(() => {
+      const P = window.__play;
+      window.__rk ??= { hp: P.php.hp };
+      const fx = window.__fx.fx.emitters.filter(e => e.id === 0x405c0800).length;
+      const left = [...P.shotFx.live.keys()].filter(b => b.shooter === 53).length;
+      const hp = P.php.hp;
+      if (hp >= window.__rk.hp) window.__rkP = P.php.pos.slice();                 // his place before the hit (the reaction moves him)
+      return fx > 0 && hp < window.__rk.hp ? { hp0: window.__rk.hp, hp, fx, left } : null;
+    }, null, { timeout: 120000, polling: 50 }).then(h => h.jsonValue()).catch(() => null);
+    // the fat test (FUN_0055c480: radius 5 + 6) reaches him from outside his body radius 5: T w270_rockets hit at 10.5 u from his axis
+    const off = await pg.evaluate(() => window.__rkB.filter(b => b.hitPoint).map(b => Math.hypot(b.hitPoint[0] - window.__rkP[0], b.hitPoint[2] - window.__rkP[2])));
+    ok(off.length > 0 && off.every(d => d > 5.5 && d < 11.5), `the hit point is ${off.map(d => d.toFixed(1))} u from his axis (the fat test's reach 11; a thin bullet's 5)`);
+    ok(hit && hit.hp0 - hit.hp >= 78, `a rocket hits Vincent: HP ${hit?.hp0} -> ${hit?.hp} (78 a rocket; T w259_heli2 -78), the blast 0x405c0800 spawned (${hit?.fx})`);
+    const gone = await pg.waitForFunction(() => ![...window.__play.shotFx.live.keys()].some(b => b.shooter === 53 && !window.__play.enemyAI.bullets.includes(b)), null, { timeout: 5000 }).then(() => true).catch(() => false);
+    ok(gone, 'an ended rocket leaves no model behind (FUN_005529a8)');
     // Real shots (playerShot through FUN_005ad118 / FUN_0055db50 / FUN_0055c7f8, no poked HP): through its part boxes until the fight ends. HP 21600, the
     // line 20000 (script 29 event 8, cmd 0x138) -> timer 0 = 240 -> event 1 -> flag 0 = 16.
     const real = await pg.evaluate(async () => {

@@ -82,6 +82,73 @@ Traces (`tools/trace/out/`, gitignored): **w259_heli** (r06_market, Vincent stan
 
 **Left out, warned:** 0x126 / 0x127 (FUN_00341458 / FUN_00341518: a looping sound on the body, the rotor: the page's `sound` has one-shots at a fixed place and no stop), 0x1a9 (FUN_00340de0 -> FUN_00340d30, the C+0x7e0 object). Effect attachment: at the body's position (L).
 
+## The rockets drawn, and how they hit (worker 0270, 2026-11-08; D + T)
+
+Dan: "dragonfly boss fight missiles don't fire". They did fire on the page (routine 6 / 7, `0x19d(25, 1, 4, 15 / 16)`), but
+nothing drew a bullet with a model and its hit test was the thin one, so a rocket that reached Vincent flew past him.
+
+**The bullet record** (+0x194 = section 24 [W+0x7c], FUN_00554850; ai.json weapons, new fields): +0x84 the model's name
+(`model`), +0xac the trail effect (`fx_trail`), +0xb0 the end effect, +0x9c the end sound (`se_end`), +0xb6 (char) the radius
+(`f2c`), +0x78 flags. Weapons 20 / 22 / 25 (Dragonfly): w011, trail 0x405c0400, end 0x405c0800, asj_374, +0x78 0x12. Weapons
+17-19 (the z128 boss's missiles): w011, 0x40600400 / 0x40600800. 23: w010 (0x40780800). The soldiers' records: none (their
++0x198 tracer, FUN_002d77c0, is still not drawn).
+- FUN_00554850: +0x78 bit 2 -> bullet +0x2c = (char)+0xb6 (6), +0x120 |= 0x800, +0x28 |= 0x200000; bit 0x10 -> +0x120 |= 0x10000.
+  T w270_rockets / w259_rockets: +0x120 0x10a00 on all 306 rocket steps; w235_missile 0x10800 on all 649 boss missile steps.
+- **Model:** FUN_00553f48: +400 = FUN_00408b30(+0x84) (+0xc8, a motion: empty for every z128 record). Placed each moved update by
+  FUN_00554058: the bullet's rows (FUN_0054a5e8: +0x60 / +0x70 / +0x80 / +0x90) with rows 0 and 2 negated, +0x9c = 1 ->
+  FUN_005a6f40. Freed by FUN_005529a8 -> FUN_00553fe0. FUN_00558050 (show / hide by distance to the player, 15 / 5 / -18) only runs
+  for W+4 bit 0x200000 (FUN_00552b48): not the rockets.
+- **Rows** (FUN_00552dd8): +0x80 = dir; h = the axis of dir's smallest component (|y| <= |x| or |z| <= |x|: y if |y| < |z|, else z;
+  otherwise x); +0x70 = unit(dir x h); +0x60 = +0x70 x dir. FUN_00556218 after a turn: +0x60 = unit(+0x70 x dir), +0x70 =
+  unit(dir x +0x60). (Ghidra's `_vopmula(a, b); _vopmsub(b, a)` = a x b.)
+- **Trail:** FUN_005534f0 (+0x140 nibble 0, a record, no model or +0x78 bit 0x20 clear): +0x188 = FUN_003358b8(record, 0) =
+  FUN_003366b8(+0xac) (record +0xac == -1: none). Moved by FUN_00557e40 -> FUN_00557c68 -> FUN_003350c0(+0x188, rows; rows 0 and 2
+  negated) -> FUN_002e7660(flag 0x10): +0xe0 = M, FUN_002d86e0 (rows to unit length), FUN_002d9cd0(+0x130, M) = the angles (x =
+  -atan2(m9, m10), y = asin(m8), z = -asin(m4 / cos y), pi - z for m0 < 0; c == 0: x = -atan2(m6, m5), z = 0; x 651.8988),
+  +0x120 = row 3. Ended by FUN_005529a8 -> FUN_00335210 -> FUN_002e7198 (soft end).
+- **The FEDs:** FileCode 0x40000000 | model << 18: 0x405c0000 = noPath/076505c3.bin (e023), 0x40600000 = 07650603.bin (e024),
+  linked in the global manager 0x4ee2e0 (FUN_003366b8 finds an id by FileCode). Also needed by routine 39's blasts (0x405c2400 ..).
+- **End:** FUN_00554ea8, then FUN_0033d760(record, +0xf0): +0x9c -> FUN_0033cc48(name, +0xf0, 1) (range 400) in the same branch
+  as the end effect. The page took the end effect from the *shooter's* W; the marker shots pass their own (FUN_00569870), so
+  the rockets' end now comes from weapon 25's record.
+- **The hit (FUN_005442d8, +0x120 bit 0x800):** the segment prev -> pos, if longer than 0.1, grows by unit x +0x2c at both ends
+  (A', B'). For an object with +0x28 bit 0x200000 (Vincent: 0x20901f) and |A' - B'| > +0x2c: vt+0x184 (radius +0x2c; half with
+  bullet bit 0x80000000 and vt+0x8c); else vt+0x19c (a sphere at B') then vt+0x3c. Vincent's vtable 0x58f128: +0x184 =
+  **FUN_0055c480**: the capsule FUN_0055bc90 (feet .. 18 up) padded by +0x2c at both ends, FUN_0025c0f8(R 5 + 6, A', B'); else
+  FUN_0025c770(5, A') or (5, B') -> the point FUN_0025d1b8(5, A') (nearest point of the capsule). No part boxes. Hit distance
+  |A' - point|. (+0x184 and +0x19c / +0x3c are the same functions in every actor vtable found: 0x58e1f8, 0x58e600, 0x58e9f0,
+  0x58f128, 0x58f4b0.)
+- **T w270_rockets** (r06_market, w259_heli2's run, `TRACE_CALLLOG=missile`, f1210-1419): the rockets' object tests return a
+  hit once, at f1313 (Vincent 9991 -> 9913, motion c_st_bl0 next record). A call in frame N runs between records N - 1 and N.
+  Replayed with record N - 1's position: the fat test hits on that step and no other of 306; the thin test never (the rocket
+  passes 10.5 u from his axis).
+- **Range:** T +0x15c = 2020 for the rockets (and the boss's missiles): FUN_00321e20 true. Decoded: W+4 & 0x3a0000 clear and
+  FUN_00312698 (DAT_0046b2fc != 0: 2 on SLES) -> FUN_00253fb8() = DAT_004e1078 (the auto-lock option) in 1..2; else W+4 bit
+  0x20. So +20 vs +15 is the player's auto-lock option: the route states have it on, the sea-of-flames save the soldier traces
+  came from off. The page keeps +15 (GUESS row): an options value it doesn't model.
+
+- **The trail vs a GS dump (review follow-up):** grab_gs of w270_rockets at f1300 (tools/trace/out/w270: dump1300.json = dumpfx.py
+  --fed e023.fed, state1300.json = fx_fixture.py with FileCodes 0x405c0000,0x40000 and manager 0x4ee2e0). The rocket's trail is
+  e023 emitter 1 (age 246, 5 particles: tags 0 / 1 / 3 type 21 bursts, tag 2 type 10, tag 4 types 17 / 14 / 106 / 105). Restored
+  from RAM, moved along T's rocket path, 4 frames, drawn with the state's camera: **45 sprites, 180 / 180 vertices within 4.5 px of
+  a game vertex (worst 4.02), 176 with the game's RGBA**; the near-rocket draws left over are the 3 youngest sub-sprites of the
+  replay (spawned during it) and none else. **Tag 4's draw type 105 adds no triangle in this frame.** Type 105 = vtable 0x49d6b8
+  (init FUN_002ac058 -> FUN_002ab198, eval 0x2ac0b8, draw **FUN_002ac1e8**: two iterators over the type 106 channel's history,
+  wrapped by data +0x52 / +0x53 / +0x54 in one of three adapters (0x49d640, 0x49d690 + FUN_002a6ed8, 0x49d668 + FUN_002a5a10),
+  strip out of FUN_002ab2f8); type 106 = vtable 0x49f178 (init FUN_002d30d8, eval FUN_002d3190, loop FUN_002d3188). Not translated,
+  warned (effects.js 'draw type 105 not translated'). The small pale trail in the first page image was its age (a few frames,
+  against the game's 246): the aged page image shows the smoke column. **Not on the page, seen in the dump:** Dragonfly's own
+  model effects (11 more e023 emitters at position 0: 4, 9, 10, 13, 14, model-attached: FUN_00336748 / MP+0x3e4).
+- **The boss's missiles (review follow-up):** T w270_boss_missiles (route r0b_box4, w259_boss_box4c's run, f2125-2199): 198
+  missile steps, the game's one hit on Vincent f2190 = the fat test's step; thin none; 137 HP (weapon 18 nwe024mn, 140) and the
+  knock-down c_jp_fa0, both the same on the page (?warp=boss, missiles injected at T's f2186 state relative to Vincent). Their
+  trails against the f2186 dump (tools/trace/out/w270b): **not aligned** (the grab run's missiles are not where the call-log run's
+  are at that frame; no RAM fixture of the bullets was taken), so the e024 trail is only checked by eye.
+
+Page: enemy_ai.js `bulletRows`, `bulletMatrix`, `playerFatTest`, `endEffect` (own W, `se_end`), hooks `opts.shotFx` (start at the
+spawn, move after each moved update, end at the delete); enemy_hit.js `fatCapsuleHit`, `cylinderCross`, `insideCylinder`,
+`capsulePoint`; effects.js `models` (model FEDs), `setMatrix`; new **shot_fx.js** (model + trail); play.js wiring.
+
 ## e036's fight (worker 0259; D + T)
 
 **w259_e036** (r07_beat, replay of w217_r07_e036, f0-309; `TRACE_POKE=960660=270f TRACE_FIELDSET=enemy TRACE_ERECS=80,1 TRACE_ENEMIES=2 TRACE_EVARS=1`). Before: page vs T with the page's old rule: clip wrong on every flinch and the kill; position off by up to 16 u when a coin flip differs (see below).

@@ -115,6 +115,9 @@ async function lum(pg) {
 async function firstBattle() {
   const { pg, errs } = await open('', '');
   await pg.waitForFunction(() => window.__play.stage && window.__play.stage.rt.frameNo > 2, null, { timeout: 120000, polling: 100 });
+  // worker 0265's stage title card (first_event displayStageInfo(0)) holds the opening and takes no pause input (FUN_003fdb48 ->
+  // FUN_00241760(1, 0, 0)): Enter only after the card's fadein
+  await pg.waitForFunction(() => { const P = window.__play, r = P.intro && P.intro.rt, si = P.stageInfo; return r && r.log.some(x => /^fadein /.test(x[1])) && (!si || si.kind < 0); }, null, { timeout: 300000 });
   await pg.keyboard.press('Enter'); await pg.waitForTimeout(300); await pg.keyboard.press('Space');   // the opening's pause, then Skip
   const b = await pg.waitForFunction(() => window.__play.stage.battle, null, { timeout: 180000, polling: 100 }).then(() => true, () => false);
   const s = await pg.evaluate(() => ({ n: window.__resets.length, hb: window.__handBacks, log: window.__play.stage.rt.log.filter(([, m]) => /^battle/.test(m)).map(x => x.join(' ')) }));
