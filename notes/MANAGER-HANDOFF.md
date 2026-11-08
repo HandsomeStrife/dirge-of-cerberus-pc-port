@@ -263,3 +263,7 @@ Open:
 ## When you finish
 
 Everything pushed, then one short summary to Dan: what now works, what's still missing, and the links to play.
+
+## 2026-11-08 playtest round (committed 07edd20)
+
+Dan's playtest list was worked by workers 0265-0270, all reviewed, review fixes re-reviewed, full suite green (warp boss timing flake passed on rerun; char_light test race fixed). All workers retired. Board items posted for each issue. Still open: title card's bar groups/red dot and hold length; mouth timing gaps in sk_mituketa2; barrier lightning offset, barrels/camera vs barriers, door walls; boss blast unverified; cutscene actor footsteps, music delay, flushSoundEffect. Awaiting Dan: which scene is "save the abducted girl". Next worker number: 0271.
