@@ -712,6 +712,7 @@ async function main() {
   if (!areas) console.warn('stage areas off: data/enemies/ai.json has no areas (re-export data/enemies); area children (barrels, items, placed sounds) stay off');
   const placedHas = k => (areas ? areas.has(k) : k >= 0);      // FUN_0053b920: the child has a parent area
   let musicRestart = null;                         // checkpoint.js: the zone music / ambience again (set below)
+  let seRestart = null;                            // the Restart's IOP command 0x23, once per Restart (audio.js RestartSound; set below)
   // GUESS (worker 0210): the zone music / ambience stay silent while the opening event plays; the event's own cue
   // (playMusic2 bgm_274, FUN_003a02b8; ambience asj_036) is not translated (notes/fidelity-audit.md 'event music')
   let soundProbe = null, soundStop = null;           // tests: what's playing, stop it
@@ -723,7 +724,7 @@ async function main() {
   const pauseSound = { audio: null, music: null };   // pause_layer.js: menu sounds + the pause's SE hold / BGM volume
   const snd = (name, pos, range = 400.0) => (sfx ? sfx.play(name, pos, range) : null);   // worker 0270: the slot (FUN_0033d788's +0x18c handle)
   const sndStop = slot => { if (sfx && sfx.stop) sfx.stop(slot); };                       // worker 0270: FUN_0033cf00
-  if (SOUND) import('./audio.js').then(({ GameAudio, SoundEmitters }) => {
+  if (SOUND) import('./audio.js').then(({ GameAudio, SoundEmitters, RestartSound }) => {
     const au = new GameAudio();
     pauseSound.audio = au;
     au.load(128).then(() => { sfx = new SoundEmitters(au); window.__play && (window.__play.sfx = sfx); })
@@ -769,20 +770,24 @@ async function main() {
       // Restart (checkpoint.js). GUESS: the stage reload stops the BGM / ambience and its ev0100 / ev0101 start them again
       // (the teardown is not decoded)
       // record (worker 0254): a scene_save's reload: main's flag-18 branch starts them (areaOn / muOn: the gesture's go() stays out)
+      seRestart = new RestartSound(() => ({ au, slots: amb.slots }));
       musicRestart = (record = false) => { if (introGate.handing) areaOn = muOn = true;   // the opening's sounds go on: a key doesn't start the stage's over them
         else { mu.stopMusic(); area.stop(); areaOn = muOn = record; if (!record) go(); }
         // the stage reload makes the section-22 objects again (FUN_00548788): their sounds stop, the new ones start from scratch
-        if (amb.slots) { amb.slots.stopAll(); amb.placed = new amb.AM.PlacedSounds(amb.data, amb.slots); amb.placed.stageStart(placedHas); }
+        // worker 0271: their SEs are ended by the Restart's IOP command 0x23, once: at the pause's OK, else here (RestartSound.reload),
+        // then the slot table is freed
+        if (!introGate.handing) { if (au.zoneCode !== undefined) au.seBlock1(au.zoneCode); seRestart.reload(); }
+        if (amb.slots) { if (introGate.handing) amb.slots.stopAll(); amb.placed = new amb.AM.PlacedSounds(amb.data, amb.slots); amb.placed.stageStart(placedHas); }
         // a new MP for Vincent: no feet up (MP+0x440 bits 16-19), no name yet, no previous position
         if (amb.foot) { amb.foot.test.bits = 0; amb.foot.mat = amb.foot.gait = -1; amb.foot.name = ''; }
         amb.footPrev = null;
-        // the stage reload loads the zone's sep.bin into SE block slot 1 again (FUN_00402220) and frees the SE slots: an event's
-        // block and its kept loops don't outlive a Restart (worker 0266). Not on the opening's hand-off (no stage reload: an
-        // event SE such as scr001's 50017 plays on; the events' own loadSoundEffectEx_l(1, 100) restores the slot)
-        if (!introGate.handing) {
-          if (au.zoneCode !== undefined) au.seBlock1(au.zoneCode);
-          if (au.eventSe) au.eventSe.stopAll();
-        }
+        // the stage reload loads the zone's sep.bin into SE block slot 1 again (FUN_00402220): an event's block doesn't outlive a
+        // Restart (worker 0266). The Restart's OK (FUN_003c0a20 -> FUN_00380b00 = FUN_003e7f60(-1, -1, -1) -> IOP command 0x23)
+        // ends every SE playing but 0x461 .. 0x463: event SEs, kept loops, shots' sounds finish their release (audio.js restartSe;
+        // worker 0271, was a cut). GUESS: a scene_save's reload (record) does the same (its teardown not decoded; see
+        // notes/fidelity-audit.md 'Restart: the SEs playing'). Not on the opening's hand-off (no stage reload: an event SE such as
+        // scr001's 50017 plays on; the events' own loadSoundEffectEx_l(1, 100) restores the slot)
+        // (both done above, before the new placed sounds: seBlock1, RestartSound.reload)
       };
       // a stage script's cmd 6 (enemy_ai opts.areaSound): FUN_003e6c88(name, vol). L: before the first gesture it is lost
       areaSoundHook = (n, v) => { if (au.ctx && au.se) { areaOn = true; area.play(n, v); } };
@@ -1181,11 +1186,14 @@ async function main() {
           if (uvAnim) uvAnim.frame(light && light.stream.areas.length ? light.stream.loaded() : null, STEP);
           // worker 0265: the stage title card (stage_info.js, first_event's displayStageInfo(0)): FUN_003fdf00 first in the frame, the
           // menu managers' effects (FUN_002efc78 / FUN_002efe98) with the others, as in play's frame. No ✕ reaches it here (the card has
-          // no mode-1 step)
+          // no mode-1 step). events.length = 0: PAGE ONLY, the page's per-frame queue (frame() already applied its fx ops, sounds() its
+          // SEs), drained as the gameplay frames' calls do; no game state
           if (stageSi) { stageSi.frame(false); stageSi.sounds(); stageSi.events.length = 0; }
           if (fx) fx.begin(STEP);
           if (fxStage) fxStage.begin(STEP);
           if (stageSi) stageSi.fxBegin(STEP);
+          // FUN_003e9ed0's 0x10000 pass over the event SE slots: once a page frame, before the event runtimes' sends (event_sound.js eventSeFrame)
+          if (pauseSound.audio && pauseSound.audio.eventSe && pauseSound.audio.eventSe.frame) pauseSound.audio.eventSe.frame();
           if (stage) stage.tick(20);               // main (stage_controller.js): its prelude, then first_event's wait
           intro.tick();
           if (chunkAnims) chunkAnims.frame(light && light.stream.areas.length ? light.stream.loaded() : null, STEP);   // FUN_00265350: the nodes (chunk_anim.js)
@@ -1211,7 +1219,9 @@ async function main() {
         window.__play.warp = { name, tick: stats.ticks };
         warpLate = name;
       }
-      // worker 0265: the warp's trigger and late flags once its chunk pair is in (warp.js applyWarpLate)
+      // worker 0265: the warp's trigger and late flags once its chunk pair is in (warp.js applyWarpLate). GUESS (page aid, no game
+      // counterpart): the wait, 2 ticks after the warp and then the stream idle with both of the pair's chunks in a slot (walking in, the
+      // game has them loaded before he reaches the trigger). notes/fidelity-audit.md 'GUESS: when a cutscene warp fires its trigger'
       if (warpLate && enemyAI && stats.ticks > window.__play.warp.tick + 1) {
         const s = light ? light.stream : null, pr = warpPair(warpLate);
         if (!s || !pr || (!s.busy && pr.every(c => [0, 1, 2].some(i => s.slotChunk(i) === c)))) {
@@ -1233,6 +1243,7 @@ async function main() {
       // stage_info.js (worker 0220): FUN_003fdf00 runs first in the game's frame (FUN_00247508), the box's update with it
       // (GUESS: order, notes/fidelity-audit.md 'Stage-info boxes'); its ✕ is the frame's edge (FUN_003de918(0, 1))
       if (stageSi) { stageSi.frame(pressed.has(CROSS_KEY)); stageSi.sounds(); stageSi.events.length = 0; }
+      if (pauseSound.audio && pauseSound.audio.eventSe && pauseSound.audio.eventSe.frame) pauseSound.audio.eventSe.frame();   // FUN_003e9ed0's 0x10000 pass, once a frame
       if (stage) stage.tick(20);
       if (stageView) stageView.step();             // the events' actors: FUN_005a8e28's draw, then FUN_003772c8 (worker 0248)
       if (stageRes) stageRes.frame(stageSi ? stageSi.now : 0);   // FUN_00242a50 (FUN_00247428): the play clock (results.js)
@@ -1436,7 +1447,10 @@ async function main() {
     // Sent when the confirm box (pause.js openBox, layout 0x472ad8) is answered OK. Restart: FUN_003c0a20 +
     // FUN_003dee40(0xf) -> FUN_004012c0 case 0xf returns 6 -> the checkpoint (restart above). Tempsave / Quit:
     // warn only (pause_layer.js; no memory card / title on the page)
-    onRequest(r) { if (r === 'restart') { restartPending = true; restartViaPause = true; } },
+    // worker 0271: FUN_003c0a20 -> FUN_00380b00 sends IOP command 0x23 at the OK, while the pause holds the SEs (seRestart: the
+    // held ones end silent); the menu's unpause (sync) comes after. restart()'s musicRestart sends it again (a no-op by then;
+    // the game over's Restart goes only through that one)
+    onRequest(r) { const mark = () => { restartPending = true; restartViaPause = true; }; if (seRestart) seRestart.pauseRequest(r, mark); else if (r === 'restart') mark(); },
   });
   actionHelp.push('Enter pause (Esc too, but with the pointer locked the browser takes Esc to unlock it)');
   // game over (gameover_layer.js): Restart (result 6) -> the checkpoint (restart above); Quit warns (no title)
@@ -1683,7 +1697,8 @@ async function main() {
     // the menu draw while the opening plays (the gameplay HUD is parked): the event windows and the event pause's screen
     // (event_window.js), with the pause's PauseLayer
     introHud = output.hud;
-    output.hud = introWin ? function introMenuDraw(o) { const p = introWin.drawAll(performance.now()); if (p.length && pause && pause.layer) pause.layer.draw(o.renderer, o, p); } : null;
+    // FUN_003e9ed0 runs every frame in the opening too: the menu-sound queue's count back to 0 (pause_layer.js's hud does it after)
+    output.hud = function introMenuDraw(o) { if (pauseSound.audio) pauseSound.audio.menuN = 0; if (!introWin) return; const p = introWin.drawAll(performance.now()); if (p.length && pause && pause.layer) pause.layer.draw(o.renderer, o, p); };
   }
   if (INTRO) {
     introData = await fetch('data/event/ev0100_scr001.json').then(r => (r.ok ? r.json() : null)).catch(() => null);

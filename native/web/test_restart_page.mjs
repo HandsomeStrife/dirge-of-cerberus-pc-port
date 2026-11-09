@@ -215,6 +215,8 @@ try {
     const nb = await pg.evaluate(() => { const P = window.__play; return P.enemyAI.actors.filter(w => w.rec < 200 && !P.enemies.actors.some(a => a.rec === w.rec)).map(w => w.rec); });
     ok(nb.length === 0, `${how}: every active actor has its body again (missing: ${nb})`);
     ok(h.name === 0 && h.count === '[16]', `${how}: the HUD refreshed at main's battle(): no item (name ${h.name}, count ${h.count}; FUN_00339590 bit 3)`);
+    const rk = await pg.evaluate(() => { const c = window.__play.aim && window.__play.aim.core; return c ? { kind: c.r.kind, mode: c.hud.mode, lock: c.lockOn, ph: c.r.phase[c.r.kind] } : null; });
+    console.log(`INFO ${how}: the reticle after the Restart's battle(): kind ${rk && rk.kind}, HUD mode ${rk && rk.mode}, phase ${rk && rk.ph}`);
   };
   let viaPause;
   { const c0 = await spoilAll();
@@ -390,13 +392,22 @@ try {
     ok(await pg.evaluate(() => window.__play.sound().event === true), 'the opening: the load-time start is off');
     // an event SE still playing at the opening's end (scr001's 50017 runs past main's return): the hand-off is no stage reload,
     // so musicRestart (handing) leaves the event SE slots alone
+    // (Skip itself ends the event SEs: FUN_00372f70 -> FUN_003e6fc8; so the hand-off's SE starts after the Skip choice, on the first
+    // frame the opening runs with +0x156c set, and must outlive the hand-off; the one started before the Skip must not)
     ok(await pg.evaluate(async () => { const au = window.__play.pauseSound.audio; au.resume();
       const { EventSeSlots } = await import('./event_sound.js'); au.eventSe ??= new EventSeSlots(au);
       const row = au.row('asj_335'), hex = row && (au.evBlocks[0xc064800] || {}).programs?.[String(row.id)];
-      window.__handSe = hex ? au.eventSe.play('asj_335', row, hex, 0x7f, false) : null; return !!window.__handSe; }), 'an event SE playing before the hand-off');
+      const play = () => (hex ? au.eventSe.play('asj_335', row, hex, 0x7f, false) : null);
+      window.__preSe = play(); window.__handSe = null; window.__handSeAt = null;
+      const P = window.__play, w = () => { const r = P.intro && P.intro.rt;
+        if (P.intro.active && r && r.skip !== 0) { window.__handSe = play(); window.__handSeAt = r.frameNo; return; }
+        if (P.intro.active) requestAnimationFrame(w); };
+      w(); return !!window.__preSe; }), 'an event SE playing before the Skip');
     await skip();
-    ok(await pg.evaluate(() => { const au = window.__play.pauseSound.audio; return !!(au.eventSe && au.eventSe.live.includes(window.__handSe)); }),
-      'the opening -> main hand-off leaves it playing (no stage reload: FUN_00402220 does not run)');
+    const hs = await pg.evaluate(() => { const au = window.__play.pauseSound.audio, L = au.eventSe ? au.eventSe.live : [];
+      return { pre: L.includes(window.__preSe), started: !!window.__handSe, at: window.__handSeAt, hand: !!window.__handSe && L.includes(window.__handSe) }; });
+    ok(!hs.pre, `Skip (FUN_00372f70 -> FUN_003e6fc8) ended the event SE started before it (live ${hs.pre})`);
+    ok(hs.started && hs.hand, `an event SE started after the Skip choice (opening frame ${hs.at}) is still playing after the opening -> main hand-off (no stage reload: FUN_00402220 does not run)`);
     const h = await pg.evaluate(() => window.__play.sound());
     ok(h.event === false && h.on === false, `after the hand-off the opening's gate is closed (event ${h.event}, on ${h.on})`);
     await pg.evaluate(() => { const s = window.__play.soundStop; s(); });

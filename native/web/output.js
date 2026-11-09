@@ -131,7 +131,7 @@ export function createOutputStage(renderer, { enabled = true, msaa = false, nati
     const a = renderer.autoClear;
     renderer.autoClear = false;
     // worker 0265: a menu-effect layer (menu_fx.js) that draws the veil in the scene, just before the menu managers' effects, sets
-    // stage.fadeDrawn for that frame (FUN_002f4480's particle draws before the menu managers: the stage title card stays above it)
+    // stage.fadeDrawn for that frame (GUESS, menu_fx.js: FUN_002efe98 calls the fade particle's system before the managers' draws)
     if (stage.fade > 0 && !stage.fadeDrawn) { fadeMat.opacity = Math.min(1, stage.fade); renderer.render(fadeScene, qCam); }
     stage.fadeDrawn = false;
     renderer.autoClear = a;

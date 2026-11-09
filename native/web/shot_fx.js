@@ -137,8 +137,9 @@ export function createShotFx({ root, fx = null, world = () => null, litPatch = n
   }
 
   // a new world (Restart): the old bullets' models go with it (their trails go with the effect manager's reset)
-  // A Restart. NOT DECODED: whether the stage reload frees the bullets through FUN_005529a8 -> FUN_0033cf00 (so asj_354 fades,
-  // SoundEmitters.stop) or tears the sound slots down another way (cut or left playing); see notes/fidelity-audit.md 'A shot's own sound'
+  // A Restart: the flight sounds are ended before the reload by its IOP command 0x23 (FUN_00380b00 = FUN_003e7f60(-1, -1, -1);
+  // audio.js restartSe: every SE playing finishes its release). Whether the reload then frees the bullets through FUN_005529a8 ->
+  // FUN_0033cf00 is not decoded, and changes nothing heard: a stop request on an ended SE does nothing (GameAudio.fade)
   function clear() { for (const b of [...live.keys()]) end(b); }
 
   return { start, move, end, clear, live, preload: name => load(name) };

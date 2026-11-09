@@ -6,7 +6,8 @@
 //
 //   objectPass({ objs, pos, move, air, push }) -> { out, applied }   FUN_0035a440 0x35a440..0x35c108's object terms
 //
-// objs: [{ half: [hx, hy, hz], m: rows (row 3 = the centre), f38 }] (props.js blockers()). pos: the body point (feet, the
+// objs: [{ half: [hx, hy, hz], m: rows (row 3 = the centre), f38, vt13c, vt84 }] (props.js blockers(); vt13c / vt84: whether the
+// object's vt+0x13c / vt+0x84 answer non-zero: the barrier's FUN_0054fb70 returns itself, FUN_0054eb78 0, ELF 0x58c76c / 0x58c6b4). pos: the body point (feet, the
 // game's -y up), move: this step's displacement (body+0x30), air: FUN_003577c8 (body state 2..5), push: body+0x80 or null,
 // r / h: body+0xb8 / +0xbc (Vincent's by default; the soldiers' and dogs': enemy_ai.js).
 // T: w269_bar1 (r03_mid2, Vincent into barrier record 56): body+0xb8 = 5, +0xbc = 9; DAT_0046f4d0 = 1 (the pass off)
@@ -19,6 +20,12 @@
 // 0x80157: +0x38 bits 4 / 5, cylinders through FUN_0025d1b8, whose normal is not decoded) are such objects and are left out
 // (props.js blockers warns), the platform frame (body flag bit 12: clear for 0x236). C+0x1c0's 0x80000 / 0x40000 | 0x400 /
 // 0x100000 and C+0xbc come back as `bits` / `kind` (enemy_ai.js sets them on the soldiers; nothing on the page reads Vincent's).
+// Also not translated (warned when an object answers vt+0x84): l.905-913 / l.1454 (iStack_10c), an object whose vt+0x84 owner
+// is a type-10 body (FUN_00550778) with owner +0xd4 +0xb4 bit 2 and FUN_00550a20(owner, move): the corrected move is slid
+// along that object's matrix row 2 when it runs against it; and C+0xbc 3 / 5 for such objects. The barriers answer vt+0x84 0.
+// T (soldiers / dogs): none. Traces a271_objpass / a271_objpass2 (r03_mid2, Vincent at barrier 56 while the r 6 chaser closes
+// in) logged every body's FUN_0035a440: only Vincent's touched a barrier, so the enemy path (bodyRH, the air branch for
+// them, the 0x100000 test) is read from the code, not traced.
 
 const f = Math.fround;
 const sub3 = (a, b) => [f(a[0] - b[0]), f(a[1] - b[1]), f(a[2] - b[2])];
@@ -102,37 +109,82 @@ export function sphereSeg(r, a, b, c) {
   return { P, N: unit3(sub3(P, c)) };
 }
 
-// FUN_0025c0f8(r, P, N, a, b, e0, e1): the segment against the cylinder e0..e1 (enemy_hit.js cylinderCross for the point).
-// L: the normal is the side's radial part (its tail FUN_00260e28(0, N, N, axis), decomp l.222) or an end disc's axis
-// (FUN_0025fed0 planes, l.99 / l.129): read from the code's structure, not traced.
-function cylSeg(r, a, b, e0, e1, cross) {
-  const c = cross(r, a, b, e0, e1);
-  if (!c) return null;
-  const ax = sub3(e1, e0), L = len3(ax), u = unit3(ax), w = sub3(c.point, e0), h = dot3(w, u);
-  let N;
-  if (Math.abs(h) < 1e-4) N = mul3(u, -1);
-  else if (Math.abs(f(h - L)) < 1e-4) N = u;
-  else N = unit3(sub3(w, mul3(u, h)));
-  return { P: c.point.map(f), N };
+// VRSQRT / VMULq.xyz: v x 1 / sqrt(v . v)
+const vunit = v => { const q = f(1 / f(Math.sqrt(dot3(v, v)))); return mul3(v, q); };
+// FUN_00261498(p, q, u): the distance from p to the line q + t u (VDIV t = ((q - p) . u) / (u . u))
+const lineDist = (p, q, u) => { const t = f(dot3(sub3(q, p), u) / dot3(u, u)); return len3(sub3(sub3(q, mul3(u, t)), p)); };
+// FUN_00260700(p, a, b): |p - a| / |b - a|, negative when (p - a) . (b - a) < 0
+const segParam = (p, a, b) => { const v = sub3(p, a), w = sub3(b, a), t = f(len3(v) / len3(w)); return dot3(v, w) < 0 ? -t : t; };
+// FUN_0025a778(0, out, v, n): v's part along n (unit(n) x (unit(n) . v))
+const along = (v, n) => { const u = vunit(n); return mul3(u, dot3(u, v)); };
+// FUN_00259680(a, u, c, v, outA, outB): the closest points of the lines a + s u and c + t v (outA, outB) and their distance.
+// uu vv - uv^2 <= 0.0001 (0x38d1b717): s = (c . u - a . u) / uu, t = 0.
+function lineLine(a, u, c, v) {
+  const w = sub3(c, a), uu = dot3(u, u), vv = dot3(v, v), wu = dot3(w, u), wv = dot3(w, v), uv = dot3(u, v);
+  const den = f(f(uu * vv) - f(uv * uv));
+  let s, t;
+  if (den <= f(0.0001)) { s = f(f(dot3(c, u) - dot3(a, u)) / uu); t = 0; }
+  else { t = f(f(f(uv * wu) - f(uu * wv)) / den); s = f(f(f(vv * wu) - f(uv * wv)) / den); }
+  const A = add3(mul3(u, s), a), B = add3(mul3(v, t), c);
+  return { A, B, d: len3(sub3(B, A)) };
+}
+// FUN_0025c0f8(r, P, N, a, b, e0, e1) 0x25c0f8..0x25c768 (read from the MIPS; the decomp drops most call arguments): the
+// segment a..b against the cylinder e0..e1, radius r. Rejects: the axis middle (FUN_002611f4(0.5, e1, e0)) further from the
+// line a + t u than sqrt(|e1 - e0|^2 / 4 + r^2); the segment middle further from the axis line than r + |a - b| / 2 + 0.1;
+// the two lines (FUN_00259680) further apart than r. Then the end discs before the side:
+//   e0's plane (FUN_0025fed0: axis, -axis . e0) with a on or behind it (plane . (a, 1) <= 0): P = the line's crossing
+//   (FUN_00260628), |P - e0| <= r and FUN_00260700(P, a, b) in [0, 1] -> N = -axis;
+//   then e1's plane with plane . (a, 1) >= 0, |P - e1| <= r, the same range -> N = +axis.
+//   The side: k = sqrt(r^2 - d^2) / |u without its axis part|; P = C - k u, then C + k u (C: the closest point on a's line),
+//   each kept when FUN_00260700(P, a, b) and the axis coordinate (FUN_0025a778 of P - e0, + e0: FUN_00260700 against
+//   e0, e1) are in [0, 1]; the first fails over to the second, the second's failure returns 0. N = unit(FUN_00260e28(0,
+//   P - e0, axis)). L: a's w is taken as 1 (the local points are positions).
+export function cylSeg(r, a, b, e0, e1) {
+  const u = vunit(sub3(b, a));
+  const m1 = add3(e1, mul3(sub3(e0, e1), 0.5));                  // FUN_002611f4(0.5, out, e1, e0)
+  if (f(Math.sqrt(f(f(dot3(sub3(e1, e0), sub3(e1, e0)) * 0.25) + f(r * r)))) < lineDist(m1, a, u)) return null;
+  const ax = vunit(sub3(e1, e0));
+  const m2 = add3(a, mul3(sub3(b, a), 0.5));                      // FUN_002611f4(0.5, out, a, b)
+  if (f(f(r + f(len3(sub3(a, b)) * 0.5)) + f(0.1)) < lineDist(m2, e1, ax)) return null;
+  const L = lineLine(a, u, e0, ax);
+  if (r < L.d) return null;
+  for (const [e, sg] of [[e0, -1], [e1, 1]]) {                     // 0x25c31c (e0) / 0x25c408 (e1)
+    const pw = f(-dot3(e, ax)), side = f(dot3(ax, a) + pw);
+    if (sg < 0 ? !(side <= 0) : !(0 <= side)) continue;
+    const t = f(f(-side) / dot3(ax, u)), P = add3(a, mul3(u, t));  // FUN_00260628
+    if (!(len3(sub3(P, e)) <= r)) continue;
+    const s = segParam(P, a, b);
+    if (!(0 <= s && s <= 1)) continue;
+    return { P, N: mul3(ax, sg) };
+  }
+  const k = f(f(Math.sqrt(f(f(r * r) - f(L.d * L.d)))) / len3(reject(u, ax)));
+  for (const kk of [f(-k), k]) {                                   // 0x25c54c / 0x25c620
+    const P = add3(mul3(u, kk), L.A), s = segParam(P, a, b);
+    if (!(0 <= s && s <= 1)) { if (kk < 0) continue; return null; }
+    const N0 = sub3(P, e0), h = segParam(add3(along(N0, ax), e0), e0, e1);
+    if (!(0 <= h && h <= 1)) { if (kk < 0) continue; return null; }
+    return { P, N: vunit(reject(N0, ax)) };                        // LAB_0025c6f0
+  }
+  return null;
 }
 
 // FUN_0025b4d8(r, P, N, a, b, e0, e1): an edge of the expanded box = the capsule e0..e1: the sphere at e0 when P's
 // FUN_0025e258 parameter along e1 - e0 is <= 0, the sphere at e1 when >= 1, else the cylinder
-function edgeSeg(r, a, b, e0, e1, cross) {
+function edgeSeg(r, a, b, e0, e1) {
   const d = sub3(e1, e0), dd = dot3(d, d);
   const t = P => f(f(-dot3(sub3(e0, P), d)) / dd);                // FUN_0025e258
   let h = sphereSeg(r, a, b, e0);
   if (h && t(h.P) <= 0) return h;
   h = sphereSeg(r, a, b, e1);
   if (h && 1 <= t(h.P)) return h;
-  return cylSeg(r, a, b, e0, e1, cross);
+  return cylSeg(r, a, b, e0, e1);
 }
 
 // FUN_0025b6f8(r, P, N, a, b, half): a sphere of radius r swept a -> b against the box +-half (local). The box grown by r
 // (FUN_0025af18); missed and a already in the grown box but not in the box: again from a + unit(a - b) r. A hit with P
 // strictly inside the box's slab on two axes or more is a face; on one axis, that edge (FUN_0025b4d8); on none, the
 // corner's three edges in x, y, z order.
-export function sweptBox(r, a, b, half, cross) {
+export function sweptBox(r, a, b, half) {
   const ext = half.map(v => f(v + r));
   let a2 = a, h = slabRay(a, b, ext);
   if (!h) {
@@ -151,12 +203,12 @@ export function sweptBox(r, a, b, half, cross) {
     const i = prod[0] < 0 ? 0 : prod[1] < 0 ? 1 : 2;
     const e1 = [sg(0), sg(1), sg(2)]; e1[i] = half[i];
     const e0 = e1.slice(); e0[i] = -half[i];
-    return edgeSeg(r, a2, b, e0, e1, cross);
+    return edgeSeg(r, a2, b, e0, e1);
   }
   const c0 = [sg(0), sg(1), sg(2)];
   for (let i = 0; i < 3; i++) {
     const e1 = c0.slice(); e1[i] = -c0[i];
-    const e = edgeSeg(r, a2, b, c0, e1, cross);
+    const e = edgeSeg(r, a2, b, c0, e1);
     if (e) return e;
   }
   return null;
@@ -192,13 +244,16 @@ export function nearestBox(q, half, m) {
 // FUN_00584900 shape 0 -> FUN_0025f450(q, half, M): q inside the box (L: the local test, as FUN_00261218)
 export const insideBox = (q, half, m) => inBox(toLocal(q, m), half.map(v => -v), half);
 
-// FUN_0035a440's object pass and the sums after it. cross = enemy_hit.js cylinderCross (FUN_0025c0f8's crossing).
+// FUN_0035a440's object pass and the sums after it.
 // FUN_00261038(a, b): the angle between a and b (L: acos of the unit dot; a zero vector gives NaN, no bit)
 const angle = (a, b) => Math.acos(Math.max(-1, Math.min(1, f(dot3(unit3(a), unit3(b))))));
 const OPPOSE = 2.3561945;            // 135 degrees (0x4016cbe4, asm 0x35b6a4..)
-// face: the character's matrix row 2 (C+0x54c vt+0x24 FUN_00347868 -> +0x20) for the 0x100000 test; null: not computed (Vincent:
-// no page reader). Returns bits = C+0x1c0's 0x80000 / 0x40000 / 0x100000 (worker 0269, review), kind = C+0xbc for 0x400.
-export function objectPass({ objs, pos, move, air, push = null, cross, warn = () => {}, r = BODY_R, h = BODY_H, face = null }) {
+// face: the character's matrix row 2 for the 0x100000 test (l.1013: FUN_00261038(N, copy +0x20)); null: not computed (Vincent:
+// no page reader). Decoded from the ELF: a live body's C+0x54c = 0x4a1bf0 (FUN_0033ff18; 0x4a1fb0 is only FUN_00340360's
+// teardown), whose +0x20 this-adjust is 0 and +0x24 FUN_00347868 copies C+0x00..+0x3f as it is when C+0x7dc == 0 (else that
+// parent's matrix (FUN_0054a698) times it, FUN_0026125c: not on the page), so row 2 = C+0x20 = enemy_ai's a.face (enemies.js /
+// test_strafe_walk read it from C+0x20). Its sign is the game's own row; only the angle's 135-degree limit is applied. Returns bits = C+0x1c0's 0x80000 / 0x40000 / 0x100000 (worker 0269, review), kind = C+0xbc for 0x400.
+export function objectPass({ objs, pos, move, air, push = null, warn = () => {}, r = BODY_R, h = BODY_H, face = null }) {
   const soft = r > SOFT ? f(r - SOFT) : 0;
   // FUN_003562d0: the body point; + the move (auStack_340); both lowered by r, then by 3 on the ground or r / 2 in the air
   const low = air ? f(r * 0.5) : 3.0;
@@ -213,7 +268,7 @@ export function objectPass({ objs, pos, move, air, push = null, cross, warn = ()
     // size / 2, radius body+0xb8): depth = |(new - P) along N| (FUN_0025a778(0, ..)); otherwise, or with no hit, the
     // nearest point to the current centre (vt+0x3c): depth = r - |cur - P|, and inside the box (vt+0x194) r + |cur - P|
     if (len3(sub3(cur, nw)) > SWEEP_MIN) {
-      const h = sweptBox(r, toLocal(cur, o.m), toLocal(nw, o.m), o.half, cross);
+      const h = sweptBox(r, toLocal(cur, o.m), toLocal(nw, o.m), o.half);
       if (h) {
         P = toWorld(h.P, o.m); N = dirWorld(h.N, o.m);
         const v = sub3(nw, P), u = unit3(N);
@@ -260,7 +315,10 @@ export function objectPass({ objs, pos, move, air, push = null, cross, warn = ()
     if (!pushed) continue;
     // static (vt+0xdc self, type flag bit 2 clear, vt+0x124 = 0): auStack_360 += push, fVar49 = the longest
     S = nS ? add3(S, pushed) : pushed;
-    kind = 4;                                                               // uStack_138: vt+0x13c (FUN_0054fb70: the barrier itself) -> 4
+    // uStack_138 (l.1223, the last pushing object's): vt+0x13c non-zero -> 4; else vt+0x84 non-zero -> 3 when it is a type-10
+    // body (FUN_00550778), else 5
+    if (o.vt84) warn('obj_contact: an object answering vt+0x84 (FUN_0035a440 iStack_10c slide l.905, C+0xbc 3 / 5) not translated');
+    kind = o.vt13c ? 4 : 5;
     maxLen = nS ? Math.max(maxLen, len3(pushed)) : len3(pushed);
     nS++;
   }

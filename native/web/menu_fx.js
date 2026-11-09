@@ -104,9 +104,13 @@ export function createMenuFx(feds, { rng = null, warn = console.warn } = {}) {
 export function menuFxLayer(THREE, mfx, { output = null } = {}) {
   const L = new TitleLayer(THREE, mfx.title, { screen: output });
   L.group.name = 'menu-box-effects';
-  // worker 0265: the event fade (output.fade; GUESS row 'the event fade's draw') is a particle of the effect managers, which draw
-  // before the menu managers (FUN_002efe98's order), so these effects (the stage title card over the opening's black) are drawn
-  // over it: the veil is drawn here, first in the group, and output.js skips its own for that frame
+  // worker 0265: the event fade (output.fade; GUESS row 'the event fade's draw') is FUN_002f4480's particle in the particle system
+  // 0x4ec760 (DAT_0050d710, set by FUN_002ef958), not in an effect manager. FUN_002efe98 calls that system's draws (FUN_00306618 /
+  // FUN_00306690 / FUN_00306b90, l.13-15) before its loop over the six managers of DAT_004ee8c0 (FUN_002ea6a0, l.16-26), menu
+  // managers DAT_004ee4a0 / DAT_004ee580 included. GUESS: that call order is the GS order (FUN_00306850's layer argument 0-3 not
+  // decoded; the f101 title-card dump shows no full-opacity fade quad to check it against), so the card's effects are drawn over
+  // the veil: drawn here, first in the group, and output.js skips its own for that frame. The page's gameplay effects (also
+  // DAT_004ee8c0 managers) stay under it. notes/fidelity-audit.md 'GUESS: the event fade drawn before the menu managers'
   if (output) {
     const veil = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.ShaderMaterial({
       uniforms: { a: { value: 0 } }, transparent: true, depthTest: false, depthWrite: false,

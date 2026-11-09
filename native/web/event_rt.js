@@ -218,7 +218,7 @@ export class EventRuntime {
   }
 
   // FUN_00372f70 (the Skip choice; offered by FUN_003c0520 while an event runs out of battle mode, stage-controller.md):
-  // +0x156c = 1, +0x1558 bit 36, then FUN_003e9950 / FUN_003ea5f0 (stream SEs and the voice channels stop) and
+  // +0x156c = 1, +0x1558 bit 36, then FUN_003e9950 / FUN_003ea5f0 / FUN_003e6fc8 (stream SEs, the voice channels, every SE but the area sounds) and
   // FUN_003b7118(DAT_00472a80, id, 1) for each open event window (+0x9804 / +0x9808, 5 of 0xc).
   requestSkip() {
     if (this.skip !== 0) return false;
@@ -226,7 +226,7 @@ export class EventRuntime {
     this.log.push([this.frameNo, 'skip']);
     if (this.sound) skipSound(this.sound);
     if (this.windows) this.windows.skip(this);
-    this.vm.warnOnce('skip-rest', 'event: FUN_00372f70\'s FUN_00380ca0(0xb4), FUN_002420e0, FUN_002f47e0, FUN_002574a0, FUN_003e6fc8 and the event effects\' stop (FUN_002ebdb8) left out');
+    this.vm.warnOnce('skip-rest', 'event: FUN_00372f70\'s FUN_00380ca0(0xb4), FUN_002420e0, FUN_002f47e0, FUN_002574a0 and the event effects\' stop (FUN_002ebdb8) left out');
     return true;
   }
 

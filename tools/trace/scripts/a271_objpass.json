@@ -1,0 +1,10 @@
+{
+"name": "a271_objpass",
+"frames": 700,
+"log_from": 600,
+"doc": "fidelity audit 2026-11-09 (obj_contact.js): from route state r03_mid2, Vincent backs into EM barrier 56's face and stays there while the area's actors close in; every body's FUN_0035a440 and FUN_0025c0f8 (edges) logged. TRACE_FIELDSET=enemy TRACE_CALLLOG=objpass TRACE_CALLLOG_FRAMES=0:700.",
+"events": [
+{ "from": 10, "to": 40, "lx": 0.0, "ly": -1.0 },
+{ "from": 41, "to": 700, "lx": 0.0, "ly": -0.3 }
+]
+}

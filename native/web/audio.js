@@ -183,6 +183,8 @@ function sharedOf(bank, prog) {
   if (prog) S.add(prog);
   return S;
 }
+// a voice already OFF is kept by reference (SeRenderer.snapshot)
+function deadShared(S) { return { has: (o) => S.has(o) || (o.phase === 0 && o.region !== undefined && o.trk !== undefined) }; }
 function copyRun(o, S, memo = new Map()) {
   if (o === null || typeof o !== 'object' || S.has(o)) return o;
   let c = memo.get(o);
@@ -207,12 +209,15 @@ export class SeRenderer {
 
   // Page aid (event_sound.js EventSeSlots: a stream replayed from a chunk start; not game logic): a copy of the running state.
   // The driver, the bank (instruments, regions, wave data) and the program are shared (read-only); events kept by length.
+  // A voice in OFF is shared too: nothing turns it on again (keyOn takes a new voice or a non-OFF one, keyOff and the
+  // key-off queue skip it, mix skips it), so what is still written to it (note, adsr) is never heard. The list never
+  // frees them (asj_620 after 3 min: 4715 voices), so copying them made a snapshot cost grow with the stream's age.
   snapshot() {
     return { rngIndex: this.rngIndex, masterSe: this.masterSe, prog: this.prog, liveTracks: this.liveTracks, events: this.events,
-      nEvents: this.events ? this.events.length : 0, run: copyRun({ tracks: this.tracks, voices: this.voices, on: this.keyOnQueue, off: this.keyOffQueue }, sharedOf(this.bank, this.prog)) };
+      nEvents: this.events ? this.events.length : 0, run: copyRun({ tracks: this.tracks, voices: this.voices, on: this.keyOnQueue, off: this.keyOffQueue }, deadShared(sharedOf(this.bank, this.prog))) };
   }
   restore(s) {
-    const r = copyRun(s.run, sharedOf(this.bank, s.prog));
+    const r = copyRun(s.run, deadShared(sharedOf(this.bank, s.prog)));
     Object.assign(this, { rngIndex: s.rngIndex, masterSe: s.masterSe, prog: s.prog, liveTracks: s.liveTracks, events: s.events ? s.events.slice(0, s.nEvents) : [],
       tracks: r.tracks, voices: r.voices, keyOnQueue: r.on, keyOffQueue: r.off });
   }
@@ -224,6 +229,7 @@ export class SeRenderer {
   // whether a later hold needs a new render.
   // stop: { tick, time }: request 0x12 (stopFade) at that driver tick (GameAudio.fade)
   render(prog, vol = 0x7f, pan = 0x40, maxSeconds = 8, holds = [], stop = null) {
+    const stops = stop ? [].concat(stop) : [];          // GameAudio.fade: a stop fade, then the Restart's end (both kept)
     this.start(prog, vol, pan);
     const maxTicks = Math.ceil(maxSeconds * TICK_HZ);
     const L = new Float32Array(maxTicks * TICK_SAMPLES), R = new Float32Array(maxTicks * TICK_SAMPLES);
@@ -232,7 +238,7 @@ export class SeRenderer {
     for (; t < maxTicks; t++) {
       if (this.holdVoices(true)) decay[t] = 1;
       if (holds.includes(t)) this.holdVoices();
-      if (stop && t === stop.tick) this.stopFade(stop.time);
+      for (const q of stops) if (t === q.tick) { if (q.end) this.endNow(); else this.stopFade(q.time); }
       if (this.tick(t, L, R, t * TICK_SAMPLES)) { t++; break; }
     }
     return { left: L.subarray(0, t * TICK_SAMPLES), right: R.subarray(0, t * TICK_SAMPLES), rate: SPU_RATE, events: this.events,
@@ -297,6 +303,24 @@ export class SeRenderer {
       trk.panStep = idiv(tp - trk.pan, ticks); trk.panTicks = ticks;
       trk.seqVolStep = idiv(((vol << 12) | 0x800) - trk.seqVol, ticks); trk.seqVolTicks = ticks;
     }
+  }
+
+  // IOP command 0x23 (irx FUN_000155f8 copies the keep list, FUN_0000cdf8(0, 1) -> FUN_00007d90(id) for every running SE whose id
+  // is not in it; EE: FUN_003e7f60 = request 0x1a, and the Restart's FUN_00380b00 = FUN_003e7f60(-1, -1, -1)): unless the program's
+  // flag byte (track +0x1a1) has 0x40, every track is ended (+0 = 0; FUN_00002db4 frees its voice-table entries) and its voice
+  // keyed off (FUN_00007620 puts a held voice's ADSR back, then voice +0x70 |= 2): the voices finish in their release (worker 0271).
+  // L: the held voice's ADSR put back is not modelled (the page's hold is a phase change)
+  // The voice's flags: +0x70 |= 2 then &= ~9 (irx 0x7ebc .. 0x7ef0): a key-on still pending for the track (bit 0, the page's
+  // keyOnQueue) is dropped with the hold bit 8.
+  endNow() {
+    if (!this.tracks || (this.prog[4] & 0x40)) return;
+    const ended = [];
+    for (const trk of this.tracks) {
+      if (!trk.active) continue;
+      trk.active = false; ended.push(trk);
+      for (const v of trk.voices) this.keyOff(v);
+    }
+    this.keyOnQueue = this.keyOnQueue.filter((k) => !ended.includes(k.trk));
   }
 
   // IOP command 0x2f (FUN_00015be8 -> FUN_00008bfc; EE: FUN_003e8ff8 -> FUN_003e9830 -> FUN_003e77f0 = request 0x12 ->
@@ -704,22 +728,62 @@ export class SoundEmitters {
     const L = this.listener, list = this.pending;
     this.pending = [];
     if (!L) return;
+    // FUN_003e9ed0's 0x10000 check: a slot stopped before it was sent (stop() below) and sent last frame has its voice handle
+    // now (the sound thread FUN_003e7150 -> FUN_003e80d8 -> FUN_003e8970 answered the send): FUN_003e9830(slot, 0) -> the stop
+    // request for a 0x20 slot (L: the sound thread is taken to answer within the frame)
+    const later = this.stopNext || [];
+    this.stopNext = [];
+    for (const e of later) if ((e.flags & SLOT_FLAGS.STOP) && e.p && this.audio.fade) this.audio.fade(e.p, 10);
     for (const e of list) {
       if (!e.pos) e.pos = L.pos.slice(0, 3);
       const { vol, pan } = emitterVolPan(e, L);
       if (this.log) this.log.push({ name: e.name, id: e.id, vol, pan });
       if (this.audio.playId(e.id, vol, pan)) e.p = this.audio.playing ? this.audio.playing[this.audio.playing.length - 1] : null;
+      if (e.f10000) this.stopNext.push(e);
     }
   }
   stop(slot) {
     if (!slot || slot === -1 || slot.stopped) return;
     slot.stopped = true;
-    const i = this.pending.indexOf(slot);
-    if (i >= 0) { this.pending.splice(i, 1); return; }
+    // FUN_0033cf00 -> FUN_003e98e0 / FUN_003e8ff8 -> FUN_003e9830 on a slot not sent yet (+0x18 -1): 0x10000 (no page slot has
+    // 0x80000). Its request flag 2 (set by the open, FUN_003e8bc8) keeps it in the table (FUN_003e8ff8 frees only a slot without 2), so FUN_003e9ed0 still
+    // sends it: a slot without 0x20 plays to its end, a 0x20 one is stopped the frame after (update above)
+    if (this.pending.includes(slot)) { slot.f10000 = true; return; }
     // FUN_003e9830 (arg 0): a slot without 0x20 is only freed. 0xb4 instead of 10 is for slot flag 0x20000, which no page slot sets
     const p = slot.p, A = this.audio;
     if (!p || !(slot.flags & SLOT_FLAGS.STOP)) return;
     if (A.fade) A.fade(p, 10);
+  }
+}
+
+// The pause menu's Restart OK (FUN_003c0a20 -> FUN_00380b00 = FUN_003e7f60(-1, -1, -1) -> IOP command 0x23), sent at the OK while
+// the pause still holds the SEs (so the held ones end silent, GameAudio.fade): the one-shots, the event SEs' streams and the placed
+// sounds' slots (ambient.js SlotStreams.endAll with the same keep list). play.js calls it from the pause's onRequest('restart'),
+// before the menu's unpause (worker 0271)
+export function restartSound(au, slots) {
+  if (!au || !au.restartSe) return;
+  au.restartSe();
+  if (slots) slots.endAll(au.keepList(-1, -1, -1));
+}
+// One 0x23 per Restart (FUN_003e7f60 is called once): the pause menu's OK sends it at once (pauseRequest); the reload (play.js
+// musicRestart) sends it only when the OK didn't (the game over's Restart; GUESS for a scene_save reload). get() -> { au, slots }
+export class RestartSound {
+  constructor(get) { this.get = get; this.sent = false; }
+  // the pause's onRequest (play.js): 'restart' -> 0x23 now, while the pause holds the SEs, then mark() (the page's restart flags)
+  pauseRequest(r, mark) {
+    if (r !== 'restart') return false;
+    const { au, slots } = this.get();
+    restartSound(au, slots);
+    this.sent = true;
+    mark();
+    return true;
+  }
+  // restart()'s sound side: the 0x23 unless the OK sent it; then the slot table goes with the reload (SlotStreams.freeAll)
+  reload() {
+    const { au, slots } = this.get();
+    if (!this.sent) restartSound(au, slots);
+    if (slots) slots.freeAll();
+    this.sent = false;
   }
 }
 
@@ -728,7 +792,13 @@ export class SoundEmitters {
 const SE_CACHE_MAX = 32;
 
 export class GameAudio {
-  constructor(base = 'data/audio/') { this.base = base; this.ctx = null; this.ready = null; }
+  constructor(base = 'data/audio/') {
+    this.base = base; this.ctx = null; this.ready = null;
+    // DAT_0050e060: the menu-sound queue (FUN_003e9d70 writes entry DAT_0047d72c, max 4; FUN_003e9ed0 sends and resets the count but
+    // leaves the entries), 0 from FUN_003e87f8. FUN_003e7f60 keeps entries 0 and 1 when >= 0 (keepList)
+    this.menuQ = [0, 0, 0, 0]; this.menuN = 0;
+    this.areaId = -1;                               // the page's area loop (music.js AreaSound): FUN_003e6fc8's area slot id A
+  }
 
   load(zone = 128) {
     const z = String(zone).padStart(3, '0');
@@ -831,7 +901,7 @@ export class GameAudio {
     if (!p.prog || !this.drv || !this.banks[p.bank]) return false;
     const rd = new SeRenderer(this.drv, this.banks[p.bank]);
     rd.rngIndex = p.rngStart;
-    const out = rd.render(p.prog, p.vol, p.pan, 8, p.holds, p.stop);
+    const out = rd.render(p.prog, p.vol, p.pan, 8, p.holds, p.stops || p.stop);
     const buf = this.ctx.createBuffer(2, out.left.length, SPU_RATE);
     buf.copyToChannel(out.left, 0); buf.copyToChannel(out.right, 1);
     p.buf = buf; p.decay = out.decay;
@@ -842,14 +912,23 @@ export class GameAudio {
   // Request 0x12 on a playing SE (FUN_003e77f0 -> FUN_003e80d8 -> IOP command 0x2f, SeRenderer.stopFade): rendered again from its
   // start (same random-table counter, its holds) with the fade begun at the driver tick it has reached, and played on from there.
   // A held one (paused) gets the new buffer and resumes with it.
-  fade(p, time = 10) {
-    if (!p || p.stop || !p.prog || !this.ctx || !this.drv || !this.banks[p.bank]) return false;
+  // end: IOP command 0x23 instead (SeRenderer.endNow, the Restart): it also ends one already fading (the fade had no time to act)
+  // A held one (IOP command 6: volume 0, pitch 0) ended by 0x23 stays silent: FUN_00007d90 -> FUN_00007620 puts back only its
+  // envelope (+0x84 / +0x86 when voice +0x70 has 8), not the volume, and its track +0 = 0, so the resume's command 6 skips it.
+  fade(p, time = 10, end = false) {
+    if (!p || (p.stop && (!end || p.stop.end)) || !p.prog || !this.ctx || !this.drv || !this.banks[p.bank]) return false;
     const held = p.held !== false && p.held !== undefined;
+    if (end && held && !(p.prog[4] & 0x40)) {
+      p.stop = { tick: Math.floor(p.held * TICK_HZ), time, end, silent: true };
+      this.playing = this.playing.filter((q) => q !== p);
+      return true;
+    }
     const off = held ? p.held : Math.min(Math.max(this.ctx.currentTime - p.at, 0), p.buf.duration);
-    p.stop = { tick: Math.floor(off * TICK_HZ), time };
+    p.stop = { tick: Math.floor(off * TICK_HZ), time, end };
+    (p.stops ??= []).push(p.stop);                  // a fade begun earlier is kept under the end (render applies both)
     const rd = new SeRenderer(this.drv, this.banks[p.bank]);
     rd.rngIndex = p.rngStart;
-    const out = rd.render(p.prog, p.vol, p.pan, 8, p.holds || [], p.stop);
+    const out = rd.render(p.prog, p.vol, p.pan, 8, p.holds || [], p.stops);
     const buf = this.ctx.createBuffer(2, out.left.length, SPU_RATE);
     buf.copyToChannel(out.left, 0); buf.copyToChannel(out.right, 1);
     p.buf = buf; p.decay = out.decay;
@@ -858,6 +937,33 @@ export class GameAudio {
       this.startSource(p, off);
     }
     return true;
+  }
+
+  // The Restart (pause menu OK, FUN_003c0a20 -> FUN_00380b00 = FUN_003e7f60(-1, -1, -1) -> IOP command 0x23): every SE playing
+  // whose id is not kept (no area sound given; FUN_003e7f60 adds DAT_0050e060 / 64, the area requests queued, and 0x461 .. 0x463)
+  // is ended at the tick it has reached (SeRenderer.endNow): the one-shots here, the event SEs' streams (event_sound.js) and the
+  // placed sounds' (ambient.js SlotStreams.endAll, called by play.js)
+  restartSe() { this.endSe(this.keepList(-1, -1, -1)); }
+  // FUN_003e7f60(a, b, c)'s keep list for IOP command 0x23: a / b / c when >= 0, the menu queue's entries 0 and 1 when >= 0 (as
+  // shorts: an id 0 when no menu sound since FUN_003e87f8), then 0x461, 0x462, 0x463
+  keepList(a, b, c) {
+    const k = [a, b, c].filter((x) => x >= 0);
+    for (const q of this.menuQ.slice(0, 2)) if (q >= 0) k.push((q << 16) >> 16);
+    return k.concat([0x461, 0x462, 0x463]);
+  }
+  // Skip (FUN_00372f70 -> FUN_003e6fc8 -> FUN_003e9a58): FUN_003e9830 on every slot but the two area sounds' (0x20 ones: request
+  // 0x12), then request 0x1a = FUN_003e77d0(mgr, area id A, area id B, 4) -> FUN_003e7f60(A, B, 4) -> IOP command 0x23, which ends
+  // what the fades had not (same tick): every SE but A, B, 4 and 0x461 .. 0x463 ends (the page's area loop is music.js AreaSound,
+  // not in these lists: it plays on, as A / B)
+  // FUN_003e9a58 also reaches the placed sounds' slots (SlotStreams: playBgSound's loops, the hum); it frees none of them
+  skipSe() {
+    const keep = this.keepList(this.areaId, -1, 4);
+    this.endSe(keep);
+    if (this.slotStreams) this.slotStreams.endAll(keep, false);
+  }
+  endSe(keep) {
+    for (const p of this.playing || []) if (!keep.includes(p.id)) this.fade(p, 10, true);
+    if (this.eventSe) this.eventSe.endAll(keep);
   }
 
   startSource(p, offset = 0) {
@@ -906,7 +1012,7 @@ export class GameAudio {
       if (this.cache.size > SE_CACHE_MAX) this.cache.delete(this.cache.keys().next().value);
     }
     // the playing list: what IOP command 6 (setPaused) holds; prog[4] = the program's flag byte (track +0x1a1)
-    const p = { buf: ent.buf, decay: ent.decay, flags: prog[4], held: false, prog, vol, pan, rngStart, bank };
+    const p = { id, buf: ent.buf, decay: ent.decay, flags: prog[4], held: false, prog, vol, pan, rngStart, bank };
     this.playing ??= [];
     this.playing.push(p);
     return this.startSource(p);
@@ -922,6 +1028,7 @@ export class GameAudio {
   playMenu(name, x = -1, y = -1) {
     const id = this.seIdOf(name);
     const pan = menuPan(x, y);
+    if (this.menuN < 4) this.menuQ[this.menuN++] = id;   // FUN_003e9d70 (any id; FUN_003e9ed0 sends only > 0)
     if (id > 0) this.playId(id, 0x7f, pan, 0x16);
     return { name, id, pan };
   }

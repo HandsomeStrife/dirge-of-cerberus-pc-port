@@ -77,6 +77,11 @@ try {
     const t0 = await pg.evaluate(() => window.__play.warp.tick);
     await pg.waitForFunction(t0 => window.__play.stats.ticks > t0 + 90, t0, { timeout: 120000 }).catch(() => null);
     if (name === 'boss') await pg.waitForFunction(() => window.__play.enemyAI.bossPlugin, null, { timeout: 600000 }).catch(() => null);   // heri_lastst comes first
+    // worker 0274: Zone.boss(true) and main's fadein(3000) land on the same controller frame (log: 'fadein 3000' at 814), so the
+    // shot used to catch the veil near 256 (20-39% lit by load timing). Wait for the fade itself: FUN_003a22e0 -> FUN_003736c8 ->
+    // FUN_002f4480, level 256 falling by 256 / (3 x 60) a tick to 0 (stage_controller.js rt.fade), ~180 ticks later
+    const faded = name !== 'boss' || await pg.waitForFunction(() => { const r = window.__play.stage && window.__play.stage.rt;
+      return r && r.log.some(x => x[1] === 'fadein 3000') && r.fade && r.fade.rate < 0 && r.fade.level === 0; }, null, { timeout: 120000 }).then(() => true).catch(() => false);
     const s = await pg.evaluate(({ name }) => {
       const P = window.__play, c = P.ctrl, f = P.enemyAI.eventFlags;
       return { pos: { ...c.pos }, onGround: c.onGround, poly: c.body.poly, gy: P.col.groundY(c.pos.x, c.pos.z, c.pos.y),
@@ -97,6 +102,7 @@ try {
     if (name === 'boss') {
       ok([10, 11].every(k => s.slots.includes(k)), `boss: main's Zone.load(128, 10, 11) loaded (slots ${s.slots.join(' / ')})`);
       ok(s.boss, `boss: main took its boss block (Zone.boss(true): bossPlugin ${s.boss})`);
+      ok(faded, 'boss: main\'s fadein(3000) ran to level 0 (FUN_002f4480)');
     }
     // flags: main may move them on (its beats); the ones it does not write must hold
     for (const [k, v] of Object.entries(w.stage || {})) if (!(name === 'boss')) ok((s.sflags[k] | 0) === v, `${name}: stage flag ${k} = ${v} (${s.sflags[k] | 0})`);

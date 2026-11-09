@@ -531,3 +531,30 @@ data/**/*.json found no other silent request: the remaining unresolved names are
 does not use and other weapons' shot names (bsj_054, bsj_061), which the game cannot resolve in z128 either (FUN_003eb868 -> 0,
 id -1, nothing sent). dsj_769 / dsj_770 (items 0x6932000b / c) are in neither sdb: silent in the game too.
 Page: test_props_page sends bsj_065 once (vol 106, pan 60 at 35 u); test_items_page sends asj_019 once (vol 114).
+
+## Skip / Restart end the SEs: IOP command 0x23 (worker 0271, 2026-11-09; decoded, not traced)
+
+Read from `data/sound/lib/iopsound.irx` (sections from base 0; command table at irx 0x1b8e4, checked: 6 -> 0x14008, 0x2f ->
+0x15be8, 0x30 -> 0x15d00, 0x34 -> 0x16114) and the EE.
+- **EE.** Restart: the pause menu's OK `FUN_003c0a20` -> `FUN_00380b00` = `FUN_003e7f60(-1, -1, -1)`. Skip: `FUN_00372f70` ->
+  `FUN_003e9950` (stream slots), `FUN_003ea5f0` (voice channels), `FUN_003e6fc8` -> `FUN_003e9a58(mgr, area slot A, id A, area slot
+  B, id B)`: `FUN_003e9830(slot, 0)` on every live slot but A / B (0x20 ones: request 0x12), then `FUN_003e77d0(mgr, id A, id B, 4)`
+  = request 0x1a -> `FUN_003e80d8` case 0x1a -> `FUN_003e7f60(A, B, 4)`. Ids A / B: the rows of the area names DAT_004f5a20 /
+  DAT_004f5a30 (row +0x10; -1 for none or a stream row). `FUN_003e9a58` frees no slot.
+- **Keep list** (`FUN_003e7f60`, 8 shorts DAT_004f5a80, -1 filled): its three arguments when >= 0, then DAT_0050e060 and DAT_0050e064
+  when >= 0 (the menu-sound queue: `FUN_003e9e60` -> `FUN_003e9d70` writes entry DAT_0047d72c (max 4, any id; `FUN_003e9d30` writes
+  -id), `FUN_003e9ed0` sends and resets the count only; `FUN_003e87f8` zeroes the entries, so 0 is kept until a menu sound), then
+  0x461, 0x462, 0x463 (resident programs, flag bytes 0x58 / 0x58 / 0x18) -> `FUN_00419e68` = `FUN_00418e38(9, 0x23, ...)`.
+- **IOP command 0x23** (irx 0x155f8): copies the 8 ids to a global, `FUN_0000cdf8(0, 1)`: over the 64 handle entries (0x14 bytes),
+  each live one whose id is not in the list (up to the first -1) -> `FUN_00007d90(id)` then `FUN_0000c9ac(entry)`.
+- **FUN_00007d90(id)** (irx): `FUN_00013340`, then for every SE track (0x1a4 bytes; +0x140 the id) with that id, unless the program's
+  flag byte (track +0x1a1) has 0x40: `FUN_00002db4` (its voice-table entries freed), track +0x154 = 0, +0 = 0 (the track off: the SE
+  tick and command 6 skip it), then its voice (+0x19f): `FUN_00007620` (only when voice +0x70 has 8, the pause hold: ADSR 1 / 2 put
+  back from +0x84 / +0x86, registers 0x300 / 0x400; the volume and pitch command 6 zeroed are NOT put back), +0x70 |= 2 (key-off,
+  applied by `FUN_000025ac` on the next driver tick) and &= ~9 (a pending key-on and the hold bit dropped), `FUN_00007674`,
+  `FUN_0000c61c`, `FUN_0000cf88`.
+- So: every SE not kept and not 0x40 finishes its release from the next driver tick; one held by the pause (Restart / Skip come from
+  the pause menu) stays at volume 0 / pitch 0 with its track off, so command 6's resume skips it: silent.
+- Page: audio.js `SeRenderer.endNow`, `GameAudio.keepList` / `endSe` / `restartSe` / `skipSe` / `fade(.., end)` (a held one dropped
+  silent), event_sound.js `EventSeSlots.endAll` / `fadeHeard(.., end)`, `skipSound`, ambient.js `SlotStreams.endAll(keep, free)`,
+  music.js `AreaSound` (its id as A). test_event_se 7 / 7b / 8 / 9.

@@ -123,6 +123,10 @@ export class StageRuntime extends EventRuntime {
     // not yet. T w240_init (a Restart's reload): main's battle() after first_event (f2264) comes before the stage init
     // (f2276-2278), so that battle's FUN_00324e70 finds none (worker 0240)
     this.stageObj = false;
+    // FUN_00374d08 (the program start: +0x1558 bit 44, FUN_005a6d70(0), then FUN_00324ca0): on a record's reload (no stage object
+    // yet: bits 5 / 4 only, cleared by main's first battle()). A new controller is the program's start on every path: a record's reload,
+    // the opening, and the save (whose settle below runs main from its start through first_event's battle()). worker 0265
+    this.fun324ca0(o.gameState && o.gameState());
     // DAT_0050db20 (stored XOR DAT_0046f608; kept plain here). A new controller = a stage (re)load: all 0. The clearing is
     // traced only (w210 start1704: 0 mid stage load); its writer is not decoded
     this.gflags = o.globalFlags || new Uint8Array(64);
@@ -261,15 +265,17 @@ export class StageRuntime extends EventRuntime {
     // hand-back (FUN_00319190) stays (the page's settle and hand-off rely on it); +0x1528 stays set for FUN_004012c0 case 9, whose
     // FUN_00326da8 (camera re-enter, message 0x7d5) runs once the stage program does, after the stage init: follow.battleHandBack
     const first = !this.stageObj;
-    // worker 0265: FUN_00324e70 -> FUN_0033c060 with DAT_0046e290 +0x58 and +0x44 set: the reticle's kind from the HUD mode
-    // again (after the reticle off of event mode or set_usercontrol(0)); its order against the stage-load pass is L (no visible effect)
-    if (this.stageObj && this.o.reticle) this.o.reticle.sync();
     if (!this.stageObj) this.log.push([this.frameNo, 'battle: no stage object yet (FUN_00324e70: nothing)']);
     else if (this.o.stagePass) this.o.stagePass();
     else this.warnOnce('stage: battle()\'s stage-load pass FUN_005453b0 (event 0x23) not wired');
     // worker 0262: L: a record's reload: the page ran the stage init's 0x22 before main (checkpoint.js initWorld). Its 0x23 belongs here, after
     // this battle (T w240_init): main's Zone.boss(true) has come by now, and the boss's mode 0x100 needs the plug-in
     if (first && this.o.globalFlags) { if (this.o.reloadPass) this.o.reloadPass(); else this.warnOnce('stage: the reload\'s event 0x23 not wired'); }
+    // FUN_00324e70 l.77-80, after FUN_005453b0 (the stage-load pass) and before the camera reset: FUN_0033c060 (the reticle's
+    // kind from the HUD mode again, after event mode's reticle off) when DAT_0046e290 +0x58 and +0x44 are set. +0x58 is written
+    // non-zero by the stage init's load loop (FUN_003245e8 l.93-106 clears it and waits for it), so it is set exactly when there is
+    // a stage object from an earlier stage init (!first); +0x44 = the weapon (o.reticle null without one). worker 0265
+    if (!first && this.o.reticle) this.o.reticle.sync();
     this.stageObj = true;             // the stage init follows that first battle (FUN_003245e8, T w240_init)
     if (this.o.cameraReset) this.o.cameraReset(this.view, first); else this.warnOnce('stage: battle()\'s camera reset (FUN_00329f68) not wired');
     this.warnOnce('stage: FUN_00324e70\'s player calls (FUN_00578548, FUN_00574928, FUN_0034b2c8, FUN_00331ab0 ...) left out');
@@ -336,15 +342,8 @@ export class StageRuntime extends EventRuntime {
     // FUN_002419d8(0) == 0 (DAT_004b8ac8 bit 0: 0 in the z128 states): FUN_0037dc78(ev, 1), FUN_0037def0(ev, 1) ->
     // FUN_00325b10(1): game-state bit 6, the AI paused (enemy_ai FUN_00365008); then FUN_00326018(2)
     if (gs) gs.set(6);
-    // worker 0265: FUN_00324ca0 (between the two): game-state bits 5 and 4 set (FUN_00326018); with the stage object (DAT_0046e290)
-    // and FUN_002419d8(5) == 0, FUN_0033c1a8 when DAT_0046e290 +0x44 (the reticle's owner: the weapon) != 0: the reticle off
-    // (aim_core reticleOff = FUN_003b03e8). Its other calls (FUN_005a7338, FUN_00324d90, FUN_00312408 / FUN_00312660,
-    // FUN_00545330, FUN_00331a40, FUN_00349438, game-state bit 0) are left out (warned)
-    if (gs) { gs.set(5); gs.set(4); }
-    if (this.stageObj) {
-      if (this.o.reticle) this.o.reticle.off(); else this.warnOnce('stage: event mode\'s reticle off (FUN_0033c1a8) not wired');
-      this.warnOnce('stage: FUN_00324ca0\'s FUN_005a7338, FUN_00324d90, FUN_00312408 / FUN_00312660, FUN_00545330, FUN_00331a40 left out');
-    }
+    // FUN_00324ca0 between the two (FUN_0037e048 l.88)
+    this.fun324ca0(gs);
     if (gs) gs.set(2);
     // (+0x9864 & 1) == 0: FUN_003e8888(mgr, 0) (not translated) and FUN_003e6538: the placed-sound table released (playBgSound's
     // entries from the last event's end, and the stage's placed sounds; ambient.js releaseAll; worker 0266)
@@ -352,6 +351,20 @@ export class StageRuntime extends EventRuntime {
     this.battle = false;
     this.log.push([this.frameNo, 'event ' + n]);
     if (this.o.onMode) this.o.onMode('event');
+  }
+
+  // FUN_00324ca0 (event mode's HUD side; from FUN_0037e048 and from the program start FUN_00374d08): game-state bits 5 and 4 set
+  // (FUN_00326018); inside DAT_0046e290 != 0 (the stage object) and FUN_002419d8(5) == 0 (DAT_004b8ac8 bit 5; o.modeBits, 0 in every
+  // z128 state): FUN_0033c1a8 when DAT_0046e290 +0x44 (the weapon) != 0, the reticle off (aim_core reticleOff = FUN_003b03e8).
+  // Its other calls (FUN_005a7338, FUN_00324d90, FUN_00312408 / FUN_00312660, FUN_00545330, FUN_00331a40, FUN_00349438, game-state
+  // bit 0 cleared by FUN_00326040(0)) are left out (warned). worker 0265
+  fun324ca0(gs) {
+    if (gs) { gs.set(5); gs.set(4); }
+    if (!this.stageObj) return;
+    if ((((this.o.modeBits ?? 0) >>> 5) & 1) === 0) {
+      if (this.o.reticle) this.o.reticle.off(); else this.warnOnce('stage: event mode\'s reticle off (FUN_0033c1a8) not wired');
+    }
+    this.warnOnce('stage: FUN_00324ca0\'s FUN_005a7338, FUN_00324d90, FUN_00312408 / FUN_00312660, FUN_00545330, FUN_00331a40, FUN_00349438 left out');
   }
 
   // FUN_0037e4e0: +0x9866 = 1, then poll until FUN_00377c68 has counted it down (the next frame's window)

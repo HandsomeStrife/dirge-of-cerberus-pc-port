@@ -621,3 +621,21 @@ SETS["w244"] = [
     dict(id=2445, kind="site", where=_ELF + (0x53D420,), name="msg7d5", copy=[cpr("ra")]),
     dict(id=2446, kind="site", where=_ELF + (0x325880,), name="wmode1", copy=[cpr("ra")]),
 ]
+
+# fidelity audit (2026-11-09, obj_contact.js): FUN_0035a440 for every body (a0 = body: +0xb0..+0xbc radius / height, +0x170..
+# the owner) and FUN_0025b4d8's FUN_0025c0f8 (f12 = r; after the call a0 = P, a1 = N, a2 = a, a3 = b, t0 = e0, t1 = e1; v0 = hit)
+SETS["objpass"] = [
+    SETS["pushstep"][1],
+    dict(id=33, kind="site", where=(0x357D48, 0x358FB8, 0x35A440), name="push_out",
+         copy=[cp("a1", 0, 4), cp("a2", 0, 4), cp("a0", 0x80, 4), cp("a0", 0xB0, 4), cp("a0", 0x170, 2), cp("a0", 0xA8, 1)]),
+    dict(id=34, kind="site", where=(0x25B4D8, 0x25B608, 0x25C0F8), name="cylseg",
+         copy=[cp("a0", 0, 4), cp("a1", 0, 4), cp("a2", 0, 4), cp("a3", 0, 4), cp("t0", 0, 4), cp("t1", 0, 4)]),
+]
+
+# worker 0265 (fidelity fix, 2026-11-09): the opening's stage title card. displayStageInfo FUN_00380788 -> FUN_003fdb48 (a0 = the
+# kind), the card's close FUN_003fdd58 from FUN_003fdf00 (its state machine) / FUN_003fded0, + the event fades and voices
+SETS["w265card"] = [
+    dict(id=2650, kind="site", where=(0x380788, 0x3807F8, 0x3FDB48), name="si_display", copy=[cpr("a0")]),
+    dict(id=2651, kind="site", where=(0x3FDF00, 0x3FE458, 0x3FDD58), name="si_close", copy=[]),
+    dict(id=2652, kind="site", where=(0x3FDED0, 0x3FDF00, 0x3FDD58), name="si_close2", copy=[]),
+] + [h for h in SETS["evsound"] if h["name"] in ("ev_fadein", "ev_fadeout", "ev_voice")]

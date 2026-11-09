@@ -25,7 +25,7 @@
 //      trace: #67 re-queued with interval 15 on the wake frame, so after the AI step)
 //   5. player moved -> trigger volumes FUN_005517a8(old, new) (they queue the wake messages)
 
-import { cylinderHit, cylinderCross, partTest, cone, fatCapsuleHit } from './enemy_hit.js';
+import { cylinderHit, partTest, cone, fatCapsuleHit } from './enemy_hit.js';
 import { objectPass } from './obj_contact.js';
 import * as PM from './path_mover.js';
 import * as NG from './nav_graph.js';
@@ -916,8 +916,12 @@ export function createEnemyAI(opts) {
     }
     // FUN_00370b40: -2 = the host's object id (VM+0x1c), looked up per send. The page swaps a record's object for a new actor
     // on cmd 0x108 (setActive): the commands after a script's own 0x108 go to that actor (worker 0268: script 124's 0x131 path
-    // after its wake went to the stale record and was dropped, so the cardkey-2 soldiers stood at locator 0)
-    const t = tgt === -2 ? (objects.get(o.id) || o) : objects.get(tgt);
+    // after its wake went to the stale record and was dropped, so the cardkey-2 soldiers stood at locator 0). An id the manager's
+    // lookup (+0x6c vt+0xc) does not find: no reply, 0 / 0 (l.47-49), as any other target (the commands < 0x100 above are the
+    // other branch, vt+0x14: the manager itself). Vincent is in the game's manager table, so his own scripts' -2 (script 297's
+    // 0x125 voices, the item scripts run on him) finds him; the page keeps him out of `objects` (the enemy passes iterate it), so
+    // the -2 lookup knows his id (PLAYER_OBJ; items.js's item hosts are Object.create(PLAYER_OBJ): the same id)
+    const t = tgt === -2 ? (PLAYER_OBJ && o.id === PLAYER_OBJ.id ? PLAYER_OBJ : objects.get(o.id)) : objects.get(tgt);
     if (!t) return 0;
     // a gimmick's own handler (barrel vt+0xc FUN_00586520 -> FUN_00588b78 -> FUN_0054cd70: props.js); undefined = the generic cases below
     if (t.kind === 'prop' && opts.props) { const v = opts.props.cmd(t, cmd, r); if (v !== undefined) return v; }
@@ -2064,16 +2068,20 @@ export function createEnemyAI(opts) {
   // r03_mid2 / r08_walk), +0xbc = +0x170 x 0.5 (a.size.r / a.size.h0, FUN_00563fc0). T: w269_bar1 bodies 5 / 9 and 6 / 6 (e027 r 5
   // h 18, e030 r 6 h 12). No soldier push (GUESS above). The pass's bits go to C+0x1c0 (0x80000, 0x40000 | 0x400 with C+0xbc,
   // 0x100000), which the brains read; FUN_0034c388's moveStart clears them each frame.
+  // null without a size (an actor not built by addActor): the pass is left out for it (warned)
   function bodyRH(a) {
-    const z = a.size || { r: R_ACTOR, h0: EYE_H };
+    const z = a.size;
+    if (!z) return null;
     const r = f(z.r) < f(6.4) ? f(z.r) : f(6.4);
-    return [r, f(f(z.h0 ?? z.h) * 0.5)];
+    return [r, f(f(z.h0) * 0.5)];
   }
   function objPass(a, mv, air) {
     const objs = opts.props && opts.props.blockers ? opts.props.blockers() : null;
     if (!objs || !objs.length) { if (a.C) a.C.f1c0 = (a.C.f1c0 & ~0x100000) >>> 0; return mv; }   // l.1274: iStack_110 0 -> cleared
-    const [r, h] = bodyRH(a);
-    const res = objectPass({ objs, pos: a.pos, move: mv, air, cross: cylinderCross, r, h, face: a.face || null, warn: warnOnce });
+    const rh = bodyRH(a);
+    if (!rh) { warnOnce('enemy_ai: a body without actor +0x2c / +0x170 (a.size): FUN_0035a440\'s object pass left out for it'); return mv; }
+    const [r, h] = rh;
+    const res = objectPass({ objs, pos: a.pos, move: mv, air, r, h, face: a.face || null, warn: warnOnce });
     const C = a.C;
     if (C) {
       if (res.bits[0x80000]) C.f1c0 = (C.f1c0 | 0x80000) >>> 0;
@@ -3279,7 +3287,7 @@ export function createEnemyAI(opts) {
         return;
       }
       if (m.phase === 2 ? m.timer > 8.0 : (m.timer > 30.0 || motionDone(a))) { m.done |= 1; setMotion(a, 6); return; }
-      if (0 < a.C.speed) { m.done |= 1; setMotion(a, 9); return; }          // worker 0267: LAB_00594840 (phases 1 and 2)
+      if (0 < a.C.speed) { m.done |= 1; setMotion(a, 9); return; }          // worker 0267: FUN_005946a0 LAB_00594840 (phases 1 and 2)
       m.timer = f(m.timer + step);
       return;
     }

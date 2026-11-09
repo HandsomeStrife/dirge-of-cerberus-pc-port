@@ -944,3 +944,137 @@ exercised in a browser.
 - EM barriers, round 4: review fixes (worker 0269, 2026-11-08). (1) A script's delete of a lit barrier (scripts 35 / 87 / 88 / 91 / 97, cmd 0x10a) now runs its destructor: FUN_0053e1e0's tail vt+0x1c(o, 3) = FUN_0054f230 -> FUN_0054fa18: beams removed at once, hum stopped (props.js `deleted`). (2) Soldiers and dogs take FUN_0035a440's object pass (enemy_ai.js `objPass` before the walk and in the air; body+0xb8 / +0xbc by model, MEASURED w269_bar1: e027 5 / 9, e030 6 / 6; other models warned, no pass); world exposes `walkBody` / `airBody` / `bodyOf` for tests. (3) Restart: the record holds flags, not objects, so the barriers come back lit, as the game's stage load; no save falls before an opened gate on the way on (saves: stage-controller.md table; route states) -> no soft lock; test pins the rebuild. Not checked with a PCSX2 reload (L). (4) Barriers skip the barrel's FUN_00586520 cases (FUN_0054f358 -> FUN_00588b78). (5) test_barrier hand cases: inside, air lowering, head test, two boxes, air levelling, a soldier / the dog stopped. (6) test_barrier_fx's last line says SKIPPED when it ran no check. Mutants red: inside, air lowering, head test, mean, air levelling, deleted teardown, enemy walk pass, dog size, the barrel-case skip. The lightning's frame offset left open. Not committed.
 - EM barriers, round 5: re-review fixes (worker 0269, 2026-11-08). (1) objectPass returns C+0x1c0's bits (FUN_0035a440 l.1264-1373: 0x80000 static sum opposes the move, 0x100000 a contact normal opposes the character's row 2 = C+0x54c vt+0x24 FUN_00347868's +0x20 = a.face, 0x40000 | 0x400 with C+0xbc = 4 the whole correction opposes the move; 135 degrees = 0x4016cbe4) and enemy_ai.js `objPass` sets them on soldiers / dogs (0x100000 cleared on every pass, as the game); test: a soldier on action layer 2 into barrier 56 stops (0x100000), side-on gives the path up after 0x3c ticks (0x80000). (2) Body sizes as FUN_0055efb8 -> FUN_003561c8: r capped at 6.4 (the stance-0x11 compression needs manager +0x2b0 bit 0: 0 in z128 RAM), height h0 / 2 (`bodyRH`); e048 and every other model now take the pass. (3) In-air pass tested (a dog leaping into 56). (4) Barrels left out of the pass with a warning + MISSING row (the non-0x200000 nearest-point branch and the moving sum: FUN_0025d1b8's normal not decoded); obj_contact.js header corrected. World test hooks: walkBody / airBody / bodyOf / action2. Mutants red: 0x100000, 0x80000, 0x400 / +0xbc, the opposition angle, the 6.4 cap, the h0 / 2, the air pass, the barrel exclusion (crash). Not committed.
 - Review fixes (worker 0265, 2026-11-08): (1) stage_info.js: `si.loading = false` in a `finally`: with stage_info.json / pause.json missing the early return left it true, so the stage controller's displayStageInfo hold waited for ever (test_event_screen section 5, a 404 fetch; mutant `loading` killed; 25 / 25). (2) test_intro_page: the event-pause step waits for the title card to close (Start is ignored while a card is up: FUN_003fdb48 -> FUN_00241760(1, 0, 0)); its frame anchors are shifted by the card's measured length (211 frames: the page's loads take no time, so the card now adds them; the game's own gap from displayStageInfo(0) to the fadein is ~327 frames, w210 trace f25 -> f352), and its sound checks wait for the first voice / the music (capped) instead of fixed frames: all ok. (3) stage_controller.js: cardStep runs before the VM window (FUN_003fdd58 is on the main thread, FUN_003fdf00 first in the frame), so the Skip bit is back before the script sees the card gone. test_stage_controller 88 / 88, test_stage_info 31. No commit.
+- Fidelity-audit fixes, enemy strafe walk / barriers area (2026-11-09; audit of 07edd20; fidelity-audit row 'EM barriers: Vincent's walls').
+  (1) **FUN_0025c0f8 translated** (obj_contact.js `cylSeg`, read from the MIPS 0x25c0f8..0x25c768 (capstone plus a small VU0
+  decoder; the decomp drops the call arguments): three bounding rejects (FUN_002611f4 / FUN_00261498 / FUN_00259680), e0's
+  then e1's end disc (FUN_0025fed0 plane, a on the far side, FUN_00260628 crossing within r, FUN_00260700 in [0, 1] -> -axis / +axis),
+  then the side's two roots with segment and axis range (FUN_0025a778), N = unit(FUN_00260e28 radial). Replaces the cylinderCross point
+  + invented 1e-4 cap tolerance; objectPass / sweptBox no longer take `cross` (enemy_ai.js, player.js, test_barrier updated).
+  T: new trace **a271_objpass** (tools/trace/scripts/a271_objpass.json, r03_mid2, call-log set `objpass` in calllog.py:
+  every body's FUN_0035a440 + FUN_0025b4d8's FUN_0025c0f8): 9 / 9 calls agree, hit P / N within 2.3e-5 (no traced disc hit).
+  (2) FUN_0035a440 l.905-913 / l.1454 (iStack_10c, objects answering vt+0x84) documented in the obj_contact.js header, warned per object.
+  (3) enemy_ai.js `bodyRH`: no invented 5 / 18 default; a body without a.size is left out of the pass (warned).
+  (4) C+0xbc: l.1223's rule per object (vt+0x13c -> 4, else 5); props.js blockers carry vt13c / vt84 (barrier vt 0x58c630: +0x13c
+  FUN_0054fb70 returns itself, +0x84 FUN_0054eb78 returns 0, ELF).
+  (5) The 0x100000 facing row decoded from the ELF: live bodies' C+0x54c = 0x4a1bf0, adjust 0, vt+0x24 FUN_00347868 -> row 2 = C+0x20
+  = a.face. **Soldier / dog vs barrier: not traced** (a271_objpass, a271_objpass2: the r 6 chaser never reached a barrier; stopped
+  after two attempts): the enemy pass and its air branch stay read-from-code.
+  (6) motion 5's LAB_00594840 now cited in FUN_005946a0.
+  Tests: test_barrier (now 1b trace cylSeg, 1c discs / side range, 1d C+0xbc, size-less body; SKIPPED lines are visible and counted),
+  test_strafe_walk, test_enemy_ai, test_push_out, test_props, test_doors, test_gate_key, test_rockets, test_pool_soldiers,
+  test_barrier_page: all ok. Mutants killed: disc plane side, disc normal sign, root order, radial normal, line-line radius, axis
+  range, disc radius, disc segment range, kind constant / 5, props vt13c, bodyRH default, walkBody pass. Equivalent survivors: the
+  two bounding rejects (the later tests already refuse what they refuse). Open: props.js cameraProbe's barrel cylinder normal (row
+  'Barrel camera hit's normal') could now use cylSeg; enemy contact trace; sizeOf's own R_ACTOR / EYE_H default (not this area). Not committed.
+- Fidelity-audit fixes: title card, event screen / reticle, warps, self-send (2026-11-09; audit of 07edd20; fidelity-audit rows
+  'The reticle in events', 'The stage title card', 'GUESS: the event fade drawn before the menu managers', 'PAGE AID: ?warp=
+  cutscene places' + two new GUESS rows). (1) **Title card's 116 frames:** T w265_card (tools/trace/scripts/w265_card.json,
+  calllog set `w265card`, start1704, out tools/trace/out/w0265fix): displayStageInfo f27, the card's close f235 (4182 ms; page
+  4220 ms, its 20 ms frames), fadein f352. The gap is after the close: first_event's wait(h) at pc 1436 on Actor.load("e048")
+  (pc 1400 / 1403), the last of the disc loads started after pc 884: the game's disc time. The page's loads take no time (GUESS
+  'Event loads complete at once'), so its opening fades in about 2.3 s early. Not invented away: test_title_card_page asserts the
+  card length against the trace (40 ms) and prints a KNOWN DIFF line for the fadein; mutant READ_FRAMES 11: red. (2) **Warps:**
+  helpme / citizens / heli copy a route state's flags whole (`whole`: both tables cleared first): r05_pre59 (new, walked: r04_east
+  + w217_r05_west's first 2030 frames; trigger 59 fires at f2030-2040; stage 1 = 13 there, not 7), r05_back, w261_preheri. Dropped
+  the invented 17 / 25 (citizens) and the heli subset. Still hand-set: citizens' late 1 = 12 / 39-41 (no walked state has the
+  rescue: GUESS row). test_warp_flags.mjs (9; SKIPPED without the states' JSON; mutants whole / helpme / heli / citizens red);
+  test_warp_cutscene_page, test_scr005_page ok. (3) The late trigger's wait labelled GUESS (play.js, row). (4) enterEvent:
+  `fun324ca0` (FUN_00324ca0) with FUN_002419d8(5) == 0 (opts.modeBits = DAT_004b8ac8, 0 by default). (5) battle(): FUN_0033c060
+  after the stage-load pass, before the camera reset, gated on +0x58 (set by the stage init FUN_003245e8 l.93-106 = !first).
+  (6) enemy_ai send: no `|| o` fallback; an id the lookup misses gets 0 (FUN_00370b40 l.47-49). The audit's 'record+4 <= 0xff host
+  branch' was a misread: *(VM+0x30)+4 is the command, and < 0x100 is the manager branch the page already has. (7) Veil order:
+  relabelled GUESS. The fade particle is in the particle system 0x4ec760, not an effect manager. FUN_002efe98 calls its draws
+  before all six managers', but the GS order (FUN_00306850 layers) is not decoded, and the f101 dump shows no full fade quad.
+  (8) FUN_00374d08's FUN_00324ca0: run at the controller's start (bits 5 / 4; the save's settle clears them at main's battle()).
+  `events.length = 0` in the opening's stageSi frame is the page's queue drain (comment). Tests: test_event_screen 30 (mutants
+  stageobj, modebit, syncorder, start, ctl, bits red), test_pool_soldiers (+ ghost self-send; `|| o` back: red),
+  test_stage_controller 88, test_story_cutscenes 190, test_enemy_ai, test_stage_info, test_event23, test_boss_wiring, test_heli ok;
+  page: test_title_card_page, test_warp_cutscene_page, test_event_reticle_page, test_scr005_page, test_intro_page ok. Open: a walked
+  state after the citizens' rescue; the disc-time gap (would need a load-time model); the veil's GS order (FUN_00306850). Not committed.
+- Fidelity-audit fixes, rockets / missiles and sound (worker 0271, 2026-11-09; audit of 07edd20; fidelity-audit rows 'Voice / BGM
+  delay', 'GUESS: the PCM sender thread ... once a PAL frame', 'Skip / Restart: the SEs playing', 'The event SE bank', 'A shot's own
+  sound', 'Rockets / missiles drawn', 'Placed sounds ...'). New **native/web/pcm_ring.js**, **native/web/test_voice_ring.mjs**.
+  (1) **0x10000:** FUN_003e8ff8 / FUN_0033cf00 -> FUN_003e9830 on an unsent slot sets 0x10000; its flag 2 (FUN_003e8bc8) keeps it,
+  FUN_003e9ed0 sends it, and once its handle is back (sound thread FUN_003e7150 -> FUN_003e80d8 -> FUN_003e8970) the next
+  FUN_003e9ed0 calls FUN_003e9830 again: a 0x20 slot is stopped one frame after its start. event_sound.js `EventSeSlots.frame` /
+  `eventSeFrame` (called first in event_rt.js / stage_controller.js frame), audio.js `SoundEmitters.stop` / `update` (a pending
+  slot is no longer dropped: one without 0x20, e.g. bsj_064, plays to its end; test_rockets 4d's old check of it was vacuous).
+  **No z128 event releases a bit-3 SE** (scan of ev0100's 181 setSoundEffect* calls: the bit-3 rows are wro_kaisetu's loops).
+  (2) **Voices and BGM through the PCM ring** (was VOICE_PIPE_S = 480 ms, derived): FUN_003ed000 / FUN_003ecad0 (mixer: while
+  (w + 1) & 7 != r), FUN_003ed8e0 / FUN_003eca08 (sender: loop while the IOP's playing slot != DAT_0047d768), FUN_003eab20
+  (offset-0 frame, no data -> no move). T w266_open / w266_sk replayed: sends 679 / 679 and 549 / 549 frames, the refill on every
+  frame outside the BGM open's disc wait, one 0x60 voice frame per block, sample 0 heard 24 / 24.75 / 25 slots (512 / 528 / 533
+  ms) after playVoice's frame with the rules giving the same. Page: 492 .. 512 ms from a frame's start (the game's 496 / 506.7 /
+  512 from the frame that mixed the offset-0 block). Late decode: starts later from 0. music.js: start / stop at the next mixed
+  block's heard time, ramps and crossfade weights evaluated at each block's mix time. GUESS: the sender woken once a frame.
+  L: the page's ring starts full; no BGM disc drain. SeRenderer snapshots share OFF voices (the hum after 3 min: 8 -> 0.5 ms).
+  (3) **Restart and Skip decoded** (iopsound.irx command table 0x1b8e4: 0x23 -> FUN_000155f8 -> FUN_0000cdf8(0, 1) ->
+  FUN_00007d90): Restart FUN_003c0a20 -> FUN_00380b00 = FUN_003e7f60(-1, -1, -1); Skip FUN_00372f70 -> FUN_003e6fc8 ->
+  FUN_003e9a58 (keeps the two area sounds and id 4). Every SE not kept ends (tracks off, voices keyed off: release) at the tick
+  heard: audio.js `SeRenderer.endNow`, `GameAudio.endSe` / `restartSe` / `skipSe`; EventSeSlots / SlotStreams `endAll`; play.js
+  musicRestart (was eventSe.stopAll, a cut); skipSound (Skip used to leave the event SEs playing). shot_fx.js clear() comment
+  corrected. GUESS: a scene_save reload does the same.
+  (4) **SlotStreams.close** fades at the heard tick (snapshot replay with the 0x11 updates); a slot's first chunk now starts when
+  sent (it waited for the 25 ms timer). (5) The + 0.02 s start offsets (EventSeSlots, SlotStreams) removed: uncited.
+  Audit row 1176 (trail vs GS dump) corrected; test_rockets' trace checks print SKIPPED lines.
+  Tests: test_voice_ring 16 (mutants loop / full / room / skip0 / late red), test_event_se 49 (new 5-8; mutants pipe / skippipe /
+  resume / pausedecode / twice / relstop / relnow / offset20 / slotfade / restartcut / restartone / restartfade / skipse red;
+  equivalent: `<` vs `<=` in frame()), test_rockets all ok (mutants: pending drop, no stop-next: red), test_music 16 (start / crossfade
+  / ramp times updated to the ring), test_story_cutscenes 190 (3g on the ring; voicepause red), test_audio, test_audio3d, test_barrier,
+  test_event_vm, test_stage_controller, test_combat_sound, test_audio_menu, test_effects, test_heli ok. test_hit_voice fails 17 in the
+  main tree with or without these files (another worker's change). Page: see the report. Open: Skip / Restart hold-ADSR put back,
+  the BGM disc drain, the area loop's own Restart teardown (music.js AreaSound GUESS), a slot pending at the Restart. Not committed.
+- Review fixes to the fidelity fixes (2026-11-09, same area). (1) **Regression fixed:** removing the self-send fallback dropped every
+  -2 from Vincent's scripts (PLAYER_OBJ id -1 and items.js's Object.create(playerObj) are not in `objects`): script 297's 0x125
+  voices went silent (test_hit_voice 17 fails), Phoenix Down never ran (test_restart_page timed out). In the game Vincent is in the
+  manager's table, so the -2 lookup now knows his id (PLAYER_OBJ) without adding him to `objects` (npcBodies and the 0x22 / 0x23
+  passes iterate it); a missing id still gets 0. test_hit_voice 40, test_pool_soldiers, test_items, test_enemy_ai ok; mutants: no
+  player branch -> hit_voice 17 FAIL; `|| o` back -> pool ghost FAIL. (2) test_restart_page's hand-off check: Skip now ends event
+  SEs (FUN_00372f70 -> FUN_003e6fc8), so the SE started before Skip must be gone, and a second SE, started by a per-frame watcher
+  on the first opening frame with +0x156c set, must still play after the hand-off. All ok. (3) Checked: the reticle after a game-over
+  Restart (probe, gun up before death: mode 1 / kind 2). By the game-over menu the HUD mode is already 0 (the death's camera type);
+  after the Restart mode 0 / kind 0, and the next R1 shows kind 2. Nothing stays hidden; no change. Not traced in PCSX2. test_restart_page
+  prints the kind / mode after each Restart (INFO). (4) test_title_card_page without the trace: the card's length is bounded by its own
+  close step (table 0x47a028, op -2 = FUN_003c6600 case 0x1b, 4000 ms in data/stage_info.json) and the measured 10-frame open delay
+  (w220_box) + 1; READ_FRAMES 11 mutant red on both checks. Not committed.
+- Review fixes, sound (worker 0271, 2026-11-09; notes/audio-research.md 'Skip / Restart end the SEs' (the irx decode); fidelity-audit
+  rows 'Skip / Restart: the SEs playing', 'L: a voice's data wait'). (1) **A held SE ended by 0x23 is silent**: the menu is up, so IOP
+  command 6 has zeroed its volume / pitch; FUN_00007d90 -> FUN_00007620 puts back only the envelope and turns the track off, so the
+  resume skips it (audio.js `fade(.., end)` drops it; EventSeSlots.fadeHeard too). Also decoded: FUN_00007d90 drops the voice's
+  pending key-on (+0x70 &= ~9): `SeRenderer.endNow` filters keyOnQueue (one asj_335 voice was keyed on after the end). (2) test_event_se
+  7 rebuilt against the rule written out (not endNow), with keep id 1123, flag-0x40 id 1, and a paused case. (3) Skip reaches
+  SlotStreams (`skipSe` -> `slotStreams.endAll(keep, false)`: slots stay open); keep list = FUN_003e7f60's (`keepList`: arguments,
+  the menu-sound queue DAT_0050e060 / 64 when >= 0 (0 after FUN_003e87f8; GameAudio.menuQ, written by playMenu, count reset by
+  SoundEmitters.update), 0x461 .. 0x463); AreaSound gives the area id. (4) play.js runs `eventSe.frame()` once a page frame (the
+  opening ticked it twice); event_rt.js / stage_controller.js no longer call it. (5) render takes a stop list: a Restart during a stop
+  fade keeps the fade. (6) test_intro_page bounds the voice delay (0.469 .. 0.515 s after its data, <= 0.56 s + the decode wait); the
+  game's 0-2 frame voice data wait is an L row. Tests: test_event_se 56 (mutants bothstops / skipslots / nokeyoff / nokeyon / no40 /
+  nokeep / heldtail / heldtailev / restartcut / restartone / restartfade / skipse red), others below in the report. test_restart_page's
+  hand-off check (l.398) reaches the hand-off via Skip, which now ends SEs: being updated by its owner, not touched here. Not committed.
+- Re-review fixes, sound (worker 0271, 2026-11-09). (1) The pause menu's Restart OK sends 0x23 at the OK, while command 6 holds
+  the SEs (FUN_003c0a20 -> FUN_00380b00): play.js `onRequest('restart')` -> `seRestart` = audio.js `restartSound(au, amb.slots)`
+  before the menu's unpause; it used to run in restart() after the unpause, so the held SEs resumed and then released (audible).
+  musicRestart still sends it (the game over's Restart; a no-op after the pause's). (2) The menu-sound queue's count is reset every
+  page frame in pause_layer.js's hud hook (FUN_00247508 -> FUN_00246c98 -> FUN_003e9ed0, paused or not), not in SoundEmitters.update
+  (which doesn't run while paused). (3) musicRestart's SlotStreams end uses au.keepList(-1, -1, -1). (4) L row: no pause hold in
+  SlotStreams (all z128 slot programs are flag 0x80: never held). (5) NOTE row: the page's id -1 for Vincent vs FUN_00370b40's -1.
+  New test_pause_sound.mjs (node, setupPause driven by keys and frames: held one-shot + event SE silent after Restart, keep list
+  entry 0 = the box cursor's sound): 8 ok; mutants late (old wiring), noreset, nosilent red; pause_layer's onRequest / sync swap is
+  equivalent (the OK's sync doesn't close the pause yet). Not committed.
+- Last sound fixes (worker 0271, 2026-11-09): (1) the menu-sound count is also reset in the opening's hud (play.js introMenuDraw, now
+  always a function; FUN_003e9ed0 every frame). (2) One 0x23 per Restart: audio.js `RestartSound` (pauseRequest at the pause's OK;
+  reload() in musicRestart sends it only when the OK didn't, then `SlotStreams.freeAll` (GUESS row: no IOP request at the reload)).
+  (3) play.js's pause onRequest is `seRestart.pauseRequest(r, mark)`; test_pause_sound.mjs uses the same class with a SlotStreams
+  placed sound (12 ok; mutants late / noreset / nosilent / twice red). Not committed.
+- Two failing page tests (worker 0274, 2026-11-09). (1) **test_warp_page boss 'room is drawn': a test timing bug, not a
+  regression** (HEAD e8508a2 in a scratch worktree fails the same, 20%). Zone.boss(true) (bossPlugin, the old wait) and main's
+  fadein(3000) land on the same controller frame (stage log: 'fadein 3000' at 814), so the shot caught the veil at level ~254
+  falling; the % lit was load timing. The boss check now waits for the fade itself: main's 'fadein 3000' logged and
+  stage.rt.fade.level reached 0 (FUN_003a22e0 -> FUN_003736c8 -> FUN_002f4480: 256 / (3 x 60) a tick, ~180 ticks), and asserts it
+  (new ok line). After the fade: 99% lit. Whole file all ok. Mutant (scratch worktree: stage_controller fade level frozen): both the
+  fade line and the room line red (8%). (2) **test_scr005_page help_people01 (Timeout 240000): not reproduced.** The only 240 s wait is
+  the first one (page load -> __play.stage); lone help_people01 and the whole file (twice) are all ok in the main tree with this
+  round's diff. No shared file changed during the manager's 10:20-10:40 run (last edit 09:52), and earlyoom killed nothing then;
+  nothing on the stage start-up path is warp-specific. Not a regression from 0271 / 0273's sound work as far as can be seen. The test
+  now records a renderer crash and, on an exception, prints how far the page got (ticks / stage / warp) and its first errors, so a
+  repeat is diagnosable. Not committed.

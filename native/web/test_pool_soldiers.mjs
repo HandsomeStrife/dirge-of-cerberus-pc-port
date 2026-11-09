@@ -61,5 +61,11 @@ ok(Math.hypot(q20[0] + 1928.6, q20[2] - 945.0) < 1.0, `path 20 ends where the ga
   const l20 = data.locators[20].m.slice(12, 15);
   ok(a9 && Math.hypot(a9.pos[0] - l20[0], a9.pos[2] - l20[2]) < 0.01, `record 9 built at locator 20 (${a9 && a9.pos.map(v => v.toFixed(1))})`);
 }
+// FUN_00370b40 l.37-49: -2 -> VM+0x1c, a command >= 0x100 goes through the manager's id lookup (+0x6c vt+0xc); an id it does not
+// find gets no reply (0 / 0). Not the host itself: a host whose id is gone answers 0 even to 0x177 ("not active", 1 on the host)
+{
+  const ghost = { kind: 'record', id: 0x7ffe, flags28: 0, vars: new Int16Array(8) };
+  ok(W.t.send(ghost, -2, 0x177, [0, 0, 0, 0]) === 0, 'self-send (-2) from a host the lookup does not find: 0 (no fallback to the host)');
+}
 console.log(fails ? `${fails} FAILED` : 'all ok');
 process.exit(fails ? 1 : 0);

@@ -1,0 +1,13 @@
+{
+"name": "a271_objpass2",
+"frames": 400,
+"log_from": 300,
+"doc": "fidelity audit 2026-11-09 (obj_contact.js), attempt 2: from route state r03_mid2, Vincent presses into EM barrier 56 and slides along its face to its west end and back while the chaser follows; every body's FUN_0035a440 and FUN_0025c0f8. TRACE_ENEMIES=3 TRACE_FIELDSET=enemy TRACE_CALLLOG=objpass TRACE_CALLLOG_FRAMES=200:390.",
+"events": [
+{ "from": 10, "to": 40, "lx": 0.0, "ly": -1.0 },
+{ "from": 41, "to": 200, "lx": 0.0, "ly": -0.3 },
+{ "from": 201, "to": 260, "lx": -1.0, "ly": -0.5 },
+{ "from": 261, "to": 330, "lx": 1.0, "ly": -0.5 },
+{ "from": 331, "to": 400, "lx": -1.0, "ly": -0.5 }
+]
+}

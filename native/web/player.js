@@ -57,7 +57,6 @@
 import * as THREE from 'three';
 import { Jump, FallMotion, stopMove, stickMode, enterState, airState, moveAngle, HIT_STATE, DEAD_STATE, REVIVE_STATE } from './jump_core.js';
 import { objectPass } from './obj_contact.js';
-import { cylinderCross } from './enemy_hit.js';
 
 // ---------------------------------------------------------------- timing
 export const TICK = 1 / 50;                       // one PAL game frame (s): play.js's loop step
@@ -643,7 +642,7 @@ export class PlayerController {
     if (objs && objs.length) {
       const B = this.body, air = B.state >= 2 && B.state <= 5;     // FUN_003577c8: body+0xa8 in 2..5
       const r = objectPass({ objs, pos: [this.pos.x, this.pos.y, this.pos.z], move: [mx, my, mz], air, push: hasPush ? q : null,
-                             cross: cylinderCross, warn: m => { if (!this._warned) this._warned = new Set(); if (!this._warned.has(m)) { this._warned.add(m); console.warn(m); } } });
+                             warn: m => { if (!this._warned) this._warned = new Set(); if (!this._warned.has(m)) { this._warned.add(m); console.warn(m); } } });
       if (!r.applied) return [mx, mz];
       o = r.out.map(f32);
     } else {

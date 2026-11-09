@@ -33,28 +33,29 @@ export const WARPS = {
   // flag 1 = 25 at pc 7187 with stage flag 0 = 24, then scene_save(4)); the next block (pc 8296: global 1 < 29, stage 0
   // < 36) is the market's townspeople beats on stage flag 1 (28 / 29 / 30 / 32 from triggers 33 / 64 / 65 / 26)
   market: { pos: [-1328.1, 0, 1205.5], face: [1, 0], pair: [6, 8], stage: { 0: 24 }, global: { 1: 25 }, note: 'chunk 06 market, townspeople beats' },
-  // worker 0261: inside trigger 59 (script 17, event 0xd: soldiers 19-21 and n_helpMe 123 up, stage flag 1 = 8 -> help_people01), pair (4, 5); flags from r05_west's RAM
-  // worker 0265: the flags of route state r05_west (walked, its RAM; notes/route-states.md) before trigger 59 fires there: stage flag 1 = 7
-  // with 15 = 1 (heri_tobi done: main's stage-1 beat 7 sets 15, ev0100 main pc 3300-3312), 16 clear (help_people01's beat: 1 == 8 and
-  // 16 < 1, pc 3708-3720); flag 2 = 4 with 43 = 1 and global 55 = 4 (deb_jump's box 4 already shown). Then trigger 59's event 0xd as
-  // walking in (script 17: soldiers 19-21 and n_helpMe up, stage flag 1 = 8): main plays help_people01
-  helpme: { cutscene: true, pos: [-1415.8, 0, 697.6], face: [0, 1], pair: [4, 5], trigger: 59,
-            stage: { 0: 11, 1: 7, 2: 4, 15: 1, 26: 1, 43: 1, 44: 1, 45: 1, 46: 1, 47: 1, 63: 1 }, global: { 0: 1, 1: 8, 55: 4, 56: 7, 58: 1 },
+  // worker 0265 (fidelity fix, 2026-11-09): the three cutscene warps copy a walked route state's stage and global flags WHOLE (`whole`:
+  // both tables cleared first, then the state's RAM values; tools/trace/out/*/NAME.json 'flags' / 'gflags'). Nothing hand-picked
+  // except the rows marked GUESS below (notes/fidelity-audit.md 'PAGE AID: ?warp= cutscene places').
+  // helpme: route state r05_pre59 (worker 0265: r04_east + the first 2030 frames of w217_r05_west's pad replay, walked; trigger 59
+  // fires between f2030 and f2040 of that walk). Spot inside trigger 59, pair (4, 5); then trigger 59's event 0xd as walking in
+  // (script 17: soldiers 19-21 and n_helpMe up, stage flag 1 = 8): main plays help_people01
+  helpme: { cutscene: true, pos: [-1415.8, 0, 697.6], face: [0, 1], pair: [4, 5], trigger: 59, whole: true, state: 'r05_pre59',
+            stage: { 0: 11, 1: 13, 2: 4, 15: 1, 26: 1, 43: 1, 44: 1, 45: 1, 46: 1, 47: 1, 63: 1 }, global: { 0: 1, 1: 8, 55: 4, 56: 7, 58: 1 },
             note: 'chunk 05, trigger 59: help_people01' },
-  // worker 0261: chunk 05 by townspeople 120 .. 122 (they stand at about (-1950, 0, 300); trigger 58's script 31 wakes them: test_scr005_page runs its event), pair (4, 5)
-  // worker 0265: the flags of route state r05_back (walked, chunk 05 after the second gate) with main's stage-1 beats before help_orei02
-  // done (15 heri_tobi, 16 help_people01, 17 help_orei01, 25 beast_ev02: their beats' own setflags); once the pair is in, trigger 58's
-  // event 0xd as walking in wakes the townspeople (script 31), then stage flag 1 = 12, which script 47's event 0x17 writes when they are
-  // saved (that fight is not replayed), with 39 / 40 / 41 = 1: one per townsperson saved (retail main reads them, pc 4175-4217, and plays
-  // the event only if one is set; its debug branch sets all three, pc 4128-4155). main plays help_orei02 (beat 12, 18 < 1) with them lent
-  citizens: { cutscene: true, pos: [-1940, 0, 330], face: [0, -1], pair: [4, 5], trigger: 58, late: { stage: { 1: 12, 39: 1, 40: 1, 41: 1 } },
-              stage: { 0: 12, 1: 8, 2: 4, 15: 1, 16: 1, 17: 1, 25: 1, 26: 1, 43: 1, 44: 1, 45: 1, 46: 1, 47: 1, 63: 5 },
+  // citizens: route state r05_back (walked, chunk 05 after the second gate), pair (4, 5). Once the pair is in, trigger 58's event 0xd as
+  // walking in wakes the townspeople (script 31). No walked state has them saved (no route state has stage flag 1 = 12), so `late` is
+  // hand-set: GUESS: stage flag 1 = 12 (script 47 event 0x17's write when they are saved; that fight is not replayed) and 39 / 40 / 41 = 1
+  // (one per townsperson saved: retail main plays help_orei02 only with one set, pc 4175-4217; all three = its debug branch, pc 4128-4155).
+  // main then plays help_orei02 (beat 12, 18 < 1) with them lent
+  citizens: { cutscene: true, pos: [-1940, 0, 330], face: [0, -1], pair: [4, 5], trigger: 58, whole: true, state: 'r05_back',
+              late: { stage: { 1: 12, 39: 1, 40: 1, 41: 1 } },
+              stage: { 0: 12, 1: 8, 2: 4, 15: 1, 16: 1, 26: 1, 43: 1, 44: 1, 45: 1, 46: 1, 47: 1, 63: 5 },
               global: { 0: 1, 1: 12, 30: 1, 55: 4, 56: 7, 58: 1 }, note: 'chunk 05, the townspeople: help_orei02' },
-  // worker 0261: chunk 06 at route state w261_preheri's spot, Dragonfly just beaten (script 29: stage flag 0 = 16, global 1 = 13
-  // in the state's RAM), pair (6, 7) as main's heri_taijou loads: main goes to heri_taijou, then sk_mituketa2
-  // worker 0265: + flag 42 and global 55 = 1 (deb_jump's box 1, 'Long Barrel', already shown at the pickup: flag 2 == 1 and 42 < 1
-  // opens it; route states r06_market / heritoujou have both)
-  heli: { cutscene: true, pos: [-1582.9, 0, 1359.1], face: [0, 1], pair: [6, 7], stage: { 0: 16, 1: 8, 2: 1, 42: 1 }, global: { 1: 13, 55: 1 }, note: 'chunk 06, Dragonfly beaten: heri_taijou, sk_mituketa2' },
+  // heli: route state w261_preheri (walked; Dragonfly just beaten, script 29: stage flag 0 = 16, global 1 = 13), at its spot, pair (6, 7)
+  // as main's heri_taijou loads: main goes to heri_taijou, then sk_mituketa2
+  heli: { cutscene: true, pos: [-1582.9, 0, 1359.1], face: [0, 1], pair: [6, 7], whole: true, state: 'w261_preheri',
+          stage: { 0: 16, 1: 8, 2: 1, 15: 1, 16: 1, 26: 1, 42: 1, 43: 1, 44: 1, 45: 1, 46: 1, 47: 1, 50: 1, 63: 1 },
+          global: { 0: 1, 1: 13, 30: 1, 55: 1, 56: 7, 58: 2 }, note: 'chunk 06, Dragonfly beaten: heri_taijou, sk_mituketa2' },
   // chunk 07 (walk polygons x -1949..-1740), pair (6, 7) = main's Zone.load(128, 6, 7) after sk_mituketa2 (pc 6412).
   // Story: sk_mituketa2 done (global 1 = 20 at pc 6630, stage 0 = 18 from pc 5939); main waits for stage 0 >= 20, which
   // trigger 18 (-1948.8, -44, 1594.2; script 102) sets: he faces it
@@ -102,7 +103,8 @@ export function warpRequest(params) {
 export function applyWarp(name, sys) {
   const w = WARPS[name];
   if (!w) return false;
-  // 1. the flags (main reads them at its next poll)
+  // 1. the flags (main reads them at its next poll); w.whole: a route state's tables, every flag it doesn't list is 0 in its RAM
+  if (w.whole) for (const t of [sys.flags, sys.gflags]) if (t) for (const k of Object.keys(t)) t[k] = 0;   // a plain object / a Uint8Array
   if (sys.flags) for (const [k, v] of Object.entries(w.stage || {})) sys.flags[k] = v;
   else if (w.stage) console.warn('warp (page aid): no enemy_ai world; the stage flags are not set');
   if (sys.gflags) for (const [k, v] of Object.entries(w.global || {})) sys.gflags[k] = v;
@@ -129,8 +131,10 @@ export function applyWarp(name, sys) {
 
 // worker 0265: once the warp's chunk pair has loaded (play.js: the stream idle with both in; walking in, the chunks are always there
 // first, and their statuses wake with them): w.trigger's event 0xd, as walking into it (enemy_ai's trigger test fires 0xd on entry: a
-// warp lands inside and does not move, so it would never fire), then w.late's flags (what the game writes after that point).
-// GUESS: the entry face argument 0 (segBox's; not checked whether scripts 17 / 31 read it; test_scr005_page fires them the same way)
+// warp lands inside and does not move, so it would never fire), then w.late's flags (hand-set: GUESS rows above).
+// GUESS: the entry face argument 0 (segBox's; not checked whether scripts 17 / 31 read it; test_scr005_page fires them the same way).
+// PAGE AID (no game counterpart): when it runs. play.js waits 2 page ticks after the warp and then for the stream idle with both of the
+// pair's chunks in a slot; walking in, the game has the pair loaded (the area box requests it) before he reaches the trigger
 export function applyWarpLate(name, sys) {
   const w = WARPS[name];
   if (!w) return;

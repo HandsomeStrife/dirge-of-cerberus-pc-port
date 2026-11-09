@@ -301,8 +301,10 @@ export class Footsteps {
 // emitterVolPan, SeStream: passed in (audio.js / music.js), so this module stays importable without them.
 const AHEAD_S = 0.2, CHUNK_TICKS = 12;   // page scheduler: 200 ms ahead, 50 ms chunks (an update is heard <= 200 ms late: L)
 export class SlotStreams {
-  constructor(au, { emitterVolPan, SeStream, hexBytes, FIXED = 0x40 }) {
-    this.au = au; this.vp = emitterVolPan; this.SeStream = SeStream; this.hex = hexBytes; this.FIXED = FIXED;
+  constructor(au, { emitterVolPan, SeStream, hexBytes, FIXED = 0x40, tickHz = 240 }) {
+    // tickHz: audio.js TICK_HZ (the IOP's SE tick, FUN_00010bdc), passed in as the others
+    this.au = au; this.vp = emitterVolPan; this.SeStream = SeStream; this.hex = hexBytes; this.FIXED = FIXED; this.tickHz = tickHz;
+    au.slotStreams = this;                           // Skip's FUN_003e9a58 reaches these slots too (audio.js GameAudio.skipSe)
     this.slots = new Map(); this.next = 1; this.log = null; this.areaFn = null; this.warned = new Set();
     this.timer = null;
   }
@@ -328,8 +330,52 @@ export class SlotStreams {
     if (!s) return;
     this.slots.delete(h);
     if (!s.stream) return;
-    if (s.flags & 0x20) { s.stream.rd.stopFade(10); s.closing = true; this.closing = (this.closing || []).concat([s]); }
+    if (s.flags & 0x20) { this.fadeHeard(s); s.closing = true; this.closing = (this.closing || []).concat([s]); }
     // GUESS: without flag 0x20 the slot is only freed and its voice plays on (FUN_003e8ff8); every z128 placed sound has it
+  }
+  // The stop request (FUN_003e9830 -> request 0x12 -> IOP command 0x2f, SeRenderer.stopFade(10)) reaches the track at the tick
+  // being heard, not at the stream's render point (AHEAD_S ahead): as event_sound.js EventSeSlots.fadeHeard, the stream is
+  // rendered again from the heard chunk's start (its renderer snapshot, with the 0x11 updates at the ticks the page applied
+  // them) to that tick and faded there; the chunks scheduled past it are replaced (page scheduler; worker 0271)
+  // end: IOP command 0x23 (the Restart, SeRenderer.endNow) instead of the fade
+  fadeHeard(s, end = false) {
+    const ctx = this.au.ctx, now = ctx ? ctx.currentTime : 0;
+    const c = s.srcs ? s.srcs.find((x) => x.end > now && x.snap) : null;
+    let off = 0;
+    if (c) {
+      const x = c.at <= now ? (now - c.at) * this.tickHz : 0, h = c.snap.t + Math.floor(x);
+      off = (x - Math.floor(x)) / this.tickHz;
+      const st = new this.SeStream(...s.args);
+      st.rd.restore(c.snap.rd); st.t = c.snap.t; st.done = c.snap.done;
+      const upd = (s.upd || []).filter((u) => u.t >= c.snap.t);
+      for (;;) {
+        while (upd.length && upd[0].t <= st.t) { const u = upd.shift(); st.rd.update(u.vol, u.pan, 10); }
+        if (st.t >= h || st.done) break;
+        st.ticks(1);
+      }
+      for (const u of upd) st.rd.update(u.vol, u.pan, 10);       // applied past the heard tick on the old stream: the latest now
+      for (const y of s.srcs) { try { y.src.stop(); } catch (e) { /* not started */ } }
+      s.srcs = []; s.stream = st; s.next = c.at <= now ? now : c.at; s.replayed = st.t - c.snap.t;
+    }
+    if (end) s.stream.rd.endNow(); else s.stream.rd.stopFade(10);
+    s.upd = null;
+    if (c && ctx) this.chunk(s, off);
+    this.pump();
+  }
+  // the next CHUNK_TICKS of the stream into the AudioContext, `off` seconds into it; slots with flag 0x20 keep the renderer's state
+  // at the chunk's start (fadeHeard)
+  chunk(s, off = 0) {
+    const ctx = this.au.ctx;
+    const snap = (s.flags & 0x20) && !s.closing ? { t: s.stream.t, done: s.stream.done, rd: s.stream.rd.snapshot() } : null;
+    const { left, right } = s.stream.ticks(CHUNK_TICKS);
+    const buf = ctx.createBuffer(2, left.length, 48000);
+    buf.copyToChannel(left, 0); buf.copyToChannel(right, 1);
+    const src = ctx.createBufferSource();
+    const at = Math.max(s.next, ctx.currentTime);
+    src.buffer = buf; src.connect(ctx.destination); src.start(at, off);
+    s.next = at + left.length / 48000 - off;
+    s.srcs.push({ src, at: at - off, end: s.next, snap });
+    if (s.upd && snap) s.upd = s.upd.filter((u) => u.t >= s.srcs.find((x) => x.end > ctx.currentTime && x.snap).snap.t);
   }
   area(name, vol) { if (this.areaFn) this.areaFn(name, vol); }
   // FUN_003e9ed0 for the placed-sound slots, once a frame with the frame's listener (audio.js soundListener)
@@ -342,7 +388,7 @@ export class SlotStreams {
       if (!s.sent) { s.sent = true; s.vol = vol; s.pan = pan; this.start(s); if (this.log) this.log.push({ code: 2, name: s.name, vol, pan }); continue; }
       if (vol !== s.vol || pan !== s.pan) {                                               // request 0x11
         s.vol = vol; s.pan = pan;
-        if (s.stream) s.stream.rd.update(vol, pan, 10);
+        if (s.stream) { s.stream.rd.update(vol, pan, 10); if (s.flags & 0x20) (s.upd ??= []).push({ t: s.stream.t, vol, pan }); }   // fadeHeard replays it
         if (this.log) this.log.push({ code: 0x11, name: s.name, vol, pan });
       }
     }
@@ -355,27 +401,45 @@ export class SlotStreams {
     const prog = this.hex(hex), bank = au.banks[prog[1] | (prog[2] << 8)];
     if (!bank) { s.failed = true; this.warnOnce('ambient: wave bank ' + (prog[1] | (prog[2] << 8)) + ' not loaded (' + s.name + '): not played'); return; }
     // GUESS: own random-table counter per stream (as music.js AreaSound; IOP FUN_0000a870 keeps one for every SE)
-    s.stream = new this.SeStream(au.drv, bank, prog, s.vol, s.pan);
-    s.next = au.ctx.currentTime + 0.02; s.srcs = [];
+    s.args = [au.drv, bank, prog, s.vol, s.pan];
+    s.stream = new this.SeStream(...s.args);
+    s.next = au.ctx.currentTime; s.srcs = [];        // update() is FUN_003e9ed0's send: heard from now (was + 20 ms, uncited)
     if (!this.timer) { this.timer = setInterval(() => this.pump(), 25); if (this.timer.unref) this.timer.unref(); }
+    this.pump();                                     // its first chunk now (it waited up to one timer step: 25 ms)
   }
   pump() {
     const ctx = this.au.ctx;
     const live = [...this.slots.values(), ...(this.closing || [])].filter((s) => s.stream);
     for (const s of live) {
-      while (!s.stream.done && s.next < ctx.currentTime + AHEAD_S) {
-        const { left, right } = s.stream.ticks(CHUNK_TICKS);
-        const buf = ctx.createBuffer(2, left.length, 48000);
-        buf.copyToChannel(left, 0); buf.copyToChannel(right, 1);
-        const src = ctx.createBufferSource();
-        src.buffer = buf; src.connect(ctx.destination); src.start(s.next);
-        s.next += left.length / 48000;
-        s.srcs.push({ src, end: s.next });
-      }
+      while (!s.stream.done && s.next < ctx.currentTime + AHEAD_S) this.chunk(s);
       s.srcs = s.srcs.filter((c) => c.end > ctx.currentTime);
     }
     if (this.closing) this.closing = this.closing.filter((s) => !s.stream.done);
     if (!live.length && this.timer) { clearInterval(this.timer); this.timer = null; }
+  }
+  // The Restart's IOP command 0x23 (audio.js GameAudio.restartSe): every slot's SE is ended at its heard tick (tracks ended, voices
+  // keyed off: they finish their release), the slots freed (the stage reload makes its section-22 objects again; worker 0271)
+  // The stage reload frees the slot table (the section-22 objects are made again).
+  // GUESS: no IOP request with the reload's slot free; a slot opened after the Restart's 0x23 plays on (warned; the world is frozen
+  // from the OK to the reload, so none is expected) (not decoded; see notes/fidelity-audit.md 'Skip / Restart: the SEs playing')
+  freeAll() {
+    for (const s of this.slots.values()) {
+      if (!s.stream || s.stream.done) continue;
+      this.warnOnce('ambient: ' + s.name + ' opened after the Restart\'s 0x23: left playing at the reload (teardown not decoded)');
+      this.closing = (this.closing || []).concat([s]);
+    }
+    this.slots.clear();
+  }
+  // keep: FUN_003e7f60's keep list; free: the Restart (its reload makes the objects again); Skip (FUN_003e9a58) leaves the slots open
+  endAll(keep = [], free = true) {
+    // released ones still fading are running on the IOP too (L: they keep no snapshots, so at their render point)
+    for (const s of this.closing || []) if (!s.stream.done && !keep.includes(s.id)) s.stream.rd.endNow();
+    for (const s of this.slots.values()) {
+      if (!s.stream || keep.includes(s.id)) continue;
+      this.fadeHeard(s, true);
+      if (free) { s.closing = true; this.closing = (this.closing || []).concat([s]); }
+    }
+    if (free) this.slots.clear();
   }
   stopAll() {
     for (const s of [...this.slots.values(), ...(this.closing || [])]) for (const c of s.srcs || []) { try { c.src.stop(); } catch (e) { /* not started */ } }

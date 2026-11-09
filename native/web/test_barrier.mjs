@@ -1,6 +1,8 @@
 // worker 0269: the EM barriers (g048, class 8, vt 0x58c630; props.js) and FUN_0035a440's object pass (obj_contact.js).
 //  1. objectPass against the game's FUN_0035a440 out (trace w269_bar2: r03_mid2, Vincent into barrier 57's face and round
 //     its end; gitignored, skipped without it).
+//  1b. obj_contact.js cylSeg (FUN_0025c0f8, read from the MIPS) against the game's own calls from FUN_0025b4d8 (trace
+//     a271_objpass: r03_mid2, Vincent along barrier 56's face to its end; gitignored, skipped without it): hit or miss, P, N.
 //  2. A walk into barrier 56 stops on its face (r + half-depth from the centre: T r03_mid2 z -355.67), and through it once
 //     it is off.
 //  3. Gate 1 (trigger 153, script 202 event 0x11) with the card: cmd 0x18e to records 56 / 57 -> state 2 (still a wall,
@@ -12,8 +14,7 @@ import { createEnemyAI } from './enemy_ai.js';
 import { createItems } from './items.js';
 import { createProps } from './props.js';
 import { initWorld } from './checkpoint.js';
-import { objectPass } from './obj_contact.js';
-import { cylinderCross } from './enemy_hit.js';
+import { objectPass, cylSeg } from './obj_contact.js';
 
 const here = new URL('.', import.meta.url).pathname;
 const data = JSON.parse(readFileSync(here + 'data/enemies/ai.json', 'utf8'));
@@ -22,10 +23,12 @@ const propsData = JSON.parse(readFileSync(here + 'data/props/props.json', 'utf8'
 const KEY = 0x6b300001;
 let fails = 0;
 const ok = (c, m) => { console.log((c ? 'ok   ' : 'FAIL ') + m); if (!c) fails++; };
+const skipped = [];
+const skip = m => { console.log('SKIPPED ' + m); skipped.push(m); };
 
 // 1. the trace
 const TRACE = here + '../../tools/trace/out/w269_bar2.calls.jsonl';
-if (!existsSync(TRACE)) console.log('skip  trace w269_bar2 missing (tools/trace/scripts/w269_bar2.json from route state r03_mid2)');
+if (!existsSync(TRACE)) skip('trace w269_bar2 missing (tools/trace/scripts/w269_bar2.json from route state r03_mid2)');
 else {
   const objs = propsData.records.filter(r => r.model === 'g048').map(r => ({ half: propsData.types[r.type].size.map(v => Math.fround(v * 0.5)), m: r.m, f38: 0x72 }));
   const L = readFileSync(TRACE, 'utf8').trim().split('\n').slice(1).map(s => JSON.parse(s.replace(/\bNaN\b/g, 'null')));
@@ -35,11 +38,49 @@ else {
     if (c.hook === 'body_step') { pos = c['a0+0x0'].f.slice(0, 3); continue; }
     if (c.hook !== 'push_out' || !pos) continue;
     const inn = c['a2+0x0'].f.slice(0, 3), out = c['a1+0x0'].f.slice(0, 3);
-    const r = objectPass({ objs, pos, move: inn, air: false, cross: cylinderCross });
+    const r = objectPass({ objs, pos, move: inn, air: false });
     worst = Math.max(worst, ...[0, 1, 2].map(i => Math.abs(r.out[i] - out[i])));
     n++; if (Math.abs(out[2] - inn[2]) > 1e-3) hit++;
   }
   ok(n > 90 && hit > 5 && worst < 1e-3, `FUN_0035a440 out = the game's over ${n} frames (${hit} against the barrier): worst ${worst.toExponential(2)} u`);
+}
+// 1b. FUN_0025c0f8 (cylSeg) against the game's calls (f12 = r; after the call a0 = P, a1 = N, a2 = a, a3 = b, t0 = e0, t1 = e1)
+const CYL = here + '../../tools/trace/out/a271_objpass.calls.jsonl';
+if (!existsSync(CYL)) skip('trace a271_objpass missing (tools/trace/scripts/a271_objpass.json from route state r03_mid2)');
+else {
+  const L = readFileSync(CYL, 'utf8').trim().split('\n').slice(1).map(s => JSON.parse(s.replace(/\bNaN\b/g, 'null'))).filter(e => e.hook === 'cylseg');
+  let n = 0, same = 0, hits = 0, worst = 0;
+  for (const e of L) {
+    const v = k => e[k].f.slice(0, 3);
+    const h = cylSeg(Math.fround(e.f12), v('a2+0x0'), v('a3+0x0'), v('t0+0x0'), v('t1+0x0'));
+    n++;
+    if (!!h !== !!e.v0) continue;
+    same++;
+    if (!h) continue;
+    hits++;
+    worst = Math.max(worst, ...[0, 1, 2].map(i => Math.abs(h.P[i] - v('a0+0x0')[i])), ...[0, 1, 2].map(i => Math.abs(h.N[i] - v('a1+0x0')[i])));
+  }
+  ok(n >= 9 && same === n && hits >= 1 && worst < 1e-4, `FUN_0025c0f8 = the game's over ${n} calls (${same} agree on hit / miss, ${hits} hits): P / N worst ${worst.toExponential(2)}`);
+}
+// 1c. the end discs (no game call reached them in a271_objpass): a segment from below e0's plane into its disc gets -axis
+// before the side is tried (0x25c31c); one from above e1's plane gets +axis (0x25c408). Hand cases on the decoded branch.
+{
+  const e0 = [0, 0, 0], e1 = [0, 10, 0];
+  const lo = cylSeg(2, [0.5, -3, 0], [0.5, 3, 0], e0, e1), hi = cylSeg(2, [0.5, 13, 0], [0.5, 7, 0], e0, e1);
+  ok(lo && lo.N.join() === '0,-1,0' && lo.P[1] === 0 && hi && hi.N.join() === '0,1,0' && hi.P[1] === 10,
+     `end discs: N ${lo && lo.N.join()} at y ${lo && lo.P[1]}, N ${hi && hi.N.join()} at y ${hi && hi.P[1]}`);
+  // the side's axis range (0x25c5d8..0x25c618): crossing the side's surface past e1 (axis coordinate > 1) is no hit
+  const past = cylSeg(2, [3, 10.3, 0], [1, 10.3, 0], e0, e1), side = cylSeg(2, [3, 5, 0], [1, 5, 0], e0, e1);
+  ok(past === null && side && side.N.join() === '1,0,0', `side range: past e1 ${JSON.stringify(past)}, inside N ${side && side.N.join()}`);
+  // a disc's tests: the plane crossed outside its radius -> the side (0x25c3a4); the crossing past b -> none (0x25c3c0..0x25c3e4)
+  const wide = cylSeg(1.5, [3, -1, 0], [-3, 5, 0], e0, e1), short = cylSeg(2, [0.5, -3, 0], [0.5, -1, 0], e0, e1);
+  ok(wide && wide.N.join() === '1,0,0' && short === null, `disc radius: N ${wide && wide.N.join()}; crossing past b: ${JSON.stringify(short)}`);
+}
+// 1d. C+0xbc (l.1223 uStack_138): an object whose vt+0x13c answers 0 (and vt+0x84 0) gives 5, the barrier (FUN_0054fb70) 4
+{
+  const wall = vt13c => ({ half: [50, 50, 5], m: [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 10, 1]], f38: 0x72, vt13c, vt84: false });
+  const k = o => objectPass({ objs: [o], pos: [0, 0, 0], move: [0, 0, 2], air: false, face: [0, 0, 1] }).kind;
+  ok(k(wall(true)) === 4 && k(wall(false)) === 5, `C+0xbc: barrier ${k(wall(true))}, vt+0x13c 0 ${k(wall(false))}`);
 }
 
 function mk() {
@@ -61,7 +102,7 @@ const walls = w => w.props.blockers().map(b => b.id);
 function walk(w, frames = 40) {
   let p = [-1752, -0.064, -362];             // the middle of 56 (x -1763 .. -1740)
   for (let i = 0; i < frames; i++) {
-    const r = objectPass({ objs: w.props.blockers(), pos: p, move: [0, 0, 1.187], air: false, cross: cylinderCross });
+    const r = objectPass({ objs: w.props.blockers(), pos: p, move: [0, 0, 1.187], air: false });
     p = [p[0] + r.out[0], p[1], p[2] + r.out[2]];
   }
   return p;
@@ -75,7 +116,7 @@ function walk(w, frames = 40) {
   // r away (T w269_bar2 f36: from z -356.885 the game's out z is 0; r03_mid2 rests at -355.67)
   ok(p[2] <= -355.66 && p[2] > -355.67 - 1.19, `a walk into it stops in front of its face: z ${p[2].toFixed(3)} (face - r = -355.67, one step 1.187)`);
   // standing 0.1 u inside the r shell (no move: the nearest-point test): depth 0.1 < body+0xb8 - 4.8 = 0.2 -> eased to 0.1^2 / 0.2
-  const e = objectPass({ objs: w.props.blockers(), pos: [-1752, -0.064, -355.57], move: [0, 0, 0], air: false, cross: cylinderCross });
+  const e = objectPass({ objs: w.props.blockers(), pos: [-1752, -0.064, -355.57], move: [0, 0, 0], air: false });
   ok(Math.abs(e.out[2] + 0.0501) < 2e-4, `a shallow contact is eased: out z ${e.out[2].toFixed(4)} (hand: depth 0.1001 -> -0.0501; unease -0.1001)`);
   for (const k of [139, 140, 143]) { const b = rec(w, k); ok(b && b.st === 0 && !(b.f38 & 0x30), `record ${k} starts off (+0x50 bit 0): state ${b && b.st}`); }
 }
@@ -119,7 +160,7 @@ function press(w) {
   const FX = await import('./effects.js');
   const rd = n => { const b = readFileSync(here + 'data/effects/' + n); return b.buffer.slice(b.byteOffset, b.byteOffset + b.length); };
   const g = existsSync(here + 'data/effects/g048.fed') && existsSync(here + 'data/props/g048.json');
-  if (!g) console.log('skip  data/effects/g048.fed or data/props/g048.json missing (export_web_effects.py, build_web.sh props step)');
+  if (!g) skip('data/effects/g048.fed or data/props/g048.json missing (export_web_effects.py, build_web.sh props step)');
   else {
     const { modelAttach } = await import('./props.js');
     const bind = JSON.parse(readFileSync(here + 'data/props/g048.json', 'utf8')).joints.bind_world_colmajor;
@@ -153,6 +194,16 @@ function press(w) {
     for (let i = 0; i < 30; i++) a.pos = W.walkBody(a, [0, 0, 1.0]);
     ok(a.pos[2] <= -345.67 - 5 - r + 0.01 && a.pos[2] > -345.67 - 5 - r - 1.01, `${model} walking into 56 stops r = ${r} in front of its face: z ${a.pos[2].toFixed(3)}`);
   }
+  // a body without actor +0x2c / +0x170 (no a.size): no invented size, the pass is left out for it, with a warning
+  const warns = [];
+  const W2 = initWorld(o => createEnemyAI({ data, player, items, props, walkMesh: floor, quiet: true, ...o, log: m => warns.push(m) }), { flags: {}, frame: 24, clock: {}, loadRecs: [] });
+  props.areaSwitch(1, true);                                            // the new world rebuilt the props
+  const a = W2.actors.find(q => q.model === 'e027');
+  if (a) {
+    a.size = null; a.pos = [-1752, -0.064, -362]; const B = W2.bodyOf(a); B.state = 0; B.poly = 0;
+    for (let i = 0; i < 30; i++) a.pos = W2.walkBody(a, [0, 0, 1.0]);
+  }
+  ok(a && a.pos[2] > -340 && warns.some(m => /object pass left out/.test(m)), `no size: walks through 56 (z ${a && a.pos[2].toFixed(3)}), warned`);
 }
 
 // 4. FUN_0054f358 sends a barrier's other commands to FUN_00588b78, not the barrel's FUN_00586520: the barrel's cases are not its own
@@ -178,7 +229,7 @@ function press(w) {
     ok(big.pos[2] <= -350.67 - 6.4 + 0.01 && big.pos[2] > -350.67 - 6.4 - 1.01, `size r 7.5: the body radius is capped at 6.4: z ${big.pos[2].toFixed(3)}`); }
   { const soldier = W.actors.find(q => q.model === 'e027');                // +0xbc = h0 / 2 = 9: the head point 15.5 up meets an overhang at 14..20
     const keep = props.blockers;
-    props.blockers = () => [{ half: [50, 3, 5], m: [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, -17, 15, 1]], f38: 0x72 }];
+    props.blockers = () => [{ half: [50, 3, 5], m: [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, -17, 15, 1]], f38: 0x72, vt13c: true, vt84: false }];
     soldier.pos = [0, 0, 8]; const B = W.bodyOf(soldier); B.state = 0; B.poly = 0;
     const p0 = soldier.pos[2]; soldier.pos = W.walkBody(soldier, [0, 0, 0]);
     props.blockers = keep;
@@ -225,8 +276,8 @@ function press(w) {
 // 5. hand cases of FUN_0035a440's object pass (obj_contact.js) on made-up boxes (rows identity, row 3 the centre; Vincent's r 5 / h 9;
 //    -y up: a box at height k above the feet has y = -k). Each value worked out from the decode in the module's comments.
 {
-  const box = (c, half) => ({ half, m: [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [c[0], c[1], c[2], 1]], f38: 0x72 });
-  const run = (objs, pos, move, air = false, push = null) => objectPass({ objs, pos, move, air, push, cross: cylinderCross });
+  const box = (c, half) => ({ half, m: [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [c[0], c[1], c[2], 1]], f38: 0x72, vt13c: true, vt84: false });
+  const run = (objs, pos, move, air = false, push = null) => objectPass({ objs, pos, move, air, push });
   const near = (a, b, e = 2e-3) => a.every((x, i) => Math.abs(x - b[i]) < e);
   const wallZ = box([0, -30, 15], [50, 30, 5]);                         // a face at z = 10, heights 0..60
   // stuck inside (deeper than r): a box 20 deep (faces z 10 / 30), the centre at z 19: nearest face -z, 9 away; r - 9 <= 0 -> vt+0x194
@@ -274,5 +325,6 @@ function press(w) {
   p2.deleted(b);
   ok(b.ems.length === 0 && removed.filter(x => typeof x === 'number').length === 4 && removed.includes('hum7'), `deleted: its 4 emitters removed at once and its hum stopped (${JSON.stringify(removed)})`); }
 
-console.log(fails ? `${fails} FAILED` : 'all ok');
+const sk = skipped.length ? ` (${skipped.length} SKIPPED: ${skipped.join('; ')})` : '';
+console.log((fails ? `${fails} FAILED` : 'all ok') + sk);
 process.exit(fails ? 1 : 0);

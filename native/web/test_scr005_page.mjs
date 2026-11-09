@@ -37,6 +37,7 @@ const want = process.argv.slice(2), SHOT = process.env.SCR005_SHOT, AT = +(proce
 for (const [warp, steps, trig] of ALL.filter(x => !want.length || x[1].some(y => want.includes(y[0])))) {
   const pg = await browser.newPage({ viewport: { width: 960, height: 540 } });
   const errs = []; pg.on('pageerror', e => errs.push(e.message)); pg.on('console', m => { if (m.type() === 'error') errs.push(m.text()); });
+  pg.on('crash', () => errs.push('the renderer crashed'));   // worker 0274: a stalled session says how far the page got (see the catch)
   if (SUB) await pg.route('**/' + SUB[0], async r => { const t = fs.readFileSync(path.join(here, SUB[0]), 'utf8'); if (!t.includes(SUB[1])) throw new Error('mutant does not apply'); await r.fulfill({ contentType: 'text/javascript', body: t.replace(SUB[1], SUB[2]) }); });
   try {
     for (let i = 0; ; i++) { try { await pg.goto(`http://127.0.0.1:${port}/play.html?intro=0&sound=0&enemydmg=0&warp=${warp}`, { waitUntil: 'load' }); break; } catch (e) { if (i > 20) throw e; await new Promise(r => setTimeout(r, 250)); } }
@@ -67,7 +68,10 @@ for (const [warp, steps, trig] of ALL.filter(x => !want.length || x[1].some(y =>
       ok(Math.hypot(s.pos[0], s.pos[2]) > 50 && s.eye.every(Number.isFinite) && Math.hypot(s.eye[0] - s.pos[0], s.eye[2] - s.pos[2]) < 120, `${ev}: Vincent and the follow camera in the level, together`, `pos ${s.pos.map(v => v.toFixed(0))} eye ${s.eye.map(v => v.toFixed(0))}`);
     }
     ok(!errs.length, `${steps.map(x => x[0])}: no page errors`, errs.slice(0, 3).join(' | '));
-  } catch (e) { ok(false, steps[0][0] + ': exception', e.message.split('\n')[0]); }
+  } catch (e) {
+    const at = await pg.evaluate(() => { const P = window.__play; return P ? `ticks ${P.stats.ticks}, stage ${!!P.stage}, warp ${!!P.warp}` : 'no __play'; }).catch(x => 'page gone: ' + x.message.split('\n')[0]);
+    ok(false, steps[0][0] + ': exception', e.message.split('\n')[0] + '; ' + at + (errs.length ? '; ' + errs.slice(0, 3).join(' | ') : ''));
+  }
   await pg.close();
 }
 // the opening's models stay through the first battle()'s trim: a Restart with no record replays the opening, whose runtime has no loads to wait on (event_actors.js trim; play.js preload)

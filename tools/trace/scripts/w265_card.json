@@ -1,0 +1,1 @@
+{"name": "w265_card", "frames": 355, "log_from": 60, "doc": "worker 0265 fidelity fix: the opening title card (displayStageInfo -> close -> fadein) from worker 0210 start1704 state, no input. TRACE_FIELDSET=event TRACE_CALLLOG=w265card TRACE_LOG_AT=B4000", "events": []}

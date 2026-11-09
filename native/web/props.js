@@ -266,7 +266,8 @@ export function createProps({ data, weapons = [], effect = null, areas = null, h
       if (!(o.flags28 & 1) || o.gone || !(o.f38 & 0x30)) continue;
       // MISSING: a barrel (+0x38 bits 4 / 5 from type flag bit 1) is in the game's pass via its untranslated branch (obj_contact.js header)
       if (!o.barrier) { warnOnce('props: explosive barrels are left out of FUN_0035a440\'s object pass (no +0x28 bit 0x200000: the nearest-point / moving-object branch, FUN_0025d1b8\'s normal, not translated): bodies pass through them'); continue; }
-      out.push({ id: o.id, half: o.half, m: o.m, f38: o.f38 });
+      // vt 0x58c630: +0x13c FUN_0054fb70 returns the object (non-zero), +0x84 FUN_0054eb78 returns 0
+      out.push({ id: o.id, half: o.half, m: o.m, f38: o.f38, vt13c: true, vt84: false });
     }
     return out;
   }

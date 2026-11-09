@@ -17,6 +17,7 @@
 // (flag 0x8000 -> pan 0x40). The same name again only refreshes the volume. The SE program is endless (op 0x06),
 // so it is rendered as a stream by the IOP driver translation in audio.js (SeRenderer.start / tick).
 import { SeRenderer, hexBytes, SPU_RATE, TICK_HZ, TICK_SAMPLES } from './audio.js';
+import { pcmRing } from './pcm_ring.js';
 
 export const BGM_GAIN = 0x7fff / 32768;      // core-1 input volume 0x7fff (IOP FUN_00010394); voices: audio.js mix
 
@@ -78,6 +79,7 @@ export class AreaSound {
     const bank = au.banks[prog[1] | (prog[2] << 8)];
     if (!bank) return false;
     this.name = name;
+    au.areaId = (row.flags & 2) ? -1 : row.id;      // FUN_003e6fc8's area id (row +0x10; a stream row gives -1): Skip keeps it
     this.stream = new SeStream(au.drv, bank, prog, Math.min(vol, 0x7f), 0x40);
     this.next = au.ctx.currentTime + 0.05;
     this.pump();
@@ -104,6 +106,7 @@ export class AreaSound {
     if (this.timer) clearInterval(this.timer);
     for (const c of this.srcs) { try { c.src.stop(); } catch (e) { /* not started */ } }
     this.timer = null; this.stream = null; this.name = null; this.srcs = [];
+    if (this.au) this.au.areaId = -1;
   }
 }
 
@@ -278,7 +281,8 @@ export class GameMusic {
     const sg = ctx.createGain();
     sg.gain.value = sfGain(vol);
     src.connect(sg); sg.connect(this.gain);
-    const at = ctx.currentTime;
+    // the stream's first frame is in the next block FUN_003ed000 mixes, heard when the IOP plays that block (pcm_ring.js)
+    const ring = pcmRing(ctx), at = ring.heard(ring.blockAt(ctx.currentTime));
     src.start(at);
     return { src, sg, at, off: vol, next: 0 };       // off = stream +0x90; next = the next frame to schedule
   }
@@ -290,8 +294,8 @@ export class GameMusic {
   // 0x47d780), a = (int)(f x 256) & 0xffff, b = (int)(1 / (1 - 1 / f) x 256) & 0xffff; from clock >= start + T the
   // frame is mixed with (0x7fff, 0x100) and the new stream becomes the main one (DAT_004fab80 = DAT_004fab84).
   // L: the weights are applied as gains per 1024-sample frame (the sample-level truncation of the divides is not
-  // reproduced); the curve and the ramp are evaluated at each frame's output time, not at its decode time (the ring
-  // runs up to 8 frames ahead); the new track starts when its FLAC has loaded.
+  // reproduced); the new track starts when its FLAC has loaded. The curve and the ramp are evaluated at each frame's
+  // decode time (pcm_ring.js mixedAt: the block's mix), and the frame is heard when the IOP plays that block.
   async crossfade(name, vol, fade) {
     const ctx = this.au.ctx, info = this.meta && this.meta[name];
     if (!ctx || !info || !this.main) return null;    // FUN_003ec0d8: no PCM ring / no file -> nothing
@@ -311,12 +315,14 @@ export class GameMusic {
     return s.src;
   }
 
-  // a new ramp / crossfade applies from the frame playing now: drop the frames already scheduled ahead (page scheduler)
+  // a new ramp / crossfade applies from the next block mixed (the frames in the ring keep theirs): drop the frames scheduled
+  // from that block's heard time on (page scheduler)
   reschedule() {
     const ctx = this.au.ctx, m = this.main;
     if (!ctx || !m) return;
-    m.next = Math.max(0, Math.ceil((ctx.currentTime - m.at) / BGM_FRAME_S));
-    for (const g of [m.sg, this.xf && this.xf.s && this.xf.s.sg]) if (g && g.gain.cancelScheduledValues) g.gain.cancelScheduledValues(ctx.currentTime);
+    const ring = pcmRing(ctx), from = Math.max(ctx.currentTime, ring.heard(ring.blockAt(ctx.currentTime)));
+    m.next = Math.max(0, Math.round((from - m.at) / BGM_FRAME_S));
+    for (const g of [m.sg, this.xf && this.xf.s && this.xf.s.sg]) if (g && g.gain.cancelScheduledValues) g.gain.cancelScheduledValues(from);
   }
 
   pumpStart() {
@@ -333,7 +339,7 @@ export class GameMusic {
       const t = m.at + m.next * BGM_FRAME_S;
       if (t > horizon) break;
       m.next++;
-      const now = clockMs(ctx, t);
+      const ring = pcmRing(ctx), now = clockMs(ctx, ring.mixedAt(Math.round((t - ring.t0) / BGM_FRAME_S)));   // its decode time
       if (this.ramp) m.off = this.ramp.apply(now, m.off);
       let wOld = 1, wNew = null;
       const x = this.xf && this.xf.s ? this.xf : null;
@@ -404,9 +410,11 @@ export class GameMusic {
   }
 
   // stopMusic -> FUN_003ebfa0.
+  // The frames already in the ring play out: the sources stop at the heard time of the next block mixed (pcm_ring.js).
   stopMusic() {
-    if (this.src) { try { this.src.stop(); } catch (e) { /* not started */ } }
-    if (this.xf && this.xf.s) { try { this.xf.s.src.stop(); } catch (e) { /* not started */ } }
+    const ctx = this.au.ctx, end = ctx ? pcmRing(ctx).heard(pcmRing(ctx).blockAt(ctx.currentTime)) : 0;
+    if (this.src) { try { this.src.stop(end); } catch (e) { /* not started */ } }
+    if (this.xf && this.xf.s) { try { this.xf.s.src.stop(end); } catch (e) { /* not started */ } }
     this.src = null; this.name = null; this.req++; this.main = null; this.xf = null;
     if (this.pumpTimer) { clearInterval(this.pumpTimer); this.pumpTimer = null; }
   }

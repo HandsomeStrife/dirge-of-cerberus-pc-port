@@ -174,14 +174,15 @@ function world(pp, hooks = null, extra = {}) {
   ok(W0.se_bullet && tok && !r.W.bullets.includes(b) && stops.filter(s => s === tok).length === 1, `weapon 0's bullet sound ${W0.se_bullet} is released (FUN_0033cf00) once at the bullet's end (${stops.filter(s => s === tok).length})`);
 }
 
-// 4d. audio.js SoundEmitters.stop (FUN_0033cf00 -> FUN_003e9830): a pending slot is dropped (never played); a sent one is freed,
+// 4d. audio.js SoundEmitters.stop (FUN_0033cf00 -> FUN_003e9830): a pending slot gets 0x10000 and is still sent (worker 0271: it was
+// dropped); a sent one is freed,
 // and only a slot with flag 0x20 (sdb row bit 3, FUN_003e9b80) gets the stop request (0x12: SeRenderer.stopFade, time 10).
 // bsj_063 (row flags 0) plays to its end; asj_354 (the rocket's flight, row flags 8) fades from the tick it has reached.
 {
   const AU = await import(pathToFileURL(process.env.AUDIO_JS || path.join(here, 'audio.js')).href);
   const { SoundEmitters, SLOT_FLAGS, GameAudio, SeRenderer, SPU_RATE, TICK_HZ } = AU;
   const A0 = path.join(here, 'data/audio');
-  if (!existsSync(path.join(A0, 'se_z128.json')) || !existsSync(path.join(A0, 'wave0000.bin'))) console.log('SKIP 4d: no audio data');
+  if (!existsSync(path.join(A0, 'se_z128.json')) || !existsSync(path.join(A0, 'wave0000.bin'))) console.log('SKIPPED 4d (the bullet sounds stop): no data/audio (tools/audio/extract.py)');
   else {
     const j = f => JSON.parse(readFileSync(path.join(A0, f), 'utf8'));
     const ctx = { currentTime: 0, destination: {}, srcs: [],
@@ -197,7 +198,20 @@ function world(pp, hooks = null, extra = {}) {
     ok(!(sb.flags & SLOT_FLAGS.STOP) && (sr.flags & SLOT_FLAGS.STOP), `slot flag 0x20 from the row's bit 3: bsj_063 ${sb.flags & 0x20}, asj_354 ${sr.flags & 0x20}`);
     E.stop(sp);
     E.update();
-    ok(!G.playing.some(p => p.id === 1061), 'a pending slot stopped before it is sent never plays');
+    // worker 0271: FUN_003e9830 on a slot not sent yet sets 0x10000; its flag 2 (FUN_003e8bc8) keeps it, FUN_003e9ed0 sends it, and
+    // without 0x20 the later FUN_003e9830 sends no stop: bsj_064 plays to its end
+    ok(!!sp.p && G.playing.includes(sp.p) && !sp.p.stop, 'a pending bsj_064 (row flags 0) stopped before it is sent is still sent and plays to its end');
+    {
+      // a pending asj_354 (0x20): sent at the next FUN_003e9ed0, the stop request the frame after (its handle back): faded from
+      // the driver tick heard then
+      ctx.currentTime = 20; const s3 = E.play('asj_354', [0, 0, 10]); s3.flags |= SLOT_FLAGS.NO3D;
+      E.stop(s3); E.update();
+      const sent = !!s3.p && !s3.p.stop;
+      ctx.currentTime = 20.02; E.update();
+      ok(sent && s3.p.stop && s3.p.stop.tick === Math.floor(0.02 * TICK_HZ) && s3.p.stop.time === 10,
+        `a pending asj_354 (0x20) stopped before it is sent: sent (${sent}), its stop request one frame later at tick ${s3.p && s3.p.stop && s3.p.stop.tick}`);
+      ctx.currentTime = 0;
+    }
     const pb = sb.p, pr = sr.p, srcB = pb.src, srcR = pr.src, bufR = pr.buf;
     const T = 60.5 / TICK_HZ;                          // mid-tick: tick 60 reached, half of it heard
     ctx.currentTime = T;
@@ -253,7 +267,7 @@ function world(pp, hooks = null, extra = {}) {
 // the game's step and no other; the thin cylinder (the page's path before) never reaches him (the rocket passes 10.5 u from his axis).
 {
   const fc = path.join(here, '../../tools/trace/out/w270_rockets.calls.jsonl'), fr = path.join(here, '../../tools/trace/out/w270_rockets.jsonl');
-  if (!existsSync(fc) || !existsSync(fr)) console.log('skip T: tools/trace/out/w270_rockets(.calls).jsonl not present');
+  if (!existsSync(fc) || !existsSync(fr)) console.log('SKIPPED T checks (rocket flight and the hit on Vincent): tools/trace/out/w270_rockets(.calls).jsonl not present (gitignored trace)');
   else {
     const J = l => JSON.parse(l.replace(/\bNaN\b/g, 'null'));
     const R = readFileSync(fr, 'utf8').trim().split('\n').map(J).slice(1);
@@ -280,7 +294,7 @@ function world(pp, hooks = null, extra = {}) {
 // w259_boss_box4c (the same run) for Vincent's HP. The fat test hits on the game's step; the page's weapon 18 does the game's damage.
 {
   const O = path.join(here, '../../tools/trace/out/'), fc = O + 'w270_boss_missiles.calls.jsonl', fr = O + 'w270_boss_missiles.jsonl', fh = O + 'w259_boss_box4c.jsonl';
-  if (!existsSync(fc) || !existsSync(fr) || !existsSync(fh)) console.log('skip T: tools/trace/out/w270_boss_missiles / w259_boss_box4c not present');
+  if (!existsSync(fc) || !existsSync(fr) || !existsSync(fh)) console.log('SKIPPED T checks (boss missiles: hit frame, damage 137): tools/trace/out/w270_boss_missiles / w259_boss_box4c not present (gitignored trace)');
   else {
     const J = l => JSON.parse(l.replace(/\bNaN\b/g, 'null'));
     const R = readFileSync(fr, 'utf8').trim().split('\n').map(J).slice(1), H = readFileSync(fh, 'utf8').trim().split('\n').map(J).slice(1);
@@ -313,7 +327,7 @@ function world(pp, hooks = null, extra = {}) {
 // drawn with the state's camera: its sprites on the game's vertices with the game's RGBA. (Restore as test_effects' w208_still restore, test-only.)
 {
   const O = path.join(here, '../../tools/trace/out/'), sp = O + 'w270/state1300.json', dp = O + 'w270/dump1300.json';
-  if (!existsSync(sp) || !existsSync(dp) || !existsSync(O + 'w270_rockets.calls.jsonl')) console.log('skip T: tools/trace/out/w270/state1300.json / dump1300.json not present');
+  if (!existsSync(sp) || !existsSync(dp) || !existsSync(O + 'w270_rockets.calls.jsonl')) console.log('SKIPPED T checks (the trail vs the f1304 GS dump): tools/trace/out/w270/state1300.json / dump1300.json not present (gitignored)');
   else {
     const f = Math.fround, st = JSON.parse(readFileSync(sp, 'utf8')), dump = JSON.parse(readFileSync(dp, 'utf8'));
     const J = l => JSON.parse(l.replace(/\bNaN\b/g, 'null'));

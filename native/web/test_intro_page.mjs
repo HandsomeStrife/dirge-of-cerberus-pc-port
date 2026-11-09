@@ -251,14 +251,20 @@ try {
     await pg3.waitForFunction(n => { const r = window.__play.intro.rt, V = r.sound.voices(); return (V && V.log.length > 0) || r.frameNo > n; }, 600 + S3, { timeout: 300000 });
     const v = await pg3.evaluate(async () => { const r = window.__play.intro.rt, V = r.sound.voices(), ch = V.log.length && V.bufs.get(V.log[0]); if (ch && ch.buf) await ch.buf; return { log: V.log.slice(), out: !!V.out, area: r.lastArea, ctx: !!(window.__play.pauseSound.audio && window.__play.pauseSound.audio.ctx) }; });
     ok(v.ctx && v.log[0] === '10109vn' && v.out && v.area && v.area[0] === 'asj_036', `sound on: AudioContext ${v.ctx}, voice ${v.log[0]} started (${v.out}), area ${v.area && v.area[0]}`);
-    // worker 0266: a voice is heard the PCM ring's queue after playVoice (event_sound.js VOICE_PIPE_S, T w266_open: 480 ms)
-    // measured from the audio graph: the voice buffer's source start (when - offset) against the context time at playVoice
-    const vt = await pg3.evaluate(async () => { const E = await import('./event_sound.js'); const V = window.__play.intro.rt.sound.voices();
+    // worker 0271: a voice is heard through the PCM ring (pcm_ring.js; T w266: 496 .. 512 ms from the frame that mixed its offset-0
+    // block): measured from the audio graph, the voice buffer's source start (when - offset) against the context time at playVoice;
+    // a decode later than that starts later from offset 0 (FUN_003eab20 waits for the data), on a block's heard time
+    const vt = await pg3.evaluate(async () => { const R = await import('./pcm_ring.js'); const V = window.__play.intro.rt.sound.voices();
       const [n, asked] = (window.__asked || [])[0] || [], ch = n && V.bufs.get(n), buf = ch && ch.buf ? await ch.buf : null;
-      const s = (window.__srcStarts || []).find((x) => buf && x.buf === buf);
-      return { P: E.VOICE_PIPE_S, d: s && asked != null ? s.when - s.off - asked : null }; });
+      const s = (window.__srcStarts || []).find((x) => buf && x.buf === buf), ring = R.pcmRing(V.au.ctx), rec = ch && ch.rec;
+      return { d: s && asked != null ? s.when - s.off - asked : null, off: s ? s.off : null, blk: s ? (s.when - ring.t0) / R.BLOCK_S : null,
+        late: rec && rec.ready != null && asked != null ? rec.ready - asked : null, fromReady: s && rec && rec.ready != null ? s.when - s.off - rec.ready : null }; });
     const d = vt.d;
-    ok(d !== null && Math.abs(d - vt.P) < 0.005, `the first voice is heard ${d === null ? '?' : (d * 1000).toFixed(1)} ms after playVoice (game: ${(vt.P * 1000).toFixed(1)} ms)`);
+    // bounded: from the moment its data is there (the page's decode; the game's channel load), within the ring's 0.47 .. 0.515 s
+    // (pcm_ring.js: two blocks mixed after it, heard 21 .. 22 blocks after their mix; T w266 496 .. 512 ms from the mixing frame);
+    // and in all at most 0.56 s plus the page's decode wait
+    ok(d !== null && vt.fromReady !== null && vt.fromReady > 0.469 && vt.fromReady < 0.515 && d <= 0.56 + Math.max(0, vt.late) && vt.off === 0 && Math.abs(vt.blk - Math.round(vt.blk)) < 1e-6,
+      `the first voice is heard ${d === null ? '?' : (d * 1000).toFixed(1)} ms after playVoice (${vt.fromReady === null ? '?' : (vt.fromReady * 1000).toFixed(1)} ms after its data, decoded ${vt.late === null ? '?' : (vt.late * 1000).toFixed(1)} ms after the call), from offset ${vt.off}, at block ${vt.blk && vt.blk.toFixed(3)}'s heard time`);
     await pg3.waitForFunction(n => (window.__play.pauseSound.music && window.__play.pauseSound.music.name) || window.__play.intro.rt.frameNo > n, 1300 + S3, { timeout: 600000 });
     const m = await pg3.evaluate(() => window.__play.pauseSound.music && window.__play.pauseSound.music.name);
     ok(m === 'bgm_274', `playMusic2: the music stream is ${m}`);

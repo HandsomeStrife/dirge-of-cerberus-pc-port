@@ -244,6 +244,9 @@ export async function setupPause({ output, url = 'data/pause.json', blocked = ()
     sync();
     // FUN_003e1d90, once a frame (the menu manager FUN_003dce38)
     const au = sound && sound.audio;
+    // FUN_00247508 l.18 -> FUN_00246c98 -> FUN_003e9ed0 every frame, paused or not: the menu-sound queue's count DAT_0047d72c = 0
+    // (audio.js GameAudio.menuQ / menuN; the entries stay: FUN_003e7f60's keep list; worker 0271)
+    if (au) au.menuN = 0;
     if (au && !menuSnd.names && au.res && au.res.menu) menuSnd.names = au.res.menu;
     menuSnd.frame(t, au && au.ctx ? (n, x, y) => au.playMenu(n, x, y) : null);
     if (prims) layer.draw(o.renderer, o, prims);

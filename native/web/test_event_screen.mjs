@@ -5,7 +5,7 @@
 // FUN_0037cf30 -> FUN_00324e70 (bits 5 / 4 cleared, FUN_0033c060: the kind from the mode again).
 // Needs data/aim/reticle.json + weapon.json (build step aim) and data/event/ev0100_stage.json (step stage); skips without them.
 // battle() after a skipped event: FUN_0037cf30 with +0x156c != 0 and n < 1 kills the fade particle (FUN_002f2218).
-// MUTATE=off|sync|bits|ctl|stageobj|fadekill|faden|cardsave|loading runs one mutant (scratch copies) and expects a failure.
+// MUTATE=off|sync|bits|ctl|stageobj|modebit|syncorder|start|fadekill|faden|cardsave|loading runs one mutant (scratch copies) and expects a failure.
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -21,7 +21,10 @@ const subs = {
   faden: ['stage_controller.js', 'if (this.skip !== 0 && n < 1 && this.fade)', 'if (this.skip !== 0 && this.fade)'],
   cardsave: ['stage_controller.js', 'if (!this.cardSaved) this.skipOff = false;', 'if (this.cardSaved) this.skipOff = true;'],
   loading: ['stage_info.js', 'finally { si.loading = false; }', 'si.loading = false;'],
-  stageobj: ['stage_controller.js', 'if (this.stageObj && this.o.reticle) this.o.reticle.sync();', 'if (this.o.reticle) this.o.reticle.sync();'],
+  stageobj: ['stage_controller.js', 'if (!first && this.o.reticle) this.o.reticle.sync();', 'if (this.o.reticle) this.o.reticle.sync();'],
+  modebit: ['stage_controller.js', 'if ((((this.o.modeBits ?? 0) >>> 5) & 1) === 0) {', 'if (true) {'],
+  syncorder: ['stage_controller.js', 'const first = !this.stageObj;', 'const first = !this.stageObj; if (!first && this.o.reticle) this.o.reticle.sync();'],
+  start: ['stage_controller.js', '    this.fun324ca0(o.gameState && o.gameState());', ''],
 };
 const mods = {};
 for (const f of ['aim_core.js', 'stage_controller.js', 'stage_info.js']) {
@@ -102,6 +105,34 @@ const frames = (w, n) => { for (let i = 0; i < n; i++) w.reticleFrame(20); };
   ok(calls.join() === 'off', 'event mode with the stage object: reticle off (FUN_0033c1a8): ' + calls.join());
   bt(R.vm, [0]);
   ok(calls.join() === 'off,sync', 'battle(): reticle sync (FUN_0033c060): ' + calls.join());
+  // FUN_00324e70 l.41 / l.77-80 / l.81: the stage-load pass FUN_005453b0, then FUN_0033c060, then the camera reset FUN_00329f68
+  {
+    const seq = [];
+    const c3 = createStageController({ data, warn: () => {}, flags: () => ({}), gameState: () => gs,
+      reticle: { off: () => seq.push('off'), sync: () => seq.push('sync') }, stagePass: () => seq.push('pass'), cameraReset: () => seq.push('cam') });
+    const R3 = c3.rt, N3 = R3.vm.natives;
+    R3.stageObj = true; seq.length = 0;
+    N3['fake/KerberosZone.battle2(I)V'](R3.vm, [0]);
+    ok(seq.join() === 'pass,sync,cam', 'battle(): stage-load pass, then FUN_0033c060, then the camera reset (' + seq.join() + ')');
+  }
+  // FUN_00324ca0 l.15-21: FUN_0033c1a8 only with FUN_002419d8(5) == 0 (DAT_004b8ac8 bit 5); the bits 5 / 4 are set either way (l.7-8)
+  {
+    const b4 = new Set(), cl = [];
+    const g4 = { set: b => b4.add(b), clear: b => b4.delete(b), test: b => (b4.has(b) ? 1 : 0) };
+    const c4 = createStageController({ data, warn: () => {}, flags: () => ({}), gameState: () => g4, modeBits: 1 << 5,
+      reticle: { off: () => cl.push('off'), sync: () => cl.push('sync') } });
+    c4.rt.stageObj = true;
+    c4.rt.vm.natives['fake/KerberosZone.event2()V'](c4.rt.vm, []);
+    ok(!cl.includes('off') && b4.has(5) && b4.has(4), 'DAT_004b8ac8 bit 5 set: no reticle off, bits 5 / 4 still set (' + cl.join() + ')');
+  }
+  // FUN_00374d08 -> FUN_00324ca0 at the program start: a record's reload (globalFlags) and the opening (openingDone) set bits 5 / 4
+  // with no stage object; the save's settle runs main through first_event's battle(), which clears them
+  for (const [name, extra, want] of [['reload', { globalFlags: new Uint8Array(64), settle: false }, true], ['opening', { openingDone: () => false }, true], ['save', {}, false]]) {
+    const b5 = new Set(), cl = [];
+    const g5 = { set: b => b5.add(b), clear: b => b5.delete(b), test: b => (b5.has(b) ? 1 : 0) };
+    createStageController({ data, warn: () => {}, flags: () => ({}), gameState: () => g5, reticle: { off: () => cl.push('off'), sync: () => {} }, ...extra });
+    ok((b5.has(5) && b5.has(4)) === want && !cl.length, `program start (FUN_00374d08), ${name}: bits 5 / 4 ${want ? 'set' : 'clear'}, no reticle call (${[...b5]})`);
+  }
   // and end to end with a WeaponSystem behind it
   const w = new WeaponSystem({ ...W }, RET);
   const c2 = createStageController({ data, warn: () => {}, flags: () => ({}), gameState: () => gs,

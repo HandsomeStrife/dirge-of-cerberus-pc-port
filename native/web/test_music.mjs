@@ -103,7 +103,9 @@ await t('GameMusic z128 start: playMusic3("bgm_001", 0, 4000) with no stream ope
   globalThis.fetch = fetchOk();
   const src = await m.playMusic3('bgm_001', 0, 4000);
   assert.ok(src, 'started');
-  assert.strictEqual(src.at, 0);
+  // worker 0271: heard when the IOP plays the first block mixed after the open (pcm_ring.js; the ring full, as T w266 every frame):
+  // block 23 of a ring made at 0 (the IOP starts on block 0), 23 x 1024 / 48000 s
+  assert.strictEqual(src.at, 23 * 1024 / 48000);
   assert.strictEqual(src.loop, true);
   assert.strictEqual(src.loopStart, 6700 * 1024 / 48000);
   assert.strictEqual(src.loopEnd, 14948 * 1024 / 48000);
@@ -141,7 +143,12 @@ await t('GameMusic FUN_003ec6f8: with a stream open, playMusic3(fade < 1) does n
   const [wa0, wb] = M.mixWeights(M.evalCurve(M.crossfadeCurve(2500), 0));
   assert.deepStrictEqual([wa0, wb], [256, 0xffff]);
   assert.strictEqual(M.mixGain(wb), null);
-  assert.strictEqual(x.to.gain.auto[0][1], 0);
+  // worker 0271: the frames are weighted when they are mixed (pcm_ring.js mixedAt), not when heard: the first frame of the new
+  // stream is block 23 (heard at 23 x 1024 / 48000 s), mixed by the ring's second wake at 40 ms: the curve at 40 ms
+  a.ctx.currentTime = 0.3; m.pump();
+  const [wa1, wb1] = M.mixWeights(M.evalCurve(M.crossfadeCurve(2500), 40));
+  assert.strictEqual(x.to.gain.auto[0][2], 23 * 1024 / 48000);
+  assert.ok(Math.abs(x.to.gain.auto[0][1] - M.sfGain(3) * M.mixGain(wb1)) < 1e-12, 'first frame: ' + x.to.gain.auto[0] + ' vs ' + [wa1, wb1]);
   assert.strictEqual(src.to.gain.auto.at(-1)[1] > 0, true);
   m.stopMusic();
   assert.ok(src.stopped && x.stopped, 'stopMusic (FUN_003ebfa0) stops both');
@@ -175,7 +182,7 @@ await t('GameMusic crossfade: the curve 1 / 4 / 8 / 64 at 0 / T/4 / T/2 / T, wei
   globalThis.fetch = fetchOk();
   const old = await m.playMusic3('bgm_001', 0, 0);
   const x = await m.playMusic3('bgm_012', 0, 100);
-  a.ctx.currentTime = 0.2; m.pump();
+  a.ctx.currentTime = 0.7; m.pump();                // worker 0271: T = 100 ms after the frames heard ~0.49 s on (the ring)
   assert.strictEqual(m.src, x, 'after T the new stream is the main one (DAT_004fab80 = DAT_004fab84)');
   assert.strictEqual(m.name, 'bgm_012');
   assert.ok(old.stopped, 'the old stream is stopped after the last mixed frame');
@@ -193,7 +200,7 @@ await t('GameMusic changeMusicVol (FUN_003ed740): linear offset ramp per decoded
   m.meta = META;
   globalThis.fetch = fetchOk();
   const src = await m.playMusic3('bgm_001', 0, 0);
-  a.ctx.currentTime = 1; m.changeMusicVol(3, 1000); a.ctx.currentTime = 1.2; m.pump();
+  a.ctx.currentTime = 1; m.changeMusicVol(3, 1000); a.ctx.currentTime = 1.7; m.pump();   // worker 0271: frames heard ~0.47 s after their mix (pcm_ring.js)
   const last = src.to.gain.auto[src.to.gain.auto.length - 1];
   assert.ok(last[1] < 1 && last[1] > M.sfGain(3), 'ramping down: ' + last[1]);
   a.ctx.currentTime = 2.5; m.pump();
