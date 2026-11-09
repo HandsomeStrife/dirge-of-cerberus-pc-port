@@ -267,3 +267,7 @@ Everything pushed, then one short summary to Dan: what now works, what's still m
 ## 2026-11-08 playtest round (committed 07edd20)
 
 Dan's playtest list was worked by workers 0265-0270, all reviewed, review fixes re-reviewed, full suite green (warp boss timing flake passed on rerun; char_light test race fixed). All workers retired. Board items posted for each issue. Still open: title card's bar groups/red dot and hold length; mouth timing gaps in sk_mituketa2; barrier lightning offset, barrels/camera vs barriers, door walls; boss blast unverified; cutscene actor footsteps, music delay, flushSoundEffect. Awaiting Dan: which scene is "save the abducted girl". Next worker number: 0271.
+
+## 2026-11-09 fidelity audit (committed 3a81479)
+
+Dan asked to validate 07edd20 against the game code. Workers 0271-0273 audited each hunk (TRANSLATED / DIFFERS / DERIVED / INVENTED), then fixed their findings; 0274 fixed the warp boss test timing. All reviewed and re-reviewed. Derived voice delay replaced by a translation of the PCM ring (BGM through it too); Restart/Skip SE ending decoded from iopsound.irx; warps use walked route states. Still open: title-card fade-in gap is disc read time (no load-time model); veil draw order GUESS; enemy-vs-barrier contact untraced; citizens' late flags GUESS; reload teardown sound GUESS; one-off scr005 load stall (diagnostics added). Next worker number: 0275.
