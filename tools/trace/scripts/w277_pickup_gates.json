@@ -1,0 +1,2 @@
+{"name": "w277_pickup_gates", "frames": 470, "log_from": 195, "doc": "worker 0277: w220_box's inputs (run east into the placed item 0x69300000; cross at 400 closes the box), no Start: FUN_003de130's gate values every frame through the pickup and the stage-info box. TRACE_FIELDSET=pausegate.",
+ "events": [{"from": 10, "to": 230, "lx": 0.6, "ly": -1.0}, {"from": 400, "to": 404, "buttons": ["cross"]}]}

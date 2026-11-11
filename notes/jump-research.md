@@ -122,7 +122,13 @@ re-take-off, the back-jump angle test, turn negation and apex margin.
 
 ## Not ported / open
 
-- Sounds 0x50 (take-off) and 0x51 (landing): FUN_003412d0 / FUN_00341330.
+- Sounds: ported by worker 0277 (2026-11-09). Take-off (phase 0 of FUN_00598f50 / FUN_005a1510): FUN_00341410(C, 2) = the
+  footstep table's kind-2 row by floor material (FUN_003415d8: cue 0x20 + m), or for the second jump FUN_00341268(C, 'bsj_520')
+  ('bsj_525' when bVar1); the back jump 'bsj_521' / 'bsj_522' (second) / 'bsj_525'; then FUN_003412d0(C, 0x50, 1): cue 0x50 =
+  bt_v010 (a grunt), forced, every jump. Landing (FUN_00599aa0 phase 0): FUN_00341410(C, 3) (cue 0x30 + m) and
+  FUN_003412d0(C, 0x51, 0) (cue 0x51 = '': nothing, but it stamps C+0x810 when past the gate). Named sounds play through
+  FUN_0054b158 at 9 above his feet (FUN_0054ae78). T w277_jump (call log `w277jump`): f11 fsj_026 + bt_v010, f53 fsj_038,
+  f141 bsj_520 + bt_v010. No random choice: every jump grunts.
 - Camera hooks in FUN_00575768: ported by worker 0107 (see HANDOFF). CAM+0x1e8 &= ~2 and
   FUN_00329ff0(CAM, 0) clear bits the page never sets (flag 2, target lock 0x10000), so they are
   left out; FUN_0032a0f8(CAM, 1, 0) with the gun drawn is jump_core takeOff.

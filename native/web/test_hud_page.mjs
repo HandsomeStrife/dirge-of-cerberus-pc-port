@@ -477,8 +477,11 @@ try {
       ok(Hh.hp1 === 780 && Hh.badDrop === -1 && Hh.same, `H during the slide-out: the HUD comes back to the start layout (HP ${Hh.hp1} after H, ${Hh.hp} 1.5 s later; ${Hh.before} HP-0 frames before it; drops without a soldier's hit: ${Hh.badDrop === -1 ? 'none' : 'at ' + Hh.badDrop})`);
       // the pause during the slide-in: FUN_0023c1f0 (the slides' clock) runs on through the game's pause, so after a
       // 1.5 s pause the first game frame has the slide done (the page's game frames stop while paused)
-      await pg4.evaluate(() => { window.__hlog.length = 0; });
+      // worker 0289: the log is cleared on H's own keydown (capture, before play.js's), not before the press: a page frame or two
+      // could run between the two and log the slid-in y 0 (the flake '(y 0 0 -46 -40)')
+      await pg4.evaluate(() => { addEventListener('keydown', e => { if (e.code === 'KeyH') window.__hlog.length = 0; }, { capture: true, once: true }); });
       await pg4.keyboard.press('KeyH');
+      await pg4.waitForFunction(() => window.__hlog.length > 0, null, { timeout: 5000, polling: 'raf' });   // one frame of the slide-in (else nothing here shows H took)
       await pg4.keyboard.press('Enter');
       await pg4.waitForTimeout(1500);
       const pz = await pg4.evaluate(() => ({ open: window.__play.pause.active, n: window.__hlog.length, y: window.__hlog.map(r => r.y5) }));

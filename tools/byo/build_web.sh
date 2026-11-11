@@ -279,7 +279,8 @@ step "z128's other enemy types (stage section 1: e048, e030, e036, e023, e024, e
 # Same decode as e027; one idle clip each (GUESS which idle the game starts: enemies.js IDLE, notes/enemy-model.md),
 # e048 / e030: the clips of the motions enemy_ai.js requests (their stance rows and attack tables, ai.json model_clips)
 E048_CLIPS=r_gst,r_gst_lk,r_st_a,r_st_f,r_stlld0,r_stlaf0,r_stbf0,m_gst,m_gst_lk,m_st_a,m_st_f,m_stlld0,m_stlaf0,m_stbf0,r_sq_a,r_sq_f,m_sq_a,m_sq_f,m_atk,r_atk,m_gwk,m_grn,m_sthd0,m_stbd0,m_stlad0,m_strad0,m_strld0,m_sthf0,m_straf0,m_stllf0,m_strlf0,r_gwk,r_grn,r_sthd0,r_stbd0,r_stlad0,r_strad0,r_strld0,r_sthf0,r_straf0,r_stllf0,r_strlf0,r_stbl0,r_bl_0,r_bl_1,r_jp_dm0,r_fl_0,r_fl_1,r_rev_0,m_stbl0,m_bl_0,m_bl_1,m_jp_dm0,m_fl_0,m_fl_1,m_rev_0,m_bl_ht0,m_sqbf0,m_sqhf0,m_sqlaf0,m_sqllf0,m_sqraf0,m_sqrlf0,r_bl_ht0,r_sqbf0,r_sqhf0,r_sqlaf0,r_sqllf0,r_sqraf0,r_sqrlf0,r_wk_a,r_bwk_a,r_lwk_a,r_rwk_a,r_rn_a,r_brn_a,r_lrn_a,r_rrn_a,r_sq_ma,r_ls_ma,r_rs_ma,r_bs_ma,m_wk_a,m_bwk_a,m_lwk_a,m_rwk_a,m_rn_a,m_brn_a,m_lrn_a,m_rrn_a,m_sq_ma,m_ls_ma,m_rs_ma,m_bs_ma
-E030_CLIPS=st_a,look,stld0,stbf0,jp0,jp1,jp2,jp3,jp4,atk_0,atk_1,atk_2,atk_3,b_stp,st_btl,lhtn,rhtn,wk_a,rn_a,stbd0,sthf0,stlf0,stbl0,bl_0,bl_1,jm_dm0,fl_0,fl_1,rev_0,stbd0,bl_ht0
+# worker 0276: kidnap (m001 0765078b): trigger 163's cmd 0x19b on e_BeastB (record 8), motion class 0x42 (its bone 1 carries the run)
+E030_CLIPS=st_a,look,stld0,stbf0,jp0,jp1,jp2,jp3,jp4,atk_0,atk_1,atk_2,atk_3,b_stp,st_btl,lhtn,rhtn,wk_a,rn_a,stbd0,sthf0,stlf0,stbl0,bl_0,bl_1,jm_dm0,fl_0,fl_1,rev_0,stbd0,bl_ht0,kidnap
 # worker 0230: e036 runs the soldiers' AI (enemy_ai AI_TYPES): its stance-0x1e rows and attack clip (ai.json model_clips)
 E036_CLIPS=m_gst,m_gst_lk,m_st_a,m_st_f,m_stlld0,m_stbf0,m_stlaf0,m_sq_a,m_gwk,m_grn,m_atk_0,m_sthd0,m_stbd0,m_stlad0,m_strad0,m_strld0,m_sthf0,m_straf0,m_stllf0,m_strlf0,m_stbl0,m_bl_0,m_bl_1,m_jp_dm0,m_fl_0,m_fl_1,m_rev_0,m_bl_ht0,m_sqbf0,m_sqhf0,m_sqlaf0,m_sqllf0,m_sqraf0,m_sqrlf0,m_wk_a,m_bwk_a,m_lwk_a,m_rwk_a,m_rn_a,m_brn_a,m_lrn_a,m_rrn_a,m_ls_ma,m_rs_ma,m_bs_ma
 # e001: its stance-0x10 rows and attack clip (m001 0765004b; ai.json model_clips)
@@ -303,7 +304,7 @@ step "z128's townspeople and WRO men (stage section 1 n0xx records) -> data/enem
 # dead1-3 (death rows 0x2a-0x35), where the model's motion file 0 has them.
 D3=rn,look,dead1,dead2,dead3
 for mc in n017:r_gst,r_gst_lk,r_look n018:r_gst,r_gst_lk n022:r_gst,m_look n023:st,breath1,fear,$D3 n024:st,fear,fear2,fear3,$D3 \
-          n025:st,fear,$D3 n026:st,fear,fear3,$D3 n028:st,fear,wk,rn,look n029:st,fear,$D3 n030:st,fear,$D3 n031:st,breath2,fear,$D3 \
+          n025:st,fear,$D3 n026:st,fear,fear3,$D3 n028:st,fear,wk,rn,look,kidnap n029:st,fear,$D3 n030:st,fear,$D3 n031:st,breath2,fear,$D3 \
           n032:st,fear,$D3 n033:st,fear,wk,rn,look n034:st,fear,wk,rn,look; do
   m=${mc%%:*}
   run enemy_$m $PY export_web_enemy.py export --model $m --out "$DATA/enemies" --clips ${mc#*:}
@@ -410,6 +411,11 @@ step "stage-info boxes (displayStageInfo): step tables, layouts, '$' codes (ELF)
 run stageinfo $PY export_web_stageinfo.py --elf "$ELF" --disc "$KEL" -o "$DATA/stage_info.json"
 [ -s "$DATA/stage_info.json" ] || fail "data/stage_info.json missing (log: $LOGS/stageinfo.log)"
 tail -n 1 "$LOGS/stageinfo.log" | cut -c1-160
+echo "ok"
+
+step "event effects (Effect.load): the opening's FED a0001 (the scanner) -> data/event/fx/a0001.fed"
+run eventfx $PY export_web_event_fx.py --disc "$KEL" -o "$DATA/event/fx"
+[ -s "$DATA/event/fx/a0001.fed" ] || fail "data/event/fx/a0001.fed missing (log: $LOGS/eventfx.log)"
 echo "ok"
 
 step "level end / Status results screen: step table, layouts, tables (ELF), texts (kelstr.bin), KerberosIntermissionCalc.class, the screen's FED a0093 -> data/results.json + results.fed"

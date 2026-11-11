@@ -22,7 +22,7 @@ export const FRAME_MS = 20;
 
 export function createIntro({ data, camera, output, canvas, zoneLoad = null, warn = (m) => console.warn(m),
                               actorLib = null, root = null, litPatch = null, light = null, sound = null, windows = null, rand = null,
-                              stageInfo = null, stageInfoWait = null }) {
+                              stageInfo = null, stageInfoWait = null, effects = null }) {
   // the event's actors (worker 0218): their natives and update (event_actor_rt.js), drawn by event_actors.js
   let view = null, clipFrames = null;
   if (actorLib && root) clipFrames = (m, n, c) => { const p = actorLib.models[m] && actorLib.models[m].packs[n]; return p && p.info.clipFrames[c] != null ? p.info.clipFrames[c] : null; };
@@ -32,7 +32,8 @@ export function createIntro({ data, camera, output, canvas, zoneLoad = null, war
     residentFiles: (m) => (actorLib.models[m] && actorLib.models[m].info.resident) || [], rand }) : null;
   // sound (event_sound.js back ends: music / area / audio / voices) and windows (event_window.js), worker 0222
   // stageInfo: () -> stage_info.js, the stage title card (displayStageInfo(0) at first_event pc 884; worker 0265)
-  const rt = new EventRuntime(data, { warn, zoneLoad, actors, sound, windows, stageInfo, stageInfoWait });
+  // effects: event_fx.js (worker 0275), the KerberosEffect natives and the effect sequences (the scanner)
+  const rt = new EventRuntime(data, { warn, zoneLoad, actors, sound, windows, stageInfo, stageInfoWait, effects });
   rt.start();
   if (actors) view = import('./event_actors.js').then(m => (view = m.createEventActorView({ root, lib: actorLib, rt, litPatch, light, warn })));
   // GUESS: the fade particle's draw (system-FED emitters 2..5, not decoded) as a black layer with opacity

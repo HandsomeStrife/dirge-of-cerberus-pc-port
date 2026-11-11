@@ -238,9 +238,12 @@ export class PlacedSounds {
 // FUN_003415d8(C, kind) -> the cue index (null when the table / material gives none). foot: ambient_z128.json foot.
 // gait: C+0x590 bits 30-31 -> kind (FUN_003466a8): 1 -> 0, 2 -> 1, 3 -> 0, 0 -> 4.
 export function footCue(foot, mat, gait, version, f568 = 0, f77a = 0) {
+  return kindCue(foot, mat, gait === 1 || gait === 3 ? 0 : gait === 2 ? 1 : 4, version, f568, f77a);
+}
+// FUN_003415d8(C, kind) itself (kind 0-4; the jump's take-off 2 and landing 3 come through FUN_00341410: worker 0277)
+export function kindCue(foot, mat, kind, version, f568 = 0, f77a = 0) {
   const m = (f568 & 0x10000000) ? f77a : (foot.mat_map[mat] ?? 0xffffffff);       // C+0x6c1 -> DAT_004a1920
   if (!(m >= 0 && m < 0xc)) return null;
-  const kind = gait === 1 || gait === 3 ? 0 : gait === 2 ? 1 : 4;
   if (kind < 4) return kind * 16 + m;
   return version >= 0x2f ? 0x6e + m : m;                                            // jump table 0x4a1960 case 4
 }

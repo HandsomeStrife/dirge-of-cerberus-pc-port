@@ -16,6 +16,8 @@
   #tools button, #rep-form button { font: 12px ui-monospace, Menlo, monospace; color: #eee; background: rgba(0,0,0,.6);
          border: 1px solid #666; border-radius: 4px; padding: 5px 9px; cursor: pointer; }
   #tools button:hover, #rep-form button:hover { background: rgba(60,60,70,.9); }
+  #warp-pick { font: 12px ui-monospace, Menlo, monospace; color: #eee; background: rgba(0,0,0,.6); border: 1px solid #666;
+         border-radius: 4px; padding: 5px 6px; max-width: 220px; cursor: pointer; }
   #btn-report { border-color: #ff2d55 !important; }
   #toast { position: fixed; z-index: 30; left: 50%; bottom: 24px; transform: translateX(-50%); display: none;
          font: 13px ui-monospace, Menlo, monospace; color: #fff; background: rgba(0,0,0,.8);
@@ -45,9 +47,34 @@
 </head>
 <body>
 <div id="hud"></div>
-<div id="tools"><button id="btn-report" type="button">Report (R)</button></div>
+<div id="tools"><select id="warp-pick" title="Warp to a place in the level (page aid, not the game)"></select><button id="btn-report" type="button">Report (R)</button></div>
 <div id="toast"></div>
 <div id="msg">loading…</div>
+<script type="module">
+  // warp picker (PAGE AID, warp.js): a pick reloads the page with ?warp=<name>, other options kept. Mouse only, so it can't take
+  // game keys or type-ahead to a place: out of the Tab order (tabindex -1), it blurs when a row is picked in its popup (the
+  // same row or not) and on a click elsewhere; a key reaching it while closed is cancelled (no type-ahead / arrow / End pick /
+  // popup) and blurs it, then goes on to the game's handlers, except Escape, which only blurs it.
+  import { warpOptions, warpUrl } from './warp.js';
+  const sel = document.getElementById('warp-pick');
+  const cur = new URLSearchParams(location.search).get('warp');
+  sel.add(new Option('Warp to…', ''));
+  for (const o of warpOptions()) sel.add(new Option(o.label, o.name));
+  if (cur && [...sel.options].some(o => o.value === cur)) sel.value = cur;
+  sel.addEventListener('change', () => { const v = sel.value; sel.blur(); if (v) location.search = warpUrl(location.search, v); });
+  sel.tabIndex = -1;
+  // Chrome: a row picked in the popup fires a click with detail 0. A mouse click on the control keeps focus: the page can't
+  // tell an opening click from a closing one (Escape in the popup closes it with no keydown), and a focused, closed control
+  // gives the next key straight back (the listener below)
+  sel.addEventListener('click', e => { if (e.detail === 0) sel.blur(); });
+  // on window, capture, registered before play.js's: pause_layer.js listens there too, so this is first to see Escape
+  addEventListener('keydown', e => {
+    if (e.target !== sel) return;
+    e.preventDefault(); sel.blur();
+    if (e.code === 'Escape') e.stopImmediatePropagation();
+  }, true);
+  addEventListener('pointerdown', e => { if (e.target !== sel) sel.blur(); }, true);
+</script>
 <script type="module" src="play.js"></script>
 </body>
 </html>

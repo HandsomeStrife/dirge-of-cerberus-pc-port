@@ -359,3 +359,51 @@ See notes/message-research.md "Box effects" for the wiring (menu_fx.js). In effe
   exact. Fixtures (gitignored): tools/trace/out/w220/fx330.json, w232/fx321.json, w232/fxrows.json, w198/lines3-5.json.
 - Open: type 26 (FUN_002735f0, the Status panel's second spawner), type 119's draw, children's matrices, E15's model 0x21,
   type 113 (FUN_002d4250: frame-buffer passes, the title card's 0x818c0400).
+
+## Bullet tracers (worker 0278, 2026-11-09; D + T)
+
+Dan: "We're missing bullet trails for some shots." The page drew no tracer for any shot: only the rockets' / missiles' FED trails
+(worker 0270). Every ordinary shot in the game draws one.
+- **Who gets one:** FUN_005534f0 (the bullet's effect start, from FUN_00553630 / FUN_00554568) with +0x140 nibble 0: no record
+  (+0x194 = 0), or a record with no trail (+0x188 = FUN_003358b8 = FUN_003366b8(+0xac) = -1) and no model name (+0x84):
+  +0x198 = FUN_002d77c0(0, (+0x120 & 0x400) == 0). Vincent's shots: FUN_00577480 -> FUN_005408e8(mgr, 0, ..) -> FUN_00553630 ->
+  FUN_00552dd8(b, 0): no record, nibble 0, for every weapon and ammo (the only bullet call in FUN_00577480); the materia shots
+  (FUN_00540ab0 -> FUN_005540d0, FUN_00310810's table, nibble != 0) take the effect path instead (not on the page). Soldiers:
+  FUN_005694f8 -> FUN_005408e8 (no record) or FUN_005409a8 (record W+0x7c): z128 records 0-11, 13-16, 21, 24 have no model and
+  no trail. Records 12, 17-20, 22, 23, 25 (models) and 26 / 27 (trail 0x44000) get none.
+- **Colour:** FUN_00552dd8's tail: +0x120 bit 0x400 when the owner (FUN_0053b978(+0x128)) has +0x28 & 4 or FUN_0055fe40 (its
+  side byte +0x188, FUN_00563288, is 0); the tracer's byte +5 = !bit. DAT_0046c6d0 (ELF): [0] 0xc8c86040 = RGBA (0x40, 0x60, 0xc8,
+  0xc8) blue, [1] 0xc82064c8 = (0xc8, 0x64, 0x20, 0xc8) orange. Vincent (+0x28 0x20901f): blue. Soldiers (side 1): orange. T:
+  route states r06_back (a flying soldier tracer +5 = 1, owner 139; another with +0x120 0x2401, owner 145: +5 = 0, an ally),
+  w278_tracer (#66's f792 tracer +5 = 1, Vincent's +5 = 0).
+- **Pool:** DAT_004e8e00, 32 x 0x30 (+0 used, +4 model index 0, +5 colour, +8 length x 0.1, +0x10 position, +0x20 -direction);
+  full: the dummy &_gp_11 (written, not listed). Draw list DAT_0050b528, count DAT_0046c6f0; FUN_002d78a0 frees and closes the gap
+  (FUN_002d77c0 / FUN_002d78a0 also count texture 7's use, FUN_0030ae48 / FUN_0030aed0 on the texture manager 0x4ec8d0).
+- **Update:** FUN_00557e40 -> FUN_00557d70(bullet, +0x90, +0xe0): v = pos - prev; length 0.01 while +0x120 bit 0x400000 (set by
+  FUN_00552dd8; FUN_005549f0 clears it before its FUN_00557e40, so only the spawn's call has it), else |v|; +0x10 = pos, +0x20 =
+  -v x VRSQRT (a zero v gives -0), +8 = length x 0.1. At the spawn and after each moved update; nothing during +0x142's delay.
+  Freed by FUN_005529a8 -> FUN_002d7678 -> FUN_002d78a0.
+- **Draw:** FUN_002eff60: FUN_002e20f0(0), FUN_002d79c8 (camera 0 +0x150 / +0x110 / +0x1d0 to scratchpad 0x3f00 / 0x3f40 / 0x3f80,
+  each listed tracer FUN_002d7a70), FUN_002e20f0(1), (2). FUN_002d7a70: model DAT_0050b5a8[+4] = FUN_002f55d0(core_ef, 4, 0)
+  (FUN_002d7758); s = model +0x18; FUN_002d84f0 S = diag(s, s, +8 x s); FUN_002d93d0(O, +0x10, +0x20): up = 0x46c710 (0, 0, 1)
+  when d.x and d.z are +0 (int compare), else 0x46c700 (0, 1, 0); row 0 = unit(up x d), row 2 = unit(d), row 1 = row 2 x row 0,
+  row 3 = pos; FUN_002d8438: S . O; FUN_002d8368: . +0x1d0; block 0x70003e00: flags 2, UV offset 0, colour DAT_0046c6d0[+5],
+  added 0, no depth matrix, no fog flag -> FUN_002f2f08 -> FUN_002f5c50 (effects.js modelPrims, drawModel's loop).
+- **The model:** core_ef.bin (FileCode 0x03100037, resident at 0xeb0000 = DAT_004ee948; FUN_002449e8 loads it, FUN_002f20f8
+  uploads its textures and relocates it: FUN_002f55b0 -> FUN_002f5460(core, R = core + core +0x3c) -> FUN_002f53f0(core, R, 4):
+  core +0x10's table = R + R's own (R + u32(R + 0x10)), u16 R +0x48 + 1 entries). Model 0 at 0x720: flags 7 (no cull), one
+  command, 8 textured quads (kind 6), 20 s16 vertices in the model's y = 0 plane, scale 0.000297 (32767 = 9.74), ALPHA 0x48
+  (additive), TEX0 4007bd06:613137c0 = core texture 7. A core strip (x -979 .. 1009 = +-0.3 u, alpha 0x80, RGB 0x80 -> 0x60 -> 0x20
+  -> 0 from z 0 to 26499) and a glow strip (x -3672 .. 3785 = +-1.1 u, alpha 0x10, z -1682 .. 32767). So a tracer is a flat
+  ribbon from 4 u ahead of the bullet back over 0.974 of its last step, fading toward the old end.
+- **T (w278_tracer, k_bullet1's run + R1 at 890 / 905 / 925 / 945; TRACE_CALLLOG=w278tracer):** per drawn tracer its fields, the
+  three camera matrices and FUN_002d7a70's two products. Vincent's pellets: spawn state 2 frames (delay i + 2), one frame at length
+  8 (80 u a frame), then gone (the hit frame's delete comes before the draw); #66's point-blank shot (15 u) is drawn only in its
+  spawn state. Page tracerMatrix = the game's S . O for all 30 (4.7e-10), x +0x1d0 = the draw matrix (6.5e-6). GS dumps (grab_gs
+  904 / 944: states f905 / f945, dumps f909 / f949): the page's drawTracer with the logged camera against the dump's texture-7
+  triangles in draw order: 32 / 48 triangles (incl. the zero-area spawn ones and a soldier's orange one), XY within 1/16 px, Z
+  <= 7e-6, RGBA 96 / 96 and 144 / 144 exact, ST <= 1.4e-7. Fixtures (gitignored): tools/trace/out/w278_tracer.calls.jsonl,
+  tools/trace/out/w278/dump_g1.json, dump_g2.json (dumpfx.py).
+- **Page:** shot_fx.js (pool, start / move / end, effects' addDraw hook), effects.js (byteReader, coreModel, tracerLookAt,
+  tracerMatrix, drawTracer, modelPrims split out of drawModel; createEffects `core`, `addDraw`), enemy_ai.js (side400 on both
+  bullet makers, Vincent's pellets start shot_fx). Draw order: after every emitter of the main engine (GUESS row).

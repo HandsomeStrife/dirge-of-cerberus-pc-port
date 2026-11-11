@@ -52,6 +52,30 @@ and posts it message 1; e036's event 2 (var1 0) sets var1 = 1 and starts path 84
 - Combat layer 1 (vt 0x4a23a0): start FUN_00360da8 = FUN_003607a8(ai, -1); update FUN_00360dc8 = magazine not empty ->
   FUN_003607a8(ai, -1), else FUN_00360718 (reload); vt+0x24 FUN_00360e10 = FUN_00360820 (stop); free FUN_00361180.
 
+## The beast alley: the child's abduction and rescue (worker 0276, 2026-11-09; Dan's "save the abducted girl")
+Records: e_BeastB 8 / e_BestB2 9 (e030, script 217), e_Beast 7 (e030, script 222, area 88), n_Child 112 (n028, script 153),
+n_Mother 115 (n026, script 30, area 88), o_nui 151 (g001, the child's toy, no script). Manager shorts (cmd 0x2f / 0x30, mgr +0x28):
+69 rescue open, 71 Vincent in trigger 166, 72 the child seen, 73-76 marker / step states. Scripts read with tools/stage_events.py
+(--dis) and the routines by index from ai.json script_fns (cmd 0x114 runs function r0 of the host's script, not an event).
+- **beast_ev01** (main, stage flag 0 = 11) ends with 8 and 112 active at their placements (T: +0x28 0x840b / 0x9403 at f593).
+- **Trigger 163** (-655.5, 241.7), script 216 event 0xd: 74 = 1, 76 = 2; 0x108 on 8, 112, 151 (+ 0x14c bits 3 4 2 6 5 13) and
+  **cmd 0x19b 'kidnap'** to each; trigger 185 and e_Beast 7 on; routine 216/1 (0x114(1)).
+  'kidnap' is in each model's motion file k = 0xb (m001): e030 0765078b (rn_b, kidnap, kidnap2), n028 076e070b (kuwa, kidnap), g001
+  0767004b (and its 0 / 0xa files). Class 0x42 (FUN_0059e730): bone 1 carries the world path. **T w276_beastpos** (r04_east +
+  w217_r05_west, walked): beast 8's C+0x30 creeps (-819, 483) -> (-857, 465) in 200 frames, holds, runs to (-1043, -3, 417) by +380;
+  the child's C+0x30 stays (1.66e-6, 0, -4.8e-7) = her clip's root (drawn on the clip's bones, carried).
+- **Routine 216/1** (delays 55, 410, 426, 430, 550, 600, 820): the child's cry (0x125), trigger 165 0x18d(0); beast 8 0x16e(0) /
+  0x11a(1) (T: +0x28 bit 0x1000 at f1108); voices on record 186; stage flag 1 = 13 (T f1224); step 7: **69 = 1, trigger 165
+  0x18d(1)** (✕ usable), beast 8 off (0x109) (T f1449 = trigger + 684; page + 683).
+- **Trigger 165** (-1010.5, 434.1, shape 8, flags 0x10018), script 219 event 0x11 (✕): with 69 == 1 and its bit 7 clear: 76 = 0,
+  voice asj_634, timer 160 -> event 1: 74 = 2, markers (0x17 / 0x18), routine 219/2 (the child to locator 19 (0x40 / 0x10e), 0x141,
+  voices, **trigger 166 0x113(2)**), the child's 0x113(2) (her event 0x18: cmd 0xab on manager +0x260 -> short 72).
+- **Trigger 166** (-989.7, 443.7), script 220: 0xd / 0xe set 71; event 0x18 (period 2): 71 == 1, 72 == 1, bit 0 clear -> 0x104(0,
+  1), trigger 168 off, message 0 to 8 (difficulty 2, cmd 0xa6) else 9 -> script 217 event 2: locator 20, 0x10e, 0x193, 0x108,
+  0x16e(1), 0x11a(0), 0x143(3) (attack). Trigger 177 (script 234, 320-tick poll) counts 8 and 152-163 dead -> stage flag 1 = 11
+  (beast_ev02), shorts 56 += 2, 57 = 1.
+- On the walked route (no ✕ at trigger 165) nobody fights in the game either: 72 never 1, 7 / 115 stay at their placements (T f1500).
+
 ## Open
 - No PCSX2 trace of any of these fights: route states stop in chunk 02 (route-states.md); trigger 71 is at the chunk 02 -> 03
   stairs top (r02_climb is at their foot), trigger 18 in chunk 07. A trace needs a walk up from r02_climb (route.py) or a
@@ -91,7 +115,7 @@ nothing drew a bullet with a model and its hit test was the thin one, so a rocke
 (`model`), +0xac the trail effect (`fx_trail`), +0xb0 the end effect, +0x9c the end sound (`se_end`), +0xb6 (char) the radius
 (`f2c`), +0x78 flags. Weapons 20 / 22 / 25 (Dragonfly): w011, trail 0x405c0400, end 0x405c0800, asj_374, +0x78 0x12. Weapons
 17-19 (the z128 boss's missiles): w011, 0x40600400 / 0x40600800. 23: w010 (0x40780800). The soldiers' records: none (their
-+0x198 tracer, FUN_002d77c0, is still not drawn).
++0x198 tracer, FUN_002d77c0: drawn since worker 0278, notes/effects-research.md 'Bullet tracers').
 - FUN_00554850: +0x78 bit 2 -> bullet +0x2c = (char)+0xb6 (6), +0x120 |= 0x800, +0x28 |= 0x200000; bit 0x10 -> +0x120 |= 0x10000.
   T w270_rockets / w259_rockets: +0x120 0x10a00 on all 306 rocket steps; w235_missile 0x10800 on all 649 boss missile steps.
 - **Model:** FUN_00553f48: +400 = FUN_00408b30(+0x84) (+0xc8, a motion: empty for every z128 record). Placed each moved update by

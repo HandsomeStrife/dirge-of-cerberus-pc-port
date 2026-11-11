@@ -101,6 +101,7 @@ export class EventRuntime {
     this.windows = opts.windows || null;        // event_window.js (worker 0222): KerberosWindow open_l / close_l
     this.stageInfo = opts.stageInfo || null;    // () -> stage_info.js StageInfo (worker 0265): displayStageInfo / isDisplayStageInfo
     this.stageInfoWait = opts.stageInfoWait || null;   // () -> true while the page still loads it (worker 0265)
+    this.effects = opts.effects || null;        // event_fx.js (worker 0275): the KerberosEffect natives, command 0x1d
     this.skip = 0;                              // +0x156c: 1 at FUN_00372f70 (the Skip choice), 2 from the next frame
     this.skipMode = 0;                          // +0x9860 (setSkipMode bits; read by the load / window commands)
     this.lang = opts.lang ?? 2;                 // FUN_00242450 = PTR_0046b2dc: 2 in the z128 save (the page's language)
@@ -151,6 +152,7 @@ export class EventRuntime {
       else if (c.type === 7) fin = this.camMove(c);                      // case 7: FUN_003779d0
       else if (c.type === 0x22) fin = this.actors ? this.actors.chain(c, this) : true;   // case 0x22: FUN_00382768 (setmotionChain; worker 0263)
       else if (c.type === 0xc) fin = this.actors ? this.actors.walk(c, this) : true;     // case 0xc: an actor's walk (worker 0263)
+      else if (c.type === 0x1d) fin = this.effects ? this.effects.seq(c, this) : true;   // case 0x1d: FUN_00382cd8, an effect sequence (worker 0275)
       if (fin) this.slots.splice(this.slots.indexOf(c), 1);
     }
     if (this.windows) this.windows.frame(this);                          // the event windows' state (event_window.js)
@@ -354,6 +356,7 @@ export class EventRuntime {
     if (R.actors) Object.assign(N, R.actors.natives(R));
     if (R.sound) Object.assign(N, soundNatives(R, R.sound));
     if (R.windows) Object.assign(N, R.windows.natives(R));
+    if (R.effects) Object.assign(N, R.effects.natives(R));
     return N;
   }
 }

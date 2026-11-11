@@ -3959,15 +3959,15 @@ export function createEnemyAI(opts) {
     P.c810 = S.mgr20;
   }
   // FUN_00341330(C, cue): C+0x7ec table; '' -> nothing; '?' -> event 0x25 (r0 = cue) to the owner C+0x7dc = P;
-  // else FUN_00341268 -> FUN_0054b158(P, name, 1). L: FUN_0054b158 taken as "play the name at P" (notes/audio-
-  // research.md 'Cue sounds'; no named cue is reached on the hit path in z128).
+  // else FUN_00341268 -> FUN_0054b158(P, name, 1) -> FUN_0054ae78: P+0x40 bit 7 -> (0, P+0x30 x 0.5, 0) through P's matrix
+  // (row 1 = (0, -1, 0)): 9 above his feet (worker 0277; T w277_jump: bt_v010 at body y - 9), then FUN_0033cc48 there.
   function playerCue(c) {
     if (!PLAYER_CUES) { warnOnce('enemy_ai: ai.json has no cue tables: rebuild data/enemies; no hit voice'); return; }
     if (!(c < PLAYER_CUES.length)) return;
     const nm = PLAYER_CUES[c];
     if (!nm) return;
     if (nm === '?') { runEvent(PLAYER_OBJ, 0x25, [c, 0]); return; }
-    sound(nm, Array.from(P.pos));
+    sound(nm, [P.pos[0], f(P.pos[1] - f(H_PLAYER * 0.5)), P.pos[2]]);
   }
 
   // FUN_0055c7f8 (as damagePlayer). The soldier's vt+0x314 / +0x31c (0x55e0c8 / 0x55e0d0) and Vincent's
@@ -4039,6 +4039,14 @@ export function createEnemyAI(opts) {
     if (!(W.flags & 0x2000)) fl |= 0x2000;                                    // else homing: +0x150 mode 1 (spawnShot, worker 0235)
     return fl;
   }
+  // worker 0278: FUN_00552dd8's tail: +0x120 bit 0x400 when the owner (FUN_0053b978(+0x128)) has +0x28 & 4 (Vincent's 0x20901f) or,
+  // without it, FUN_0055fe40: its side byte +0x188 (FUN_00563288) is 0; no owner: cleared. It picks the tracer's colour
+  // (FUN_005534f0 -> FUN_002d77c0; shot_fx.js). The soldiers' side: a.f188 ?? 1 (save RAM: 1; not exported, as blastActor)
+  function side400(o) {
+    if (!o) return 0;
+    const f28 = o === P ? (P.f28 ?? 0x20901f) : (o.flags28 ?? 0), side = o === P ? (P.f188 ?? 5) : (o.f188 ?? 1);
+    return ((f28 & 4) || !(side & 0xff)) ? 0x400 : 0;
+  }
   // worker 0270: the bullet's matrix rows (FUN_00554058 draws its model with them, FUN_00557c68 its trail). FUN_00552dd8: +0x80 =
   // dir; h = the axis of dir's smallest component (|y| <= |x| or |z| <= |x|: y when |y| < |z|, else z; otherwise x); +0x70 =
   // unit(dir x h), +0x60 = +0x70 x dir. FUN_00556218, after a turn: +0x60 = unit(+0x70 x dir), +0x70 = unit(dir x +0x60).
@@ -4075,7 +4083,7 @@ export function createEnemyAI(opts) {
     const b = {
       from: a, start, dir, end, endDist: f(len3(sub3(start, end))), range,
       speed: f(W.speed * f(0.16666667)),                                      // +0x12c (bullet flag 2 clear)
-      age: 0, pos: start.slice(), prev: start.slice(), f120: bulletFlags(W),
+      age: 0, pos: start.slice(), prev: start.slice(), f120: (bulletFlags(W) | side400(a)) >>> 0,   // worker 0278: | FUN_00552dd8's 0x400
       delay: 0 + 2,                                                           // +0x142 = (FUN_005409a8 arg 7 = 0) + 2
       damage: W.damage,                                                       // +0x134 = (short)W+0x40
       hit: W.hit ?? 0, f148: W.react ?? 0,                                    // +0x153 = W+0x4a, +0x148 = W+0xc (FUN_00552dd8)
@@ -4559,13 +4567,15 @@ export function createEnemyAI(opts) {
         speed: f(W.speed10 * f(0.16666667)),                                  // +0x12c = W+0x2c / 6
         // FUN_005405b0: +0x120 |= 0x100004 with the shooter's status (param_6) +0x60 bit 1 (Vincent's 0x8233; worker 0209:
         // bit 2 lets the bullet break a gimmick with type flag bit 6, FUN_00585000)
-        age: 0, pos: start.slice(), prev: start.slice(), f120: (bulletFlags(W) | ((PS.f60 & 2) ? 0x100004 : 0)) >>> 0, f148: 0,
+        age: 0, pos: start.slice(), prev: start.slice(), f120: (bulletFlags(W) | ((PS.f60 & 2) ? 0x100004 : 0) | side400(P)) >>> 0, f148: 0,
         cls: W.class & 3,                                                     // +0x150 bits 16-17 = W+0x14 >> 2 & 3 (FUN_00552dd8)
         delay: i + 2,                                                         // +0x142 = pellet index + 2
         damage: W.damage, hit: W.hit ?? 0,                                    // +0x134 (short)W+0x40, +0x153 W+0x4a
         kind: (W.flags & 0x80000) && JITTER_ON ? 2 : 0,                      // FUN_00554738
         shooter: P.id ?? 0x16,                                                // +0x128 owner id
       });
+      // worker 0278: FUN_005408e8 -> FUN_00553630 -> FUN_005534f0: no record (+0x194 = 0), so the tracer (shot_fx.js)
+      if (opts.shotFx) opts.shotFx.start(bullets[bullets.length - 1]);
     }
     if (W.hit == null) warnOnce('enemy_ai: weapon.json has no hit value (W+0x4a): rebuild data/aim; stagger uses 0');
     // after the pellets FUN_00577480 plays FUN_0033d118(W, muzzle) (P+0x28 bit 0x20 clear: T: w170_sound2 v_fire_118;
@@ -5905,6 +5915,7 @@ export function createEnemyAI(opts) {
                   hudGauge: () => hudGauge,               // worker 0231: manager 0x6e / 0x6f / 0x70
                   get bossPlugin() { return bossPlugin; }, setBossPlugin: on => { bossPlugin = !!on; },   // FUN_00aa30c8 (Zone.boss)
                   playerObj: PLAYER_OBJ,                  // Vincent's script object (worker 0224: items.js runs his event 0x3a)
+                  playerCue: (c, force) => gatedCue(c, force ? 1 : 0),   // FUN_003412d0(C, cue, force) (worker 0277: the jump's 0x50 / 0x51)
                   postManager,                            // FUN_0053fbe8 (props.js: cmd 0x14a's event 6)                    // the world's event flags (FUN_003ff738; tests: checkpoint.js)
                   playerBoneWorld: opts.playerBoneWorld || null,
                   attackPick: a => attackPick(a.ai),     // FUN_0035ff98 on an actor's AI (tests)

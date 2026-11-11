@@ -142,6 +142,13 @@ def fits(buf, P, end, bc, slack=16):
     return True
 
 
+def cloth_windows(buf, ents, clips):
+    """worker 0280: each clip's cloth window bytes, as export_web_vincent.cloth's clip_windows: FUN_005a95f0 reads the clip's
+    flag +0x19 (0 -> window cleared, 2 -> 2 x u16 +0x1a, else unchanged) when the clip starts on the head layer. Read for
+    every MP, event-loaded ones too (cloth.js, event_actors.js's cape)."""
+    return {nm: [int(buf[P + 0x19]), int(A._u16(buf, P + 0x1a))] for nm, P, _e in ents if nm in clips}
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--event', required=True, help='data/event/ev0100_scr001.json (export_web_event.py)')
@@ -209,6 +216,7 @@ def main():
             name = '%s_m%02x_local.bin' % (m, n)
             lp = V.local_pose(sk, list(sk['parent']), clips, out, name, in_place=False)
             lp['clipFrames'] = {c: d['nf'] for c, d in clips.items()}
+            lp['clothWindows'] = cloth_windows(buf, ents, clips)
             lp['container'] = os.path.basename(f)
             packs['%d' % n] = lp
         # worker 0248: the character's own (resident) motion files (export_web_enemy CLIP_KS: FUN_00249cb8 k) that hold a
@@ -232,6 +240,7 @@ def main():
             clips = {nm: dict(cont=f, nf=AR.clip_frames(buf, P), zero_y=False) for nm, P, _e in ents}
             lp = V.local_pose(sk, list(sk['parent']), clips, out, '%s_%s_local.bin' % (m, key), in_place=False)
             lp['clipFrames'] = {c: d['nf'] for c, d in clips.items()}
+            lp['clothWindows'] = cloth_windows(buf, ents, clips)
             lp['container'] = os.path.basename(f)
             packs[key] = lp
             resident.append(key)

@@ -1,0 +1,1 @@
+{"name": "w275_scan", "frames": 1000, "log_from": 60, "doc": "worker 0275: the opening's scanner shot (p014 + playseqstr_l on actor 10) from worker 0210's start1704 state, no input; GS dumps via grab_gs.py", "events": []}

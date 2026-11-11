@@ -218,16 +218,117 @@ export function createEventActorView({ root, lib, rt, litPatch, light, weapon = 
       l2 = new Light2();
     }
     const v = { a, body, pose, joints, prims, U, l2, files: [], model: M, tad: texAnimView(M, prims, warnOnce) };
+    v.cape = capeOf(v, scn, U);
     // draw order (FUN_005a7978): in front of the older actors
     group.add(body);
     const c = group.children; c.splice(c.indexOf(body), 1); c.unshift(body);
     return v;
   }
 
+  // ---- the cape (worker 0280; notes/story-cutscenes.md 'Vincent's cape in events')
+  // FUN_005ab8f0 draws every MP, an event-loaded one too, through FUN_005b2ef8, which calls FUN_005b2550 for each smd list
+  // entry of the MP's variant: FUN_005b06d0 (the cloth vertices' keyed targets, all influences) and FUN_005b0d30 (the cloth
+  // step) run for any block whose cloth count (smd +0xe) is not 0. p000 (07700001.bin) has one such block, 0x19f70: the
+  // cape, the same bytes as gameplay Vincent's (07703201.bin 0x19ed0; one relocated pointer differs), which is
+  // data/vincent/cloth.json's source. The enemies' pipeline that exports the event models can't decode a cloth block
+  // (no skin batches), so p000.glb has no cape; play.js lends vincent.glb's cape corners and materials (lib.cape) and
+  // each body runs its own cloth.js CapeCloth, as the game keeps a cloth buffer per block. p005's cape is an ordinary
+  // skinned block (+0xe = 0) and is in its glb. The skeletons are the same (93 joints, equal inverse binds), so
+  // cloth.json's bind-model points skin on the event body as on Vincent's.
+  const CLOTH_BLOCK = { p000: '0x19f70' };     // model -> the cloth block in its smd list (actors.json blocks)
+  function capeOf(v, scn, U) {
+    const blk = CLOTH_BLOCK[v.a.model], C = lib.cape;
+    const list = v.model.info.blocks || [];
+    if (!blk) {
+      // p001 has cloth blocks of its own (07700041.bin 0xe910 / 0x17100 / 0x1dec0), not exported
+      if (v.a.model === 'p001') warnOnce('cloth p001', `event actor ${v.a.id} (p001): its cloth blocks are not exported (not drawn)`);
+      return null;
+    }
+    if (!C) { warnOnce('cape', `event actor ${v.a.id} (${v.a.model}): no cape source (play.js lib.cape; ?cloth=0 or no data/vincent/cloth.json): cape not drawn`); return null; }
+    const skm = v.prims.find(o => o.isSkinnedMesh);
+    const ci = list.indexOf(blk);
+    if (!skm || ci < 0) { warnOnce('cape ' + v.a.model, `event actor ${v.a.id} (${v.a.model}): no skeleton / no block ${blk}: cape not drawn`); return null; }
+    const cloth = new C.CapeCloth(C.data);
+    const n = C.data.corner_vertex.length, N3 = cloth.N * 3;
+    const geom = new THREE.BufferGeometry();
+    for (const [k, at] of Object.entries(C.attributes)) geom.setAttribute(k, at);      // uv / colour: shared, read-only
+    const posAttr = new THREE.BufferAttribute(new Float32Array(n * 3), 3).setUsage(THREE.DynamicDrawUsage);
+    const nrmAttr = C.normals ? new THREE.BufferAttribute(new Float32Array(n * 3), 3).setUsage(THREE.DynamicDrawUsage) : null;
+    geom.setAttribute('position', posAttr);
+    if (nrmAttr) geom.setAttribute('normal', nrmAttr);
+    // draw order: FUN_005b2ef8 walks the smd list from its last entry; the glb's triangles are in that order
+    // (export_web_enemy.decode), so the cape goes after the triangles of the entries behind it in the list
+    let before = 0;
+    for (const g of v.model.side.groups) {
+      const b = list.indexOf(g.name.slice(g.name.indexOf('@') + 1, g.name.lastIndexOf('.')));
+      if (b > ci) before += g.triangles;
+    }
+    const parent = skm.parent;
+    const at = parent.children.filter(o => v.prims.includes(o) && (o.geometry.userData?.firstTri ?? 0) < before).pop();
+    let i = at ? parent.children.indexOf(at) + 1 : 0;
+    const meshes = [];
+    for (const m of C.materials()) {                  // pass 1, then the GS alpha-fail pass (play.js gsAlphaPasses)
+      const o = new THREE.Mesh(geom, m);
+      o.name = v.a.model + ' cape'; o.frustumCulled = false; o.userData = { cloth: true };
+      if (U && litPatch) litPatch(m, U, true);       // program D with the cloth buffer's normals, the actor's own rig
+      parent.children.splice(i++, 0, o); o.parent = parent;
+      meshes.push(o);
+    }
+    const sk = skm.skeleton, bind = skm.bindMatrix, tmp = new THREE.Matrix4(), inv = new THREE.Matrix4();
+    const bones = [...new Set(C.data.skin.map(r => r[1]))], mats = new Map();
+    const nrm = new Float32Array(N3);
+    return {
+      cloth, meshes, geom, block: ci, req: undefined,
+      // one game frame, after place() set the body's matrices: FUN_005b2550's FUN_005b06d0 + FUN_005b0d30 at the draw
+      // pose, then FUN_005aa5b8's decrement and the facing check of the matrix the update set (cloth.js frame order)
+      frame(fx) {
+        for (const b of bones) mats.set(b, tmp.multiplyMatrices(sk.bones[b].matrixWorld, sk.boneInverses[b]).multiply(bind).toArray());
+        const skinMat = b => mats.get(b);
+        cloth.frame({ skinMat, fx });
+        inv.copy(parent.matrixWorld).invert();
+        const e = inv.elements, P = cloth.pos, out = posAttr.array, cv = C.data.corner_vertex;
+        for (let k = 0; k < n; k++) {
+          const j = 3 * cv[k], x = P[j], y = P[j + 1], z = P[j + 2];
+          out[3 * k] = e[0] * x + e[4] * y + e[8] * z + e[12];
+          out[3 * k + 1] = e[1] * x + e[5] * y + e[9] * z + e[13];
+          out[3 * k + 2] = e[2] * x + e[6] * y + e[10] * z + e[14];
+        }
+        posAttr.needsUpdate = true;
+        if (nrmAttr) {                                // FUN_005b06d0's normal half: the keyed target's, never the cloth's
+          cloth.skinNormals(skinMat, nrm);
+          const o = nrmAttr.array;
+          for (let k = 0; k < n; k++) {
+            const j = 3 * cv[k], x = nrm[j], y = nrm[j + 1], z = nrm[j + 2];
+            o[3 * k] = e[0] * x + e[4] * y + e[8] * z; o[3 * k + 1] = e[1] * x + e[5] * y + e[9] * z; o[3 * k + 2] = e[2] * x + e[6] * y + e[10] * z;
+          }
+          nrmAttr.needsUpdate = true;
+        }
+      },
+    };
+  }
+
+  // a clip request seen at the draw (FUN_005a91c8 -> FUN_005a95f0): the window bytes of the clip's own pack
+  // (actors.json clothWindows, export_web_event_actors.py), else cloth.json's (Vincent's gameplay clips). Armed at the
+  // request, drawn or not (FUN_005a95f0 runs in the request, not in the draw). A lent actor's slot holds the object's own
+  // MP (stage_controller.js getbattleactor), so the request arms that MP's window too: the gameplay cape's (a.lent.cloth,
+  // play.js vinBattle), which the page keeps as a separate CapeCloth (worker 0280 review)
+  function capeRequest(v) {
+    const c = v.cape, mp = v.a.mp;
+    if (c.req === mp.req) return;
+    c.req = mp.req;
+    if (!mp.clip) return;
+    const h = rt.actors.findClip(v.a, mp.clip), p = h && v.model.packs[h.n];
+    const w = p && p.info.clothWindows ? p.info.clothWindows[mp.clip] : undefined;
+    if (!w && !c.cloth.windows[mp.clip]) warnOnce('window ' + mp.clip, `event actor ${v.a.id} (${v.a.model}): clip ${mp.clip} has no cloth window bytes (re-run export_web_event_actors.py); the window is left as it was`);
+    c.cloth.clipStart(mp.clip, w || c.cloth.windows[mp.clip]);
+    if (v.a.lent && v.a.lent.cloth) v.a.lent.cloth.clipStart(mp.clip, w || c.cloth.windows[mp.clip]);
+  }
+
   // a body's own GPU objects: cloned materials and cloneSkinned's skeletons (their bone textures); the glb's
   // geometry / textures are shared with the library and stay
   function freeBody(v) {
     const sk = new Set();
+    if (v.cape) { v.cape.geom.dispose(); for (const o of v.cape.meshes) o.material.dispose(); }
     for (const o of v.prims) { o.material.dispose(); if (o.isSkinnedMesh && o.skeleton) sk.add(o.skeleton); }
     for (const s of sk) s.dispose();
     if (v.tad) v.tad.dispose();
@@ -314,6 +415,7 @@ export function createEventActorView({ root, lib, rt, litPatch, light, weapon = 
     // a set behind loadchr's mask (event_actor_rt.js findClip): its pack joins when asked for
     if (mp.clip && !v.pose.lp.clips[mp.clip]) { const h = rt.actors.findClip(a, mp.clip), p = h && (a.late || []).includes(h.n) ? v.model.packs[h.n] : null; if (p && p.buf) v.pose.addLocalPose(p.info, p.buf); }
     if (mp.clip && v.pose.lp.clips[mp.clip]) v.pose.poseLocal(mp.clip, mp.frame, null, 0, 1);
+    if (v.cape) capeRequest(v);
   }
 
   // place every body after the update (the MP matrices), attached ones through their parent's socket
@@ -360,6 +462,13 @@ export function createEventActorView({ root, lib, rt, litPatch, light, weapon = 
       if (v.tad && a.drawn.tex) v.tad.apply(a.drawn.tex);               // the texture animations (worker 0248)
       v.body.updateMatrixWorld(true);                                  // the joints' world for children and light
       lightRig(v, new THREE.Vector3().setFromMatrixPosition(v.body.matrixWorld));
+      if (v.cape) {
+        // FUN_005b2ef8 skips a hidden list entry (MP+0x180, hide_model_l) and FUN_005abec0 a hidden MP: no draw, no cloth step
+        const on = shown && !((v.a.partMask >>> v.cape.block) & 1);
+        for (const o of v.cape.meshes) o.visible = on;
+        const M = a.mp.M;                                              // FUN_005a6f40's facing check: the matrix's x axis (row 0)
+        if (on) v.cape.frame(M ? [M[0], M[1], M[2]] : null);
+      }
     };
     for (const a of rt.actors.slots) placeOne(a);
   }

@@ -265,6 +265,8 @@ INPUTS = {
     '07650042.bin': 'c32c4a27b524a8ed7bff7cb2fe9e809a265dc350f25943963478d46893978a84',   # e001 textures
     '07650040.bin': 'c6fdc70867907cbf2b423e4bd8239f4ab98e69fdd1157eaf1a18aed373bde697',   # e001 clips m000 (n_st)
     '0765004b.bin': 'cbb669695daf5c1ca1ea1e1e32da65039bb648e845edd1fbe1a36864ce3c7970',   # e001 clips m001 (a_*: its stance 0x10 rows; worker 0230)
+    '0765078b.bin': 'd90d38e85600afa918a4aeef3e63e20f9aead44ea814417806ec0d38bb276bef',   # e030 clips m001 (kidnap: trigger 163's cmd 0x19b; worker 0276)
+    '076e070b.bin': 'bd639a5b5f54568394cba389f20ab549e2e18a9ddf72f42a7e1983b002b3494a',   # n028 clips m001 (kidnap: trigger 163's cmd 0x19b; worker 0276)
     '07703201.bin': '9b5570610fb12e2eaf834cec0025c3cc18f7c8a64ba5f92d416d0b78e5d315d9',
     '07703202.bin': '06cfcf6ce98c8e60abb4ba119489c67da2a70429bfd32df3c44acd271cb137c3',
     '07703200.bin': 'bac21ed575aa60e3742de4b0c1c36b787444de612f566b4d4e24f1a842181a75',
@@ -365,6 +367,8 @@ INPUTS = {
     # the stage-info boxes (export_web_stageinfo.py, worker 0220): ev0100's message file, the box FED a0211 (file 0x3100085)
     '0c0641ca.bin': '99f2fdd0b88b1592fde3460f84f94e9968beec8824d539d28f62cf6febbd6119',
     '../data/effect/anything/a0200/a0211/fer/a0211.fed': '061e191289545e0b734251f8dea714832d26a60e2b413b70ad82915cc77f894b',
+    # the opening's event effects (Effect.load(1): FED 0x80040000, the scanner SCOPE01_*, HINOKO, HEAD*; export_web_event_fx.py, worker 0275)
+    '../data/effect/anything/a0000/a0001/fer/a0001.fed': '8cbe0c811c9780b90fc1ab07f49c88dbe96c59ad372261724411c10c402d3fc0',
     # outside noPath: the UK locale's menu textures, font and strings (export_web_hud.py, export_web_pause.py)
     '../data/etc/locale/uk/menudata.bin': '5a4d8679077abd937d5938417db218dd80e368dd0e5dc8e7734da26c8a3ba740',
     '../data/etc/locale/uk/fontdata1.bin': 'd9d46539391478cdbb9a8b7d517c2b3fe278c9a2da5c805f7c2105092675cdaf',

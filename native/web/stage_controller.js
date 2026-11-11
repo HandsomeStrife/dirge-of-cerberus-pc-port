@@ -131,6 +131,7 @@ export class StageRuntime extends EventRuntime {
     // traced only (w210 start1704: 0 mid stage load); its writer is not decoded
     this.gflags = o.globalFlags || new Uint8Array(64);
     this.peaceN = 0;                  // DAT_0046f854 (FUN_003809a8's peace count)
+    this.noPause = false;             // DAT_004f3044 bit 0x10000 (FUN_003e0d18; cleared at the stage load by FUN_00245d00; worker 0277)
     this.cardOn = false; this.cardSaved = false;
     this.sectionStat = {};            // KerberosIntermission section stats (FUN_003a53e0)
     this.zoneCmd = null;              // the live command 4 (+0x985c: one at a time)
@@ -461,13 +462,21 @@ export class StageRuntime extends EventRuntime {
       // peace / chaos (FUN_0039def0 / FUN_0039df18 -> FUN_00380290(ev, 1 / 0)): FUN_0037df80 -> FUN_003809a8 (bit 10
       // counter); peace: FUN_0037dc78, FUN_0037def0 (bit 6), waits FUN_00323538; chaos: FUN_003e0d18(0), FUN_00325b10(0)
       // FUN_003809a8's counter DAT_0046f854: peace +1 (bit 10 on at 0 -> 1), chaos -1 (bit 10 off when it drops below 1)
+      // worker 0277: peace's FUN_0037dc78(ev, 0): the +0x1558 abort bit 33 is never set on the page, so FUN_003dedc0() == 0 ->
+      // FUN_003e0d18(1): DAT_004f3044 |= 0x10000 (noPause), which FUN_003de130's Start -> pause branch tests (FUN_003e0d50); chaos's
+      // FUN_003e0d18(0) clears it. T w277_pickup_gates: 0x10000 from deb_jump's peace (f206) to its chaos (f458); w277_pickup_start:
+      // Start with the help box up (f300) opens nothing, Start after chaos (f465) opens the pause
       'fake/KerberosZone.peace()V': () => {
         const g = gs(); if (g) { if (R.peaceN === 0) g.set(10); g.set(6); }
-        R.peaceN++; R.state.peace = 1; log('peace');
+        R.peaceN++;
+        R.warnOnce('stage: peace\'s FUN_0037dc78 screen close (FUN_003dec80(0)) and its wait for open screens (FUN_003e05d8 / FUN_003dedc0) left out');
+        R.noPause = true;
+        R.state.peace = 1; log('peace');
       },
       'fake/KerberosZone.chaos()V': () => {
         const g = gs(); R.peaceN--;
         if (R.peaceN < 1) { R.peaceN = 0; if (g) g.clear(10); }
+        R.noPause = false;                                                  // FUN_00380290(ev, 0): FUN_003e0d18(0)
         if (g) g.clear(6); R.state.peace = 0; log('chaos');
       },
       // scene_save (FUN_0039c728): unless game-state bits 0xc / 0x10 / 0x14: wait_save, then FUN_0023d690(0, n, 0) ->

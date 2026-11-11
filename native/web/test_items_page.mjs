@@ -87,6 +87,14 @@ try {
     ok(b1.yaw === b0.yaw && b1.pitch === b0.pitch, `the mouse does not turn the camera (yaw ${(b1.yaw - b0.yaw).toExponential(2)}, pitch ${(b1.pitch - b0.pitch).toExponential(2)})`);
     ok(b1.st === b0.st && b1.drawn === b0.drawn && b1.rounds === b0.rounds, `R1 / R2 do nothing (weapon state ${b0.st} -> ${b1.st}, drawn ${b0.drawn} -> ${b1.drawn}, rounds ${b0.rounds} -> ${b1.rounds})`);
   }
+  // worker 0277: Start with the help box up opens nothing (deb_jump's peace -> FUN_0037dc78 -> FUN_003e0d18(1): DAT_004f3044 bit
+  // 0x10000, FUN_003de130's FUN_003e0d50 test; T w277_pickup_start: Start at f300 with the box up, no pause)
+  if (box) {
+    await pg.keyboard.press('Enter'); await new Promise(r => setTimeout(r, 400));
+    const p = await pg.evaluate(() => ({ active: window.__play.pause.active, noPause: window.__play.stage && window.__play.stage.rt.noPause, kind: window.__play.stageInfo.kind }));
+    ok(!p.active && p.noPause === true && p.kind === 6, `Start during the pickup's help box: no pause (active ${p.active}, peace bit ${p.noPause}, box kind ${p.kind})`);
+    if (p.active) { await pg.keyboard.press('Enter'); await new Promise(r => setTimeout(r, 400)); }
+  }
   // close it (one cross), so the page runs on
   if (box) { await new Promise(r => setTimeout(r, 1500)); await pg.keyboard.press('Space').catch(() => {});
     await until(() => window.__play.stageInfo.kind === -1, null, 60000).catch(() => {}); }
@@ -96,6 +104,13 @@ try {
     await walk(800);
     const p1 = await pg.evaluate(() => { const c = window.__play.ctrl.pos; return [c.x, c.z]; });
     ok(Math.hypot(p1[0] - p0[0], p1[1] - p0[1]) > 1, `after the box W moves him again (${Math.hypot(p1[0] - p0[0], p1[1] - p0[1]).toFixed(2)} units)`); }
+  { // worker 0277: after deb_jump's chaos (FUN_003e0d18(0)) Start opens the pause again (T w277_pickup_start f465), and closes it
+    await until(() => window.__play.stage && !window.__play.stage.rt.noPause, null, 30000).catch(() => {});
+    await pg.keyboard.press('Enter'); await new Promise(r => setTimeout(r, 400));
+    const on = await pg.evaluate(() => window.__play.pause.active);
+    await pg.keyboard.press('Enter'); await new Promise(r => setTimeout(r, 400));
+    const off = await pg.evaluate(() => window.__play.pause.active);
+    ok(on && !off, `after the box Start pauses (${on}) and Start again resumes (${!off})`); }
   // 2. kill record 45, take his drop. H first (the page's respawn: aim_core's reset makes a new Ammo; review blocker)
   await pg.keyboard.press('KeyH');
   await new Promise(r => setTimeout(r, 1000));

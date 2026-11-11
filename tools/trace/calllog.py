@@ -639,3 +639,25 @@ SETS["w265card"] = [
     dict(id=2651, kind="site", where=(0x3FDF00, 0x3FE458, 0x3FDD58), name="si_close", copy=[]),
     dict(id=2652, kind="site", where=(0x3FDED0, 0x3FDF00, 0x3FDD58), name="si_close2", copy=[]),
 ] + [h for h in SETS["evsound"] if h["name"] in ("ev_fadein", "ev_fadeout", "ev_voice")]
+
+# worker 0277 (2026-11-09): Vincent's jump sounds. FUN_00598f50 (jump motion state 0x20) phase 0 -> FUN_00341410(C, 2) /
+# FUN_00341268(C, 'bsj_52x') and FUN_003412d0(C, 0x50, 1); FUN_00599aa0 (landing 0x21) -> FUN_00341410(C, 3), FUN_003412d0(C, 0x51, 0).
+# Every named sound goes FUN_00341268 -> FUN_0054b158(P, name, 1).
+SETS["w277jump"] = [SETS["sound3"][0], SETS["sound3"][2],
+    dict(id=2770, kind="site", where=(0x341268, 0x341298, 0x54B158), name="cue_name", copy=[cp("a1", 0, 2)]),
+    dict(id=2771, kind="site", where=(0x598F50, 0x599780, 0x3412D0), name="jump_cue", copy=[cpr("a1"), cpr("a2")]),
+    dict(id=2772, kind="site", where=(0x599AA0, 0x599C90, 0x3412D0), name="land_cue", copy=[cpr("a1"), cpr("a2")]),
+    dict(id=2773, kind="site", where=(0x598F50, 0x599780, 0x341410), name="jump_foot", copy=[cpr("a1")]),
+    dict(id=2774, kind="site", where=(0x599AA0, 0x599C90, 0x341410), name="land_foot", copy=[cpr("a1")]),
+]
+
+# worker 0278 (2026-11-09): the bullet tracers' draw (FUN_002eff60 -> FUN_002d79c8). tr = each tracer at FUN_002d7a70 (a0: +0
+# active, +4 / +5 bytes, +8 length x 0.1, +0x10 position, +0x20 -direction); cam = FUN_002d8528 x 3 (0x70003f00 = camera 0 +0x150
+# view, 0x70003f40 = +0x110 projection, 0x70003f80 = +0x1d0 view x projection); so = FUN_002d8438 (scale x look-at), mvp =
+# FUN_002d8368 (that x +0x1d0), both into 0x70003d00 before FUN_002f2f08 draws the core_ef model.
+SETS["w278tracer"] = [
+    dict(id=2780, kind="site", where=(0x2D79C8, 0x2D7A70, 0x2D7A70), name="tr", copy=[cp("a0", 0, 12)]),
+    dict(id=2781, kind="site", where=(0x2D79C8, 0x2D7A70, 0x2D8528), name="cam", copy=[cp("a0", 0, 16)]),
+    dict(id=2782, kind="site", where=(0x2D7A70, 0x2D7BB8, 0x2D8438), name="so", copy=[cp("a0", 0, 16)]),
+    dict(id=2783, kind="site", where=(0x2D7A70, 0x2D7BB8, 0x2D8368), name="mvp", copy=[cp("a0", 0, 16)]),
+]

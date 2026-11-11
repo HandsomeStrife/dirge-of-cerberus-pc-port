@@ -55,7 +55,22 @@ try {
   }, [cls, name, desc, args]);
   const pauseRestart = async (wait = true) => {
     const n0 = await pg.evaluate(() => window.__play.restart.count);
-    await pg.keyboard.press('Enter');
+    // worker 0289: Start does nothing between a stage script's peace and its chaos (FUN_003e0d50, DAT_004f3044 bit 0x10000; worker
+    // 0277's T w277_pickup_start): after scene_save 1 main runs a peace .. chaos event (~13 s on the page), so wait for its chaos.
+    // worker 0290: main's hand-back (battle()) comes a few frames before that peace (main pc 2219: t489 -> t495 after the save,
+    // t2312 -> t2313 after a record's Restart), so !noPause can hold before the peace has begun and the press then lands inside it:
+    // refused (FUN_003de130 drops it, nothing queued). The user presses Start again after the chaos; only a refusal under noPause
+    for (let tries = 0; ; tries++) {
+      await until(() => !window.__play.stage.rt.noPause, null, 120000);
+      await pg.evaluate(() => { window.__startAt = null; if (!window.__startSpy) { window.__startSpy = true;
+        addEventListener('keydown', e => { if (e.code === 'Enter') window.__startAt = { noPause: window.__play.stage.rt.noPause, t: window.__play.stats.ticks }; }, true); } });
+      await pg.keyboard.press('Enter');
+      const at = await (await until(() => window.__startAt)).jsonValue();
+      if (!at.noPause || tries >= 4) break;
+      await until(t => window.__play.pause.active || window.__play.stats.ticks >= t, at.t + 2);   // a pause stops the ticks
+      const opened = await pg.evaluate(() => window.__play.pause.active);
+      ok(!opened, `Start at frame ${at.t} inside main's peace .. chaos: refused (FUN_003e0d50; pause ${opened}), pressed again after the chaos`);
+    }
     await until(() => { const s = window.__play.pause.flow.screen; return s && s.cur === s.total && s.hasFocus && s.focus.id === 3; });
     await pg.keyboard.press('Space');
     await until(() => { const f = window.__play.pause.flow; return !!f.box && f.box.cur === f.box.total; });

@@ -64,9 +64,9 @@ export class CapeCloth {
     this.started = false;
   }
 
-  // ---- FUN_005a95f0: a clip starts on the head layer
-  clipStart(name) {
-    const w = this.windows[name];
+  // ---- FUN_005a95f0: a clip starts on the head layer. w: the clip's [flag, u16] when the caller has it (an event
+  // actor's packs: actors.json clothWindows), else cloth.json's clip_windows
+  clipStart(name, w = this.windows[name]) {
     if (!w) return;                     // clip not in the data: leave the window alone
     const [flag, n16] = w;
     if (flag === 0) { this.remaining = 0; this.total = 0; }

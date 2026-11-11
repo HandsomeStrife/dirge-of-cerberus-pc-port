@@ -1078,3 +1078,175 @@ exercised in a browser.
   nothing on the stage start-up path is warp-specific. Not a regression from 0271 / 0273's sound work as far as can be seen. The test
   now records a renderer crash and, on an exception, prints how far the page got (ticks / stage / warp) and its first errors, so a
   repeat is diagnosable. Not committed.
+
+- Warp picker (worker 0279, 2026-11-09; PAGE AID, not the game): play.html has a `#warp-pick` select beside the Report button (same style), listing every `WARPS` entry as `name - note` (warp.js `warpOptions`). A pick reloads with `?warp=<name>` and keeps the other options (`warpUrl`). It is an HTML control over the canvas, nothing in the game's framebuffer or HUD. Keys: play.js, aim.js, pause_layer.js and gameover_layer.js now skip a focused SELECT (as INPUT / TEXTAREA); the control blurs after a pick, on Escape and on a click elsewhere, so it never holds the keyboard (the pad is not read through focus). Note: a real letter typed into a focused select type-aheads to a place and warps; that is the browser's, and Escape / a click first avoids it. Nothing decoded (no game counterpart). Test: test_warp_picker_page.mjs (14 checks: labels, pick -> ?warp=market with sound/intro/enemydmg kept, arrival, focus, keys not stolen, keys still reach the game). Mutants 3 / 3 caught: SELECT dropped from play.js `typing`, warpUrl dropping the other options, the change handler not navigating. No commit.
+  - Review fix (2026-11-11): a stray Tab focused the picker, then W type-aheaded to `wro` and warped (ArrowDown to `deck`), and the SELECT guards dropped every game key meanwhile. Now mouse-only (play.html): tabindex -1; blurs when its popup closes, the same row too (Chrome's click with detail 0, or a click on the control); a window capture keydown listener (before play.js's, as pause_layer.js's is capture too) cancels any key on the focused control (no type-ahead / arrow pick), blurs it and passes the key on to the game, except Escape (blur only, no pause). The SELECT guards in play.js / aim.js / pause_layer.js / gameover_layer.js are back out. Test now 18 checks (same row re-picked -> focus off; Tab not focusing; Tab + W walks, no warp; W / ArrowDown on the focused control; Escape does not pause); the hollow "focus off after the pick" check (always true after the reload) is gone. Mutants 4 / 4 caught: tabindex, the close blur, the key listener, the Escape stop. No commit.
+- Pause during an item pickup + Vincent's jump sounds (worker 0277, 2026-11-09; notes/jump-research.md 'Not ported / open'
+  (Sounds), fidelity-audit rows 'Jump sounds', 'GUESS: the jump sounds' bVar1', 'Start does not pause between ... peace and
+  chaos'). **(1) Pause:** FUN_003de130's Start -> pause branch tests FUN_003e0d50 = DAT_004f3044 bit 0x10000, set by the
+  stage script's `peace` (FUN_0039def0 -> FUN_00380290(ev, 1) -> FUN_0037dc78(ev, 0) -> FUN_003e0d18(1)) and cleared by
+  `chaos` (FUN_003e0d18(0)). ev0100's deb_jump wraps the item help box in peace / chaos, so the game refuses Start from the
+  frame after the take to the box's end. T (new field set `pausegate`, scripts w277_pickup_gates / w277_pickup_start):
+  0x10000 f206-f457; Start at f300 (box up) opens nothing, Start after chaos (f465) pauses; Start on the take frame itself
+  (before peace) does pause. The box's own gates (0x100 count f217-f451, pad focus f252-f451) sit inside that span. Page:
+  stage_controller.js `noPause` (peace / chaos), play.js setupPause `blocked`. Other states the same gate covers: any
+  peace .. chaos span of a stage script. Not on the page: the 0x100 count / pad focus for a stage-info box shown outside peace.
+  **(2) Jump sounds (the game does make a noise):** every take-off plays the floor's kind-2 step (fsj_024.. by material;
+  second jump bsj_520, back jump bsj_521 / bsj_522) and cue 0x50 = **bt_v010** (forced, no random pick); every landing the
+  kind-3 step (fsj_036..); cue 0x51 is ''. Decoded FUN_00598f50 / FUN_005a1510 / FUN_00599aa0 phase 0, FUN_00341410 ->
+  FUN_003415d8, FUN_003412d0 / FUN_00341330 / FUN_00341268 -> FUN_0054b158 -> FUN_0054ae78 (9 above the feet). T w277_jump
+  (call-log set `w277jump`): f11 fsj_026 + bt_v010, f53 fsj_038, f141 bsj_520 + bt_v010. Page: jump_core.js io.sound,
+  play.js `ctrl.jumpSound`, ambient.js `kindCue`, enemy_ai.js world `playerCue` (the C+0x810 gate shared with the hit voice)
+  and playerCue's named sounds now at FUN_0054ae78's point (was his feet). Page vs game: ids 20026 / 37008 / 20038, vol 116,
+  pan 65 / 65 / 63, take-off -> landing 42 frames: all equal. GUESS: bVar1 (-> bsj_525) false (row). Tests: test_jump_sound
+  (19; mutants: feet position, landing kind, gate on the forced cue, second-jump name: red), test_jump_sound_page (11),
+  test_items_page (+2: Start in the box, Start after it); page mutants below in the report. Not committed.
+- Bullet tracers (worker 0278, 2026-11-09; Dan: "We're missing bullet trails for some shots."; **notes/effects-research.md 'Bullet
+  tracers'**, fidelity-audit rows 'The bullet tracer' + 2 GUESS rows). **Cause:** the page drew no tracer for any shot (only the
+  rockets' / missiles' FED trails, worker 0270); the soldiers' row was MISSING. **Decoded:** FUN_005534f0 gives +0x198 =
+  FUN_002d77c0 to every bullet with no record (all of Vincent's shots: FUN_00577480 -> FUN_005408e8 -> FUN_00553630, every weapon /
+  ammo) or with a record that has no trail and no model (the soldiers' records); colour by +0x120 bit 0x400 (FUN_00552dd8's tail:
+  owner +0x28 & 4 or side byte 0 -> blue DAT_0046c6d0[0]; else orange [1]); pool DAT_004e8e00 (32); FUN_00557d70 (length 0.01 at
+  the spawn, then |pos - prev|, -direction); drawn by FUN_002eff60 -> FUN_002d79c8 -> FUN_002d7a70: core_ef.bin model 0 (relocated
+  by FUN_002f5460: at 0x720), S = diag(s, s, len x s), look-at FUN_002d93d0, FUN_002f5c50. Materia shots (FUN_005540d0) use the
+  effect table: not on the page. **Page:** effects.js modelPrims (split out of drawModel unchanged), byteReader / coreModel /
+  tracerLookAt / tracerMatrix / drawTracer, createEffects `core` + `addDraw`; shot_fx.js tracer pool + start / move / end;
+  enemy_ai.js `side400` on both bullet makers and Vincent's pellets -> shotFx.start. No new disc input (core_ef.bin was already
+  built). **T:** new calllog set `w278tracer` + script tools/trace/scripts/w278_tracer.json (k_bullet1's run + R1 at 890 / 905 /
+  925 / 945; TRACE_FIELDSET=enemy TRACE_ENEMIES=2 TRACE_CALLLOG_FRAMES=770:960) and grab_gs 904,944 -> tools/trace/out/w278
+  (dumps f909 / f949 = states f905 / f945 + 4; dumpfx.py -> dump_g1 / g2.json). Page = game: S . O for 30 tracers 4.7e-10, draw
+  matrix 6.5e-6; dumps 32 / 48 triangles in draw order, XY within 1/16 px, Z <= 7e-6, RGBA and ST exact. **Tests:** new
+  test_tracer.mjs (node, 36 checks incl. 3 T; mutants 18 / 18 red: no tracer without a record, colour inverted, spawn length,
+  not freed, no 32 cap, direction sign, tracer for trail records / none for soldier records, length x 1, up vector, row 1 order, z
+  scale, relocation base, colour table, no view, side400 x 2, Vincent's start), new test_tracer_page.mjs (real canvas clicks fire
+  Vincent's gun: blue moved tracers 8 quads, texture 7, ALPHA 0x48, built as visible meshes, freed; a soldier's shot orange;
+  ?fx=0; page mutants: draw hook removed, Vincent's start removed: both red). test_rockets, test_gameover (76), test_effects
+  (280), test_barrier_fx, test_enemy_ai, test_enemy_hits, test_other_types, test_boss_trace, test_hit_trace, test_heli: green.
+  **Image:** /tmp/claude-1000/-srv-games-dirge-port/e42984a2-64d3-461d-ae86-71e441cea2ec/scratchpad/w0278_tracer_game_vs_page.png
+  (game f909 via gsrender2 | the page drawn with the game's f909 camera and tracer state; crops x6 with the dump's triangles).
+  **Open:** no dump of a soldier's tracer at length (only its spawn state; geometry is the same code path); the tracers' place
+  among the frame loop's layers (GUESS); the soldiers' side byte (GUESS 1); materia shots. Not committed.
+  **Review (2026-11-11):** no code defect found; two hollow spots in test_tracer.mjs closed (now 41 checks): the tracer keeps its
+  spawn state while +0x142 > 0 (FUN_005549f0 returns before FUN_00557e40), and FUN_002d93d0's up for d = (0, 1, 0) / (-0, 1, -0).
+  Mutants red: move during the delay, up tested on d.y, -0 taken as the word 0. Checked, no change: bullets during an event.
+  FUN_00323128 skips the object update (FUN_0053b500, the bullets) while game-state bit 0x17 is set, and the only decompiled setter
+  is FUN_003227b8 (state restore, from FUN_00322460 / 4f8 / 628), not an event start. The page's no-tick branch (play.js intro)
+  is the opening event, where no bullet exists. Nothing to translate.
+- The opening's scanner overlay (worker 0275, 2026-11-09; Dan after 3a81479: "the scanner overlay is still not there in the first
+  cutscene; just Vincent pink"; fidelity-audit rows 'Event effects: ...' by worker 0275). **What Dan meant:** not the title card
+  (0265's reading) but Shelke's scope on Vincent (first_event camera 1 after the stairs shot): p014 (Vincent's scanned body, magenta
+  textures in the game too) under FEDEF_A0001_SCOPE01_IN, played by `KerberosEffect.playseqstr_l(10, ...)`. The page left every
+  KerberosEffect native out (0261's 'Effects in events: not done'), so it showed p014 alone. Reproduced on play.html with no options.
+  **Game:** PCSX2 from 0210's start1704 state, no input: tools/trace/out/w275 (f760 / 840 stairs, f920 Shelke) and w275b (state 03 +
+  120 / 200 / 280 / 360: the scope; scripts w275_scan.json / w275_scan2.json, TRACE_FIELDSET=event). **Decoded + translated (new
+  event_fx.js):** Effect.load FUN_003a2580 -> FUN_0037f2f0 (cmd 0x18; Skip 0x7fffffff); strid2numid FUN_002f5238 (FUN_002df168:
+  letter nibble, digits << 18; FUN_002e50c8 -> FUN_002e5178: length + byte sum + strcmp in the FED's +0x18 table); playseqstr_l
+  FUN_003a1ea8 (arrays int / float / String, one length) -> FUN_0037fb88 -> FUN_0037f728 (Skip: only types of DAT_0046f588 with ids on
+  0x4ee3c0 / 0x4ee2e0) -> cmd 0x1d -> FUN_00382cd8 (times in frames ms x 0.06 since the last item; the last or a pad item ends the
+  frame) -> FUN_00382b70 jump table 0x4a3520 (case 0: FUN_00375db8 on the actor's 16 entries / FUN_0037f400 -> FUN_002ed660; read from
+  the ELF, other cases listed, warned); setVisible_l FUN_00379760 -> FUN_002ed828 -> FUN_002edad8(3) -> FUN_002ebee8 (b 0 sets +0x0a
+  bit 2); stop2_l FUN_00379808 -> FUN_002ed768 (FUN_002e6920); the queue runs in FUN_002efc78 after the managers (FUN_002edcc0).
+  effects.js: FUN_002ea6a0 l.64 skips an emitter with +0x0a & 0xfc7f, FUN_002eadc0 draws only +0x0a == 0 (was: 0x380 only).
+  event_rt.js case 0x1d + opts.effects; intro.js passes `effects`; play.js loads event_fx + a TitleLayer on the screen projection
+  (as menuFxLayer, no veil) before stage_info's layer, runs begin / end in the opening's frame, frees at the end (GUESS row),
+  `__play.intro.fx / fxLayer`. **Data:** new export_web_event_fx.py (a0001.fed -> data/event/fx), build_web.sh step eventfx,
+  disc.py a0001.fed. **Re-run:** `python3 -I native/assets/models/export_web_event_fx.py --disc extract/_KEL -o native/web/data/event/fx`.
+  **Against the game:** the page's SCOPE01_IN sprites match the w275b f200 dump's z-130818 draws in colour / texture / count (38 / 20 /
+  12 / 4 ... quads = the dump's 76 / 40 / 24 / 8 ... triangles). The f360 dump draws the event fade's full-screen strips after the
+  scope (and the f101 card dump's trailing fade quad has alpha 0): the fade belongs over the menu managers, against 0265's veil-first
+  GUESS (that row annotated; the card keeps it, the scanner sits under the veil by scene order). **Largest differences:** (1) the
+  full-screen blue tint, the blue bars, the top-right dial and 'TARGET...' are not drawn (channel types 26 / 111 / 121, render
+  category 255, type 21 shape 8, list-0 particles: MISSING row; blue share 0.06 against the game's 0.52); (2) Vincent is framed
+  larger and higher on the page than in the game frame (the event camera / timing, not checked: the page frame is the scope's age
+  +150, the game's age is not known); (3) camera-0 event effects (HINOKO, the visor glows HEAD*) spawn but aren't drawn (attach to
+  the actor's MP not translated). Only the opening runs them; main's events still warn.
+  **Tests:** new test_event_fx.mjs (node, 15: FUN_002df168, strid2numid, Skip returns, array check, item timing, the opening's
+  spawn / hide / stop / HEAD00 / Skip; mutants 8 / 8 red), new test_scanner_page.mjs (play.html with no options, the opening as Dan
+  plays it: SCOPE01_IN on DAT_004ee4a0, drawn, blue over the picture, the fade over it, hidden after setVisible_l(0); fails on the
+  previous code: no event effects; page mutants 3 / 3 red: effects not passed to the opening, the layer added after stage_info's
+  (the scanner over the fade), the layer without the screen projection). test_title_card_page all ok after. test_effects 280, test_event_vm, test_menu_fx 43, test_event_screen 30, test_stage_info 31,
+  test_rockets, test_barrier, test_event_actors, test_tracer, test_barrier_fx, test_gameover 76 green. **Image:** game w275b f200
+  left, page right: /tmp/claude-1000/-srv-games-dirge-port/a49a9ba1-63b5-47aa-aff6-688169dc610a/scratchpad/w0275_scanner_game_vs_page.png.
+  **Review fixes (2026-11-11):** test_event_fx (16 checks) gains a hidden-emitter check (particles and the shared LCG unchanged while
+  +0x0a bit 2 is set: FUN_002ea6a0 l.64) and the timing check now uses items at 5 and 10 frames (steps 5 / 14: the time since the
+  item before); both had been hollow, and each new check goes red on its mutant (effects.js l.64 gate removed; time measured from the
+  command's start). The fade-order claim above is NOT settled by the dumps (f360's last black strips may be an alpha pass and follow
+  the window text; f101's alpha-0 sprite is another primitive; the fade's draw FUN_002f4270 is undecoded): the two GUESS rows now
+  say so and that they contradict each other; code unchanged. Not committed.
+- Vincent's cape in events (worker 0280, 2026-11-09; **notes/story-cutscenes.md 'Vincent's cape in events'**; fidelity-audit row
+  'Vincent's cape on his event body'). Dan: "Vincent's cape is missing in some of the cutscenes." Missing on every event body made
+  from **p000** (heri_taijou, first_encounter, rv_toujou, wro_kaisetu, the lent p_Vin body; by clips also the opening's, rescue and
+  boss p000 shots); p005 (close-ups, rv_matiawase) always had its skinned cape. Cause: p000's cape is a cloth block (0x19f70, 82
+  cloth verts) that export_web_enemy.decode can't pool, so p000.glb had no cape. Decoded: FUN_005ab8f0 -> FUN_005b2ef8 ->
+  FUN_005b2550 runs FUN_005b06d0 + FUN_005b0d30 for every MP, event ones too; the window FUN_005a95f0 per clip request; all of
+  p000's ev0100 event clips have flag 0, so k = 1 (keyed target). The block equals gameplay Vincent's (07703201 0x19ed0). Page:
+  event_actors.js capeOf / capeRequest (cloth.js per body, vincent.glb's cape via play.js eventSource = lib.cape), event_actor_rt.js
+  mp.req, cloth.js clipStart(name, w), export_web_event_actors.py clothWindows (actors.json re-exported for p000, p005, p001 with
+  --only; glbs unchanged). Image: tools/trace/out/w280/w280_heri_cape_game_vs_page.png (GS w261 f1580 vs page). New
+  test_event_cape_page.mjs: all ok; mutants: no capeOf, no lib.cape on the stage library, mask bit inverted: all three red (the cape
+  never on screen: the wait times out). Node: test_event_vm, test_story_cutscenes 190, test_cape_light, test_event_actors ok. Open: p001
+  (heri_lasted, 105 bones) has three cloth blocks, not exported, their parts not drawn (warned); the opening not sampled. Not committed.
+  **Review fixes (2026-11-11):** the lent p_Vin slot holds Vincent's own MP, so its clip requests now also arm the gameplay cape's
+  window (play.js vinBattle `cloth`, event_actors.js capeRequest): run into a lend, stand after battle() -> total 0, k 1, as the game
+  (was: the run's window kept, a turn re-armed a swing). The window is armed at the request, drawn or not (was: at the next draw).
+  test_event_cape_page: drawn bodies only in the count (a loading body was counted: 1-sample flake), the wait no longer waits on
+  the cape (mutants fail by assert), new hide_model_l bit 3 assert, new heridgsol lend phase (run, lend, stand). Mutants: mask check
+  removed, lent clipStart removed: both red by assert. Fix 2 has no mutant that shows (all p000 clips flag 0). Not committed.
+- "Save the abducted girl": the characters just stand there (worker 0276, 2026-11-09; **notes/other-types.md 'The beast alley'**).
+  **The scene:** beast_ev01 (stage flag 0 = 11), then trigger 163 (-655.5, 241.7, script 216): e_BeastB (record 8) carries off n_Child
+  (record 112, Rio) with cmd 0x19b 'kidnap' (motion class 0x42); the rescue is ✕ at trigger 165 (script 219, open once routine 216/1
+  sets short 69 = 1), then trigger 166 (script 220) wakes e_BestB2 (9) when Vincent is in it and the child is on screen (short 72);
+  trigger 177 (script 234) counts the kills -> stage flag 1 = 11 -> beast_ev02 (mother and child). Dan's 17:49 report
+  (reports/20261109T174913Z-9722, "still not running/triggering") is at (-859, 444) facing records 8, 112, 7 and 115 at their placements.
+  **Cause:** 'kidnap' is only in each model's motion file k = 0xb (m001): e030 0765078b, n028 076e070b, not in disc.py INPUTS, so the
+  page had no clip: class 0x42 warned 'without the root track' and the beast stood at (-828, 500). ai.json model_clips missed it too
+  (its 0x19b scan read only a record's own script; here the trigger's script sends it). **T w276_beastpos** (r04_east + w217_r05_west,
+  walked): the beast creeps (-819, 483) -> (-857, 465) over 200 frames, waits, runs to (-1043, -3, 417) by +380; the child is carried
+  (C+0x30 = her clip root). T w276_beast / w276_beast2 (f190-2030): shorts 69-76, stage flags, records' +0x28. **Fix (data):**
+  disc.py + 0765078b / 076e070b; build_web.sh E030_CLIPS + kidnap, n028 + kidnap; export_web_triggers.py model_clips: 0x19b sent to a
+  record by any script (target from the 0x3a lookup) adds the clip and that record's stance rows (n028 now listed: st, look, rn,
+  kidnap; its wk2 row is in no n028 file). ai.json changes only in model_clips (e030 kidnap 240, n028). No page code changed.
+  **Page now:** the beast runs off with the child on the game's path: largest 0.05 u over 7 points (+40 .. +400). Routine 216/1's
+  step 7 is +683 on the page vs +684 in the game. New **test_kidnap_page.mjs** (plays from route state r04_east's spot / flags via a
+  test-only warp entry, walks the game's route: beast_ev01, trigger 163; checks clips, frames, path): all ok. Mutants (MUTATE=noclip /
+  noroot / noplay): 10 / 9 / 12 FAIL. Node: test_enemy_ai (2 known gaps), test_npc, test_pool_soldiers, test_stage_controller 88,
+  test_props, test_story_cutscenes 190 ok. Image: tools/trace/out/w276/w276_kidnap_game_vs_page.png. Scripts:
+  tools/trace/scripts/w276_beast*.json, w276_pre165.json, w276_rescue.json, w217_w276_at165.json (pad only). **Open:** (1) after the
+  clip the child's script 153 event 0x16 moves her to locator 19 (0x40 / 0x10e): the page draws her there standing, the game's C+0x30
+  stays 0 (FUN_00588430 body sync not translated): where the game draws her then is not traced. (2) The toy (g001, record 151) has no
+  page model (0767004x not listed): not drawn, its kidnap not played. (3) The rescue itself (✕ at trigger 165 -> beast 9) is not
+  checked against the game: the steered run (route.py w276_at165) stopped at (-1004, 440), short of the trigger's box, while the beasts
+  fought it. On the page e_Beast (7) attacked Vincent near (-1009, 450) and killed him with ?enemydmg=0 (a bite? not looked at). Not
+  committed.
+  **Review (2026-11-11):** e_Beast 7's kill is not a bug: ?enemydmg=0 covers bullets only, melee always damages (FUN_0055c7f8,
+  enemy_ai attackDamagePlayer); in T w276_rescue record 7 also runs to ~14 u of Vincent (f60-250). test_kidnap_page.mjs now checks the
+  child's body at her clip root (game C+0x30 ~0) at the 6 points in the clip (mutant: no rootDrive for 112 -> red, 957 u). T
+  w276_beastpos for open (1): her C+0x30 is locator 19 for one frame (+399) then 0 again from +400; the page keeps her at the
+  locator. export_web_triggers.py model_clips: no 0x19b match at op 0 (no wrap to the last op); WARN when a 0x3a lookup is not
+  push_i id / push_i -2 (none of 1169 in z128; mutant: all 1169 warn, n028 drops out). ai.json output unchanged. Not committed.
+- Suite page-test failures on this round's tree, triaged (worker 0289, 2026-11-11). Each run alone (>= 13 GB available), the
+  committed state compared in a scratch worktree. **One real cause, from 0277's pause gate; the test was out of date, the decode wins:**
+  test_restart_page timed out in pauseRestart because after scene_save 1 main runs a peace .. chaos event (~13 s on the page) and
+  Start is refused there: peace -> FUN_00380290(ev, 1) -> FUN_0037dc78(ev, 0) -> FUN_003e0d18(1) (DAT_004f3044 |= 0x10000), tested
+  by FUN_003de130's Start branch (FUN_003e0d50); chaos clears it (checked in analysis/decomp; 0277's T w277_pickup_start). Test
+  fix: pauseRestart waits for `!stage.rt.noPause` before Enter; all ok after. **Test races, hardened (page code unchanged):**
+  test_hud_page 'pause during the slide-in (H)': frames could run between the log's clearing and H (y 0 0 -46 -40; base 3a81479
+  passed by luck of timing); the log is now cleared on H's own keydown and Enter waits for one slide-in frame (mutant: H without
+  gameHud.reset -> red). test_tracer_page: soldier shots aim through spreadAim's cone (FUN_005409a8 -> FUN_005405b0), so 3 runs
+  in 7 the orange tracer flew off screen and drew no quad; up to 6 shots now (mutant: colour-1 tracers not drawn -> red), and
+  Vincent's click loop 16 tries (once 8 shots drew only spawn-length tracers: soldiers near him at the start). **Flakes / kills,
+  all ok alone:** test_char_light_page, test_scr005_page (help_people01 draws e030,e027; one beast_ev01 load lost to
+  ERR_NETWORK_CHANGED), test_phoenix_page, test_phoenix_hit_page, test_warp_page, test_stage_page (full, 85 s),
+  test_stage_info_page (52 s). The warp picker's capture listeners, the cape and the tracer layer showed no fault. Not committed.
+- test_restart_page's pause timeout, root cause (worker 0290, 2026-11-11). **The page is right, the test raced.** Main's hand-back
+  (battle()) comes a few frames before its post-save peace (main pc 2219): page log t489 battle -> t495 peace after scene_save 1,
+  t2312 -> t2313 after a record's Restart. 0289's `until(!noPause)` could resolve in that gap, so Enter landed inside the peace and
+  was refused, as FUN_003de130's Start branch does (FUN_003e0d50, DAT_004f3044 bit 0x10000; 0277's T w277_pickup_start: Start during
+  the span opens nothing, nothing queued). The press was then lost, and the screen wait timed out. Shown with a passive in-page
+  recorder (noPause / battle transitions plus state at each keydown). The warp picker's listeners saw every Enter (target BODY,
+  nothing cancelled): not involved. **Test fix** (pauseRestart): a capture keydown spy notes noPause at the Enter. If it was set,
+  assert that the pause did not open, then press again after the chaos (at most 5 tries). A refusal for any other reason still times
+  out as before. Checks (scratch variant that presses inside the peace on the first record Restart): 0289's version -> timeout
+  (the reported failure, deterministic); fixed -> 'refused ... pressed again', all ok; page mutant without the noPause gate in
+  blocked() -> FAIL by assert (pause true). Runs: test_restart_page x3, test_pause_page, test_items_page, test_warp_picker_page,
+  test_hud_page all ok. Page code unchanged. Not committed.

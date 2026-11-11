@@ -87,6 +87,15 @@ export const WARPS = {
 };
 
 export const WARP_NAMES = Object.keys(WARPS);
+// the picker's rows (play.html #warp-pick, PAGE AID): the name and where it is in the level (the entry's note)
+export const warpOptions = () => WARP_NAMES.map(n => ({ name: n, label: `${n} - ${WARPS[n].note}` }));
+// the URL a pick leads to: the current query with ?warp= set (every other option kept); '' drops the warp
+export function warpUrl(search, name) {
+  const q = new URLSearchParams(search);
+  if (name) q.set('warp', name); else q.delete('warp');
+  const t = q.toString();
+  return t ? '?' + t : '?';
+}
 export const warpHelp = () => `?warp=list|${WARP_NAMES.join('|')} (page aid)`;
 
 // the URL's request: null (off), 'list', or a WARPS entry name (an unknown name warns and is off)

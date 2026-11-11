@@ -577,7 +577,27 @@ def model_clips(recs, st, atk, scr=None):
     clip no listed file holds is left out (printed)."""
     import export_web_enemy as E
     out = {}
-    for model, stance in sorted({(r['model'], r['stance']) for r in recs if r['stance'] is not None and r['model'] in AI_TYPES}):
+    # worker 0276: cmd 0x19b sent to a record by another object's script (the record looked up with manager cmd 0x3a, the
+    # target a local): trigger 163's script 216 plays 'kidnap' on e_BeastB (8) and n_Child (112). {record: {clip}}
+    sent = {}
+    for fns in (scr or {}).values():
+        for fn in fns.values():
+            data, code, loc = bytes.fromhex(fn.get('data') or ''), fn['code'], {}
+            for i, (op, imm) in enumerate(code):
+                if op == 38 and imm == 0x3a and i + 1 < len(code) and code[i + 1][0] == 27:    # send 0x3a; pop_local k
+                    ids = [code[j][1] for j in range(max(i - 5, 0), i) if code[j][0] == 4]   # push_i id (then clr_regs, pop_reg 0, push_i -2)
+                    loc[code[i + 1][1]] = ids[0] if len(ids) == 2 else None
+                    if len(ids) != 2:
+                        print('WARN cmd 0x3a at op %d: not push_i id / push_i -2 (%r); its 0x19b target is not scanned' % (i, code[max(i - 5, 0):i + 2]))
+                if i == 0 or op != 38 or imm != 0x19b or code[i - 1][0] != 25 or loc.get(code[i - 1][1]) is None:  # push_local k; send 0x19b
+                    continue
+                refs = [code[j][1] for j in range(max(i - 8, 0), i) if code[j][0] == 37]
+                c = data[refs[-1] * 8:refs[-1] * 8 + 8].split(b'\0')[0].decode('latin-1') if refs else ''
+                if c:
+                    sent.setdefault(loc[code[i - 1][1]], set()).add(c)
+    # such a record's model gets its stance rows too (a model in model_clips plays only the clips listed there, enemy_ai.js)
+    pairs = {(r['model'], r['stance']) for r in recs if r['stance'] is not None and (r['model'] in AI_TYPES or r['rec'] in sent)}
+    for model, stance in sorted(pairs):
         names = st[str(stance)]['motions']
         res = out.setdefault(model, {})
         for m in AI_MOTIONS:
@@ -614,6 +634,17 @@ def model_clips(recs, st, atk, scr=None):
                         continue
                     cbuf, CP = E.V.find_clip(f, c)
                     res[c] = int(E.AR.clip_frames(cbuf, CP))
+        for r in recs:
+            for c in sorted(sent.get(r['rec'], ())):
+                if c in out.get(r['model'], {}):
+                    continue
+                try:
+                    f = E.clip_file(r['model'], c)
+                except SystemExit:
+                    print('WARN %s record %d cmd 0x19b clip %s: no listed motion file holds it' % (r['model'], r['rec'], c))
+                    continue
+                cbuf, CP = E.V.find_clip(f, c)
+                out.setdefault(r['model'], {})[c] = int(E.AR.clip_frames(cbuf, CP))
     # the attack clips (the play-clip commands of the model's attack tables, ai.json attacks)
     for r in recs:
         if r['model'] not in AI_TYPES or r['zones'] < 0 or not atk.get(str(r['zones'])):

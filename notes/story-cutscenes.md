@@ -171,7 +171,7 @@ Results, largest by event clock (traces tools/trace/out/w263, gitignored; states
 Open here:
 - **The Shop is not on the page.** After Supplies, stage-info kind 4 has no box kind 0x20 data: stage_info.js warns and closes it at once, so the talk goes straight on and the box comes back with Supplies marked. No buying, selling or modifying. Decoded so far, and an unwired translation: notes/shop-research.md.
 - **Voice length: a real difference, cause not found.** One trace (w263_fe_v, TRACE_FIELDSET=event TRACE_EVVOICE=1: the six voice channels DAT_004f7c38 per frame), first_encounter shot 5. Channel from play (+0x1c bit 1) to freed (+4 = 0), by the event clock, against data.voiceMs (row +0x14): 10406sk game 1778 ms (f1469-1558), page 1612, **166 ms long**; 10408sk game 2298 ms (f1593-1708), page 2272, **26 ms long** (a frame's sampling is 20 ms). So not a fixed ratio or a fixed delay: two voices only. It explains about 9 of shot 5's 15 short frames; the rest is unexplained (block start drift above?). The channel is freed in FUN_003ed000's stream code, which was not read; 10406sk and 10408sk's channels were mapped by play order. Other events not measured. Page unchanged.
-- The page's Vincent (lent body) has no cape in events and is darker than the game's (the image shows both; 0261 saw the same).
+- The page's Vincent (lent body) is darker than the game's (the image shows both; 0261 saw the same). His missing cape in events: fixed, see 'Vincent's cape in events' below.
 - Effects, chunk animations, focus blur, shadows (setshadow_l, set_shadowalpha, dir -1), pad vibration left out with warnings, as agreed.
 - `playBgSound` (FUN_0039de38 -> FUN_003e6d70, wro_kaisetu's last call, an 8-slot positional ambient): left out, unknown native warning. The event SE bank (loadSoundEffectEx_l FUN_003a0be8, asj_154.., asj_334..): not exported, silent.
 - first_encounter and rv_toujou actors were traced in windows only (f980-1299, f2340-2559; rv one window of 330 frames); wro_kaisetu's cast by slots, walks only. e050 and n013's clips in first_encounter not compared (their MPs were not identified in the window traced).
@@ -189,6 +189,8 @@ Open here:
 - Tests: test_scr005_page checks real bodies with triangles in the scene, and models freed after battle(); page mutants noensure, notrim, keepopen. test_story_cutscenes: load holds, getbattleactor's ensure, bit 8 (mutants loadhold, motionhold, lentensure, gunbit). **Not tested:** the gameplay body staying visible while a lent model loads, the failed-pack path, Restart replaying the opening end to end (only the models staying in).
 
 ## Effects in events: not done, nothing on the page (worker 0261, 2026-11-04; wound down at Dan's request)
+
+**Update (worker 0275, 2026-11-09):** the opening's effects now run (native/web/event_fx.js: load, strid2numid, playseqstr_l, setVisible_l, stop2_l, command 0x1d) for a0001 on DAT_004ee4a0; the scanner is drawn. See notes/HANDOFF.md (worker 0275) and the fidelity-audit rows 'Event effects'. Main's events and the other FEDs below are still out.
 
 All wiring was taken out; the natives still warn as left out. A scratch copy of the draft native module is in this session's scratchpad only, and was never verified on the page. What the code says:
 - **Natives -> C:** load 3a2580 -> FUN_0037f2f0 (command 0x18 -> FUN_00381a08; skip != 0: 0x7fffffff), unload 3a24c0 -> FUN_0037f568, strid2numid 3a1e58 -> FUN_002f5238, playseqstr_l 3a1ea8 -> FUN_0037fb88 -> FUN_0037f728, playseq_l 3a1f78, setVisible_l 3a21c0 -> FUN_00379760, stop2_l 3a1638 -> FUN_00379808, enableloop_l 3a2038 -> FUN_00379680, play_l 3a2640 -> FUN_00375f98 -> FUN_00380ca0 -> FUN_002e29b8 (play_screen: not read), setFocusBlur 3a2090.
@@ -253,3 +255,43 @@ Skip's stop all act through the queue: what was mixed plays on for 480 ms).
 loadchrs(1, 5) before `sleep(393)` waits for its load in the game: the known 'event loads' row); sk_mituketa2 +372 / +736 vs
 +404 / +789 (32 and 53 frames short: the known short shots / block start drift, not looked into here). Not compared against
 PCSX2 audio output: the delay is read from the ring state, the SPU2's own buffering is not counted.
+
+## Vincent's cape in events (worker 0280, 2026-11-09)
+
+Dan, 2026-11-09: "Vincent's cape is missing in some of the cutscenes."
+
+**Where it was missing:** on every event body built from **p000** (07700001.bin). Seen on the page (survey of the warps):
+heri_taijou (the fall), first_encounter, rv_toujou, wro_kaisetu (all of it); by p000's clips in actors.json (not walked): the opening's p000 shots (km01vnw2 / km0102vn),
+the rescue scenes' km0520vn / km0521vn, the boss scenes (kmb*), and the lent p_Vin body (bv* clips in main, setbattlename).
+**p005**, the other Vincent event model (rv_matiawase, the close-ups in first_encounter / rv_toujou), always had its cape:
+its cape is an ordinary skinned smd block in its glb (slot 7).
+
+**Why:** p000's cape is a cloth block (smd 'p000_L02' 0x19f70: +0xe = 82 cloth vertices, +0x10 = 1 group). The event models
+go through the enemies' exporter (export_web_enemy.decode), which builds no pool for a block without skin batches
+('WARN p000_L02@0x19f70.g0: no pool'), so p000.glb ends at triangle 2389 with no cape. Nothing drew it.
+
+**What the game does:** FUN_005ab8f0 draws every MP, event-loaded ones too, through FUN_005b2ef8; that walks the smd list
+from the end and calls FUN_005b2550 per entry of the MP's variant (skipping MP+0x180's hidden entries), which runs
+FUN_005b06d0 (the cloth vertices' keyed targets from all influences) and FUN_005b0d30 (the cloth step). So event p000 has
+a live cape cloth with its own window: FUN_005a95f0 at each clip request reads clip +0x19 / +0x1a. **Every event clip p000
+plays in ev0100 has flag 0** (window cleared), and h_st / m_st / r_st have flag 1 (left alone) on a fresh MP (total 0):
+k = 1 throughout, so the drawn cape is the keyed target, no swing. 07700001.bin's block is 07703201.bin's 0x19ed0 (gameplay
+Vincent) byte for byte but one relocated pointer, and the two glbs' skeletons are equal.
+
+**Page:** event_actors.js `capeOf` gives each p000 body a cape mesh pair (pass 1 + GS alpha-fail pass) built from
+vincent.glb's cape corners and materials (play.js `eventSource`, hung on the actor library as `lib.cape`) and its own
+cloth.js CapeCloth, stepped once per game frame in place() after the body's matrices; clip requests (event_actor_rt.js
+`mp.req`) arm the window from the clip's pack (`clothWindows`, new in export_web_event_actors.py). Hidden with the body
+or with hide_model_l's bit 3 (the block's list index).
+
+**Check:** GS dump w261 f1580 (heri_taijou) vs the page at heri_taijou tick 348 (best of 71 page frames by correlation,
+0.67; next best 0.38): tools/trace/out/w280/w280_heri_cape_game_vs_page.png. Same outline and spread, by eye. The colour
+in the overlap is within ~4 levels. Not compared per vertex (no vertex dump of an event frame).
+
+**Test:** test_event_cape_page.mjs (heri_taijou). Survey of the warps: heri_taijou p000 692 / 692 samples with the cape,
+first_encounter 352 / 358 (the 6: probably bodies spawned but not yet placed, as the test found; not checked), rv_toujou 1171 / 1171, wro_kaisetu 7431 / 7431 (+ getstate 3429 / 3429), heri_lasted 1390 / 1390, kita_ev0145 1231 / 1231.
+The lent p_Vin body with no clip yet is the gameplay body (its own cape). helpme / heritoujou / heridgsol: no p000 / p005 sampled.
+
+**Open:** p001 (105 bones; drawn in heri_lasted, 1596 samples, clip kmb45gb) has three cloth blocks of its own; their parts are
+not drawn. p001's cloth blocks (07700041.bin 0xe910 / 0x17100 / 0x1dec0) not exported (warned). The opening was not sampled
+by the survey (its runtime is intro.js's; same lib object, so the same path). The lent body's cloth starts fresh.

@@ -344,6 +344,13 @@ async function setupCapeCloth(vin, anim, pose) {
     const p = o.parent, i = p.children.indexOf(o);
     p.children[i] = m; m.parent = p; o.parent = null;
   }
+  // worker 0280: the same cape for the events' p000 bodies (event_actors.js capeOf; lib.cape): the corners' uv / colour
+  // attributes and fresh copies of the two passes' materials as gsAlphaPasses left them (before the program-D patch;
+  // Material.clone drops onBeforeCompile, so the alpha-fail pass's is carried over)
+  const shared = Object.fromEntries(Object.entries(geom.attributes).filter(([k]) => k !== 'normal'));
+  const passes = [src, twin].filter(Boolean).map(o => [o.material, o.material.onBeforeCompile, o.material.customProgramCacheKey]);
+  const eventSource = { CapeCloth, data, attributes: shared, normals: !!nrmAttr,
+    materials: () => passes.map(([m, f, k]) => { const c = m.clone(); if (m !== src.material) { c.onBeforeCompile = f; c.customProgramCacheKey = k; } return c; }) };
   const cloth = new CapeCloth(data);
   const sk = src.skeleton, bind = src.bindMatrix;
   const mats = new Map(), tmp = new THREE.Matrix4(), inv = new THREE.Matrix4();
@@ -426,6 +433,7 @@ async function setupCapeCloth(vin, anim, pose) {
       }
     },
     materials: nrmAttr ? materials : [],
+    eventSource,
     state: () => ({ total: cloth.total, remaining: cloth.remaining, k: +cloth.k().toFixed(4) }),
   };
 }
@@ -724,6 +732,29 @@ async function main() {
   const pauseSound = { audio: null, music: null };   // pause_layer.js: menu sounds + the pause's SE hold / BGM volume
   const snd = (name, pos, range = 400.0) => (sfx ? sfx.play(name, pos, range) : null);   // worker 0270: the slot (FUN_0033d788's +0x18c handle)
   const sndStop = slot => { if (sfx && sfx.stop) sfx.stop(slot); };                       // worker 0270: FUN_0033cf00
+  // worker 0277: the jump classes' sounds (jump_core.js JumpMotion / BackJumpMotion / LandMotion phase 0). A named one is
+  // FUN_00341268 -> FUN_0054b158(P, name, 1): FUN_0054ae78 (P+0x40 bit 7: (0, P+0x30 x 0.5, 0) through P's matrix = 9 above
+  // his feet; T w277_jump: body y - 9 at f11 / f141) -> FUN_0033cc48 (positioned; T: pan 65, vol 116 for both take-off sounds).
+  // foot(kind) = FUN_00341410(C, kind) -> FUN_003415d8 (ambient.js kindCue: the floor material C+0x6c1, as the footsteps).
+  // cue = FUN_003412d0 in the AI world (his cue table, its 15-frame gate C+0x810 shared with the hit voice).
+  const jumpAt = () => [ctrl.pos.x, Math.fround(ctrl.pos.y - Math.fround(18 * 0.5)), ctrl.pos.z];   // P+0x30 = 18 (H_PLAYER)
+  ctrl.jumpSound = {
+    // GUESS: bVar1 (FUN_00326500() and the status record's +0xae == 5 through C+0x54c) taken false: its inputs are not on the
+    // page; false in z128 (T w277_jump: the second jump played bsj_520, not bsj_525). See notes/fidelity-audit.md
+    wet: false,
+    name: (n) => { if (n) snd(n, jumpAt()); },
+    foot(kind) {
+      if (!amb.data || !amb.AM) return;
+      const poly = ctrl.active ? null : ctrl.body.poly;
+      const mat = poly == null || !col.polys ? 0 : (col.polys[poly].word6 & 0xff);   // FUN_00340e08 (as the footsteps above)
+      const k = amb.AM.kindCue(amb.data.foot, mat, kind, amb.data.version);
+      if (k !== null) this.name(amb.data.foot.cues[k] || '');
+    },
+    cue(c, force) {
+      if (enemyAI && enemyAI.playerCue) enemyAI.playerCue(c, force);
+      else if (!this.warned) { this.warned = true; console.warn('jump: no enemy AI world: Vincent\'s cue ' + c.toString(16) + ' (FUN_003412d0) not played'); }
+    },
+  };
   if (SOUND) import('./audio.js').then(({ GameAudio, SoundEmitters, RestartSound }) => {
     const au = new GameAudio();
     pauseSound.audio = au;
@@ -1192,6 +1223,7 @@ async function main() {
           if (fx) fx.begin(STEP);
           if (fxStage) fxStage.begin(STEP);
           if (stageSi) stageSi.fxBegin(STEP);
+          if (introFx) introFx.begin(STEP);         // worker 0275: the event effects' manager (FUN_002efc78: FUN_002e9f98, then FUN_002edcc0's queue)
           // FUN_003e9ed0's 0x10000 pass over the event SE slots: once a page frame, before the event runtimes' sends (event_sound.js eventSeFrame)
           if (pauseSound.audio && pauseSound.audio.eventSe && pauseSound.audio.eventSe.frame) pauseSound.audio.eventSe.frame();
           if (stage) stage.tick(20);               // main (stage_controller.js): its prelude, then first_event's wait
@@ -1199,6 +1231,7 @@ async function main() {
           if (chunkAnims) chunkAnims.frame(light && light.stream.areas.length ? light.stream.loaded() : null, STEP);   // FUN_00265350: the nodes (chunk_anim.js)
           if (fx) { const c = renderFxCamera(), fov = renderFov(); fx.end(null, fov); if (fxStage) fxStage.end(cameraView(c), fov); fxLayer.update(c); if (fxStage) fxStageLayer.update(c); }
           if (stageSi) stageSi.fxEnd(renderFxCamera());   // worker 0265: the title card's effects (menu_fx.js)
+          if (introFx) { introFx.end(); introFxLayer.update(); }   // worker 0275: FUN_002efe98 on the event effects, their draw
           if (intro.done) endIntro();
         }
         acc -= TICK; n++; continue;                // ended: held (still hidden, the event's last view) until the hand-off
@@ -1442,7 +1475,9 @@ async function main() {
     // worker 0257: FUN_003de130: with an event program in event mode (FUN_003dfd18) Start takes the event branch, not this menu
     // the kill's own frame: FUN_00576b48 -> FUN_00241760(1, 3, 0); then gameover.js's FUN_00241760 count / the pad given to the menus (FUN_00253fd8(2))
     // worker 0242: after Zone.exit the stage program has ended (FUN_004012c0 returned 1), so its pause (case 0xf) is gone
-    output, blocked: () => frozen || !!intro || stageEventMode() || php.hp === 0 || !!(gameOver && gameOver.go.pauseBlocked) || !!(stageRes && stageRes.exit), sound: pauseSound,
+    // worker 0277: FUN_003e0d50 (DAT_004f3044 bit 0x10000, set by the stage script's peace, cleared by chaos: stage_controller.js
+    // noPause): e.g. deb_jump's item help box after a pickup
+    output, blocked: () => frozen || !!intro || stageEventMode() || php.hp === 0 || !!(gameOver && gameOver.go.pauseBlocked) || !!(stageRes && stageRes.exit) || !!(stage && stage.rt.noPause), sound: pauseSound,
     onPause(on) { paused = on; if (gameHud) gameHud.pause(on); pressed.clear(); mouse.dx = mouse.dy = 0; drag = null; if (!on) { clock.getDelta(); acc = 0; } },
     // Sent when the confirm box (pause.js openBox, layout 0x472ad8) is answered OK. Restart: FUN_003c0a20 +
     // FUN_003dee40(0xf) -> FUN_004012c0 case 0xf returns 6 -> the checkpoint (restart above). Tempsave / Quit:
@@ -1461,7 +1496,7 @@ async function main() {
   window.__play = { shotFx, ctrl, anim, follow, aim: weapon, col, stats, amb, areas, camera, renderer, output, root, vin, light, spawnY: gy,
                     playerState, camView, report, keys, pressed, motions, packsReady, actionHelp, cape, enemies, enemyAI, php, pause, gameHud, pauseSound, gameOver,
                     sound: () => (soundProbe ? soundProbe() : null), soundStop: () => { if (soundStop) soundStop(); }, restart: { get count() { return restarts; }, get pending() { return restartPending || !!restartHold || restartReady; }, get record() { return checkpointRec; } },
-                    intro: { get active() { return !!intro; }, get rt() { return introRt; }, get windows() { return introWin; }, get hudParked() { return !!intro && output.hud !== introHud; }, get ended() { return introEnded; }, get paused() { return !!intro && intro.paused; } },
+                    intro: { get active() { return !!intro; }, get rt() { return introRt; }, get windows() { return introWin; }, get hudParked() { return !!intro && output.hud !== introHud; }, get ended() { return introEnded; }, get paused() { return !!intro && intro.paused; }, get fx() { return introFx; }, get fxLayer() { return introFxLayer; } },
                     get stage() { return stage; }, get stageLib() { return stageLib; }, get stageView() { return stageView; }, get stageWin() { return stageWin; }, get stagePaused() { return stagePaused; }, get stageInfo() { return stageSi; }, get gameState() { return stageGs; }, get viewRay() { return aiOpts && aiOpts.viewRay; }, get results() { return stageRes; }, get voices() { return introVoices; }, visMask, roomOccl };
   // ---- the opening event (intro.js): played before play on a fresh load; at its end the Restart path (checkpoint.js)
   // places Vincent and soldiers 41-43 as the event's end hands them to play. The page's gameplay bodies and HUD are
@@ -1613,6 +1648,7 @@ async function main() {
     tag: 'p_Vin', model: 'p000',
     matrix: () => { const f = ctrl.C.face; return [-f.z, 0, f.x, 0, 0, -1, 0, 0, -f.x, 0, -f.z, 0, ctrl.pos.x, ctrl.pos.y, ctrl.pos.z, 1]; },
     lend() {}, show(v) { vin.eventHidden = !v; }, release() { vin.eventHidden = false; },   // applied by the aim view's render (worker 0261)
+    cloth: cape ? cape.cloth : null,                 // the MP's cape window: the slot's clip requests arm it (event_actors.js capeRequest)
     place(p, f) {
       ctrl.pos = { x: p[0], y: p[1], z: p[2] };                                       // status +0x30
       ctrl.heading = Math.atan2(f[0], f[2]);                                          // +0x40 (facing)
@@ -1650,6 +1686,8 @@ async function main() {
   }
   function finishIntro() {
     intro.finish();
+    // GUESS: the event effects go with the event (worker 0275; notes/fidelity-audit.md 'Event effects: freed at the event's end')
+    if (introFx) { introFx.reset(); introFxLayer.update(); }
     for (const o of introHidden) o.visible = true;
     introHidden = [];
     output.hud = introHud;
@@ -1673,6 +1711,7 @@ async function main() {
   { const prev = output.hud; output.hud = (o) => { if (prev) prev(o); if (stageWin && pause && pause.layer) { const p = stageWin.drawAll(performance.now()); if (p.length) pause.layer.draw(o.renderer, o, p); } }; }
   let introData = null, createIntro = null, introActors = null, introVoices = null;
   let introWin = null, introWinMod = null, introWinData = null;      // event_window.js (worker 0239): the subtitles, the event pause's screen
+  let introFx = null, introFxLayer = null;                           // event_fx.js (worker 0275): the opening's effects (the scanner)
   // the opening's sound back ends (event_sound.js): music.js GameMusic, the area sound hook, audio.js GameAudio, the voices
   const introSound = {
     music: () => pauseSound.music,
@@ -1690,7 +1729,9 @@ async function main() {
                           rand: () => aiRng.rand(),                            // FUN_0040b5c0: the face animations' waits (worker 0248)
                           sound: introSound,                                   // its music / SEs / voices (event_sound.js, worker 0222)
                           windows: introWin = introWinMod ? introWinMod.createEventWindows({ D: introWinData }) : null,   // subtitles (worker 0239)
-                          stageInfo: () => stageSi, stageInfoWait: () => stageSiLoading });   // the stage title card (stage_info.js, worker 0265)
+                          stageInfo: () => stageSi, stageInfoWait: () => stageSiLoading,   // the stage title card (stage_info.js, worker 0265)
+                          effects: introFx });                                 // Effect.load / playseqstr_l ... (event_fx.js, worker 0275)
+    if (introFx) { introFx.reset(); introFxLayer.update(); }
     introGate.event = true;
     introGate.on = true;
     introRt = intro.rt;
@@ -1714,6 +1755,20 @@ async function main() {
       for (const m of ['e027', 'e048', 'e063', 'g000', 'g013', 'n013', 'p000', 'p005', 'p014', 'w003']) open[m] = openFiles;
       introActors = await (await import('./event_actors.js')).loadEventActors(undefined, { preload: { models: open } })
         .catch(e => { console.warn('intro: the event\'s actors not drawn (data/event/actors: build step event_actors):', e.message); return null; });
+      if (introActors) introActors.cape = cape ? cape.eventSource : null;    // the p000 bodies' cape (event_actors.js capeOf)
+      // worker 0275: the event effects (event_fx.js) on a menu-manager layer (gameover_title.js TitleLayer on the screen projection, as
+      // menu_fx.js menuFxLayer without its veil; the FEDs from data/event/fx, build step eventfx). The page draws in scene-graph order
+      // (sortObjects = false): added here, before stage_info's layer (loaded after this block), whose veil then draws over these sprites,
+      // (the fade's draw FUN_002f4270 is not decoded; the dumps do not settle this order, and the card keeps the opposite one).
+      // GUESS: notes/fidelity-audit.md 'Event effects: under the event fade'
+      try {
+        const [EF, MF, GT] = await Promise.all([import('./event_fx.js'), import('./menu_fx.js'), import('./gameover_title.js')]);
+        introFx = EF.createEventFx({ createMenuFx: MF.createMenuFx, rng: fx ? fx.rng : null,
+          fetchFed: n => fetch(`data/event/fx/a${String(n).padStart(4, '0')}.fed`).then(r => (r.ok ? r.arrayBuffer() : null)).catch(() => null) });
+        introFxLayer = new GT.TitleLayer(THREE, introFx.title, { screen: output });
+        introFxLayer.group.name = 'event-effects';
+        root.add(introFxLayer.group);
+      } catch (e) { console.warn('intro: event effects off:', e && e.message); introFx = null; }
       startIntro();
     }
   }
@@ -1732,6 +1787,7 @@ async function main() {
                  SOUND && !introVoices ? import('./event_sound.js').then(E => { introVoices = new E.VoicePlayer({ get ctx() { return pauseSound.audio && pauseSound.audio.ctx; } }); }).catch(() => null) : null])
       .then(([d, m, GS, SI, RS, SV, LIB, GUN, WIN]) => {
         stageViewMod = SV; stageLib = LIB; stageGun = GUN;
+        if (LIB) LIB.cape = cape ? cape.eventSource : null;               // the p000 bodies' cape (event_actors.js capeOf)
         if (WIN) { stageWinMod = WIN.W; stageWinData = WIN.D; }
         if (!d) { stageSiLoading = false; console.warn('stage: data/event/ev0100_stage.json missing (tools/byo/build_web.sh step stage): no story beats'); return; }
         stageData = d; createStage = m.createStageController;

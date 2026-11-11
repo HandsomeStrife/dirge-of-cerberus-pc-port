@@ -207,6 +207,7 @@ export class EventActors {
     if (mp.count > 0 && (flags & 0x80) && mp.clip === name) return false;
     if (blend) this.warnOnce('blend', 'event actors: a blended motion request (FUN_005a91c8 param_3 != 0) is played without the blend');
     mp.clip = name; mp.n = hit.nf; mp.frame = 0; mp.loop = !!(flags & 1); mp.count = 1; mp.flags = flags;
+    mp.req = (mp.req || 0) + 1;                                        // FUN_005a95f0 runs for each (the cape's window: event_actors.js)
     return true;
   }
 

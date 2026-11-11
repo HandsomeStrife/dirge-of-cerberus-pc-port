@@ -58,7 +58,7 @@ def resolve_bases(mem):
         bases["AIQ"] = u32(mem, G_AISCHED)
         bases["PS"] = u32(mem, P + 0x17C)          # player status record (FUN_0055a370)
         bases["EVF"] = u32(mem, 0x47DBB0)        # DAT_0047dbb0: event-flag block (FUN_003ff658 / FUN_003ff738)
-    elif FIELDSET == "stageinfo":                  # worker 0220: as "enemy" (no enemy records)
+    elif FIELDSET in ("stageinfo", "pausegate"):    # worker 0220: as "enemy" (no enemy records); pausegate: worker 0277
         bases["GSB"] = u32(mem, u32(mem, u32(mem, G_GSTATE)) + 4)
         bases["AIQ"] = u32(mem, G_AISCHED)
         bases["EVF"] = u32(mem, 0x47DBB0)
@@ -697,8 +697,27 @@ if FIELDSET == "results":
     FIELDS = RESULTS_FIELDS
 if FIELDSET == "items":
     FIELDS = ITEMS_FIELDS
+# Opt-in set for FUN_003de130's Start gates (TRACE_FIELDSET=pausegate, worker 0277): every value the Start -> pause
+# branch reads, on the stage-info box route (w277_pickup_*). Bases as "stageinfo" (EVF = DAT_0047dbb0).
+PAUSEGATE_FIELDS = [f for f in FIELDS if f[0] in ("step", "pad_held")] + [
+    ("ui_flags", None, 0x4F3044, "u32", "D", "DAT_004f3044: 0x4000 skip once, 0x100 FUN_003e0cb0, 0x8000 FUN_003e0d98, 0x10000 FUN_003e0d50, 0x2000 FUN_003e0d00"),
+    ("sflags", None, 0x4B8980, "u32", "D", "DAT_004b8980 (FUN_002413c0(0x14): bit 20)"),
+    ("pause", None, 0x477670, "u32", "D", "DAT_00477670: the pause screen (0 = none)"),
+    ("pad_gate", None, 0x4E0FF8, "bytes:8", "D", "DAT_004e0ff8 pad owner (FUN_00254810 needs 1), DAT_004e0ffc"),
+    ("pad_gate2", None, 0x4E1204, "u32", "D", "DAT_004e1204 (FUN_00254810 needs != 0)"),
+    ("fade", None, 0x4EC04C, "f32", "D", "DAT_004ec04c (FUN_002e29e0): needs <= 0"),
+    ("evf_18", "EVF", 0x18, "u32", "D", "DAT_0047dbb0 +0x18: bit 5 = FUN_003e2910"),
+    ("b8ac8", None, 0x4B8AC8, "u32", "D", "DAT_004b8ac8 (FUN_002419d8(0): bit 0)"),
+    ("gclock", None, 0x4B8B2C, "u32", "D", "DAT_004b8b2c game state (FUN_00241d68; 0x17 = paused)"),
+    ("ref_1dc", None, 0x46B1DC, "bytes:8", "D", "DAT_0046b1dc count + DAT_0046b1e0[4] (FUN_00241760)"),
+    ("si_kind", None, 0x47DB6C, "u32", "D", "PTR_0047db6c stage-info kind"),
+    ("si_state", None, 0x4FADBC, "u32", "D", "DAT_004fadbc: FUN_003fdf00 state"),
+    ("stage_ptr", None, 0x46F850, "u32", "D", "DAT_0046f850"),
+]
 if FIELDSET == "stage":
     FIELDS = STAGE_FIELDS
+if FIELDSET == "pausegate":
+    FIELDS = PAUSEGATE_FIELDS
 if FIELDSET == "stageinfo":
     FIELDS = STAGEINFO_FIELDS
 if FIELDSET == "evactor":

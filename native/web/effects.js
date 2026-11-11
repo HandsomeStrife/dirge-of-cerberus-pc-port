@@ -849,6 +849,12 @@ function drawModel(X, mi, kind, uvo, view, out, tex, proj, dz = null) {
   const col = [0, 1, 2, 3].map(i => f(Math.trunc(Math.min(255, Math.max(0, f(p.v[colSlot + i] * em.col[i])))) * f(1 / 128)));
   const add = [0, 0, 0, 0];                                         // 0x70003c1c = 0 (both callers)
   // the vertices (the s16 path, flags & 0x400 clear)
+  modelPrims(F, m, flags, C, Dm, col, add, uvo, proj, tex, X.warn, out, { emitter: em.ei, id: em.id, type: D.type(F, d), tag: p.tag, model: mi });
+}
+// FUN_002f5c50's vertices and commands (drawModel above; worker 0278: also the bullet tracer, drawTracer below). F: the reader of
+// the file holding model m (a FED, or core_ef.bin); C: model -> view rows; Dm: the depth matrix or null; col / add: the block's
+// +0x18 colour (bytes / 128) and +0x1c added colour; uvo: +0x10 / +0x14 UV offset; meta: fields copied to each primitive
+function modelPrims(F, m, flags, C, Dm, col, add, uvo, proj, tex, warn, out, meta) {
   const vb = m + F.u32(m + 8), n = F.u16(m + 0x12), V = [];
   for (let i = 0; i < n; i++) {
     const x = F.s16(vb + 6 * i), y = F.s16(vb + 6 * i + 2), z = F.s16(vb + 6 * i + 4);
@@ -863,7 +869,7 @@ function drawModel(X, mi, kind, uvo, view, out, tex, proj, dz = null) {
     const k = (F.u8(c + 1) << 24) >> 24, cnt = F.s16(c + 2);   // lb: signed
     if (k < 0) break;                                               // 0xff: the end (default case 0x2f91b8)
     const sz = MDL_REC[k];
-    if (!sz) { X.warn(`effects: model command ${k} (FUN_002f5c50) not translated: not drawn`); return; }
+    if (!sz) { warn(`effects: model command ${k} (FUN_002f5c50) not translated: not drawn`); return; }
     const tx = k === 2 || k === 6, nv = k <= 2 ? 3 : 4;
     let t = null, uoff = 0, voff = 0;
     if (tx) {                                                       // TEX0 = header +8 (+ 0x70003c0c TBP / CBP: 0)
@@ -871,7 +877,7 @@ function drawModel(X, mi, kind, uvo, view, out, tex, proj, dz = null) {
       const W = 1 << ((lo >>> 26) & 15), H = 1 << (((lo >>> 30) | (hi << 2)) & 15);
       uoff = Math.trunc(((uvo[0] % (W * 65536)) >> 4) / W); voff = Math.trunc(((uvo[1] % (H * 65536)) >> 4) / H);
       t = tex.get(`${hi.toString(16)}:${lo.toString(16)}`);
-      if (!t) { X.warn(`effects: model TEX0 ${hi.toString(16)}${lo.toString(16).padStart(8, '0')} not in the FED's textures: not drawn`); c += 16 + cnt * sz; continue; }
+      if (!t) { warn(`effects: model TEX0 ${hi.toString(16)}${lo.toString(16).padStart(8, '0')} not in the FED's textures: not drawn`); c += 16 + cnt * sz; continue; }
     }
     const ix = k <= 2 ? 0xc : 0x10, uvAt = k === 2 ? 0x14 : 0x18;
     for (let r = c + 16, e = 0; e < cnt; e++, r += sz) {
@@ -893,10 +899,68 @@ function drawModel(X, mi, kind, uvo, view, out, tex, proj, dz = null) {
         // GS X / Y (VFTOI4: 1/16 px, toward zero), Z (VFTOI0); pos = the view-space point (the page camera)
         return { pos: u.pv, uv, rgba, gs: [Math.trunc(u.s[0] * 16) / 16, Math.trunc(u.s[1] * 16) / 16, Math.trunc(u.s[2])] };
       });
-      out.push({ verts, tex: t, untextured: !tx, alpha, emitter: em.ei, id: em.id, type: D.type(F, d), tag: p.tag, model: mi });
+      out.push({ verts, tex: t, untextured: !tx, alpha, ...meta });
     }
     c += 16 + cnt * sz;
   }
+}
+// ---- The bullet tracer (worker 0278; notes/effects-research.md 'Bullet tracers'). The pool (FUN_002d77c0, shot_fx.js) holds per
+// tracer +4 the model index (0), +5 the colour index, +8 the length x 0.1, +0x10 the position, +0x20 the negated direction;
+// FUN_002eff60 draws the list (FUN_002d79c8 -> FUN_002d7a70) between FUN_002e20f0(0) and FUN_002e20f0(1).
+// core_ef.bin (FileCode 0x03100037, resident at DAT_004ee948 = 0xeb0000) is relocated at load by FUN_002f20f8 -> FUN_002f55b0 ->
+// FUN_002f5460(core, R = core + core +0x3c): FUN_002f53f0(core, R, 4) fills the model table core +0x10 with R + R's own table
+// (R + u32(R + 0x10)) entries, u16 R +0x48 + 1 of them; FUN_002d7758 keeps FUN_002f55d0(core, 4, 0) in DAT_0050b5a8[0].
+export function byteReader(buf) {
+  const dv = new DataView(buf);
+  return { dv, u8: o => dv.getUint8(o), u16: o => dv.getUint16(o, true), s16: o => dv.getInt16(o, true),
+    u32: o => dv.getUint32(o, true), s32: o => dv.getInt32(o, true), f32: o => dv.getFloat32(o, true) };
+}
+export function coreModel(Fc, i) {
+  const R = Fc.u32(0x3c);
+  if (i > Fc.u16(R + 0x48)) return 0;
+  const e = Fc.u32(R + Fc.u32(R + 0x10) + 4 * i);
+  return e ? R + e : 0;
+}
+// DAT_0046c6d0 (ELF .data): the colour words by byte +5, R G B A from the low byte: 0 (bullet +0x120 bit 0x400 set) blue,
+// 1 orange
+export const TRACER_RGBA = [[0x40, 0x60, 0xc8, 0xc8], [0xc8, 0x64, 0x20, 0xc8]];
+const FLT_MAX_VU = 3.4028234663852886e38;                       // VU DIV / RSQRT by 0 (the I flag): the largest float
+const unitVU = v => { const l = f(f(f(v[0] * v[0]) + f(v[1] * v[1])) + f(v[2] * v[2])), k = l ? f(1 / f(Math.sqrt(l))) : FLT_MAX_VU; return v.map(x => f(x * k)); };
+const crossVU = (a, b) => [f(f(a[1] * b[2]) - f(a[2] * b[1])), f(f(a[2] * b[0]) - f(a[0] * b[2])), f(f(a[0] * b[1]) - f(a[1] * b[0]))];
+const plus0 = x => x === 0 && !Object.is(x, -0);                 // `*(int *)p == 0`: +0.0 only
+// FUN_002d93d0(out, pos, d): up = 0x46c710 (0, 0, 1) when d.x and d.z are +0, else 0x46c700 (0, 1, 0); row 0 = unit(up x d)
+// (FUN_00444a88, FUN_00444ad0), row 2 = unit(d), row 1 = row 2 x row 0, row 3 = pos (FUN_00444c88)
+export function tracerLookAt(pos, d) {
+  const up = plus0(d[0]) && plus0(d[2]) ? [0, 0, 1] : [0, 1, 0];
+  const r0 = unitVU(crossVU(up, d)), r2 = unitVU(d), r1 = crossVU(r2, r0);
+  return [...r0, 0, ...r1, 0, ...r2, 0, pos[0], pos[1], pos[2], 1];
+}
+// FUN_002d7a70: s = model +0x18; FUN_002d84f0 S = diag(s, s, +8 x s); FUN_002d8438(out, O, S): rows 0-2 = S row . O, row 3 = O's
+export function tracerMatrix(tr, s) {
+  const O = tracerLookAt(tr.pos, tr.dir), k = [s, s, f(tr.len * s)], M = O.slice();
+  for (let r = 0; r < 3; r++) for (let j = 0; j < 3; j++) M[4 * r + j] = f(k[r] * O[4 * r + j]);
+  return M;
+}
+// FUN_002d8368(out, +0x1d0, M) = M . camera 0 +0x1d0 (view x projection): here M . the view, drawModel's projection after. The
+// block 0x70003e00: flags 2 (| 2 by FUN_002f2f08; model +0 = 7: no cull, no flag 8, s16 vertices), UV offset 0, colour
+// DAT_0046c6d0[+5], added 0, no depth matrix (+0x44 = 0), no fog flag 0x100 -> FUN_002f5c50
+export function drawTracer(Fc, tex, tr, view, proj, out, warn) {
+  if (!Fc) return;
+  const m = coreModel(Fc, tr.model);                            // DAT_0050b5a8[+4]: 0 -> not drawn
+  if (!m) return;
+  const mf = Fc.u32(m);
+  const flags = 2 | ((mf & 2) ? 0 : 0x10) | ((mf & 1) ? 0 : 8);
+  if (flags & 8) { warn('effects: tracer model flag 8 (TEST from DAT_004ec480) not translated: not drawn'); return; }
+  if (mf & 0x400) { warn('effects: tracer model flag 0x400 (float vertices) not translated: not drawn'); return; }
+  if (!view.toViewMatrix) { warn('effects: the tracer needs view.toViewMatrix'); return; }
+  const M = tracerMatrix(tr, Fc.f32(m + 0x18)), V = view.toViewMatrix(), C = new Array(16).fill(0);
+  for (let r = 0; r < 4; r++) for (let j = 0; j < 4; j++) {
+    let a = 0;
+    for (let k = 0; k < 4; k++) a = f(a + f(M[4 * r + k] * V[4 * k + j]));
+    C[4 * r + j] = a;
+  }
+  const col = TRACER_RGBA[tr.colour].map(c => f(c * f(1 / 128)));
+  modelPrims(Fc, m, flags, C, null, col, [0, 0, 0, 0], [0, 0], proj, tex, warn, out, { tracer: tr });
 }
 // Type 35: the glow of a sprite through a frame-buffer page. Data: +0 anim (FED +0x70), +4 speed, +8 scale % (the
 // repeat's growth), +0xc depth offset, bytes +0x10 page size index (DAT_0046c230 / 238 / 240 / 248), +0x11 frame
@@ -1640,6 +1704,8 @@ export function createEffects({ fed, fed0 = null, core, warn = console.warn, twi
   const feds = new Map([[F0.code, F0]]);
   if (fed0) { const F1 = parseFed(fed0); feds.set(F1.code, F1); }
   const tex = core ? parseCore(core) : new Map();
+  const Fc = core ? byteReader(core) : null;                 // worker 0278: core_ef.bin's models (the bullet tracer, drawTracer)
+  const drawHooks = [];                                        // worker 0278: draws after the emitters' (shot_fx.js: the tracer list)
   for (const [k, t] of parseFedTextures(F)) tex.set(k, t);    // FUN_002eba88: the FED's own TIM2 images
   const stageFeds = stage.map(b => parseFed(b));
   for (const S of stageFeds) { feds.set(S.code, S); for (const [k, t] of parseFedTextures(S)) tex.set(k, t); }
@@ -2025,6 +2091,7 @@ export function createEffects({ fed, fed0 = null, core, warn = console.warn, twi
     if (cull && !view) warnOnce('effects: the emitter cull (FUN_002ea6a0) needs this frame\'s camera: end(view)');
     for (const em of emitters) {
       if (em.age < 0) continue;
+      if (em.f0a & 0xfc7f) continue;                             // FUN_002ea6a0 l.64: +0x0a bits other than the cull's 0x380 (setVisible's bit 2, worker 0275): no matrix, cull or eval
       F = em.F;
       emitterMatrix(em);
       if (cull && view && cullEmitter(em, view)) continue;
@@ -2101,7 +2168,7 @@ export function createEffects({ fed, fed0 = null, core, warn = console.warn, twi
     for (const em of emitters) {
       if (em.age < 0) continue;
       if (em.noDraw) { F = em.F; warnOnce(`effects: emitter ${em.ei} with ${em.noDraw} not translated: not drawn`); continue; }
-      if (em.f0a & 0x380) continue;                              // culled (FUN_002ea6a0): no eval, no bucket entry
+      if (em.f0a) continue;                                      // FUN_002eadc0: drawn only with +0x0a == 0 (culled 0x380, hidden bit 2 ...; worker 0275)
       for (const L of em.lists) for (const p of L) order.push([em, p]);
     }
     // the draw buckets (drawSlot, worker 0206): slot order, append (eval) order within a slot. GUESS: when a drawn
@@ -2124,6 +2191,9 @@ export function createEffects({ fed, fed0 = null, core, warn = console.warn, twi
         }
       }
     }
+    // worker 0278: FUN_002eff60 draws the tracer list (FUN_002d79c8) after FUN_002e20f0(0), before layers 1 / 2. GUESS: after
+    // every emitter here (the page does not split the buckets into the frame loop's layers; notes/fidelity-audit.md)
+    for (const h of drawHooks) h(view, out, cam0 ? cam0.proj : proj);
     return out;
   }
   // Restart (checkpoint.js, worker 0201). GUESS: the stage reload frees every emitter and zeroes mgr +0x8c (the manager's
@@ -2173,7 +2243,7 @@ export function createEffects({ fed, fed0 = null, core, warn = console.warn, twi
     em.p130 = matrixAngles(rowsUnit(M));
     em.p120 = [M[12], M[13], M[14], M[15]];
   }
-  return { spawn, begin, end, update, sprites, emitters, rng, fed: F0, feds, tex, warn: warnOnce, reset, stageLoad, softEnd, remove, setMatrix, cellMask, cells: () => mask ? mask.bits() : [...new Set([...hiddenSet, ...scriptCells])].sort((a, b) => a - b) };
+  return { spawn, begin, end, update, sprites, emitters, rng, fed: F0, feds, tex, core: Fc, addDraw: h => drawHooks.push(h), warn: warnOnce, reset, stageLoad, softEnd, remove, setMatrix, cellMask, cells: () => mask ? mask.bits() : [...new Set([...hiddenSet, ...scriptCells])].sort((a, b) => a - b) };
 }
 
 // ---------------------------------------------------------------------------------------------

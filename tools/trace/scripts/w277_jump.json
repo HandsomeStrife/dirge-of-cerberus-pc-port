@@ -1,0 +1,2 @@
+{"name": "w277_jump", "frames": 260, "log_from": 100, "doc": "worker 0277: standing jump (cross 10-13), then a double jump (cross 120-123, 140-143), the jump sound call log: TRACE_FIELDSET=jump TRACE_CALLLOG=w277jump",
+ "events": [{"from": 10, "to": 13, "buttons": ["cross"]}, {"from": 120, "to": 123, "buttons": ["cross"]}, {"from": 140, "to": 143, "buttons": ["cross"]}]}

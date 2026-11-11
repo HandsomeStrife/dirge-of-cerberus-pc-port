@@ -335,7 +335,14 @@ export class JumpMotion {
         if (this.second) out.push(req(0xd5, { now: true }));
         else if (armed) out.push(...aimedReq(0xbc, 0x82, 1, io));   // FUN_00345818(C, 0xbc, 0xc2, 0xc8, 0x82, 1, 0)
         else out.push(req(0x16, { now: true }));
-        // FUN_003412d0(C, 0x50, 1): sound 0x50 (not ported)
+        // the take-off sounds (worker 0277; T w277_jump: f11 fsj_026 + bt_v010, second jump f141 bsj_520 + bt_v010):
+        // bVar1 ? (second ? 'bsj_525' : FUN_00341410(C, 2)) : second ? FUN_00341268(C, 'bsj_520') : FUN_00341410(C, 2),
+        // then FUN_003412d0(C, 0x50, 1) (the cue, forced)
+        if (io.sound) {
+          if (this.second) io.sound.name(io.sound.wet ? 'bsj_525' : 'bsj_520');   // 0x5a3b48 / 0x5a3b50
+          else io.sound.foot(2);
+          io.sound.cue(0x50, 1);
+        }
         this.phase = this.second ? 8 : armed ? 4 : 1;
         this.t = 0;
         break;
@@ -406,6 +413,12 @@ export class BackJumpMotion extends JumpMotion {
         if (second) out.push(req(0xe0, { now: true }));
         else if (armed) out.push(req(0xdd, { now: true }));   // FUN_00345530(C, 1) first
         else out.push(req(0xda, { now: true }));
+        // FUN_005a1510 phase 0 (worker 0277): bVar1 ? 'bsj_525' : second ? 'bsj_522' : 'bsj_521' (FUN_00341268; 0x5a3b48 /
+        // 0x5a3d30 / 0x5a3d38), then FUN_003412d0(C, 0x50, 1). Not traced (the back jump's names read from the ELF)
+        if (io.sound) {
+          io.sound.name(io.sound.wet ? 'bsj_525' : second ? 'bsj_522' : 'bsj_521');
+          io.sound.cue(0x50, 1);
+        }
         this.phase = second ? 8 : armed ? 4 : 1;
         this.t = 0;
         break;
@@ -535,7 +548,8 @@ export class LandMotion {
     if (this.phase === 0) {
       if (io.armed) out.push(...aimedReq(0xc0, 0x82, 0, io));   // FUN_00345818(C, 0xc0, 0xc6, 0xcc, 0x82, 0, 0)
       else out.push(req(0x1a, { now: true }));
-      // FUN_00341410(C, 3), FUN_003412d0(C, 0x51, 0): landing sound (not ported)
+      // FUN_00341410(C, 3), FUN_003412d0(C, 0x51, 0) (worker 0277; T w277_jump f53 / f190: fsj_038; cue 0x51 is '' for Vincent)
+      if (io.sound) { io.sound.foot(3); io.sound.cue(0x51, 0); }
       this.t = 0; this.phase = 1;
     } else if (this.phase === 1) {
       if (io.clipEnded || this.t >= JUMP.landMax) {
@@ -946,6 +960,7 @@ export class Jump {
                    armed: !!opts.armed, aimChanged: !!opts.aimChanged, groundSpeed: ctrl.C.groundSpeed,
                    headClip: this.clock ? this.clock.clip : null, headBlending: this.clock ? this.clock.blending() : false };
       if (opts.usable) io.usable = opts.usable;
+      if (ctrl.jumpSound) io.sound = ctrl.jumpSound;      // the jump classes' sounds (play.js; worker 0277)
       io.C = ctrl.C;                                      // the death class's FUN_00353418 (C+0x214)
       io.ctrl = ctrl;                                     // class 0x35's mover 9 (player.js knockBack)
       io.dead = !!(ctrl.hpZero && ctrl.hpZero());
