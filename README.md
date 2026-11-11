@@ -22,7 +22,8 @@ recordings and GS dumps. The first stage plays from the opening through to its b
 The native C side (`native/engine`, `native/renderer`, `native/gpu`) has the room loader
 and renderer but not yet the gameplay. The next step is moving the browser build's
 translated code into C, so one C codebase builds both the Windows program and (through
-WebAssembly) the browser test page.
+WebAssembly) the browser test page. The plan is in
+[notes/native-migration-plan.md](notes/native-migration-plan.md).
 
 ## Try the browser build
 
