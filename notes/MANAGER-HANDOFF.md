@@ -271,3 +271,9 @@ Dan's playtest list was worked by workers 0265-0270, all reviewed, review fixes 
 ## 2026-11-09 fidelity audit (committed 3a81479)
 
 Dan asked to validate 07edd20 against the game code. Workers 0271-0273 audited each hunk (TRANSLATED / DIFFERS / DERIVED / INVENTED), then fixed their findings; 0274 fixed the warp boss test timing. All reviewed and re-reviewed. Derived voice delay replaced by a translation of the PCM ring (BGM through it too); Restart/Skip SE ending decoded from iopsound.irx; warps use walked route states. Still open: title-card fade-in gap is disc read time (no load-time model); veil draw order GUESS; enemy-vs-barrier contact untraced; citizens' late flags GUESS; reload teardown sound GUESS; one-off scr005 load stall (diagnostics added). Next worker number: 0275.
+
+## 2026-11-09/11 playtest round (committed 465f9a2)
+
+Dan's list: scanner overlay (0275: it is Shelke's scope view; KerberosEffect translated, blue tint/bars/dial/TARGET still undecoded), "save the abducted girl" (0276: beast alley kidnap, clips in second motion files; awaiting Dan's confirmation it's the scene he meant), pause during pickup + jump noise (0277), bullet trails (0278), warp picker (0279, made mouse-only after review), cape in cutscenes (0280; p001's cloth still missing). Reviews 0282-0287, re-review 0288, suite fixes 0289/0290 (test races; the restart test pressed Start inside a peace..chaos window). Original workers were closed by the overnight idle cleanup before review fixes: hand fixes to the reviewer (role change) when that happens.
+
+Direction change (Dan, 2026-11-09): the goal is a NATIVE C port for Windows; the browser build is the test bench. README updated. Migration plan: worker 0281 (brief in the manager's scratchpad briefs/w0281.txt; includes evaluating PS2Recomp, OpenGOAL's structure, splat/m2c). Next worker number: 0291.
