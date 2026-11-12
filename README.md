@@ -56,3 +56,6 @@ See `notes/STATE-OF-THE-PORT.md` for the full status and `notes/PLAN.md` for dir
 *Dirge of Cerberus: Final Fantasy VII* and all its assets are © Square Enix. This
 project is an unaffiliated, non-commercial reverse-engineering effort for
 interoperability and preservation. No copyrighted game data is distributed here.
+
+The port's own code, tools and notes are under the [MIT licence](LICENSE). That covers
+only what is in this repository, not the game or anything extracted from it.
