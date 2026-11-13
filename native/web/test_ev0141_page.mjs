@@ -32,7 +32,7 @@ for (const name of (process.env.EV || 'encounter,toujou,wro').split(',')) {
   try {
     const errs = []; pg.on('pageerror', e => errs.push(e.message)); pg.on('console', m => { if (m.type() === 'error' || /no marker/.test(m.text())) errs.push(m.text()); });
     for (let i = 0; ; i++) {
-      try { await pg.goto(`http://127.0.0.1:${port}/play.html?intro=0&sound=0&enemydmg=0&warp=${name}`, { waitUntil: 'load' }); break; }
+      try { await pg.goto(`http://127.0.0.1:${port}/play.html?video=pal&intro=0&sound=0&enemydmg=0&warp=${name}`, { waitUntil: 'load' }); break; }
       catch (e) { if (i > 20) throw e; await new Promise(r => setTimeout(r, 250)); }
     }
     await pg.waitForFunction(() => window.__play && window.__play.stats.ticks > 5, null, { timeout: 240000 });

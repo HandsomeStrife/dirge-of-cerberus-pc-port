@@ -57,8 +57,8 @@ const port = await new Promise(r => { const s = net.createServer().listen(0, '12
 const srv = spawn('python3', ['-I', '-m', 'http.server', String(port), '--bind', '127.0.0.1', '--directory', here], { stdio: 'ignore' });
 const browser = await chromium.launch({ args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
 try {
-  for (const [name, url, strip] of [['play.html', 'play.html?intro=0&enemydmg=0', false],
-                                    ['play.html, no area boxes', 'play.html?intro=0&enemydmg=0', true],
+  for (const [name, url, strip] of [['play.html', 'play.html?video=pal&intro=0&enemydmg=0', false],
+                                    ['play.html, no area boxes', 'play.html?video=pal&intro=0&enemydmg=0', true],
                                     ['index.html (main.js)', 'index.html', false]]) {
     const pg = await browser.newPage({ viewport: { width: 640, height: 360 } });
     const errs = [];
@@ -87,7 +87,7 @@ try {
     const errs = [];
     pg.on('pageerror', e => errs.push(e.message));
     await pg.route('**/data/effects/ids.json', async r => { const res = await r.fetch(), j = await res.json(); j.stage = []; r.fulfill({ response: res, json: j }); });
-    await pg.goto(`http://127.0.0.1:${port}/play.html?intro=0&enemydmg=0`, { waitUntil: 'load' });
+    await pg.goto(`http://127.0.0.1:${port}/play.html?video=pal&intro=0&enemydmg=0`, { waitUntil: 'load' });
     await pg.waitForFunction(() => window.__play && window.__play.visMask && window.__play.packsReady, null, { timeout: 240000 }).catch(() => {});
     await pg.waitForFunction(() => window.__play && window.__play.stats.ticks > 5, null, { timeout: 240000 });
     const noFire = await pg.evaluate(() => !window.__fx || !window.__fx.stage);

@@ -7,7 +7,8 @@
 //   left mouse [R1] draw the gun (first press), then fire;  Z / middle mouse [R3] first person;
 //   C [circle] put the gun away.  ?aim=0 turns all of this off.
 import * as THREE from 'three';
-import { GAME, STEP } from './player.js';
+import { GAME, STEP, LOCO_INSTALL } from './player.js';
+import { frameMs } from './video_mode.js';
 import { WeaponSystem, AIM_SETS, AIM_IDLE, AIM_FIRE, AIM_WALK_THR, quadrant, moveAngleDeg,
          reticleQuads, reticleRay, aimRayPoints } from './aim_core.js';
 import { createLock, lockFrame, lockRay, screenPoint } from './lock_on.js';
@@ -273,7 +274,7 @@ export function makeClipControl({ core, anim, ctrl, motions, step = STEP }) {
     // idle class <-> aimed move class FUN_00595440: it returns to the idle class when C+0x1d8 == 0.
     // GUESS: it is entered when C+0x1d8 reaches 5 u/s, the same rule player.js uses for the
     // locomotion table install (traced: h_st_a at 1.9 / 3.7, h_wk_a at 5.6; aim_c f31-33, f161-163).
-    if (!inMove && ctrl.C.groundSpeed >= 5.0) inMove = true;
+    if (!inMove && ctrl.C.groundSpeed >= LOCO_INSTALL) inMove = true;   // GUESS: player.js LOCO_INSTALL (shared with the unaimed table)
     else if (inMove && ctrl.C.groundSpeed === 0) inMove = false;
     const moving = ctrl.C.groundSpeed > 0;
     // stand-fire class FUN_00596460: a shot while standing requests h_st_f; back to h_st_a when
@@ -353,6 +354,7 @@ export async function setupAim({ ctrl, anim, motions, col, follow, output, vin, 
     return null;
   }
   const core = new WeaponSystem(W, ret, { step: STEP });
+  const reticleMs = frameMs();                       // DAT_004f58ec's ms a frame (video_mode frameMs)
   if (!ret.textures) console.warn('reticle texture missing: re-run native/assets/models/export_web_aim.py');
   const layer = new ReticleLayer(ret);
   const ctl = makeClipControl({ core, anim, ctrl, motions });
@@ -453,7 +455,7 @@ export async function setupAim({ ctrl, anim, motions, col, follow, output, vin, 
       const before = core.cam.pitch;
       core.stateMachine(lastRay ? lastRay.hit : null);
       if (core.cam.pitch !== before) follow.pitch = core.cam.pitch;   // shot: pitch carry-over (message 0x3e9)
-      core.reticleFrame(1000 / 50);                  // GUESS: DAT_004f58ec counts ms (phase 1 = 100 -> 5 frames, traced)
+      core.reticleFrame(reticleMs());                // GUESS: DAT_004f58ec counts ms (FUN_0023c1f0; video_mode frameMs) (phase 1 = 100 -> 5 frames, traced)
       const ev = core.events.find(e => e.type === 'shot');
       const shot = !!ev;
       if (shot && api.onShot && lastRay) {          // the bullets (enemy_ai playerShot, hooked by play.js)

@@ -46,7 +46,7 @@ try {
     if (strip) await pg.route('**/data/vincent/light.json', async r => {
       const res = await r.fetch(), j = await res.json(); delete j.areas; r.fulfill({ response: res, json: j });
     });
-    for (let k = 0; ; k++) { try { await pg.goto(`http://127.0.0.1:${port}/play.html?intro=0&enemydmg=0`, { waitUntil: 'load' }); break; } catch (e) { if (k > 20) throw e; await new Promise(r => setTimeout(r, 250)); } }
+    for (let k = 0; ; k++) { try { await pg.goto(`http://127.0.0.1:${port}/play.html?video=pal&intro=0&enemydmg=0`, { waitUntil: 'load' }); break; } catch (e) { if (k > 20) throw e; await new Promise(r => setTimeout(r, 250)); } }
     await pg.waitForFunction(() => typeof window.__rayCast === 'function' && window.__play && window.__play.stats.ticks > 5, null, { timeout: 240000 });
     // the dropped and kept ranges now (chunks 0..2; groups the mask does not hide)
     const st = await pg.evaluate(() => {

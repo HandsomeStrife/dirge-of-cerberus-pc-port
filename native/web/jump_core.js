@@ -17,6 +17,7 @@
 //   groundSpeed, flags79c? }, ctrl.body { state, ... }, ctrl.onGround, ctrl.startFall(h),
 //   ctrl.stickInput(input), ctrl.intent(), ctrl.moveTick(), ctrl.rotate().
 
+import { STEP } from './video_mode.js';
 const f32 = Math.fround;
 // PS2 FPU rounding toward zero (player.js / enemy_ai.js chop)
 const _cb = new DataView(new ArrayBuffer(4));
@@ -30,7 +31,7 @@ function chop(x) {
 // ---------------------------------------------------------------- game data
 // Runtime values from the sea-of-flames save state (EE RAM), checked against the traces.
 export const JUMP = {
-  STEP: 1.1999999284744263,  // DAT_004eeb24: ticks per PAL frame (player.js STEP)
+  STEP,                      // DAT_004eeb24: ticks per frame (video_mode.js: 1.1999999 PAL, 1.0 NTSC)
   cfgC4: 12.100000381469727, // cfg+0xc4, cfg = *(DAT_0046dd68+0x14) = 0x1faaf24: jump height - 1
   cfgC0: 24.200000762939453, // cfg+0xc0: the alternative height (story-progress branch, not taken in z128)
   gravCfg: 1.2000000476837158, // DAT_0046ee2c -> cfg+0xcc (FUN_00326500 true); gravity = cfg+0xcc x 196
@@ -779,10 +780,12 @@ class KnockMotion {
 // The motion player's head layer for the jump clips, enough to answer FUN_003460d8:
 // frame += rate x weight/128 x step (FUN_005aa2a8); a loop resets to 0 at the clip length;
 // a one-shot holds at n - 1 and counts as ended there (trace: h_jp0 2.0, h_jp4 14.0); a
-// queued clip takes over at frame 0 on the advance that would pass n - 1, the remainder
-// dropped (trace: h_jp1 8.4 -> 9.0 -> h_jp2 0.0; c_wjp2 7.8 -> h_jp3 0.0).
-// GUESS: the hold / queue take-over rule (not decoded; inferred from 7 traces, exact on all;
-// see notes/jump-research.md). Only FUN_005aa2a8's frame step and loop reset are decoded.
+// queued clip takes over at frame 0 on the advance that reaches n - 1, the remainder
+// dropped (trace: h_jp1 8.4 -> 8.999998 -> h_jp2 0.0; c_wjp2 7.8 -> h_jp3 0.0).
+// FUN_005aa2a8 (one-shot branch): `n - 1.0 <= frame` returns 1 and holds the frame at n - 1;
+// FUN_005aa5b8 then steps to the queued layer (worker 0295: the NTSC-timing trace w295_ntsc_jump
+// has h_jp1 8.5 -> h_jp2 0.0, i.e. take-over at exactly 9.0; PAL's 8.999998 is just below it).
+// GUESS: only the queue's order of operations in FUN_005aa5b8 (see notes/jump-research.md).
 export class ClipClock {
   constructor(clip = null, frame = 0, frames = CLIP_FRAMES) {
     this.frames = frames; this.clip = clip; this.frame = frame; this.loop = false; this.queue = [];
@@ -810,7 +813,7 @@ export class ClipClock {
     // on the 26th advance (state 0x18 -> 2 at record 1489); rounded to nearest it would end on the 25th.
     const f = chop(this.frame + chop(chop(JUMP.clipRate) * step));
     if (this.loop) { this.frame = f >= n ? 0 : f; return; }
-    if (f > n - 1 && this.queue.length) {               // passes the last frame: the queued clip
+    if (f >= n - 1 && this.queue.length) {              // FUN_005aa2a8 returns 1 (n - 1.0 <= f): the queued clip
       const r = this.queue.shift(); this.clip = r.clip; this.frame = 0; this.loop = r.loop;
       this.serial++; this.take(r.blend); return;
     }

@@ -64,7 +64,7 @@ try {
   pg.on('pageerror', e => errs.push(e.message));
   for (let i = 0; ; i++) {                                 // the server needs a moment
     // ?enemydmg=0: the soldiers' bullets hit but do no damage, so steps 8 / 10 see the melee damage alone
-    try { await pg.goto(`http://127.0.0.1:${port}/play.html?intro=0&enemydmg=0`, { waitUntil: 'load' }); break; }
+    try { await pg.goto(`http://127.0.0.1:${port}/play.html?video=pal&intro=0&enemydmg=0`, { waitUntil: 'load' }); break; }
     catch (e) { if (i > 20) throw e; await new Promise(r => setTimeout(r, 250)); }
   }
   await pg.waitForFunction(() => window.__play && window.__play.stats.ticks > 30, null, { timeout: 120000 });
@@ -488,7 +488,7 @@ try {
   // one (no ?enemydmg): bullet damage on, the HUD does not say 'off'.
   // A fresh page: earlier in this run #51's bullets (he stands inside trigger 76, script 99: wake n1 ->
   // 46-49) and then 46-49's own bullets (inside 77) have already woken them.
-  await pg.goto(`http://127.0.0.1:${port}/play.html?intro=0`, { waitUntil: 'load' });
+  await pg.goto(`http://127.0.0.1:${port}/play.html?video=pal&intro=0`, { waitUntil: 'load' });
   await pg.waitForFunction(() => window.__play && window.__play.stats.ticks > 30, null, { timeout: 120000 });
   const pf = await pg.evaluate(async () => {
     const P = window.__play, ai = P.enemyAI, c = P.ctrl, wait = n => new Promise(r => setTimeout(r, n));
@@ -570,7 +570,7 @@ try {
   // fired from 40 u in front of him). The game's chain: event 8 -> mode 5 -> action layer 2 -> mover 0xd along
   // the graph while Vincent is out of view (w161_chase: mover 0xd within ~10 frames of mode 5), then state 7 /
   // 8 -> layer 3 -> mover 3 in view -> d34 < 22 -> the attack pick (actor state 0x80+, the e027 melee).
-  await pg.goto(`http://127.0.0.1:${port}/play.html?intro=0&enemydmg=0`, { waitUntil: 'load' });
+  await pg.goto(`http://127.0.0.1:${port}/play.html?video=pal&intro=0&enemydmg=0`, { waitUntil: 'load' });
   await pg.waitForFunction(() => window.__play && window.__play.stats.ticks > 30, null, { timeout: 120000 });
   const ch = await pg.evaluate(async () => {
     const P = window.__play, ai = P.enemyAI, c = P.ctrl, obj = k => ai.objects.get(k + 22);
@@ -625,7 +625,7 @@ try {
   // node toward Vincent's node that keeps the distance (cost | |goal - n| - c | x 0.1, c = d34): he repositions at
   // range, layer 5 (mode 3) backs off after a failed attack pick; he closes in only through states 7 / 8 (layer 3,
   // mover 3) and melees inside 22 u. Node sim (same LOS): melee at frame ~550-560, 145-148 shots.
-  await pg.goto(`http://127.0.0.1:${port}/play.html?intro=0&enemydmg=0`, { waitUntil: 'load' });
+  await pg.goto(`http://127.0.0.1:${port}/play.html?video=pal&intro=0&enemydmg=0`, { waitUntil: 'load' });
   await pg.waitForFunction(() => window.__play && window.__play.stats.ticks > 30, null, { timeout: 120000 });
   const cv = await pg.evaluate(async () => {
     const P = window.__play, ai = P.enemyAI, c = P.ctrl, obj = k => ai.objects.get(k + 22);

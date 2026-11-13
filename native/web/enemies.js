@@ -64,6 +64,10 @@ const IDLE = { e027: CLIP, e048: 'r_gst', e030: 'st_a', e036: 'm_gst', e023: 'id
 // the 'fear' their script asks for with cmd 0x141, enemy_ai t.motion). Not n112 (e_Shc).
 for (const m of ['n017', 'n018', 'n022']) IDLE[m] = 'r_gst';
 for (const m of ['n023', 'n024', 'n025', 'n026', 'n028', 'n029', 'n030', 'n031', 'n032', 'n033', 'n034']) IDLE[m] = 'st';
+// worker 0292: g001 (the child's toy, record 151): stance 0x3b has no motion rows. Its only activation (trigger 163's script 216
+// event 0xd) sends 0x108 and then 0x19b 'kidnap' in the same event, so its first drawn pose is kidnap's (L: one event; the body's
+// pose is the AI's from then on). Without a 0x19b the toy would show kidnap's frame 0 (its start, (-821.5, -2.4, 480.3) from bone 0).
+IDLE.g001 = 'kidnap';
 const ALL = typeof location !== 'undefined' && new URLSearchParams(location.search).get('enemies') === 'all';
 const RATE = 0.5;                // MP+0x40c of every idle e027 in the save state (= FUN_003456c0 rate 1.0, as Vincent's)
 // A request's blend length = C+0x591 + 1 at the request (enemy_ai C.blendLen, FUN_00344608; C+0x591 is

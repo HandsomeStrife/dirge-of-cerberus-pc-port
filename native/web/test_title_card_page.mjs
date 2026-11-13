@@ -35,7 +35,7 @@ try {
   pg.on('console', m => { if (m.type() === 'error') errs.push(m.text()); else if (m.type() === 'warning' && /menu fx|stage info|effects/.test(m.text())) warns.push(m.text()); });
   pg.on('pageerror', e => errs.push(e.message));
   for (let i = 0; ; i++) {
-    try { await pg.goto(`http://127.0.0.1:${port}/play.html?hud=0`, { waitUntil: 'load' }); break; }
+    try { await pg.goto(`http://127.0.0.1:${port}/play.html?video=pal&hud=0`, { waitUntil: 'load' }); break; }
     catch (e) { if (i > 20) throw e; await new Promise(r => setTimeout(r, 250)); }
   }
   const until = (fn, arg, t = 180000) => pg.waitForFunction(fn, arg, { timeout: t, polling: 50 });

@@ -22,7 +22,7 @@ try {
   const pg = await browser.newPage({ viewport: { width: 640, height: 360 } });
   const errs = [];
   pg.on('pageerror', e => errs.push(e.message));
-  for (let k = 0; ; k++) { try { await pg.goto(`http://127.0.0.1:${port}/play.html?intro=0&enemydmg=0&sound=0`, { waitUntil: 'load' }); break; } catch (e) { if (k > 20) throw e; await new Promise(r => setTimeout(r, 250)); } }
+  for (let k = 0; ; k++) { try { await pg.goto(`http://127.0.0.1:${port}/play.html?video=pal&intro=0&enemydmg=0&sound=0`, { waitUntil: 'load' }); break; } catch (e) { if (k > 20) throw e; await new Promise(r => setTimeout(r, 250)); } }
   await pg.waitForFunction(() => typeof window.__rayCast === 'function' && window.__play && window.__play.stats.ticks > 5, null, { timeout: 400000 });
   for (const [name, x, y, z, want, pair] of CASES) {
     const got = await pg.evaluate(async ({ x, y, z, pair }) => {
@@ -45,7 +45,7 @@ try {
     const warn = [];
     pg2.on('console', m => { if (/floor shade off/.test(m.text())) warn.push(m.text()); });
     await pg2.route('**/data/z128_walk_shade.bin', r => r.fulfill({ status: 200, contentType: 'text/html', body: '<!doctype html><html>not found</html>' }));
-    await pg2.goto(`http://127.0.0.1:${port}/play.html?intro=0&enemydmg=0&sound=0`, { waitUntil: 'load' });
+    await pg2.goto(`http://127.0.0.1:${port}/play.html?video=pal&intro=0&enemydmg=0&sound=0`, { waitUntil: 'load' });
     await pg2.waitForFunction(() => typeof window.__rayCast === 'function' && window.__play && window.__play.stats.ticks > 10, null, { timeout: 400000 });
     const g = await pg2.evaluate(async () => { const P = window.__play, U = P.light.U; await new Promise(r => setTimeout(r, 300)); return { byte: P.light.scaleByte(), c0: U.uC0.value.x, env: P.light.env.col0[0] }; });
     ok(warn.length >= 1, `bad sidecar warned (${warn[0] || 'nothing'})`);

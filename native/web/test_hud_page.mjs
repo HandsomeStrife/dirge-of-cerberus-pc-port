@@ -291,7 +291,7 @@ try {
       const bd = P.bufferData; P.bufferData = function (t, d, ...a) { if (st.on && d && d.byteLength) st.bytes += d.byteLength; return bd.call(this, t, d, ...a); };
       const bs = P.bufferSubData; P.bufferSubData = function (t, off, d, so, len) { if (st.on) st.bytes += len ? len * (d.BYTES_PER_ELEMENT || 1) : d.byteLength - (so || 0) * (d.BYTES_PER_ELEMENT || 1); return bs.call(this, t, off, d, so, len); };
     });
-    await pg2.goto(base + 'play.html?intro=0&sound=0', { waitUntil: 'load' });
+    await pg2.goto(base + 'play.html?video=pal&intro=0&sound=0', { waitUntil: 'load' });
     await pg2.waitForFunction(() => window.__play && window.__play.stats.ticks > 30, null, { timeout: 120000 });
     const cost = await pg2.evaluate(async () => {
       const mod = await import('./hud.js');
@@ -397,7 +397,7 @@ try {
     }
     await pg2.close();
     const pg3 = await browser.newPage({ viewport: { width: 960, height: 540 } });
-    await pg3.goto(base + 'play.html?intro=0&sound=0&widehud=0', { waitUntil: 'load' });
+    await pg3.goto(base + 'play.html?video=pal&intro=0&sound=0&widehud=0', { waitUntil: 'load' });
     await pg3.waitForFunction(() => window.__play && window.__play.stats.ticks > 2, null, { timeout: 120000 });
     const wideOff = await pg3.evaluate(() => window.__play.output.wideHud);
     await pg3.close();
@@ -410,7 +410,7 @@ try {
     const pg4 = await browser.newPage({ viewport: { width: 960, height: 540 } });
     const errs4 = [];
     pg4.on('pageerror', e => errs4.push(e.message));
-    await pg4.goto(base + 'play.html?intro=0&sound=0', { waitUntil: 'load' });
+    await pg4.goto(base + 'play.html?video=pal&intro=0&sound=0', { waitUntil: 'load' });
     await pg4.waitForFunction(() => window.__play && window.__play.stats.ticks > 30, null, { timeout: 120000 });
     const skip = await pg4.evaluate(async () => {
       const P = window.__play;
@@ -503,7 +503,7 @@ try {
     const pg5 = await browser.newPage({ viewport: { width: 640, height: 480 } });
     const errs5 = [];
     pg5.on('pageerror', e => errs5.push(e.message));
-    await pg5.goto(base + 'play.html?intro=0&sound=0&widehud=0', { waitUntil: 'load' });
+    await pg5.goto(base + 'play.html?video=pal&intro=0&sound=0&widehud=0', { waitUntil: 'load' });
     await pg5.waitForFunction(() => window.__play && window.__play.stats.ticks > 30 && window.__play.gameHud, null, { timeout: 120000 });
     const g0 = await pg5.evaluate(() => {
       const P = window.__play, W = P.enemyAI, o = W.stageObj;

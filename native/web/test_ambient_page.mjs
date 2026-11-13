@@ -44,7 +44,7 @@ try {
   pg.on('response', r => { if (r.status() !== 404) return; const u = r.url().replace(/^http:..[^/]+/, ''); if (OPTIONAL.has(u)) opt404++; else errs.push('404 ' + u); console.log('     404:', u); });
   const page = process.env.PLAY_HTML || 'play.html';
   for (let i = 0; ; i++) {
-    try { await pg.goto(`http://127.0.0.1:${port}/${page}?intro=0`, { waitUntil: 'load' }); break; }
+    try { await pg.goto(`http://127.0.0.1:${port}/${page}?video=pal&intro=0`, { waitUntil: 'load' }); break; }
     catch (e) { if (i > 20) throw e; await new Promise(r => setTimeout(r, 250)); }
   }
   await pg.waitForFunction(() => window.__play && window.__play.stats.ticks > 30, null, { timeout: 120000 });
@@ -103,7 +103,7 @@ try {
 
   // 4. the ladder (l_ladder_cam's route ends there; the page's ?ladder=0 warp instead of walking it): record 28's asj_039
   //    (+0xa8 = area 105: manager +0x2b4, on while Vincent is in area 105 or a neighbour, areas.js) starts, as in w215_routeA f170
-  await pg.goto(`http://127.0.0.1:${port}/${page}?intro=0&ladder=0`, { waitUntil: 'load' });
+  await pg.goto(`http://127.0.0.1:${port}/${page}?video=pal&intro=0&ladder=0`, { waitUntil: 'load' });
   await pg.waitForFunction(() => window.__play && window.__play.stats.ticks > 30, null, { timeout: 120000 });
   await pg.mouse.click(480, 270);
   const lad = await pg.waitForFunction(() => { const A = window.__play.amb; if (!A || !A.slots) return false;

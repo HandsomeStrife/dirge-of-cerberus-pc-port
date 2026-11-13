@@ -36,7 +36,7 @@ try {
   // the camera: at btbox5's centre, 60 u up, looking at btbox0 (BOSS_SHOT only)
   const cam = process.env.BOSS_SHOT ? '&cam=' + (process.env.BOSS_CAM || '600,-160,1300,45,-12') : '';
   for (let i = 0; ; i++) {
-    try { await pg.goto(`http://127.0.0.1:${port}/play.html?intro=0&sound=0${cam}`, { waitUntil: 'load' }); break; }
+    try { await pg.goto(`http://127.0.0.1:${port}/play.html?video=pal&intro=0&sound=0${cam}`, { waitUntil: 'load' }); break; }
     catch (e) { if (i > 20) throw e; await new Promise(r => setTimeout(r, 250)); }
   }
   await pg.waitForFunction(() => window.__play && window.__play.stats.ticks > 30 && window.__play.enemyAI && window.__play.enemies && window.__play.stage, null, { timeout: 180000 });

@@ -370,7 +370,7 @@ def hit_volume(d, o):
 def stance_of(model, armed, wcls, params=True):
     """FUN_00564228 (called by FUN_00559748 at activation): the body's stance C+0x664 by model name
     (FUN_00340ac0(C, n) also sets C+0x808 = stance flags and C+0x7fc = its motion rows). Only the
-    names z128 places are translated; None for the rest (n112, p000, g001, ...):
+    names z128 places are translated; None for the rest (n112, p000, ...):
       e027 / e048 / e036: no case of their own -> LAB_005649f0: weapon W = status +0xac; class
         W+0x14 >> 2 & 7: 2 -> 0x1e, 0 / 1 / 3 or no weapon -> 0x1f, other classes keep the stance.
       e030 -> 0x23 (and C+0x568 |= 0x200); e023 -> 0x19, e024 -> 0x1a (actor +0x118 |= 0x80801c);
@@ -390,7 +390,10 @@ def stance_of(model, armed, wcls, params=True):
         return {0: 0x1f, 1: 0x1f, 2: 0x1e, 3: 0x1f}.get(wcls)
     npc = {'n023': 0xd, 'n025': 0xd, 'n029': 0xd, 'n031': 0xd, 'n024': 0xc, 'n026': 0xc, 'n030': 0xc, 'n032': 0xc,
            'n027': 0xe, 'n028': 0xe, 'n033': 0xe, 'n034': 0xe, 'n058': 0xe}
-    return {'e030': 0x23, 'e023': 0x19, 'e024': 0x1a, 'e001': 0x10, **npc}.get(model)
+    # worker 0292: g001 (o_nui, record 151, the child's toy): no case of its own; below 'n013' and not g014 / n004 -> LAB_00564d48:
+    # FUN_00340ac0(C, 0x3b) (T w276 pre165 RAM: C+0x664 = 0x3b). Stance 0x3b has no motion rows (flags 0): the toy plays only
+    # what a script asks for (trigger 163's 0x19b 'kidnap').
+    return {'e030': 0x23, 'e023': 0x19, 'e024': 0x1a, 'e001': 0x10, 'g001': 0x3b, **npc}.get(model)
 
 
 def stances(path, used):

@@ -11,6 +11,7 @@
 // +2 flag 8 get the GS's bilinear (TEX1 0x60, FUN_003d3830 -> FUN_003d2dc0).
 import * as THREE from 'three';
 import { HudState, hexBytes, restartedHud } from './hud_core.js';
+import { frameMs } from './video_mode.js';
 
 // GS stand-in: Cv = Cf Ct >> 7, Av = Af At >> 7 (TFX modulate, TCC 1), then ((Cs - Cd) As >> 7) + Cd
 // with COLCLAMP (0..255). An 8-bit target clamps the blend factor at 1 and the source at 255, so a
@@ -288,6 +289,7 @@ export async function setupHud({ output, player, url = 'data/hud/hud.json', camY
   const prev = output ? output.hud : null;
   if (output) output.hud = o => { if (prev) prev(o); layer.draw(o.renderer, o); };
   let lastHp = player ? player.hp : null;
+  const hudMs = frameMs();                         // the HUD clocks' ms a frame (video_mode frameMs: 20 PAL, 16 / 17 / 17 NTSC)
   const hits = [];
   let hide = false, pausedAt = null;
   const control = [];                              // worker 0248: set_usercontrol's FUN_003b01b0(HUD, b) calls, in order
@@ -329,12 +331,12 @@ export async function setupHud({ output, player, url = 'data/hud/hud.json', camY
       else if (pausedAt != null) { st.mnow = (st.mnow + Math.round(t - pausedAt)) >>> 0; pausedAt = null; }
     },
     // once per game frame, after the frame's damage (enemy_ai tick). GUESS: the HUD clock FUN_0023c1f0
-    // advances 20 ms per frame (the same stand-in as aim.js's HUD clock; notes/fidelity-audit.md). The
+    // advances one frame's ms (video_mode frameMs: 20 PAL, 16 / 17 / 17 NTSC; the same stand-in as aim.js's HUD clock; notes/fidelity-audit.md). The
     // frame's hits (FUN_003af6b8) see this frame's clock, as the ring's update (FUN_003af740, HUD update
     // FUN_003add28) and its draw (FUN_003b0ac0: phase step, then the draw's inputs; +0x234 += 1) do.
     // GUESS: the clock advancing before the frame's game logic (not decoded; it moves a hit's 2 s by one frame at most).
     tick() {
-      st.now += 20; st.mnow += 20;                 // both HUD clocks (hud_core HudState: now / mnow)
+      const ms = hudMs(); st.now += ms; st.mnow += ms;   // both HUD clocks (hud_core HudState: now / mnow)
       if (player && player.hp !== lastHp) { lastHp = player.hp; st.setHP(player.hp, st.hp[1]); }
       // FUN_00339590 (FUN_00323128, once a frame after the objects): DAT_0046e54c bit 1 -> FUN_003ae138 with the
       // slot's rounds, W+0x48 and the reserve, then the mask is cleared (traced w214_dry: the HUD text changes in the

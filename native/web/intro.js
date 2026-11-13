@@ -13,12 +13,13 @@
 
 import { EventRuntime } from './event_rt.js';
 import { EventActors } from './event_actor_rt.js';
+import { FRAME_MS } from './video_mode.js';
 
 // The event clock's step per game frame. The game's is real time: FUN_003798a0 adds the EE timer's milliseconds
 // (FUN_0023c1f0) once per frame, 20 at 50 fps and 40 when a frame drops (T w210_intro: 20 in 1971 of 2399 frames,
-// 40 in 97, 19 / 21 jitter). GUESS: the page steps a fixed 20 per game frame (its frames are fixed 1 / 50 s ticks),
+// 40 in 97, 19 / 21 jitter). GUESS: the page steps 1000 x TICK ms per game frame in whole ms (video_mode frameMs, through event_rt frame()) (its frames are fixed 1 / 50 s ticks, 1 / 60 in NTSC mode),
 // as the HUD clock does (notes/fidelity-audit.md 'GUESS: the event clock's step').
-export const FRAME_MS = 20;
+export { FRAME_MS };                               // the mean: 20 PAL, 16.67 NTSC (video_mode.js)
 
 export function createIntro({ data, camera, output, canvas, zoneLoad = null, warn = (m) => console.warn(m),
                               actorLib = null, root = null, litPatch = null, light = null, sound = null, windows = null, rand = null,
@@ -46,7 +47,7 @@ export function createIntro({ data, camera, output, canvas, zoneLoad = null, war
     get paused() { return paused; },
     tick() {
       if (rt.done || paused) return;
-      rt.frame(FRAME_MS);
+      rt.frame();                                  // the runtime's ms stepper (video_mode frameMs: 20 PAL, 16 / 17 / 17 NTSC)
       // FUN_005a8e28 (the MPs' draw + advance), then FUN_003772c8 (the event actor update)
       if (view && view.step) view.step(); else if (actors) actors.step();
       I.frames++;

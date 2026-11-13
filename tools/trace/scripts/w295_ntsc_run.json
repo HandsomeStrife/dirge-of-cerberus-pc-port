@@ -1,0 +1,2 @@
+{"name": "w295_ntsc_run", "frames": 230, "doc": "worker 0295: c_run's input on the NTSC-timing state (scale +0x20 = 1.0, FUN_0040cb78 mode 1; --state out/sof_scale1.p2s): run from frame 10 to 160, then release",
+ "events": [{"from": 10, "to": 160, "ly": -1.0}]}

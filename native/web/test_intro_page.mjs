@@ -33,7 +33,7 @@ try {
   pg.on('pageerror', e => errs.push(e.message));
   for (let i = 0; ; i++) {
     // enemydmg=0: bullets hit without damage, so the soldiers don't kill Vincent during the test's long waits
-    try { await pg.goto(`http://127.0.0.1:${port}/play.html?sound=0&enemydmg=0`, { waitUntil: 'load' }); break; }
+    try { await pg.goto(`http://127.0.0.1:${port}/play.html?video=pal&sound=0&enemydmg=0`, { waitUntil: 'load' }); break; }
     catch (e) { if (i > 20) throw e; await new Promise(r => setTimeout(r, 250)); }
   }
   // worker 0265: the stage title card (first_event pc 884 displayStageInfo(0), polled at pc 1428 before its fadein) now holds the
@@ -227,7 +227,7 @@ try {
   }
   // ?intro=0: straight to play from the save, as before
   const pg2 = await browser.newPage({ viewport: { width: 640, height: 360 } });
-  await pg2.goto(`http://127.0.0.1:${port}/play.html?sound=0&intro=0`, { waitUntil: 'load' });
+  await pg2.goto(`http://127.0.0.1:${port}/play.html?video=pal&sound=0&intro=0`, { waitUntil: 'load' });
   await pg2.waitForFunction(() => window.__play && window.__play.stats.ticks > 10, null, { timeout: 120000 });
   const d = await pg2.evaluate(() => ({ active: window.__play.intro.active, rt: !!window.__play.intro.rt }));
   ok(!d.active && !d.rt, '?intro=0 skips the event');
@@ -240,7 +240,7 @@ try {
     // worker 0266: every buffer source's real start (the context time it is heard from, and its offset)
     await pg3.addInitScript(() => { const o = AudioBufferSourceNode.prototype.start;
       AudioBufferSourceNode.prototype.start = function (when = 0, off = 0) { (window.__srcStarts ??= []).push({ buf: this.buffer, when, off }); return o.apply(this, arguments); }; });
-    await pg3.goto(`http://127.0.0.1:${port}/play.html`, { waitUntil: 'load' });
+    await pg3.goto(`http://127.0.0.1:${port}/play.html?video=pal`, { waitUntil: 'load' });
     await pg3.waitForFunction(() => window.__play && window.__play.intro.rt && window.__play.intro.rt.frameNo > 5, null, { timeout: 120000 });
     await pg3.keyboard.press('ShiftLeft');                // the browser's first gesture (AudioContext)
     const S3 = await cardLen(pg3);

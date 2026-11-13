@@ -27,6 +27,7 @@
 // Clock: ms (FUN_0023c1f0), 20 ms a game frame (the HUD's GUESS row).
 import { PauseScreen, measureText } from './pause.js';
 import { hexBytes } from './menu_layout.js';
+import { FRAME_MS, frameMs } from './video_mode.js';
 
 export const BOX_KIND_ITEM = 0x2b, BOX_KIND_OBJECTIVE = 0x1f, BOX_KIND_TITLE = 0x1e;   // 0x1e: stage-info 0, the stage title card (worker 0265)
 export const STAT_OBJECTIVE = 0x32, STAT_STAGE = 0xe;
@@ -36,8 +37,10 @@ export const STAT_OBJECTIVE = 0x32, STAT_STAGE = 0xe;
 export const READ_FRAMES = 8;                   // frames waiting in state 3 after the frame that ran states 0 -> 3
 // MEASURED: script flags DAT_004b8980 = 0xc0026001 in the w220 (open330) and w232 states: bit 0x1e (FUN_002413c0(0x1e))
 // set. It picks the slot positions of FUN_003c58b8 / FUN_003c6d70 (worker 0241).
+// Worker 0295: kept set in both video modes (video_mode.js): the page's 2D menus stay on the PAL layout branch, NTSC
+// mode changes only the timing (notes/frame-rate.md; fidelity-audit 'NTSC timing with the PAL 2D layout').
 export const SCRIPT_FLAG_1E = true;
-export const FRAME_MS = 20;                       // GUESS: FUN_0023c1f0 is real time (ms); 20 ms a game frame (notes/fidelity-audit.md 'stage-info clock')
+export { FRAME_MS };                               // GUESS: FUN_0023c1f0 is real time (ms); 1000 / 50 (PAL) or 1000 / 60 (NTSC) ms a game frame on average, stepped in whole ms (video_mode frameMs) (notes/fidelity-audit.md 'stage-info clock')
 
 const warned = new Set();
 function warnOnce(k, m, warn = console.warn) { if (!warned.has(k)) { warned.add(k); warn(m); } }
@@ -404,6 +407,7 @@ export class StageInfo {
     this.box = null;                               // DAT_0047db78 slot
     this.text = null;                              // DAT_0047d968
     this.now = 0;                                  // FUN_0023c1f0 (ms)
+    this.msStep = frameMs();                       // its ms a frame (video_mode frameMs: 20 PAL, 16 / 17 / 17 NTSC)
     this.events = [];
   }
   // FUN_0039e8e8: the key's text (FUN_003a6698 in ev0100's message file) to DAT_0047d968; then FUN_00380788 ->
@@ -439,7 +443,7 @@ export class StageInfo {
   }
   // FUN_003fdf00 (first in the game frame) and the box's vt+0x1c (FUN_003c6050). cross: the ✕ edge of this frame.
   frame(cross = false) {
-    this.now += FRAME_MS;
+    this.now += this.msStep();
     const now = this.now;
     if (this.kind < 0) return;
     if (this.state === 0) {                        // states 0 -> 3: the file (a0211 for kind 6) is read

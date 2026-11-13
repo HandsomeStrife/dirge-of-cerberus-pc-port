@@ -20,7 +20,8 @@ export const BLOCK_SAMPLES = 1024, OUT_RATE = 48000;
 export const BLOCK_S = BLOCK_SAMPLES / OUT_RATE;
 // GUESS: the sender thread (FUN_003eca08) is woken once a PAL frame. Event 7's signaller is not located; in w266 the sends of a
 // frame see the IOP slot of the next frame's record (the end of the frame). See notes/fidelity-audit.md 'Voice / BGM delay'.
-export const FRAME_S = 1 / 50;
+import { TICK } from './video_mode.js';
+export const FRAME_S = TICK;                      // one game frame (1/50 PAL, 1/60 NTSC; video_mode.js)
 
 // The two queues' state and the code that moves it (the same rules the trace test replays).
 export class PcmQueues {

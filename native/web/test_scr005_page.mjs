@@ -40,7 +40,7 @@ for (const [warp, steps, trig] of ALL.filter(x => !want.length || x[1].some(y =>
   pg.on('crash', () => errs.push('the renderer crashed'));   // worker 0274: a stalled session says how far the page got (see the catch)
   if (SUB) await pg.route('**/' + SUB[0], async r => { const t = fs.readFileSync(path.join(here, SUB[0]), 'utf8'); if (!t.includes(SUB[1])) throw new Error('mutant does not apply'); await r.fulfill({ contentType: 'text/javascript', body: t.replace(SUB[1], SUB[2]) }); });
   try {
-    for (let i = 0; ; i++) { try { await pg.goto(`http://127.0.0.1:${port}/play.html?intro=0&sound=0&enemydmg=0&warp=${warp}`, { waitUntil: 'load' }); break; } catch (e) { if (i > 20) throw e; await new Promise(r => setTimeout(r, 250)); } }
+    for (let i = 0; ; i++) { try { await pg.goto(`http://127.0.0.1:${port}/play.html?video=pal&intro=0&sound=0&enemydmg=0&warp=${warp}`, { waitUntil: 'load' }); break; } catch (e) { if (i > 20) throw e; await new Promise(r => setTimeout(r, 250)); } }
     await pg.waitForFunction(() => window.__play && window.__play.stats.ticks > 5 && window.__play.stage, null, { timeout: 240000 });
     // main's chain settles first: its battle()s run the stage-load pass (script 0 event 0x23), which switches off what a later beat's flags say is gone
     if (trig != null) { await pg.waitForTimeout(8000); await pg.waitForFunction(() => window.__play.stage.rt.battle, null, { timeout: 120000, polling: 100 }); }
@@ -79,7 +79,7 @@ if (!want.length || want.includes('opening')) {
   const pg = await browser.newPage({ viewport: { width: 960, height: 540 } });
   if (SUB) await pg.route('**/' + SUB[0], async r => { const t = fs.readFileSync(path.join(here, SUB[0]), 'utf8'); if (!t.includes(SUB[1])) throw new Error('mutant does not apply'); await r.fulfill({ contentType: 'text/javascript', body: t.replace(SUB[1], SUB[2]) }); });
   try {
-    await pg.goto(`http://127.0.0.1:${port}/play.html?sound=0&enemydmg=0`, { waitUntil: 'load' });
+    await pg.goto(`http://127.0.0.1:${port}/play.html?video=pal&sound=0&enemydmg=0`, { waitUntil: 'load' });
     await pg.waitForFunction(() => window.__play && window.__play.stage && window.__play.stage.rt.frameNo > 2, null, { timeout: 240000, polling: 100 });
     // worker 0265's stage title card (first_event displayStageInfo(0)) holds the opening and takes no pause input (FUN_003fdb48 ->
     // FUN_00241760(1, 0, 0)): Enter only after the card's fadein

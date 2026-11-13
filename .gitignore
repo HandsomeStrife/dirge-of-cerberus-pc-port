@@ -44,6 +44,9 @@
 !tools/trace/scripts/*.json
 !tools/trace/*.mjs
 !tools/hygiene_allow.txt
+# native C build: CMake presets, the wasm test adapters (native/web/c)
+!native/CMakePresets.json
+!native/web/c/*.mjs
 
 # ----------------------------------------------------------------------------
 # 4) Re-exclude DERIVATIVES OF THE COPYRIGHTED GAME BINARY (never public):
@@ -93,6 +96,10 @@ CTestTestfile.cmake
 #    a clone of the community DoC-Research wiki.
 # ----------------------------------------------------------------------------
 notes/doc-research-wiki/**
+#    the native build's fetched dependencies (SDL2, cJSON, cgltf, dr_flac, stb:
+#    native/scripts/fetch_deps.sh pins them) and its wasm output copied for the pages.
+native/third_party/**
+native/web/wasm/**
 
 # ----------------------------------------------------------------------------
 # 8) Loose build artifacts / scratch (defensive).

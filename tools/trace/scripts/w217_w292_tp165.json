@@ -1,0 +1,52 @@
+{
+"name": "w292_tp165",
+"frames": 398,
+"log_from": 396,
+"doc": "worker 0217 route replay from w276_at165.p2s (pokes: 960660=270f; HP set to 780 before the save). Recorded pad bytes of a PINE-steered run; see notes/route-states.md.",
+"events": [
+{
+"from": 20,
+"to": 24,
+"lx": 0.00392,
+"ly": 0.00392,
+"rx": 0.00392,
+"ry": 0.00392,
+"buttons": [
+"cross"
+]
+},
+{
+"from": 50,
+"to": 54,
+"lx": 0.00392,
+"ly": 0.00392,
+"rx": 0.00392,
+"ry": 0.00392,
+"buttons": [
+"cross"
+]
+},
+{
+"from": 80,
+"to": 84,
+"lx": 0.00392,
+"ly": 0.00392,
+"rx": 0.00392,
+"ry": 0.00392,
+"buttons": [
+"cross"
+]
+},
+{
+"from": 110,
+"to": 114,
+"lx": 0.00392,
+"ly": 0.00392,
+"rx": 0.00392,
+"ry": 0.00392,
+"buttons": [
+"cross"
+]
+}
+]
+}

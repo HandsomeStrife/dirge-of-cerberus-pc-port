@@ -26,7 +26,7 @@ try {
   const pg = await browser.newPage({ viewport: { width: 960, height: 540 } });
   const errs = []; pg.on('pageerror', e => errs.push(e.message)); pg.on('console', m => { if (m.type() === 'error') errs.push(m.text()); });
   for (let i = 0; ; i++) {
-    try { await pg.goto(`http://127.0.0.1:${port}/play.html?intro=0&sound=0&enemydmg=0&warp=heli`, { waitUntil: 'load' }); break; }
+    try { await pg.goto(`http://127.0.0.1:${port}/play.html?video=pal&intro=0&sound=0&enemydmg=0&warp=heli`, { waitUntil: 'load' }); break; }
     catch (e) { if (i > 20) throw e; await new Promise(r => setTimeout(r, 250)); }
   }
   await pg.waitForFunction(() => window.__play && window.__play.stats.ticks > 5, null, { timeout: 240000 });
@@ -93,7 +93,7 @@ try {
   for (const [m, later] of [['heri_taijou', false], ['sk_mituketa2', true]]) {
     const p2 = await browser.newPage({ viewport: { width: 960, height: 540 } });
     const e2 = []; p2.on('pageerror', e => e2.push(e.message));
-    for (let i = 0; ; i++) { try { await p2.goto(`http://127.0.0.1:${port}/play.html?intro=0&sound=0&enemydmg=0&warp=heli`, { waitUntil: 'load' }); break; } catch (e) { if (i > 20) throw e; await new Promise(r => setTimeout(r, 250)); } }
+    for (let i = 0; ; i++) { try { await p2.goto(`http://127.0.0.1:${port}/play.html?video=pal&intro=0&sound=0&enemydmg=0&warp=heli`, { waitUntil: 'load' }); break; } catch (e) { if (i > 20) throw e; await new Promise(r => setTimeout(r, 250)); } }
     await p2.waitForFunction(() => window.__play && window.__play.stats.ticks > 5, null, { timeout: 240000 });
     await p2.waitForFunction(m => { const R = window.__play.stage.rt; return R.vm.frames.some(F => F.m.name === m) && R.skippable() && R.view; }, m, { timeout: 400000, polling: 100 });
     await p2.keyboard.press('Enter');

@@ -30,12 +30,13 @@ const unit = a => { const l = len(a); return l > 0 ? mul(a, 1 / l) : [0, 0, 0]; 
 export const LOCK_FAR = 1050.0;          // FUN_00328968 / FUN_00329778: far = max(1050, CAM+0x1b8)
 export const LOCK_KEEP = 1.1;            // keep within 1.1 x CAM+0x1b0
 export const LOCK_CONE_K = 0.013089971;  // pi / 240 (x FOV x CAM+0x1b4 x DAT_0046e360)
-export const FOV_K = 0.875;              // DAT_0046e360
+export const FOV_K = 0.875;              // DAT_0046e360 (FUN_00328968 l.228 reads it in both video modes)
 export const PROBE2_R = 1.5;             // FUN_0055bda8 mode 2: within 1.5 x actor +0x2c of the ray
 export const LOCK_TURN0 = 0.05;          // CAM+0x218 = 0x3d4ccccd on every lock change
-// screen bounds of the keep test (FUN_00328968) and of probe 2 (FUN_0055bda8), the non-0x1e video mode
-export const KEEP_BOX = [-60, 572, -110, 558];
-export const PROBE2_BOX = [-50, 562, -100, 548];
+// screen bounds of the keep test (FUN_00328968) and of probe 2 (FUN_0055bda8): both branches of the
+// flag-0x1e test, picked by the video mode (video_mode.js; worker 0295)
+export { KEEP_BOX, PROBE2_BOX } from './video_mode.js';
+import { KEEP_BOX, PROBE2_BOX, SCREEN_CX, SCREEN_CY, ASPECT } from './video_mode.js';
 
 export function createLock() {
   // CAM+0x1e4 target, +0x1e6 target / under the reticle, +0x1e8 bits 0x10 / 0x20 (lock / still
@@ -181,12 +182,14 @@ export function angle(a, b) {
 }
 
 // FUN_0040d7f0 for the page: camera rows M (FollowCamera.M: 0 = x, 1 = y (down), 2 = forward) and the
-// eye; 512 x 448 HUD grid, centre (256, 224). L: the GS projection's matrices (view +0x340 / +0x380)
-// are not read; the scale is the one FUN_0032ace0 (l.517-535) uses for screen <-> angle: half width
-// = tan(FOV x DAT_0046e364 (1.0) / 2), half height = tan(FOV x DAT_0046e360 (0.875) / 2).
+// eye; the video mode's grid: mode 1 512 x 448, centre (256, 224); mode 2 448 x 512, centre (224, 256)
+// (video_mode.js SCREEN_CX / CY). L: the GS projection's matrices (view +0x340 / +0x380) are not read;
+// the scale is the one FUN_0032ace0 (l.517-535) uses for screen <-> angle in that mode: half width
+// = tan(FOV x KX / 2), half height = tan(FOV x KY / 2) (mode 1 DAT_0046e364 / 360 = 1.0 / 0.875,
+// mode 2 DAT_0046e374 / 370 = 1.0 / 1.1428572).
 export function screenPoint(M, eye, fov, p) {
   const v = sub(p, eye), z = dot(v, M[2]);
   if (!(z > 0)) return null;                                                  // behind the eye: off screen
-  const tx = Math.tan(fov * 0.017453294 * 0.5), ty = Math.tan(fov * FOV_K * 0.017453294 * 0.5);
-  return [256 + 256 * dot(v, M[0]) / z / tx, 224 + 224 * dot(v, M[1]) / z / ty];
+  const tx = Math.tan(fov * ASPECT.KX * 0.017453294 * 0.5), ty = Math.tan(fov * ASPECT.KY * 0.017453294 * 0.5);
+  return [SCREEN_CX + SCREEN_CX * dot(v, M[0]) / z / tx, SCREEN_CY + SCREEN_CY * dot(v, M[1]) / z / ty];
 }

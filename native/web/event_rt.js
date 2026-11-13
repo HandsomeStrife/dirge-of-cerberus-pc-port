@@ -15,6 +15,7 @@
 import { EventVM, block } from './event_vm.js';
 import { soundNatives, sendEventSe, skipSound } from './event_sound.js';
 import { LOAD_CMD } from './event_actor_rt.js';
+import { STEP, frameMs } from './video_mode.js';
 
 const f32 = Math.fround;
 
@@ -107,6 +108,7 @@ export class EventRuntime {
     this.lang = opts.lang ?? 2;                 // FUN_00242450 = PTR_0046b2dc: 2 in the z128 save (the page's language)
     this.eps = data.splineEps ?? SPLINE_EPS_DEFAULT;
     if (this.eps == null) throw new Error('event data: no splineEps (re-run export_web_event.py)');
+    this.msStep = frameMs();                    // frame()'s default ms a frame (video_mode.js; GUESS row 'the event clock's step')
     this.clock = 0;                             // +0x9848 - +0x9858 (FUN_00373098 sets both to 0 / now at the start)
     this.slots = [];                            // live commands, in slot order
     this.handle = 0;                            // +0x1520
@@ -139,7 +141,7 @@ export class EventRuntime {
 
   busy(h) { return this.slots.some(c => c.h === h); }
 
-  frame(dtMs = 20) {
+  frame(dtMs = this.msStep()) {                                           // FUN_003798a0 <- FUN_0023c1f0 (ms; video_mode frameMs)
     this.frameNo++;
     // FUN_003e9ed0: last frame's event SEs go out (event_sound.js)
     if (this.sePending && this.sePending.length) this.seSent = sendEventSe(this, this.sound && this.sound.audio ? this.sound.audio() : null);
@@ -159,9 +161,9 @@ export class EventRuntime {
     if (this.skip === 1) this.skip = 2;                                  // FUN_00377c68's tail
     this.camOutput();                                                    // FUN_00379148
     if (this.fade) {                                                     // the fade particle (see fadeTo)
-      // GUESS: the level moves by the rate once per tick, 1.2 ticks per PAL frame (FUN_00322f88's step);
+      // GUESS: the level moves by the rate once per tick, STEP ticks a frame (FUN_00322f88's step; video_mode.js);
       // the particle's integration of +0x4c / +0x6c is not decoded (notes/event-vm-research.md)
-      const f = this.fade; f.level = f32(f.level + f32(f.rate * 1.2));
+      const f = this.fade; f.level = f32(f.level + f32(f.rate * STEP));
       if (f.level <= 0) { f.level = 0; } else if (f.level >= 256) f.level = 256;
     }
   }

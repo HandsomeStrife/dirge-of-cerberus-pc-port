@@ -61,7 +61,7 @@ async function open(query) {
   pg.on('crash', () => errs.push('the renderer crashed'));
   pg.on('response', r => { if (r.status() !== 404) return; const u = r.url().replace(/^http:..[^/]+/, ''); if (!OPTIONAL.has(u)) errs.push('404 ' + u); });
   for (let i = 0; ; i++) {
-    try { await pg.goto(`http://127.0.0.1:${port}/play.html?sound=0&${query}`, { waitUntil: 'load' }); break; }
+    try { await pg.goto(`http://127.0.0.1:${port}/play.html?video=pal&sound=0&${query}`, { waitUntil: 'load' }); break; }
     catch (e) { if (i > 20) throw e; await new Promise(r => setTimeout(r, 250)); }
   }
   return { pg, errs, info };

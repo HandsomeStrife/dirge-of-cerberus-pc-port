@@ -18,12 +18,19 @@ is the test bench: every system in it (movement, camera, collision, enemies and 
 event scripts and cutscenes, effects, sound) is translated function by function from the
 game's code, with the game address cited next to the code, and checked against PCSX2
 recordings and GS dumps. The first stage plays from the opening through to its boss.
+It runs at 60 frames a second by default, using the game's own NTSC timing (step 1.0 per
+frame instead of PAL's 1.2, so the same real speed); `?video=pal` gives the PAL 50 Hz
+timing the PCSX2 recordings were made with. See [notes/frame-rate.md](notes/frame-rate.md).
 
 The native C side (`native/engine`, `native/renderer`, `native/gpu`) has the room loader
 and renderer but not yet the gameplay. The next step is moving the browser build's
 translated code into C, so one C codebase builds both the Windows program and (through
-WebAssembly) the browser test page. The plan is in
+WebAssembly) the browser test page. Step 0 of that is done: the same C tree builds a Linux
+program, a Windows `.exe` (MinGW, run under Wine in tests) and WebAssembly, runs the game's
+frame loop, and has its first translated module (floor shading) matching the browser build on
+every tested point. The plan is in
 [notes/native-migration-plan.md](notes/native-migration-plan.md).
+How to build and run each target: [docs/NATIVE.md](docs/NATIVE.md).
 
 ## Try the browser build
 

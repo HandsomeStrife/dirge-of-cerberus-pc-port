@@ -33,6 +33,7 @@
 // the cull on the impacts' manager, the depth buckets (FUN_002e1c90: depth-sorted order).
 
 import { T59, T60 } from './effects_ribbon.js';
+import { STEP } from './video_mode.js';
 const f = Math.fround;
 const ANG = f(11.377778);          // FUN_00275850: degrees x 11.377778 = 4096 units per turn
 const PCT = f(0.01);               // FUN_002760d8: scale percent x 0.01
@@ -2068,7 +2069,7 @@ export function createEffects({ fed, fed0 = null, core, warn = console.warn, twi
     }
   }
   // The frame (FUN_00248110): begin() before the game logic, end() after it, then the draw.
-  function begin(step = 1.2) {
+  function begin(step = STEP) {
     if (reseed) rng.frame();                                   // FUN_002efc78 -> FUN_002d97f8: LCG and VU0 R from rand()
     // FUN_002efc78 -> FUN_002e9f98: dt = step (emitter +0xc is 0), FUN_002ea040 per emitter
     for (const em of emitters.slice()) {

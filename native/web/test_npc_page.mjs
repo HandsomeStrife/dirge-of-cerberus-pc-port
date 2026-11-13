@@ -41,7 +41,7 @@ try {
   for (let i = 0; ; i++) {
     // NPC_SHOT: the game's camera of w223_npcview f100 (CAM+0x90 eye, +0x80 forward -> yaw 96.92, pitch 8.13) as ?cam=
     const cam = process.env.NPC_SHOT ? '&cam=' + (process.env.NPC_CAM || '-1162.73,-11.40,-1250.42,96.92,8.13') : '';
-    try { await pg.goto(`http://127.0.0.1:${port}/${page}?intro=0&sound=0${cam}`, { waitUntil: 'load' }); break; }
+    try { await pg.goto(`http://127.0.0.1:${port}/${page}?video=pal&intro=0&sound=0${cam}`, { waitUntil: 'load' }); break; }
     catch (e) { if (i > 20) throw e; await new Promise(r => setTimeout(r, 250)); }
   }
   await pg.waitForFunction(() => window.__play && window.__play.stats.ticks > 30 && window.__play.enemyAI && window.__play.enemies, null, { timeout: 120000 });

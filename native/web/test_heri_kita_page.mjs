@@ -62,7 +62,7 @@ async function bossRestart() {
   const pg = cur = await browser.newPage({ viewport: { width: 960, height: 540 } });
   const errs = []; pg.on('pageerror', e => errs.push(e.message)); pg.on('crash', () => errs.push('the renderer crashed')); pg.on('console', m => { if (m.type() === 'error') errs.push(m.text()); });
   for (let i = 0; ; i++) {
-    try { await pg.goto(`http://127.0.0.1:${port}/play.html?intro=0&sound=0&enemydmg=0&warp=chunk0b`, { waitUntil: 'load' }); break; }
+    try { await pg.goto(`http://127.0.0.1:${port}/play.html?video=pal&intro=0&sound=0&enemydmg=0&warp=chunk0b`, { waitUntil: 'load' }); break; }
     catch (e) { if (i > 20) throw e; await new Promise(r => setTimeout(r, 250)); }
   }
   const until = (f, a, t = 600000) => pg.waitForFunction(f, a, { timeout: t, polling: 200 });
@@ -112,7 +112,7 @@ try {
     const pg = cur = await browser.newPage({ viewport: { width: 960, height: 540 } });
     const errs = [], warns = []; pg.on('pageerror', e => errs.push(e.message)); pg.on('console', m => { if (m.type() === 'error') errs.push(m.text()); if (m.type() === 'warning') warns.push(m.text()); });
     for (let i = 0; ; i++) {
-      try { await pg.goto(`http://127.0.0.1:${port}/play.html?intro=0&sound=0&enemydmg=0&warp=${C.warp}`, { waitUntil: 'load' }); break; }
+      try { await pg.goto(`http://127.0.0.1:${port}/play.html?video=pal&intro=0&sound=0&enemydmg=0&warp=${C.warp}`, { waitUntil: 'load' }); break; }
       catch (e) { if (i > 20) throw e; await new Promise(r => setTimeout(r, 250)); }
     }
     await pg.waitForFunction(() => window.__play && window.__play.stats.ticks > 5, null, { timeout: 900000 });

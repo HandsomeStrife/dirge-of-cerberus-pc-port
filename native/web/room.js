@@ -16,6 +16,7 @@
 //           ?zunder=0 turns it off.
 import * as THREE from 'three';
 import { createRoomOccl } from './room_occl.js';
+import { STEP } from './video_mode.js';
 
 export const VS = `
 precision highp float;
@@ -426,7 +427,7 @@ export class RoomUVAnim {
   }
   // One game frame (FUN_00265350, late in FUN_00248110). loaded: the loaded chunks (AreaStream.loaded(): an
   // array), or null = every chunk. advance: DAT_004fc7e8 (1.2; 0 while DAT_004fc7e4 == 1).
-  frame(loaded, advance = 1.2) {
+  frame(loaded, advance = STEP) {
     const want = loaded == null ? this.allChunks : loaded;
     for (const c of this.time.keys()) if (!want.includes(c)) this.time.delete(c);   // FUN_002681b0
     for (const c of want) {

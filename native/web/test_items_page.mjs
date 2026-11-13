@@ -33,7 +33,7 @@ try {
   pg.on('console', m => { if (m.type() === 'error') errs.push(m.text()); });
   pg.on('pageerror', e => errs.push(e.message));
   for (let i = 0; ; i++) {
-    try { await pg.goto(`http://127.0.0.1:${port}/play.html?intro=0&enemydmg=0`, { waitUntil: 'load' }); break; }
+    try { await pg.goto(`http://127.0.0.1:${port}/play.html?video=pal&intro=0&enemydmg=0`, { waitUntil: 'load' }); break; }
     catch (e) { if (i > 20) throw e; await new Promise(r => setTimeout(r, 250)); }
   }
   await pg.waitForFunction(() => window.__play && window.__play.stats.ticks > 30 && window.__itemsView && window.__play.enemyAI, null, { timeout: 180000 });

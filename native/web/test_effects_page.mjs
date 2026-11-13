@@ -34,7 +34,7 @@ try {
   pg.on('console', m => { if (m.type() === 'error') errs.push(m.text()); });
   const fxWarns = []; pg.on('console', m => { if (m.type() === 'warning' && /no rand\(\) state|no effect twister/.test(m.text())) fxWarns.push(m.text()); });
   const open = async q => {
-    for (let i = 0; ; i++) { try { await pg.goto(`http://127.0.0.1:${port}/play.html${q}${q ? '&' : '?'}intro=0`, { waitUntil: 'load' }); break; } catch (e) { if (i > 20) throw e; await new Promise(r => setTimeout(r, 250)); } }
+    for (let i = 0; ; i++) { try { await pg.goto(`http://127.0.0.1:${port}/play.html?video=pal${q ? '&' + q.slice(1) : ''}&intro=0`, { waitUntil: 'load' }); break; } catch (e) { if (i > 20) throw e; await new Promise(r => setTimeout(r, 250)); } }
     await pg.waitForFunction(() => window.__play && window.__play.stats.ticks > 30, null, { timeout: 180000 });
   };
   await open('?enemydmg=0&sound=0');

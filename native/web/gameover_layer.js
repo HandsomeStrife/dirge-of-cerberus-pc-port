@@ -5,10 +5,11 @@
 // play.js passes THREE / root: begin at the frame start, spawn in the frame's logic, end + draw via endFrame(camera).
 import { PauseLayer, PAUSE_KEYS } from './pause_layer.js';
 import { GameOver, mergeData } from './gameover.js';
+import { frameMs } from './video_mode.js';
 import { createTitle, TitleLayer } from './gameover_title.js';
 
 // setupGameOver({ output, onRequest, blocked }): returns { go, frame(dead, step), reset() }.
-// frame() runs one game frame; its clock is 20 ms a game frame (GUESS: the HUD's clock stand-in, hud.js).
+// frame() runs one game frame; its clock is one frame's ms a game frame (video_mode frameMs: 20 PAL, 16 / 17 / 17 NTSC) (GUESS: the HUD's clock stand-in, hud.js).
 // onRequest('restart' | 'quit').
 // THREE / root / fxRng (worker 0198): the title's EffectLayer goes into root; fxRng = the 3D effects' EffectRng.
 export async function setupGameOver({ output, onRequest = () => {}, blocked = () => false,
@@ -37,6 +38,7 @@ export async function setupGameOver({ output, onRequest = () => {}, blocked = ()
     } catch (e) { console.warn('game over: the GAME OVER title is not drawn (' + e.message + ')'); title = null; }
   } else if (G && !G.title) console.warn('game over: gameover.json has no "title" (re-run export_web_gameover.py): the GAME OVER title is not drawn');
   let clock = 0;
+  const clockMs = frameMs();                     // its ms a frame (video_mode frameMs)
   const queued = [];                               // pad actions, seen by the next game frame (as the pad poll)
   const send = () => {
     if (!go.request) return;
@@ -68,7 +70,7 @@ export async function setupGameOver({ output, onRequest = () => {}, blocked = ()
     frame(dead, step) {
       // GUESS: the logic step; the game ages the title by its emitter's own +0x20 dt (not decoded; fidelity-audit 'the title's effect step')
       if (title) title.begin(step);                  // FUN_002efc78: every manager ages at the frame start
-      clock += 20; for (const a of queued.splice(0)) go.input(a, clock, 0); go.frame(dead, step, clock);
+      clock += clockMs(); for (const a of queued.splice(0)) go.input(a, clock, 0); go.frame(dead, step, clock);
       if (title) title.logic(go.started);            // FUN_00381a08's spawn: stage request 0x18, in the frame's logic
       send();
     },

@@ -13,6 +13,16 @@ Short version: **yes to the proposed direction**, with three changes:
    while there is still time to change them.
 3. **The C reads the same exported data the page reads** (`native/web/data/`, built by `tools/byo/build_web.sh`). No exporter rewrite now.
 
+**Status (2026-11-12).** Dan approved the plan: MIT licence (LICENSE is in the repo; keep GPL out of the build),
+the recommendations for D2-D7. **D8 (2026-11-13, worker 0295): the game's own video mode**, NTSC (60 Hz, step 1.0) by default, PAL
+(50 Hz, step 1.2) for the parity tests; the page has it now (`native/web/video_mode.js`, `?video=pal|ntsc`), the native build follows the same setting.
+**Step 0 done** (worker 0291): presets linux / windows / wasm, native/platform (SDL2), native/game (dirge shell, tick rate
+a parameter, floor_shade moved), play_c.html, the node adapter (native/web/c), the wine and headless-browser smoke tests.
+How to build and run: docs/NATIVE.md. Next: step 1. Differences from the step-0 row below: the adapter is picked
+by the test's module-path argument (no separate IMPL variable needed); only floor_shade.js moved. game_state.js stays JS:
+its tests import it by a fixed path and it calls JS listeners, so it moves with the event / stage-controller code (step 6).
+The vendored libs are fetched (pinned, not committed) and compile on all three targets, but nothing uses them yet.
+
 Size: about **47 worker jobs** of porting, about **65-75 including reviews**. First step: **step 0, the build skeleton**
 (section 3).
 
@@ -252,7 +262,7 @@ and is deleted once the C has passed a full level run.
 | D5 | **Debug UI on native:** none (flags + keys + reports), Dear ImGui (C++, MIT, via cimgui), or own overlay with the game font. | Flags + keys + R reports. The browser stays the place for the warp picker. |
 | D6 | **Graphics API:** OpenGL 3.3 / GLES 3.0 shared subset (tested here) vs a layer like sokol_gfx (D3D11 on Windows, WebGL2 on web). | GL 3.3. It's tested on both targets and gpu/ already has a GL core. Revisit only if Windows GL drivers cause trouble. |
 | D7 | **SDL2 vs SDL3.** | SDL2 2.30.x: tested on both targets here. Moving to SDL3 later is a small platform-layer change. |
-| D8 | **Display rate.** The game is 50 Hz PAL; most PC screens are 60 Hz+. The page now draws up to 8 ticks per rAF and shows the latest; no interpolation (it would be invented). | Same on native: fixed 50 Hz ticks, draw the latest tick, vsync on. Any frame interpolation is a later option, off by default. |
+| D8 | **Display rate.** The game is 50 Hz PAL; most PC screens are 60 Hz+. The ELF has both video modes (notes/frame-rate.md): mode 2 PAL (50 Hz, step scale 1.1999999) and mode 1 NTSC (60 Hz, step scale 1.0, FUN_0040cb78; mouse factor DAT_0046baac 1.0, FUN_00254490). | **Decided (worker 0295, 2026-11-13): one video-mode setting, as on the page** (`native/web/video_mode.js`): NTSC by default (Dan wants 60 fps), PAL with `--video pal` / `?video=pal` for the parity tests against the PAL traces (NTSC-timing traces check mode 1). The native build reads the same setting at boot and derives everything from it, as the page does: tick rate (`frame_clock.c`'s `--tick-hz` becomes the mode's 50 / 60), STEP / DT (one `g_step`), the mouse factor, the 3D screen-space constants (FUN_0040d7f0 centre, FUN_0032ace0 aspect, the lock boxes). Fixed ticks, draw the latest tick, vsync on. No interpolation; above 60 Hz it would be a later option, off by default. The 2D menu layout stays on the PAL branch in both modes for now (fidelity-audit 'NTSC timing with the PAL 2D layout'). |
 | R1 | **Floats differ between the builds** (FMA contraction, x87, fast-math), so a browser pass doesn't prove Windows. | `-ffp-contract=off`, no fast-math, SSE2; the per-tick hash compare between wasm and exe in CI (2.3). |
 | R2 | **JS and C both correct but different** (JS uses double in places where the game uses f32). | The trace decides; accept C closer to the trace; widen no test tolerance without a note. |
 | R3 | **play.js's order isn't the game's frame order**; moving to FUN_00248110's order can change behaviour that tests depend on. | Step 5 lists each difference and checks it against a trace before choosing. |

@@ -22,7 +22,7 @@
 // next frame's draw. EventActors.draw() / .update() keep that order (event_actors.js calls them).
 
 const f32 = Math.fround;
-const STEP = 1.1999999284744263;      // DAT_004eeb24: ticks per frame (player.js STEP; not imported: player.js needs three)
+import { STEP } from './video_mode.js';   // DAT_004eeb24: ticks per frame (1.1999999 PAL, 1.0 NTSC)
 
 // FUN_005aa2a8's sums round toward zero on the PS2 FPU (enemy_ai.js chop, the same code; not imported for the same reason)
 const _cb = new DataView(new ArrayBuffer(4));

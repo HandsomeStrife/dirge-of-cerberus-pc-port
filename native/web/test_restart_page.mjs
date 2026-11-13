@@ -37,7 +37,7 @@ try {
   pg.on('pageerror', e => errs.push(e.message));
   const load = async () => {
     for (let i = 0; ; i++) {
-      try { await pg.goto(`http://127.0.0.1:${port}/play.html?intro=0&enemydmg=0`, { waitUntil: 'load' }); break; }
+      try { await pg.goto(`http://127.0.0.1:${port}/play.html?video=pal&intro=0&enemydmg=0`, { waitUntil: 'load' }); break; }
       catch (e) { if (i > 20) throw e; await new Promise(r => setTimeout(r, 250)); }
     }
     await pg.waitForFunction(() => { const P = window.__play; return P && P.stats.ticks > 30 && window.__items && P.enemyAI && P.gameHud && P.stage && P.results && P.stageInfo; }, null, { timeout: 180000 });
@@ -388,7 +388,7 @@ try {
   }
   { // 6. with the opening on: the hand-off, the sounds it leaves, a key, a record Restart (no opening), a no-record Restart (the opening again)
     for (let i = 0; ; i++) {
-      try { await pg.goto(`http://127.0.0.1:${port}/play.html?enemydmg=0`, { waitUntil: 'load' }); break; }
+      try { await pg.goto(`http://127.0.0.1:${port}/play.html?video=pal&enemydmg=0`, { waitUntil: 'load' }); break; }
       catch (e) { if (i > 20) throw e; await new Promise(r => setTimeout(r, 250)); }
     }
     await pg.waitForFunction(() => { const P = window.__play; return P && P.intro && P.intro.active && P.sound && P.sound() && window.__items; }, null, { timeout: 180000 });

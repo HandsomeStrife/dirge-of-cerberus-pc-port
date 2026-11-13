@@ -35,7 +35,7 @@ try {
   const pg = await browser.newPage({ viewport: { width: 640, height: 360 } });
   const errs = [];
   pg.on('pageerror', e => errs.push(e.message));
-  for (let k = 0; ; k++) { try { await pg.goto(`http://127.0.0.1:${port}/play.html?intro=0&enemydmg=0&sound=0`, { waitUntil: 'load' }); break; } catch (e) { if (k > 20) throw e; await new Promise(r => setTimeout(r, 250)); } }
+  for (let k = 0; ; k++) { try { await pg.goto(`http://127.0.0.1:${port}/play.html?video=pal&intro=0&enemydmg=0&sound=0`, { waitUntil: 'load' }); break; } catch (e) { if (k > 20) throw e; await new Promise(r => setTimeout(r, 250)); } }
   await pg.waitForFunction(() => typeof window.__rayCast === 'function' && window.__play && window.__play.stats.ticks > 5, null, { timeout: 400000 });
   const r = await pg.evaluate(async ([feet, heading, want]) => {
     const P = window.__play, c = P.ctrl, wait = ms => new Promise(res => setTimeout(res, ms));

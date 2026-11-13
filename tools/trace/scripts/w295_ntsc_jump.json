@@ -1,0 +1,2 @@
+{"name": "w295_ntsc_jump", "frames": 90, "log_from": 5, "doc": "worker 0295: j_stand's input on the NTSC-timing state (--state out/sof_scale1.p2s, TRACE_FIELDSET=jump): standing jump, cross held 10-16",
+ "events": [{"from": 10, "to": 16, "buttons": ["cross"]}]}

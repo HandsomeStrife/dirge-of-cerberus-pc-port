@@ -31,7 +31,7 @@ try {
     const pg = await browser.newPage({ viewport: { width: 960, height: 540 } });
     const errs = [];
     pg.on('pageerror', e => errs.push(e.message));
-    for (let i = 0; ; i++) { try { await pg.goto(`http://127.0.0.1:${port}/play.html?warp=${name}&hud=0&sound=0`, { waitUntil: 'load' }); break; } catch (e) { if (i > 20) throw e; await new Promise(r => setTimeout(r, 250)); } }
+    for (let i = 0; ; i++) { try { await pg.goto(`http://127.0.0.1:${port}/play.html?video=pal&warp=${name}&hud=0&sound=0`, { waitUntil: 'load' }); break; } catch (e) { if (i > 20) throw e; await new Promise(r => setTimeout(r, 250)); } }
     const ev = CASES[name];
     // the first event main enters after the warp
     try {

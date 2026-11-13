@@ -55,6 +55,9 @@ if(DOC_LIBM)
     target_link_libraries(doc_engine PUBLIC ${DOC_LIBM})
 endif()
 
+# Unit tests: host builds only (the windows / wasm presets build just the library).
+option(DOC_ENGINE_TESTS "Build the engine's C unit tests" ON)
+if(DOC_ENGINE_TESTS)
 enable_testing()
 
 add_executable(test_math tests/test_math.c)
@@ -107,3 +110,4 @@ add_test(NAME test_light COMMAND test_light)
 add_executable(test_actor tests/test_actor.c)
 target_link_libraries(test_actor PRIVATE doc_engine)
 add_test(NAME test_actor COMMAND test_actor)
+endif()

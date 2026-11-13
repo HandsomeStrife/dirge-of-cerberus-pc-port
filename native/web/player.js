@@ -5,11 +5,12 @@
 // Game space throughout: -Y is up, so "down" is +y and the head sits at a smaller y
 // than the feet. Headings use main.js's yaw convention: dir = (sin h, 0, cos h).
 //
-// ================================================================ TIMING (PAL)
-// The game runs ONE logic step per 50 Hz frame, with step = vblanks x 1.2 ticks
-// (FUN_00322f88 / FUN_0040ce28; DAT_004eeb24 = 1.1999999 in every trace record) and
-// every mover scaling by `step`. PlayerController.step() is one such game frame
-// (TICK = 1/50 s, STEP = 1.1999999 ticks). play.js's fixed-step loop uses TICK.
+// ================================================================ TIMING (video_mode.js)
+// The game runs ONE logic step per vblank frame, with step = vblanks x scale ticks
+// (FUN_00322f88 / FUN_0040ce28; scale FUN_0040cb78: 1.1999999 in PAL mode 2, 1.0 in NTSC
+// mode 1; DAT_004eeb24 = 1.1999999 in every PAL trace record) and every mover scaling by
+// `step`. PlayerController.step() is one such game frame (PAL: TICK = 1/50 s, STEP =
+// 1.1999999 ticks; NTSC: 1/60 s, 1.0). play.js's fixed-step loop uses TICK.
 // Actions (actions/*.js) are still timed in 60 Hz ticks: step() runs them from a
 // 60 Hz accumulator (ACTION_TICK), 1 or 2 times per game frame (see ACTIONS.md).
 //
@@ -57,17 +58,19 @@
 import * as THREE from 'three';
 import { Jump, FallMotion, stopMove, stickMode, enterState, airState, moveAngle, HIT_STATE, DEAD_STATE, REVIVE_STATE } from './jump_core.js';
 import { objectPass } from './obj_contact.js';
+import { TICK, STEP, DT } from './video_mode.js';
 
 // ---------------------------------------------------------------- timing
-export const TICK = 1 / 50;                       // one PAL game frame (s): play.js's loop step
+export { TICK, STEP, DT };                         // one game frame (s): play.js's loop step; DAT_004eeb24; DAT_004eeb28 (video_mode.js)
 const DAT_0046E400 = 4.0;                          // ladder camera pull-back (RAM; FUN_00328640)
 const DAT_0046E4C0 = 0.2;                          // its ease rate per tick (FUN_0032ace0 l.1748)
 const DAT_0046E4D4 = 1.5;                          // camera ray start, back along the forward axis in view 1 (FUN_0032ace0)
 const DAT_0046E4E0 = 1.0, DAT_0046E4E4 = 2.5, DAT_0046E4E8 = 0.1;   // the pre-probes' margin, least side offset, wall margin (FUN_0032ace0 l.1820-1990; ELF)
-export const STEP = 1.1999999284744263;           // DAT_004eeb24: ticks per frame (f32 of 1 x 1.2)
-export const DT = 0.019999999552965164;           // DAT_004eeb28 = STEP x 0.016666668 (s)
 export const BODY_FLAGS = 0x236;                  // body+0xac (C+0x45c) in z128: bits 1 2 4 5 9 (T: k_push17 FUN_0034c388 log)
-export const ACTION_TICK = 1 / 60;                // actions/*.js are timed in 60 Hz ticks
+export const ACTION_TICK = 1 / 60;
+// GUESS: the locomotion table's install speed, C+0x1d8 (SpeedAnimator below; aim.js's aimed move class too): not
+// decoded (writer of C+0x658 not found); traced bound (3.70, 4.79) over PAL and NTSC timing (notes/frame-rate.md §5)
+export const LOCO_INSTALL = 4.0;                // actions/*.js are timed in 60 Hz ticks
 
 const f32 = Math.fround;
 const wrapPi = a => Math.atan2(Math.sin(a), Math.cos(a));
@@ -1336,8 +1339,10 @@ export class SpeedAnimator {
     // GUESS: when the game installs the table (C+0x658 = 3) isn't decoded (its writer for
     // the player wasn't found in two attempts; FUN_00345b58 is only called from NPC state
     // classes). Traced: installed in the frame C+0x1d8 first reaches 5.55 (ramp byte 87,
-    // the third frame of stick); 3.70 the frame before doesn't install it.
-    if (!this.installed && s >= 5.0) this.installed = true;
+    // the third frame of stick); 3.70 the frame before doesn't install it. NTSC timing (worker
+    // 0295, w295_ntsc_run / _turn, step 1.0): installed at 4.79, the third frame of stick too, so
+    // the bound is in (3.70, 4.79) (4.79 itself misses NTSC); 4.0 fits both modes (was 5.0, which missed NTSC by a frame).
+    if (!this.installed && s >= LOCO_INSTALL) this.installed = true;
     let rate = this.rate;
     if (this.request) {
       rate = 0.5;                                 // FUN_003456c0 / FUN_00345818 rate 1.0 -> MP+0x40c 0.5
@@ -1598,10 +1603,10 @@ export class SpeedAnimator {
 //   +0x1e2 stick-idle counter (s8), +0x1ec / +0x1f0 look-stick ramp and direction.
 // Game space, -Y up. pitch > 0 = eye below the look-at point, looking up.
 //
-// One game frame = one tick() (50 Hz, step 1.2), run BEFORE the player's logic: the
+// One game frame = one tick() (50 Hz, step 1.2 in PAL; 60 Hz, step 1.0 in NTSC), run BEFORE the player's logic: the
 // player's stick-to-world (FUN_003295c0) reads this frame's matrix, and the camera reads
 // the player as the previous frame left him (both checked on the traces).
-const CSTEP = 1.2;                                // DAT_004eeb24 (PAL)
+const CSTEP = STEP;                               // DAT_004eeb24 (video_mode.js)
 const PI_ = 3.1415927, TWO_PI = 6.2831855;
 const DEG = 0.017453294;
 export const CAM_TYPE_C = {                       // type 0xc object (FUN_00330138), runtime values (z128 state)

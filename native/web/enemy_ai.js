@@ -68,6 +68,10 @@ AI_TYPES.add('e036');
 AI_TYPES.add('e001'); AI_TYPES.add('e023');
 // worker 0235: e024 (the z128 boss, record 32) gets the same actor; its brain is the overlay's (AI mode 0x100, boss_io.js)
 AI_TYPES.add('e024');
+// worker 0292: g001 (o_nui, record 151: the child's toy in the beast alley) gets the same actor (T w276 pre165 RAM: vtable 0x58e1f8,
+// a body, a status, an AI in brain mode 0). FUN_00564228: stance 0x3b, which has no motion rows; no script: it only plays trigger 163's
+// 0x19b 'kidnap' (motion class 0x42).
+AI_TYPES.add('g001');
 // worker 0228 (notes/npc-research.md §8): the townspeople. The same actor class 0x58e1f8, so an activation builds the same
 // actor + AI (FUN_00559748 -> FUN_00365c50; T: w223_npc95 AI mode 0 after the wake). Brain mode 0 (their section-1 +8) is
 // class 0x4a2430, update FUN_003614b0 = `jr ra` (empty): what they do comes from their scripts (cmds 0x141 / 0x131 / 0x16a /
@@ -565,6 +569,8 @@ export function createEnemyAI(opts) {
   function sizeOf(rec) {
     const z = data.sizes && rec.zones >= 0 ? data.sizes[rec.zones] : null;
     // h0 = +0x170 (standing); h = +0x30, which FUN_00565bd0 switches to +0x174 = 0.6 x h0 when crouched
+    // GUESS: no zone (rec.zones -1, e.g. the toy g001): Vincent's R_ACTOR / EYE_H (FUN_00563fc0 without a zone not decoded;
+    // notes/fidelity-audit.md 'The toy g001's size')
     return z ? { r: z.r, h: z.h, h0: z.h } : { r: R_ACTOR, h: EYE_H, h0: EYE_H };
   }
   // the per-type dispatch: does an activation of this record build an AI actor here (AI_TYPES; an old
@@ -618,6 +624,9 @@ export function createEnemyAI(opts) {
     // their event 3's cmd 0x16a(1) (w223_npc95 RAM f826; bit 0 bullets test it, bit 2 clear never lockable, bit 9 push-out).
     // GUESS: the same value from the activation on (its constructor / FUN_00559748 writer is not read; 0x16a sets 0x210 again)
     if (NPC_TYPES.has(rec.model)) a.f38 = 0x391;                            // = NPC_PROBE_BITS
+    // worker 0292: the toy's +0x38 = 0x181 (T w276 pre165 RAM: bullets test it, no lock-on, no push-out). GUESS: from its activation on
+    // (the writer is not read; notes/fidelity-audit.md 'The toy g001')
+    if (rec.model === 'g001') a.f38 = 0x181;
     // worker 0264: a kept stance 1 keeps its height: FUN_00565bd0 wrote +0x30 = +0x174 and off never clears it
     if (a.stance === 1) a.size.h = f(a.size.h0 * f(0.6));
     // worker 0230: FUN_00564228 'e023' (0x65303233): FUN_00340ac0(C, 0x19), actor +0x118 |= 0x80801c (the same for e024)
@@ -672,6 +681,11 @@ export function createEnemyAI(opts) {
   // Runs event `ev` of object o's script (vtable +0x2f4, FUN_003715e0) with args r0..r3.
   // worker 0259: fnBody = a function by index, not event (cmd 0x114's routine; ai.json script_fns; FUN_003714b0)
   function runEvent(o, ev, args = [], fnBody = null) {
+    // worker 0292: a trigger's vt+0x2f4 is FUN_0054e4a0 (RAM: vtables 0x58cdf8 / 0x58fd90; actors' 0x58e1f8 has FUN_00568f98, which does
+    // not): with a script (+0x34 != -1) it first sets manager +0x260 to its own +0x90 (FUN_0054a720 -> FUN_0053d960), even when the
+    // event is not in the script. T: +0x260 = trigger 177's centre after its event 0xd, trigger 166's from its 0x18 period on (w292 states);
+    // the child's 0xab (script 153 event 0x18) tests that point. Not for cmd 0x114's routines (FUN_0054dec0)
+    if (!fnBody && o.kind === 'trigger' && o.script >= 0) { const p = objPos90(o); if (p) mgr260 = [p[0], p[1], p[2], 1]; }
     // worker 0243: an object may carry its own table (o.scripts): items.js runs an item's bgd script (FUN_00310718) for Vincent
     const sc = (o.scripts || scripts)[String(o.script)];
     let fn = fnBody || (sc && sc[String(ev)]);
@@ -1576,9 +1590,26 @@ export function createEnemyAI(opts) {
   // carry = FUN_00345448 (the table switch keeps the clip phase, enemies.js C.reqCarry).
   function playClip(a, name, flags, keep = 0, carry = false, partner = null) {
     const C = a.C;
-    // worker 0259: FUN_003449a0: C+0x564 bit 0x400000 != bit 4 -> FUN_00340c00: bit 4 off with 0x400000 clear (the body keeps the root's last place).
-    // The page's bit 4 is set by motion42, the only setter of 0x400000.
-    if ((C.f564 & 4) && !(C.f564 & 0x400000)) C.f564 &= ~4;
+    // worker 0259: FUN_003449a0: C+0x564 bit 0x400000 != bit 4 -> FUN_00340c00: bit 4 off with 0x400000 clear.
+    // The page's 0x400000 and bit 4 are set only by motion42 (FUN_00341750(C, 1), then bit 4 for its request).
+    // worker 0292: FUN_00340c00(C, 0) also places the body: FUN_005ad878(MP time, MP, C+0x570 = the clip still playing) = that clip's root
+    // at the MP's time (FUN_005a7390 by name, FUN_005af980), FUN_00343088 (rows 1 and 2 negated), x C+0x5b0, FUN_0034aae0, FUN_00356d98.
+    // L: the same root rootDrive samples (FUN_005ad9c0) with C+0x5b0 as identity (T w276_beastpos: the child's C+0x30 reads her
+    // kidnap root (1.66e-6, 0, -4.8e-7) in the clip and again from +400, after event 0x16's 0x10e had put her at locator 19 at +399).
+    // worker 0297: FUN_00340c00(C, 0) samples C+0x570, the clip of the last request = the one still playing (C.mp.clip), whatever C+0x640
+    // holds (cmd 0x141 writes C+0x640 before its request). A partner (aimed) request goes through FUN_00344bd0, which calls
+    // FUN_00340c00(C, 0) on bit 4 alone (0x400000 not tested); FUN_00340c00 clears both bits (& 0xffbffffb).
+    // FUN_00340c00 then FUN_00356d98(C+0x3b0, the root's translation, 1, 0, 0): the body's position slots and FUN_00356740 its walk
+    // polygon (FUN_0035cbc8) = placeBody (collision.js locate); FUN_00356a10 with arg 2 = 0 skips the ground probe FUN_00355d40.
+    // worker 0297: placeBody(a, 0) = FUN_00356a10's arg 2 = 0 rules (the state kept off the mesh, and for 4 / 5 / 2; GUESS there: +0x170 /
+    // +0x180). C+0x568 |= 0x80000 (no reader on the page).
+    // The other way, FUN_003449a0 with 0x400000 set and bit 4 clear -> FUN_00340c00(C, 1) (C+0x564 |= 0x400004), is only motion42's own
+    // request here (it sets bit 4 itself); a 0x19b with no clip C+0x640 leaves 0x400000 set without bit 4 and the game turns bit 4 on at the
+    // next request: not translated (audit 'OPEN: FUN_00340c00(C, 1) outside motion42').
+    if ((C.f564 & 4) && (partner || !(C.f564 & 0x400000))) {
+      if (C.mp && rootDrive(a) && walkCol) placeBody(a, 0);
+      C.f564 &= ~(4 | 0x400000); C.f568 = (C.f568 | 0x80000) >>> 0;
+    }
     if (!keep) { C.loco = null; C.f564 &= ~8; C.rate = null; }
     // FUN_00344608 (bit 0x400 clear: FUN_003456c0 passes 0): the new layer's blend = C+0x591, 0 with
     // C+0x564 bit 2 (FUN_00340bb8(C, 0, ..)); bit 0x20000000 (set by the stage-load pass FUN_00558f68) -> the blend is
@@ -2049,15 +2080,27 @@ export function createEnemyAI(opts) {
     });
   }
   function bodyOf(a) {
-    return a.B || (a.B = { poly: null, state: 0, vel: [0, 0, 0], want: [0, 0, 0], acc: 2.5, turn: f(4 * Math.PI), dt: f(0.019999999552965164) });
+    return a.B || (a.B = { poly: null, state: 0, vel: [0, 0, 0], want: [0, 0, 0], acc: 2.5, turn: f(4 * Math.PI), dt: PM.MOVE_DT });   // DAT_004eeb28 (video_mode.js)
   }
   // FUN_00356d98(C+0x3b0, C+0x30, 1, 1, 0): the body at the position; FUN_00356740 -> FUN_0035cbc8 its polygon
   // (collision.js locate). Without the page's collision the body has no polygon and FUN_00357d48 skips the walk.
-  function placeBody(a) {
+  // worker 0297: FUN_00356a10(body, arg 2, poly, ..) after FUN_0035cbc8. No polygon: FUN_0035c9a8(body, 0, -1, 0) only (the polygon
+  // cleared, the state kept) and return. A polygon: arg 2 != 0 (FUN_0034f178's FUN_00356d98(.., 1, 1, 0); arg 6 = 0, so no ground
+  // probe FUN_00355d40) -> state 0; arg 2 == 0 (FUN_00340c00's (.., 1, 0, 0)) -> state 4 with +0x170 != 0 and state 5 with
+  // +0x180 != 0 stay, state 2 stays while FUN_00326500() (JITTER_ON: FUN_002424a0, DAT_0046b2fc != 0), any other -> 0.
+  // GUESS: +0x170 / +0x180 read as 0 (not modelled; the page's bodies never take states 4 / 5) (notes/fidelity-audit.md 'FUN_00340c00(C, 0)').
+  // The +0xac bit 27 height test (|y - polygon y| > 20 -> no polygon) is left out: no page body sets that bit.
+  // FUN_00356d98 also zeroes body +0x60 (the displacement FUN_003590c8 adds); the page has no +0x60 (0 throughout, player.js state 2),
+  // so nothing to clear (B.vel is +0x40).
+  function placeBody(a, arg2 = 1) {
     const B = bodyOf(a);
-    B.state = 0;
     const r = walkCol ? walkCol.locate(a.pos[0], a.pos[1], a.pos[2]) : null;
-    B.poly = r ? r[0] : null;
+    if (!r) { B.poly = null; return; }
+    B.poly = r[0];
+    if (arg2) { B.state = 0; return; }
+    const s = B.state;
+    if ((s === 4 && (B.f170 || 0) !== 0) || (s === 5 && (B.f180 || 0) !== 0)) return;
+    if (s !== 0 && !(s === 2 && JITTER_ON)) B.state = 0;
   }
   // FUN_003590c8 body state 0 walk: FUN_00357d48 (collision.js navMove) from the body polygon by move x / z.
   // The actor push C+0x430 enters it (FUN_0035a440, body flag bit 4) -- GUESS: soldiers get no push on the
@@ -3183,9 +3226,10 @@ export function createEnemyAI(opts) {
   // within 1.6 u of bone 1 at clip frame 13 + 0.6 x f.
   function rootDrive(a) {
     const C = a.C, h = C.mp, tr = h && opts.rootTrack ? opts.rootTrack(a.model, h.clip) : null;
-    if (!h || h.frame == null || !tr) { warnOnce('enemy_ai: motion class 0x42 without the root track (opts.rootTrack): the body stays'); return; }
+    if (!h || h.frame == null || !tr) { warnOnce('enemy_ai: motion class 0x42 without the root track (opts.rootTrack): the body stays'); return false; }
     const M = rootMatrix(tr, h.frame);
     for (let k = 0; k < 3; k++) { a.pos[k] = f(M[3][k]); a.face[k] = f(-M[2][k]); }   // T: C+0x20 = minus the bone's row 2
+    return true;
   }
   function bodyUpdate(a, step) {
     const C = a.C, m = C.motion;

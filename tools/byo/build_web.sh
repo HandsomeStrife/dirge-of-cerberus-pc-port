@@ -289,7 +289,9 @@ E001_CLIPS=a_st,a_atk_1,a_stlld0,a_dead,a_wk,a_rn,a_wk_l,a_wk_r,n_ude,a_lhtn,a_r
 E023_CLIPS=idle,sp0_0,sp1_0,ms4_0,mv4_0,eva_0,evb_0,ms0_1,mv0_1,ms1_2,mv1_2,sp2_2,sp3_2,sp2_3,ms2_3,mv2_3,sp4_3,sp0_4,sp1_4,ms3_4,mv3_4
 # worker 0231: e024 (the z128 boss) also takes the clips its overlay brain sets by name (FUN_00344840; notes/boss-research.md)
 E024_CLIPS=idle,l_trn,r_trn,atk_sp1,atk_sp2,atk_sp3,idl_lean,lean,lean_idl
-for mc in e048:$E048_CLIPS e030:$E030_CLIPS e036:$E036_CLIPS e023:$E023_CLIPS e024:$E024_CLIPS e001:n_st,$E001_CLIPS; do
+# worker 0292: g001 (o_nui, record 151, the child's toy): its only clip is trigger 163's 0x19b 'kidnap' (m000 07670040; m001 0767004b holds a
+# lower-precision copy, within 0.13 u / 0.017 per quaternion component)
+for mc in e048:$E048_CLIPS e030:$E030_CLIPS e036:$E036_CLIPS e023:$E023_CLIPS e024:$E024_CLIPS e001:n_st,$E001_CLIPS g001:kidnap; do
   m=${mc%%:*}
   run enemy_$m $PY export_web_enemy.py export --model $m --out "$DATA/enemies" --clips ${mc#*:}
   [ -s "$DATA/enemies/$m.glb" ] || fail "data/enemies/$m.glb missing after the enemy export (log: $LOGS/enemy_$m.log)"

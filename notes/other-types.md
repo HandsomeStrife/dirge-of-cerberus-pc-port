@@ -76,6 +76,56 @@ n_Mother 115 (n026, script 30, area 88), o_nui 151 (g001, the child's toy, no sc
   (beast_ev02), shorts 56 += 2, 57 = 1.
 - On the walked route (no ✕ at trigger 165) nobody fights in the game either: 72 never 1, 7 / 115 stay at their placements (T f1500).
 
+### The rescue, traced (worker 0292, 2026-11-12)
+T (tools/trace/out/w292, gitignored; pads tools/trace/scripts/w292_*.json): **w292_x165** from 0276's w276_at165 state (Vincent fighting at
+(-1004, 440), short 69 = 1) with Vincent poked into trigger 165's box (TRACE_POKE: C+0x30 / +0x60 / +0x3b0 / +0x3c0 and MP+0x40 =
+(-1010.51, -0.06, 434.12), C+0x4c0 = 0; route.py --teleport's addresses), ✕ f20; **w292_x165b** (camera sweep, nothing), **w292_back** (walk
+toward trigger 166's centre), **w292_fight** (route.py fight mode: it aimed at record 112, which shares the enemy vtable; beast 9 beside her took
+the shots), **w292_ev02** (beast_ev02 to its end); **w292_toypos** (w276_beastpos's walk with the toy / child bodies).
+- ✕ (FUN_005513c8: flags bit 4 with the origin in the box, else a ray of 7 along the facing): script 219 event 0x11 needs short 69 == 1, its own
+  var 7 == 0 (then 0x104(7, 1): once) and its 0x18d(1). 76 = 0 next record (f21); the timer's event 1 at f180 (+159): 74 = 2, routine 219/2: the child to
+  locator 19 (C+0x30 (-1021.3, -3.1, 427.9) from about f200, 'fear'). The routine's last step (about 1050 ticks on) gives trigger 166 its
+  0x113(2): before that nothing can wake record 9.
+- **Who writes manager +0x260 here (DECODED):** a trigger's script-event runner vt+0x2f4 = FUN_0054e4a0 (vtables 0x58cdf8 / 0x58fd90, RAM)
+  sets it to the trigger's own +0x90 (FUN_0054a720 -> FUN_0053d960) before every event; the actors' FUN_00568f98 (0x58e1f8) does not. So
+  it is trigger 177's centre (-999.16, 6.95, 438.68) after its events (pre165 .. x165_end) and trigger 166's from its 0x18 period on;
+  routine 219/2's 0x40(19) writes it too (the child's 0x10e
+  to locator 19), and trigger 177's next 320-tick poll puts its centre back. The page did not have this (enemy_ai runEvent now does).
+- Manager +0x260 is then trigger 166's centre (-989.7, -0.2, 443.7) (RAM): the child's event 0x18 (0xab) sees it only when the camera does.
+  From the box (camera at the fence) it never did in 2000 frames; walking back toward it: 72 = 1 at back f79, record 9 active f82, 72 = 0 at f121
+  (out of view again).
+- Record 9 (e030, HP 110) dies f67 of the fight (stbf0); stage flag 1 = 11 at f206 (trigger 177's 320-tick poll; record 7 had gone off at
+  x165 f82, 152-163 counted dead or inactive); event mode from f208; global flags 56 = 9, 57 = 1. **beast_ev02 ends at ev02 f41** (fight f1041:
+  833 frames): battle, Vincent at (-940.0, -0.1, 525.0), short 69 = 0. Record 9's body off at ev02 f255.
+- **The child after her clip (0276's open 1), DECODED:** event 0x16 (script 153: 0x142(2), 0x40(19), 0x10e) runs at the clip's end. 0x10e ->
+  FUN_00588430 (FUN_0034aae0(C, actor +0x60), FUN_00356d98(C+0x3b0, +0x90)): C+0x30 = locator 19 (record +399, f1164: C+0x564 0x100004 =
+  class 0x42's leave FUN_0059e6a0 has cleared 0x400000, bit 4 still set). The 'st' request next frame: FUN_003449a0 -> **FUN_00340c00(C, 0)**:
+  bit 4 and 0x400000 off and the body placed on the clip's root (FUN_005ad878(MP time, MP, C+0x570) -> FUN_00343088 (rows 1, 2 negated) ->
+  x C+0x5b0 -> FUN_0034aae0, FUN_00356d98): record +400 (f1165) C+0x30 = (1.66e-6, 0, -4.8e-7), C+0x564 = 0. Her kidnap root is at the origin,
+  so from then until the rescue she stands at the world origin; her bone matrices keep the clip's last world pose (-1048, -6, 417), not
+  updated. The page: enemy_ai playClip does the placement (rootDrive) when it clears bit 4. Worker 0297: on the clip still playing
+  (C+0x570 = C.mp.clip, not C+0x640, which cmd 0x141 rewrites before its request), and for a partner (aimed) request on bit 4 alone
+  (FUN_00344bd0 -> FUN_00340c00(C, 0) does not test 0x400000).
+- **The toy (g001, record 151, o_nui):** an actor like the others (vtable 0x58e1f8, body, status, AI brain mode 0; +0x38 = 0x181, +0x2c / +0x30
+  = 4.243 / 17). FUN_00564228: 'g001' -> LAB_00564d48: stance 0x3b (no motion rows). Activated by script 216 with its 0x19b 'kidnap'
+  (m000 07670040 and m001 0767004b both hold one, 240 frames, within 0.13 u / 0.017 per quaternion component; the exporter takes m000). Its
+  path is in **bone 0** (bone 1 has no translation track): C+0x30 from (-828.3, 476.9) at +35 to (-869.93, -0.37, 456.41) at +315, then held
+  (no script: no request ends the bone-root mode). export_web_enemy now moves bone 0's x / z into the root track when it moves.
+- **Record 9 'takes no damage' (worker 0294): the test's aim, not the port.** Hit logs of test_rescue_page runs: when the shots land,
+  record 9 (+0x118 = 3, zone set 8) takes 30 a hit and dies in 3-4 shots like record 7. In the runs that failed (about one in two),
+  no shot reached it at all (no hit, no near miss: the bullet missed its cylinder): the beast was at Vincent's side by the time the
+  view step found the child, and the test's aim loop stepped the camera by the whole error into the sky (aim point y about -8550),
+  then R1 went on with the ammo at 0. Fixed in the test (face the body each shot, clamped corrections). The +0x118 bits 5 / 6
+  (FUN_0055db50 / FUN_0055d2c0: no damage) belong to **record 8** (e_BeastB, script 217 too, same spot): script 216 event 0xd (the
+  kidnap) sends it 0x108 then 0x14c 3, 4, 2, 6, 5, 13 (and the same to records 112 and 151). Trigger 166's event 0x18 (script 220)
+  wakes trigger 168 and, by manager 0xa6 (FUN_00242c28() == 2), either record 8 with those bits cleared (0x14d) or, in the save
+  (difficulty 1), record 9 (0x3a(9), 0x14d the same bits: nothing to clear).
+- **beast_ev02's length (worker 0294).** Event +0x1558 bit 43 (a fade running, T w292_fight) is set 50 frames from f491 (fadein 1000)
+  and 151 from f676 (fadeout 3000): fadein -> fadeout 185 frames; page 175 (the block-start drift, story-cutscenes.md). Before the
+  fadein the game spends 256 frames (event start, bit 37 off at f235) and after the fadeout 354 (to main's fadein at ev02 f30) on disc
+  loads (the event's models / motions / voices; its zone 128,4,5 chunks); the page's script takes 3 and 102 ticks there (plus its own
+  loads in the browser: 508 ticks in all against the game's 806).
+
 ## Open
 - No PCSX2 trace of any of these fights: route states stop in chunk 02 (route-states.md); trigger 71 is at the chunk 02 -> 03
   stairs top (r02_climb is at their foot), trigger 18 in chunk 07. A trace needs a walk up from r02_climb (route.py) or a

@@ -267,6 +267,10 @@ INPUTS = {
     '0765004b.bin': 'cbb669695daf5c1ca1ea1e1e32da65039bb648e845edd1fbe1a36864ce3c7970',   # e001 clips m001 (a_*: its stance 0x10 rows; worker 0230)
     '0765078b.bin': 'd90d38e85600afa918a4aeef3e63e20f9aead44ea814417806ec0d38bb276bef',   # e030 clips m001 (kidnap: trigger 163's cmd 0x19b; worker 0276)
     '076e070b.bin': 'bd639a5b5f54568394cba389f20ab549e2e18a9ddf72f42a7e1983b002b3494a',   # n028 clips m001 (kidnap: trigger 163's cmd 0x19b; worker 0276)
+    '07670041.bin': '88e9d1ae998dd22ee87cd981cb6fdf96d3ca1737ef4f49ca45bcc5ad3f446503',   # g001 model (o_nui, record 151: the child's toy; worker 0292)
+    '07670042.bin': 'cbea7b0aa328a0213f30e37e6c90dc585f70b9262196b8437f613c37a432fa2f',   # g001 texture
+    '07670040.bin': '57ae8bc349a7407dabfd792ac03af9086e2ed725488e3b5cac3c8a537b7e07c4',   # g001 clips m000 (kidnap, km611g1)
+    '0767004b.bin': '806d7f4b9a128431a72f2cf5879ee68b05cffc014a7809686e71c51cabbb59de',   # g001 clips m001 (kidnap)
     '07703201.bin': '9b5570610fb12e2eaf834cec0025c3cc18f7c8a64ba5f92d416d0b78e5d315d9',
     '07703202.bin': '06cfcf6ce98c8e60abb4ba119489c67da2a70429bfd32df3c44acd271cb137c3',
     '07703200.bin': 'bac21ed575aa60e3742de4b0c1c36b787444de612f566b4d4e24f1a842181a75',

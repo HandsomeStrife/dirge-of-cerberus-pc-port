@@ -1,0 +1,30 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": { "major": 3, "minor": 21, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "base", "hidden": true, "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
+    },
+    {
+      "name": "linux", "inherits": "base", "displayName": "Linux (gcc, SDL2 from source)"
+    },
+    {
+      "name": "windows", "inherits": "base", "displayName": "Windows (MinGW-w64, SDL2, OpenGL 3.3 core)",
+      "toolchainFile": "${sourceDir}/cmake/mingw-w64.cmake"
+    },
+    {
+      "name": "wasm", "inherits": "base", "displayName": "WebAssembly (Emscripten, WebGL2); source ~/emsdk/emsdk_env.sh first",
+      "toolchainFile": "$env{EMSDK}/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake"
+    }
+  ],
+  "buildPresets": [
+    { "name": "linux", "configurePreset": "linux" },
+    { "name": "windows", "configurePreset": "windows" },
+    { "name": "wasm", "configurePreset": "wasm" }
+  ],
+  "testPresets": [
+    { "name": "linux", "configurePreset": "linux", "output": { "outputOnFailure": true } }
+  ]
+}

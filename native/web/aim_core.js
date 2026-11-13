@@ -4,6 +4,7 @@
 // camera, HUD = view object, RET = reticle sprite object, W = weapon stats.
 import { weaponSwitch } from './jump_core.js';
 import * as gameState from './game_state.js';
+import { STEP } from './video_mode.js';
 //
 // Per game frame the game runs (and so does WeaponSystem.frame):
 //   1. camera update FUN_0032ace0: type transition, fade, recoil, reticle offset; the aim
@@ -213,7 +214,7 @@ const warnAmmoSe = () => { if (!ammoSeWarned) { ammoSeWarned = true; console.war
 
 export class WeaponSystem {
   // W: weapon.json (export_web_aim.py, FUN_0031c3f8); reticle: reticle.json (kinds, lengths)
-  constructor(W, reticle = null, { step = 1.1999999284744263, lockOn = true } = {}) {
+  constructor(W, reticle = null, { step = STEP, lockOn = true } = {}) {
     this.W = W; this.ret = reticle; this.step = step;
     this.sound = null;                              // draw / holster sound hook (W.se_draw / W.se_holster)
     this.lockOn = lockOn;   // HUD+0x64 bit 0 / CAM+0x1e8 bit 2 (FUN_00575510 <- FUN_00321e20: the auto-lock option; on in the save)

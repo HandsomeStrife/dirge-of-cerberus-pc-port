@@ -17,6 +17,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { TICK, STEP, PlayerController, SpeedAnimator, FollowCamera, cameraRays, KEY_WALK, KEY_RUN, MouseFeed, MOUSE_SENS_DEFAULT, CROSS_KEY, dirAngles } from './player.js';
 import { warpRequest, applyWarp, applyWarpLate, warpPair, warpHelp } from './warp.js';   // PAGE AID ?warp= (worker 0249)
+import { frameMs } from './video_mode.js';         // the ms clocks' step a game frame (FUN_0023c1f0)
 import { attachGun } from './gun.js';
 import { loadActions } from './actions/index.js';
 import { initReport } from './report.js';
@@ -1172,6 +1173,7 @@ async function main() {
   });
   document.getElementById('btn-report').addEventListener('click', e => { e.stopPropagation(); report.open(); });
 
+  const stageMs = frameMs();                       // the stage event clock's ms a game frame (FUN_003798a0 <- FUN_0023c1f0; video_mode.js)
   // ---- loop: one ctrl.step per PAL game frame (TICK = 1/50 s), interpolated render.
   // GUESS: the catch-up cap (8 frames, then drop the time) is a port convenience; the game
   // caps its step at 5 ticks (FUN_00322f88).
@@ -1226,7 +1228,7 @@ async function main() {
           if (introFx) introFx.begin(STEP);         // worker 0275: the event effects' manager (FUN_002efc78: FUN_002e9f98, then FUN_002edcc0's queue)
           // FUN_003e9ed0's 0x10000 pass over the event SE slots: once a page frame, before the event runtimes' sends (event_sound.js eventSeFrame)
           if (pauseSound.audio && pauseSound.audio.eventSe && pauseSound.audio.eventSe.frame) pauseSound.audio.eventSe.frame();
-          if (stage) stage.tick(20);               // main (stage_controller.js): its prelude, then first_event's wait
+          if (stage) stage.tick(stageMs());        // main (stage_controller.js): its prelude, then first_event's wait
           intro.tick();
           if (chunkAnims) chunkAnims.frame(light && light.stream.areas.length ? light.stream.loaded() : null, STEP);   // FUN_00265350: the nodes (chunk_anim.js)
           if (fx) { const c = renderFxCamera(), fov = renderFov(); fx.end(null, fov); if (fxStage) fxStage.end(cameraView(c), fov); fxLayer.update(c); if (fxStage) fxStageLayer.update(c); }
@@ -1277,7 +1279,7 @@ async function main() {
       // (GUESS: order, notes/fidelity-audit.md 'Stage-info boxes'); its ✕ is the frame's edge (FUN_003de918(0, 1))
       if (stageSi) { stageSi.frame(pressed.has(CROSS_KEY)); stageSi.sounds(); stageSi.events.length = 0; }
       if (pauseSound.audio && pauseSound.audio.eventSe && pauseSound.audio.eventSe.frame) pauseSound.audio.eventSe.frame();   // FUN_003e9ed0's 0x10000 pass, once a frame
-      if (stage) stage.tick(20);
+      if (stage) stage.tick(stageMs());          // FUN_003798a0's clock (FUN_0023c1f0, ms; video_mode frameMs)
       if (stageView) stageView.step();             // the events' actors: FUN_005a8e28's draw, then FUN_003772c8 (worker 0248)
       if (stageRes) stageRes.frame(stageSi ? stageSi.now : 0);   // FUN_00242a50 (FUN_00247428): the play clock (results.js)
       // FUN_00331f08: the player's control update (vt+0x5c) is skipped while game-state bit 11 is set (set_usercontrol(0)

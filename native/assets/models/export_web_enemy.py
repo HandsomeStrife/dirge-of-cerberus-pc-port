@@ -285,9 +285,18 @@ def export(model, out, clip_names, variant=0):
         zy = V.y_moves(sk, cf, c); frames = []; root = []; Ws = []
         for f in range(nf):
             W = V.clip_mats(sk, c, f, cont=cf, zero_y=zy)
-            frames.append([V.mat_to_trs(Mx) for Mx in W]); Ws.append(W)
             Wr = V.clip_mats(sk, c, f, root_motion=True, cont=cf)
-            root.append((Wr[1][:3, 3] - W[1][:3, 3]).tolist())
+            r = Wr[1][:3, 3] - W[1][:3, 3]
+            # worker 0292: a clip whose path is in bone 0 (g001 'kidnap': bone 1 has no translation track, so the strip above
+            # leaves the path in every bone): bone 0's x / z goes from the pose into the root too, so pose + root is still
+            # bone 1's world place (FUN_005ad9c0 -> FUN_005b29c0(.., 1, ..), enemy_ai rootDrive). No change where bone 0 stays at x = z = 0.
+            p0 = np.array([W[0][0, 3], 0.0, W[0][2, 3]])
+            if np.abs(p0).max() > 1e-6:
+                W = [Mx.copy() for Mx in W]
+                for Mx in W: Mx[:3, 3] -= p0
+                r = r + p0
+            frames.append([V.mat_to_trs(Mx) for Mx in W]); Ws.append(W)
+            root.append(r.tolist())
         wrap = V.pose_jump(Ws[-1], Ws[0]) if nf > 1 else 0.0
         step_med = float(np.median([V.pose_jump(Ws[f], Ws[f + 1]) for f in range(nf - 1)])) if nf > 1 else 0.0
         loop = V.is_loop(wrap, step_med, nf)

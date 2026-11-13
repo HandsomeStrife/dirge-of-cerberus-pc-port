@@ -1,0 +1,2 @@
+{"name": "w295_ntsc_turn", "frames": 280, "doc": "worker 0295: d_turn_circle's input on the NTSC-timing state (--state out/sof_scale1.p2s): camera turn, then walk + turn (the cape window's arms and facing re-arms)",
+ "events": [{"from": 10, "to": 70, "rx": 1.0}, {"from": 100, "to": 275, "ly": -0.5, "rx": 0.5}]}

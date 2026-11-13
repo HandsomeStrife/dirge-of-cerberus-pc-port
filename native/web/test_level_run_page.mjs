@@ -145,7 +145,7 @@ let crashed = false;
 pg.on('crash', () => { crashed = true; let oom = ''; try { oom = execSync('journalctl -u earlyoom --since "-2 min" -q | grep -c "sending SIG"', { encoding: 'utf8' }).trim(); } catch { /* no journal */ } log(`PAGE CRASH (earlyoom kills in the last 2 min: ${oom || 0})`); lockDrop(); srv.kill(); browser.close().catch(() => {}).finally(() => process.exit(3)); });
 const OPTIONAL = new Set(['/game_state.js', '/stage_info.js']);
 pg.on('response', r => { if (r.status() === 404) { const u = r.url().replace(/^http:..[^/]+/, ''); if (!OPTIONAL.has(u)) log('404', u); } });
-await pg.goto(`http://127.0.0.1:${port}/play.html${QUERY ? '?' + QUERY : ''}`, { waitUntil: 'load', timeout: 240000 });
+await pg.goto(`http://127.0.0.1:${port}/play.html?video=pal${QUERY ? '&' + QUERY : ''}`, { waitUntil: 'load', timeout: 240000 });
 await pg.waitForFunction(() => window.__play && window.__play.packsReady, null, { timeout: 300000 });
 await pg.evaluate(() => window.__play.packsReady);
 log(`page up (${vw}x${vh}@${vd || 1}, events ${EVENTS}, log ${LOGF})`);

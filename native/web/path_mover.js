@@ -19,13 +19,14 @@
 //   C.s214 turn mode, C.t2c0 +0x2c0 turn target   C.dir +0x90 move direction
 //   C.mover +0x300   C.path +0x310   C.node +0x314   C.last +0x318   C.p31c..C.p32c +0x31c..+0x32c
 import * as NG from './nav_graph.js';
+import { DT } from './video_mode.js';
 const f = Math.fround;
 
 // FUN_00310c40 = G+0x64: 48 in the save (the gate in FUN_0034f4a0: > 8 sets the spline's points C+0x100..)
 export const G64 = 48;
 // DAT_0046e290 +0xc: the time a body's move clock C+0x1cc gains per frame (FUN_0034ea18), seconds.
 // T: w159_walk95 (every frame of 46 / 47's walk: C+0x1cc gains 0.02 = 1.2 ticks / 60)
-export const MOVE_DT = f(0.02);
+export const MOVE_DT = DT;                  // DAT_004eeb28 (video_mode.js: f32 0.02 PAL, 0.016666668 NTSC)
 
 // FUN_00311120: section 9 entry i (null when i >= the count; the exporter checks the layout)
 export function pathOf(paths, i) {

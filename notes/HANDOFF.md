@@ -1250,3 +1250,138 @@ exercised in a browser.
   (the reported failure, deterministic); fixed -> 'refused ... pressed again', all ok; page mutant without the noPause gate in
   blocked() -> FAIL by assert (pause true). Runs: test_restart_page x3, test_pause_page, test_items_page, test_warp_picker_page,
   test_hud_page all ok. Page code unchanged. Not committed.
+- 60 fps research (worker 0293, 2026-11-12; **notes/frame-rate.md**, research only, no code). **The game has its own 60 Hz
+  mode.** Boot picks PAL from the ELF name (FUN_00242650: `S?ES` -> script flag 0x1e) -> FUN_00244c38 -> FUN_0040c078(0x4fc7d0,
+  2 PAL / 1 NTSC); there is no 50/60 Hz menu. Every system steps in 1/60 s ticks: step = vblanks x scale (FUN_0040ce28), scale
+  = 1.1999999 in mode 2, 1.0 in mode 1 (FUN_0040cb78), cap 5 (FUN_00322f88). PCSX2 check: a save state with scale patched to
+  1.0 runs 1.0002 u/frame vs PAL 1.2002, ground speed 60 u/s in both (c_run). Per-drawn-frame parts (cape cloth + settle
+  window, pad edges) run 60x/s in mode 1, as on NTSC. Other mode-1 differences: pointer factor DAT_0046baac 1.0 (FUN_00254490),
+  and 2D layout / framebuffer for 448 lines. Audio runs on its own 240 Hz IOP timer. **Recommendation:** change D8 to a
+  video-mode setting with mode 1 (60 fps, STEP 1.0) as the default, per Dan's request. Keep mode 2 for parity tests. Gather the
+  1.2 / 1/50 constants (about 13 page files) into one source. Record NTSC-timing traces with the patched-scale state. No
+  interpolation (only needed above 60 Hz). Open: 15+ flag-0x1e users not read (look like layout only), FMV rate, a list of
+  integer per-frame counters. Not committed.
+- Native step 0, the build skeleton (worker 0291, 2026-11-12; **docs/NATIVE.md**, plan status updated). One CMake tree
+  (`native/CMakePresets.json`): `linux` (gcc; SDL2 2.30.9 from source, no X11 on this box -> offscreen/EGL; a system
+  libsdl2-dev is used if present), `windows` (MinGW, SDL2.dll, GL 3.3 core), `wasm` (emsdk 3.1.74 in ~/emsdk, WebGL2,
+  ES-module factory `createDirge` for page + node). Third-party code is fetched and pinned by sha256
+  (`native/scripts/fetch_deps.sh` -> gitignored `native/third_party/`). `native/platform/` = SDL window / GL / pad
+  (keys from pause_layer.js's FUN_00255220 binding) / 48 kHz audio callback (silence for now) / `fs_load` (sync fopen,
+  async fetch). `native/game/main.c` = the `dirge` shell: engine/core's FUN_00248110 frame (doc_engine_frame) with the
+  SDL input backend behind input_poll, run by `frame_clock.c` (play.js's accumulator; **tick rate a parameter**,
+  `--tick-hz` / `?tick_hz`, 50 default; D8 still open, see 0293's mode-1 finding); draws a cleared frame. First moved
+  module: `floor_shade.c` (FUN_005ae1f0, round-toward-zero as the JS). Adapter `native/web/c/floor_shade.mjs`:
+  `node test_light_states.mjs area_stream.js c/floor_shade.mjs` passes on C as on JS (MP+0x450 53/56 vs RAM, same 3
+  teleported states); `test_c_parity.mjs` C = JS on 38,671 points. All three targets print the same smoke hash
+  (07316aff for 300 ticks; fp probe included). Tests: ctest 13/13, wine_smoke OK (= linux), test_play_c_page all ok
+  (WebGL2, GLSL 300 es, fetch, hash = linux, 50.0 / 60.0 ticks/s, Space -> Cross). Mutations, all red: floor_shade
+  round-to-nearest / no 4th corner / cap 62 / no T=0 path / +1 (test_light_states; parity catches 3 of 5); key
+  Space->Square (test_platform_pad, page); tick rate baked at 50 (test_frame_clock, page 60 Hz check); round-to-nearest
+  in wasm only (page hash != linux; the first probe missed it, fixed by adding equal-shade samples). Open: Linux window
+  needs libsdl2-dev (or libxext-dev for the source build); game_state.js not moved (step 6); vendored libs unused yet;
+  audio mixer is step 7. Not committed.
+- The beast alley rescue, the toy, the child after the kidnap (worker 0292, 2026-11-12; **notes/other-types.md 'The rescue, traced'**).
+  **T (gitignored, tools/trace/out/w292; pads tools/trace/scripts/w292_*.json):** 0276's steered run never reached trigger 165's ✕ (the use
+  ray is 7 along the facing, the box 4 thick); w292_x165 starts from its state with Vincent poked into the box (TRACE_POKE, route.py
+  --teleport's addresses, documented in the script), then x165b / back / fight / ev02 play on to the end of beast_ev02; w292_toypos retraces
+  w276_beastpos with the toy and child bodies. Game: ✕ f20 -> 76 = 0 next record, event 1 +159 (74 = 2, the child to locator 19, 'fear');
+  trigger 166's 0x113(2) ~1050 ticks after event 1; 72 = 1 and record 9 active 3 frames later; record 9 (HP 110) dies, stage flag 1 = 11
+  139 frames later (trigger 177's poll), beast_ev02 for 833 frames, then battle with Vincent at (-940.0, -0.1, 525.0), short 69 = 0.
+  **Decoded and translated:** (1) FUN_0054e4a0 (a trigger's vt+0x2f4; vtables 0x58cdf8 / 0x58fd90, RAM) sets manager +0x260 to the
+  trigger's +0x90 before every script event (actors' FUN_00568f98 does not): enemy_ai runEvent. Without it the page's +0x260 stayed on
+  locator 19 and the child's 0xab never saw trigger 166's centre, so record 9 never woke. (2) FUN_00340c00(C, 0) places the body on the
+  clip's root (FUN_005ad878 -> FUN_00343088 -> x C+0x5b0 -> FUN_0034aae0 / FUN_00356d98) when the bone-root mode ends: enemy_ai playClip
+  (rootDrive; L: C+0x5b0 as identity). The child's body after her kidnap clip: locator 19 for one record (+399, 0x10e -> FUN_00588430 body
+  sync), then her clip root at the origin (+400 on) until the rescue; the page now matches from +401 (0276's open 1). (3) The toy g001
+  (record 151): FUN_00564228 'g001' -> stance 0x3b (no rows); an actor in brain mode 0, +0x38 0x181 (GUESS row), size on the no-zone
+  fallback (row). Its kidnap path is in bone 0, so export_web_enemy moves bone 0's x / z into the root track (e030 / n028 exports byte-identical
+  after). Inputs: disc.py + 07670040 / 41 / 42 / 4b; build_web.sh g001:kidnap; export_web_triggers stance_of g001 (ai.json: record 151 stance 59,
+  stances '59', model_clips g001); enemies.js IDLE.g001 = 'kidnap' (its only activation sends the 0x19b in the same event).
+  **Page vs T:** the beast 0.05 u (7 points), the toy 0.17 u (9 points, its rest place included), the child 0 u in the clip and from +401;
+  ✕ -> 76 next tick, event 1 +159 (T 159), the child at locator 19 in 'fear'; 72 -> record 9 active +2 ticks (T +3). **Largest gap / OPEN:**
+  the page's shots flinch record 9 (lhtn / rhtn) but never take its HP (110 after 209 shots; record 7, same data, dies in ~18): suspect the
+  part mask C+0x77c (FUN_0055bda8 -> FUN_0055df90, no damage) on the side it shows while attacking; not decoded (two attempts: the test's
+  aim and holster were fixed first). So the page run never reaches flag 1 = 11 / beast_ev02 (test_scr005_page plays beast_ev02 from the flags).
+  Also: the game's one record with the child's C+0x30 at locator 19 (+399) has no page counterpart (the request runs in the same tick).
+  **Tests:** test_kidnap_page.mjs + toy checks (class 0x42, drawn, path) and the child's hand-off: all ok; mutants notoy, noplace red.
+  New **test_rescue_page.mjs** (from r04_east: kidnap, ✕, beast 7 shot, 166's period, the view turned to its centre, record 9 shot, flag,
+  beast_ev02): 5 checks ok (✕, +159, the child before / after, the wake), 4 fail on the open beast-9 kill. The +0x260 fix's own mutant is
+  this test's runs before it (72 never 1, wake check red); MUTATE=nocross: red (no event 0x11, so trigger 166's period never comes: the wait times out; by exception, not by the ✕ assert). Page aids, labelled in the test: warp, HP 9999,
+  camera turns, Vincent put back at the fence spot after the beast-7 fight. Node: test_heli, test_other_types, test_enemy_ai, test_npc,
+  test_pool_soldiers, test_stage_controller 88, test_props, test_enemy_hits, test_story_cutscenes 190, test_gate_key ok (test_doors needs
+  three for node: not run). **Image:** tools/trace/out/w292/w292_toy_game_vs_page.png (game GS f1061 = 0276's frame, the toy on the
+  ground right; page +296 with the camera turned to the toy: Vincent's body covers the line to it, so the toy is not seen in it: the image
+  does not show it, the test's drawn / path checks do). Not committed.
+- 60 Hz: the game's video mode on the page (worker 0295, 2026-11-13; **notes/frame-rate.md §5**, fidelity-audit 'Video mode').
+  **`native/web/video_mode.js`** is the one place for the mode and what it sets: HZ / TICK, STEP (FUN_0040cb78: 1.1999999 PAL,
+  1.0 NTSC), DT (FUN_00322f88), the mouse factor DAT_0046baac (FUN_00254490), framebuffer, FUN_0040d7f0's screen centre,
+  FUN_0032ace0's aspect constants (ELF DAT_0046e360..37c), the lock boxes (FUN_00328968 / FUN_0055bda8). `?video=pal|ntsc`;
+  **page default NTSC (60 fps)**, node default PAL (`DIRGE_VIDEO=ntsc` for NTSC). The 1.2 / 1/50 / 0.02 copies are gone from
+  player.js (TICK/STEP/DT and the camera's CSTEP), jump_core, aim_core, event_actor_rt, path_mover (MOVE_DT), enemy_ai (body dt,
+  one line), pcm_ring (FRAME_S), event_rt / stage_controller (fade), chunk_anim / room / effects (defaults), intro / stage_info
+  (FRAME_MS = 1000 x TICK), lock_on (grid + boxes per mode). **All 55 play.html page tests now load `?video=pal`** (URL edit
+  only). The other ~20 flag-0x1e users were read: 2D menu layout only; the page keeps their PAL branch in both modes (KNOWN MIX
+  row). **T (gitignored, tools/trace/out/w295):** w295_ntsc_run / _turn / _jump on 0293's scale-1.0 state (copied to
+  tools/trace/out/sof_scale1.p2s), step 1.0 in every record. They exposed two page errors PAL hid: the locomotion-table install
+  GUESS (C+0x1d8 >= 5.0 -> 4.0; NTSC installs at 4.79) and the jump queue take-over (`>` -> `>=`, now decoded from FUN_005aa2a8:
+  `n - 1.0 <= frame`). **Tests:** new test_ntsc_traces.mjs (NTSC: run / turn position 2.8e-3 / 1.6e-2, C+0x1d8 7e-6, head clip
+  + frame 0 off, cape window 0 off, 60.01 u/s; test_jump + test_wall on the NTSC traces: ok; `DIRGE_VIDEO=pal` = same replay on
+  c_run / d_turn_circle: ok); new test_video_mode_page.mjs (default and ?video=ntsc: 1.0001 u a frame, 60 frames/s; ?video=pal:
+  1.2001, 50 frames/s). Node suite in PAL: 96 / 96 ok. Page in PAL: test_mouse, title_card, stage_info, strafe_walk ok (others
+  not re-run). **Mutants, red:** NTSC step 1.2, tick 50, jump_core STEP baked, take-over `>`, install 5.0, stick ramp without
+  STEP, cape countdown per tick (PAL replay), node default NTSC (test_jump), page default PAL (page test). Equivalent: a per-tick
+  countdown in NTSC (step 1.0). **Open:** the mouse path doesn't apply FUN_002553e8 (x sens x step x DAT_0046baac, truncated;
+  OPEN row); 2D layout NTSC branches not translated; no NTSC camera / enemy / event traces; native C still takes `--tick-hz`
+  (D8 now says it follows the same setting: notes/native-migration-plan.md, docs/NATIVE.md). Not committed.
+- Beast 9 in the rescue: it was the test, not the port (worker 0294, 2026-11-13; **notes/other-types.md 'The rescue, traced'**, last
+  two bullets; fidelity-audit rows 'e_BestB2 ...' (FIXED) and 'Event loads complete at once'). **No port code changed.** Hit logs of
+  test_rescue_page (RESCUE_LOG=1 now prints hits, shots and aim samples): when Vincent's shots land, record 9 (+0x118 = 3, zones 8)
+  takes 30 a hit and dies in 3-4 shots like record 7. In the failing runs (2 of 5 before the fix) no shot reached it at all, not even
+  a near miss. By the time the view step found the child, the beast was at Vincent's side, and the test's aim loop stepped the camera
+  by the whole error into the sky (aim point y about -8550). R1 went on with the ammo at 0, which gave 0292's 'HP 110 after 209 shots'.
+  The no-damage bits (+0x118 0x20 / 0x40: FUN_0055db50, FUN_0055d2c0) are **record 8's** (e_BeastB: script 216 event 0xd sends it
+  0x14c 3, 4, 2, 6, 5, 13 at the kidnap). Trigger 166's wake (script 220 event 0x18) picks record 8 (bits cleared, 0x14d) or record 9 by
+  manager 0xa6 (FUN_00242c28() == 2); in the save, record 9. The page already does all of this (enemy_ai 0x14c / 0x14d, 0xa6).
+  **Test changes:** the shot aid faces the body each shot (FollowCamera.reset, the follow camera's own pitch) and corrects in steps of
+  at most 0.1; the view step sweeps yaw finer and at a second pitch. The beast_ev02 length check now compares the event's own clock:
+  fadein(1000) -> fadeout(3000), T w292_fight event +0x1558 bit 43 (a fade running) 491 -> 676 = 185 frames, page 175 (6%: the
+  block-start drift, story-cutscenes.md Open). The old 833-frame check counted the game's disc loads: event start -> fadein 256 frames
+  (page script 3) and fadeout -> main's fadein 354 (page 102: its zone 128,4,5 chunks back). Page whole event 506-508 ticks vs T 806.
+  **Results:** test_rescue_page 3 runs of 3 all ok (10 checks; beast 9 in 4 / 28 / 42 shots); mutants red: nodmg (FUN_0055db50's damage
+  0: the 4 checks from the death on), sleep (event sleeps x 2: fadein -> fadeout 350). **Largest gaps:** fadein -> fadeout 10 frames short
+  (block-start drift, open); the event starts +26 ticks after flag 1 = 11 vs the game's +29 (bit 37 off at f235, flag at f206). Still slow
+  (each run 10-25 min) and still a page aid: aim / view by FollowCamera.reset. Not committed.
+- Worker 0298 fixes (2026-11-13; review of 0295's 60 Hz mode and 0294's rescue test). The game's ms clocks (FUN_0023c1f0, real
+  time: the event clock FUN_003798a0, the HUD clock DAT_004f58ec, the menu clock) still stepped 20 a frame outside the intro, so
+  in NTSC (the page default) stage events, waits / timers, the HUD, reticle fades and the game-over box ran 1.2x fast. New
+  video_mode.js `frameMs()`: whole ms a frame (20 PAL; 16 / 17 / 17 NTSC: a fixed 16.67 truncated to 16 in the clocks' `>>> 0`),
+  used by play.js `stage.tick`, event_rt.js / stage_controller.js `frame` defaults (intro.js), stage_info.js, event_window.js,
+  hud.js, aim.js reticle, gameover_layer.js; hud_core.js `restartedHud` lead in FRAME_MS. player.js `LOCO_INSTALL` (4.0 GUESS,
+  range (3.70, 4.79) open above) shared with aim.js's aimed move class (was 5.0). test_rescue_page fade span one-sided (page <=
+  game, at most 11 short; the 10-frame gap recorded OPEN in fidelity-audit 'Event loads complete at once').
+  test_video_mode_page checks 1000 / HZ ms a frame on the stage and HUD clocks (red with `stage.tick(20)` / HUD `+= 20` restored).
+  Not committed.
+- Worker 0297 fixes (2026-11-13; review of 0292's rescue work). enemy_ai.js `playClip`: FUN_00340c00(C, 0)'s placement now samples the clip
+  still playing (C+0x570 = C.mp.clip) with no C+0x640 name test (cmd 0x141 rewrites C+0x640 before its request), clears bits 4 and 0x400000
+  (& 0xffbffffb), and a partner (aimed) request runs it on bit 4 alone (FUN_00344bd0). `sizeOf`: the no-zone fallback labelled GUESS (audit
+  row 'The toy g001's size'). The toy shot: not decoded in two tries (FUN_0055bda8 ray test on g001's model, FUN_0055c7f8 -> vt+0x324 /
+  0x334 for a stance with no rows): new audit row 'OPEN: the toy g001 shot', no page check. test_kidnap_page's noplace mutant string updated.
+  Tests: test_kidnap_page all ok; MUTATE=noplace red (the child 1107 u off at +401); node suite 97/97 exit 0; test_rescue_page run 1:
+  4 FAIL (record 9 never died: dead false; the shot log was not kept), run 2 all ok (beast 9 in 6 shots). Run 1 is most likely the aim
+  aid's flakiness (0294: 2 of 5 failing runs before its fix); not proven. Not committed.
+- Re-review of 0297's fixes (2026-11-13, reviewer session). enemy_ai.js `playClip`: after FUN_00340c00's root placement the body is re-placed
+  (placeBody = FUN_00356d98(C+0x3b0, root, 1, 0, 0) -> FUN_00356740; GUESS body state 0, FUN_00356a10's state 4 / 5 / 2 keeps not decoded)
+  and C+0x568 |= 0x80000; `rootDrive` returns whether it placed. New audit row 'OPEN: FUN_00340c00(C, 1) outside motion42' (a 0x19b with no
+  clip turns bit 4 on at the next request; not translated); the FUN_00340c00(C, 0) row notes no test covers the partner branch.
+  **test_kidnap_page's MUTATE=noplace string no longer applies** (the line changed; the test throws 'mutant does not apply'): its SUB needs
+  `if (C.mp && rootDrive(a) && walkCol) placeBody(a);` -> `` (test file not edited here). Tests: node suite (PAL) 97/97; test_kidnap_page all ok;
+  test_rescue_page all ok (one run). Not committed.
+- Worker 0297, placeBody (2026-11-13; review of 0296's FUN_00340c00 placement). enemy_ai.js `placeBody(a, arg2 = 1)` now translates
+  FUN_00356a10 after FUN_0035cbc8: no polygon -> FUN_0035c9a8(body, 0, -1, 0) only (poly null, state kept); a polygon with arg 2 != 0
+  (FUN_0034f178's (.., 1, 1, 0): enterBody, and the page's lazy hasPoly / attack ops 8 / 9) -> state 0; arg 2 == 0 (FUN_00340c00's
+  (.., 1, 0, 0): playClip calls placeBody(a, 0)) -> state 4 with +0x170, 5 with +0x180, 2 while FUN_00326500 (JITTER_ON) kept, others 0.
+  GUESS: +0x170 / +0x180 read as 0 (the page's bodies never take 4 / 5). +0xac bit 27's 20-u test left out (never set). Body +0x60, which
+  FUN_00356d98 zeroes, has no page counterpart (B.vel is +0x40): no change. No caller relied on the old state-0 reset on a failed locate.
+  Audit row 'FUN_00340c00(C, 0)' updated. **test_kidnap_page's noplace mutant string is stale** (`placeBody(a)` -> now `placeBody(a, 0)`):
+  in the repo it throws 'mutant does not apply'; from a scratch copy with the string fixed it is red as before (the child 1107 u off at
+  +401). Tests: node suite (PAL) 97/97; test_kidnap_page, test_dog_page, test_heli_page, test_rescue_page all ok. Not committed.

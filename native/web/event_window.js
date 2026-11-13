@@ -24,11 +24,12 @@
 // Box kind 27 (worker 0263; wro_kaisetu's choice box): EventChoiceScreen below, open_l_str, getstate_l, getvalue_l.
 // Left out (warned): other window kinds than 4 / 27, move / hide / select, FUN_003d0058 ('$&' text),
 //   kind 4's state (FUN_003b8850 result 5).
-// Clock: the menu clock FUN_0023c1f0 (ms); the page steps FRAME_MS a game frame (stage_info.js FRAME_MS, GUESS row
+// Clock: the menu clock FUN_0023c1f0 (ms); the page steps one frame's whole ms (video_mode frameMs: 20 PAL, 16 / 17 / 17 NTSC; GUESS row
 //   'stage-info clock').
 
 import { PauseScreen, SE, scissor } from './pause.js';
-import { StageInfoScreen, speakerCode, speakerNamesOn, MENU_CONFIG_BITS, FRAME_MS } from './stage_info.js';
+import { StageInfoScreen, speakerCode, speakerNamesOn, MENU_CONFIG_BITS } from './stage_info.js';
+import { frameMs } from './video_mode.js';
 import { hexBytes } from './menu_layout.js';
 
 const s16 = v => (v << 16) >> 16;
@@ -381,9 +382,10 @@ function rowWidget(l) {
 // D: stage_info.js loadStageInfoData(stage_info.json, loadPauseData(pause.json)) (layouts incl. window4, the '$'
 // codes, the speaker table and names). Without D the windows still run (book-keeping only) and nothing is drawn.
 export function createEventWindows({ D = null, warn = (m) => console.warn(m), se = null } = {}) {
+  const winMs = frameMs();                        // FUN_0023c1f0's ms a frame (video_mode frameMs)
   const W = {
     D,
-    now: 0,                                       // FUN_0023c1f0 (ms), FRAME_MS a frame
+    now: 0,                                       // FUN_0023c1f0 (ms), one frame's ms a frame (frameMs)
     entries: Array.from({ length: 5 }, () => ({ id: 0, box: null, state: 0 })),
     screens: [],                                  // live boxes (open or closing), in creation order
     log: [],                                      // (event frame, what) for tests
@@ -498,7 +500,7 @@ export function createEventWindows({ D = null, warn = (m) => console.warn(m), se
     },
     // once an event frame, after the slot loop (event_rt.js frame)
     frame(R) {
-      W.now += FRAME_MS;
+      W.now += winMs();
       for (const c of R.slots.filter(s => s.type === 10)) {      // case 10: FUN_00383408 returns 1, the slot is freed
         R.slots.splice(R.slots.indexOf(c), 1);
         W.open(R, c);

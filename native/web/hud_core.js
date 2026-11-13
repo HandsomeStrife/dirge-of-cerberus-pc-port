@@ -8,6 +8,7 @@
 //   { kind: 'line',   v: [[x, y] x n], c: [[r, g, b, a] x n] }                                     (line strip)
 // x, y, u, v in pixels / texels (the GS's 12.4 values / 16). Blend for all: ALPHA (Cs - Cd) As + Cd
 // (hero dump: (0, 1, 0, 1, 0) on every HUD draw), TFX modulate (Cv = Cf Ct >> 7).
+import { FRAME_MS } from './video_mode.js';
 
 // ------------------------------------------------------------------ frame mapping (DAT_004f2258 set)
 const div0 = (a, b) => Math.trunc(a / b);                   // C integer division (toward zero)
@@ -875,7 +876,9 @@ export function restartedHud(data, now, mnow = now) {
   const st = new HudState(data);
   st.now = now >>> 0;
   st.fresh();
-  st.mnow = (mnow + 20 - RELOAD_SHOW_LEAD * 20) >>> 0;
+  // GUESS: 12 frames' ms at the mode's FRAME_MS (NTSC 200 ms); measured in PAL load frames, so NTSC's lead could be the same
+  // real time (~240 ms) instead: not decoded (notes/fidelity-audit.md 'the Restart slide-in lead in NTSC')
+  st.mnow = (mnow - Math.round((RELOAD_SHOW_LEAD - 1) * FRAME_MS)) >>> 0;
   st.show();
   st.mnow = mnow >>> 0;
   return st;

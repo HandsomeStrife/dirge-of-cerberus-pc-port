@@ -33,7 +33,7 @@ try {
   const errs = [], warns = [];
   pg.on('pageerror', e => errs.push(e.message));
   pg.on('console', m => { if (m.type() === 'error') errs.push(m.text()); if (m.type() === 'warning' && /context|WebGL/i.test(m.text())) warns.push(m.text()); });
-  for (let i = 0; ; i++) { try { await pg.goto(`http://127.0.0.1:${port}/play.html?sound=0&intro=0`, { waitUntil: 'load' }); break; } catch (e) { if (i > 20) throw e; await new Promise(r => setTimeout(r, 250)); } }
+  for (let i = 0; ; i++) { try { await pg.goto(`http://127.0.0.1:${port}/play.html?video=pal&sound=0&intro=0`, { waitUntil: 'load' }); break; } catch (e) { if (i > 20) throw e; await new Promise(r => setTimeout(r, 250)); } }
   await pg.waitForFunction(() => window.__play && window.__play.stats.ticks > 120, null, { timeout: 300000 });
   const shot = async n => { const b = await pg.screenshot(); if (OUT) writeFileSync(path.join(OUT, `loss_${n}.png`), b); return lit(png(b)); };
   const before = await shot('before');

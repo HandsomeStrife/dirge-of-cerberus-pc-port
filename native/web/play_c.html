@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dirge (C build)</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; height: 100%; background: #000; color: #9a9a9a; font: 12px/1.4 monospace; }
+  #canvas { display: block; width: 100vw; height: 100vh; outline: none; }
+  #log { position: fixed; left: 8px; bottom: 8px; margin: 0; white-space: pre-wrap; pointer-events: none; max-width: calc(100vw - 16px); }
+</style>
+</head>
+<body>
+<canvas id="canvas" tabindex="0"></canvas>
+<pre id="log"></pre>
+<script type="module">
+// play_c.html -- the C build in the browser (native migration plan step 0): native/web/wasm/dirge.mjs + .wasm from
+// `cmake --build --preset wasm` (docs/NATIVE.md). Step 0 runs the frame spine at the tick rate and draws a cleared
+// frame; the game itself is still play.html.
+// URL: ?smoke=N (N ticks, then print the state hash)  ?tick_hz=N (default 50)  ?data=<url prefix> (default data/)
+const q = new URLSearchParams(location.search), log = document.getElementById('log'), canvas = document.getElementById('canvas');
+const lines = [];
+const out = s => { lines.push(s); console.log(s); log.textContent = lines.slice(-8).join('\n'); };
+window.__dirge = { ready: false, lines };
+let createDirge;
+try {
+  ({ default: createDirge } = await import('./wasm/dirge.mjs'));
+} catch (e) {
+  out('no wasm build: source ~/emsdk/emsdk_env.sh; cd native; cmake --preset wasm; cmake --build --preset wasm');
+  throw e;
+}
+const M = await createDirge({ canvas, print: out, printErr: s => { lines.push(s); console.warn(s); } });
+const args = [];
+if (q.has('smoke')) args.push('--smoke', q.get('smoke'));
+if (q.has('tick_hz')) args.push('--tick-hz', q.get('tick_hz'));
+if (q.has('data')) args.push('--data', q.get('data'));
+M.callMain(args);
+canvas.focus();
+Object.assign(window.__dirge, { ready: true, M });
+</script>
+</body>
+</html>

@@ -25,6 +25,7 @@ import { EventRuntime } from './event_rt.js';
 import { EventVM, block } from './event_vm.js';
 import { EventActors } from './event_actor_rt.js';
 import { sendEventSe } from './event_sound.js';
+import { STEP } from './video_mode.js';
 
 // worker 0248: the events the page plays out, every one main calls (StageVM.invoke's check; test_stage_controller reads main's call sites)
 // worker 0261 (notes/story-cutscenes.md): sk_mituketa2, heri_taijou (Skip in it takes main's branch past sk_mituketa2), roji02_01
@@ -178,7 +179,7 @@ export class StageRuntime extends EventRuntime {
     return true;
   }
 
-  frame(dtMs = 20) {
+  frame(dtMs = this.msStep()) {                                           // FUN_003798a0 <- FUN_0023c1f0 (ms; event_rt msStep)
     this.frameNo++;
     if (this.log.length > 4000) this.log.splice(0, 2000);              // page memory: the log is for tests
     // FUN_003e9ed0: last frame's event SEs go out (event_sound.js; as event_rt.js frame, worker 0248)
@@ -206,7 +207,7 @@ export class StageRuntime extends EventRuntime {
     if (this.skip === 1) this.skip = 2;                                  // FUN_00377c68's tail
     if (!this.battle) this.camOutput(); else this.view = null;           // FUN_00379148 only out of battle mode
     if (this.fade) {                                                     // the fade's level, as event_rt.js frame (its GUESS rows)
-      const f = this.fade; f.level = Math.fround(f.level + Math.fround(f.rate * 1.2));
+      const f = this.fade; f.level = Math.fround(f.level + Math.fround(f.rate * STEP));
       if (f.level <= 0) f.level = 0; else if (f.level >= 256) f.level = 256;
     }
   }
@@ -633,11 +634,11 @@ export function createStageController(opts) {
   // wait until the hand-off.
   if (opts.settle !== false && !opts.openingDone) {
     const played = () => rt.log.some(([, m]) => m.startsWith('played elsewhere '));
-    for (let i = 0; i < 16 && !rt.vm.done && !(played() && rt.battle && rt.skip === 0 && rt.vm.pending === null); i++) rt.frame(20);
+    for (let i = 0; i < 16 && !rt.vm.done && !(played() && rt.battle && rt.skip === 0 && rt.vm.pending === null); i++) rt.frame();
   }
   return {
     rt,
-    tick(dtMs = 20) { if (!rt.vm.done) rt.frame(dtMs); },
+    tick(dtMs) { if (!rt.vm.done) rt.frame(dtMs); },   // dtMs: FUN_003798a0's ms this frame (play.js frameMs); none: the runtime's own stepper
     get done() { return rt.vm.done; },
     get battle() { return rt.battle; },
     get view() { return rt.view; },

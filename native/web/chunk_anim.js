@@ -5,6 +5,7 @@
 // (FUN_00261e68) with flags bit 2 or when no curve is still running. Script cmds 0x50 .. 0x53 (FUN_00545b20) -> FUN_00327660 / FUN_00327948 / FUN_00327a30 /
 // FUN_003278d8 keep a list (DAT_0046e2ac) that FUN_00327de8 replays when a chunk comes back.
 import { evalCurve } from './room.js';
+import { STEP } from './video_mode.js';
 
 const fr = Math.fround;
 const RAD = 0.017453294;
@@ -70,7 +71,7 @@ export class ChunkAnims {
   // FUN_00269530 -> FUN_00267c88: the node's matrix; null when the chunk isn't loaded
   node(c, n) { const L = this.loaded.get(c); if (!L) return null; return L.node.get(n) ?? (this.byChunk.get(c).rest[n] || null); }
   // one game frame: FUN_00265350. loaded: the loaded chunks or null = all; advance: DAT_004fc7e8
-  frame(loaded, advance = 1.2) {
+  frame(loaded, advance = STEP) {
     const want = loaded == null ? [...this.byChunk.keys()] : loaded;
     for (const c of [...this.loaded.keys()]) if (!want.includes(c)) this.unload(c);
     for (const c of want) if (!this.loaded.has(c)) this.load(c);

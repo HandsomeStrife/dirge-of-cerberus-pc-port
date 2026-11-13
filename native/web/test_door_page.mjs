@@ -17,7 +17,7 @@ const SHOT = process.env.DOOR_SHOT;
 try {
   const pg = await browser.newPage({ viewport: { width: 960, height: 540 } });
   const errs = []; pg.on('pageerror', e => errs.push(e.message));
-  for (let i = 0; ; i++) { try { await pg.goto(`http://127.0.0.1:${port}/play.html?intro=0&sound=0&enemydmg=0&stage=0`, { waitUntil: 'load' }); break; } catch (e) { if (i > 20) throw e; await new Promise(r => setTimeout(r, 250)); } }
+  for (let i = 0; ; i++) { try { await pg.goto(`http://127.0.0.1:${port}/play.html?video=pal&intro=0&sound=0&enemydmg=0&stage=0`, { waitUntil: 'load' }); break; } catch (e) { if (i > 20) throw e; await new Promise(r => setTimeout(r, 250)); } }
   await pg.waitForFunction(() => window.__play && window.__play.stats.ticks > 30, null, { timeout: 120000 });
   await pg.evaluate(() => window.__play.packsReady);
   const place = (x, z, h, yaw, pitch) => pg.evaluate(async ([x, z, h, yaw, pitch]) => { const P = window.__play, c = P.ctrl, feet = { x, y: 0, z }, wait = ms => new Promise(r => setTimeout(r, ms));
