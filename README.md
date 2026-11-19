@@ -37,6 +37,8 @@ How to build and run each target: [docs/NATIVE.md](docs/NATIVE.md).
 Built from your own disc: `tools/byo/build_web.sh /path/to/your.iso`. The supported disc,
 prerequisites, controls and limitations are in [docs/BROWSER.md](docs/BROWSER.md). If you'd
 rather have a coding agent set it up for you, see [docs/AGENT-SETUP.md](docs/AGENT-SETUP.md).
+To do faithful-port work yourself (decoding, testing against the game), see
+[docs/CONTRIBUTING.md](docs/CONTRIBUTING.md).
 
 ## What's here
 
