@@ -134,8 +134,9 @@ static int test_B(void){
 }
 
 /* ============================= TEST C ============================= */
-static const char *FL_DEFAULT = "/srv/games/dirge-port/extract/FILELIST.BIN";
-static const char *DAT_DEFAULT = "/srv/games/dirge-port/extract/KEL.DAT";
+/* repo-relative: run from port/hle (`make check`); or pass FILELIST.BIN KEL.DAT */
+static const char *FL_DEFAULT = "../../extract/FILELIST.BIN";
+static const char *DAT_DEFAULT = "../../extract/KEL.DAT";
 
 static int test_C(const char *flpath, const char *datpath){
     printf("== (C) SIF CD-read RPC HLE vs kel.c (byte-exact) + fileio + IOP reboot ==\n");

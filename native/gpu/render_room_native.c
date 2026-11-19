@@ -114,7 +114,7 @@ static unsigned char *read_file(const char *path, size_t *sz){
 
 int main(int argc, char **argv) {
     const char *mdir = "../assets/models/out/z143_loader";
-    const char *xdir = "/srv/games/dirge-port/extract/_KEL/noPath";
+    const char *xdir = "../../extract/_KEL/noPath";
     const char *outdir = "out";
     float dist_override = -1.f, el_override = 10.f;   /* -dist N => interior turntable */
     const char *only = NULL;                          /* -only CID => render one chunk */

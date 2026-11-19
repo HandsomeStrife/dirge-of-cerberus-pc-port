@@ -810,7 +810,8 @@ def main():
     if len(sys.argv)>=3 and sys.argv[1]!='emit' and os.path.exists(sys.argv[1]) \
        and all(a.startswith('0x') or all(c in '0123456789abcdefABCDEF' for c in a) for a in sys.argv[2:]):
         legacy(sys.argv[1], [int(a,16) for a in sys.argv[2:]],
-               csvpath='/srv/games/dirge-port/analysis/ee_boundaries.csv')
+               csvpath=os.environ.get('DIRGE_EE_CSV') or os.path.join(
+                   os.path.dirname(os.path.abspath(__file__)), '..', '..', '..', 'analysis', 'ee_boundaries.csv'))
         return
     ap=argparse.ArgumentParser()
     sub=ap.add_subparsers(dest='cmd')

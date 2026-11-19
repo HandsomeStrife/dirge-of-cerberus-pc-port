@@ -34,6 +34,7 @@
 //   node native/web/test_enemies_page.mjs          (needs data/enemies + playwright; else SKIP, exit 0)
 // Serves native/web with python3 http.server on a free port. three.js comes from the CDN (play.html importmap).
 import { existsSync, readFileSync } from 'node:fs';
+import { SAVE_STATE as SAVE_P2S, missingIsFail } from './test_data.mjs';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { spawn, execSync } from 'node:child_process';
@@ -86,7 +87,7 @@ try {
   // *(DAT_0046e880+0x1164)[rec + 22]); record 45 (#67) has 0x10000000 (its event 3's cmd 0x14c(28)), so
   // overlapping him, the push-out moves only Vincent (FUN_00542ab8). Skipped without the save state.
   {
-    const saveP2s = process.env.SAVE_STATE ?? '/srv/shared/dirge-port/save-states/sea-of-flames.p2s';
+    const saveP2s = process.env.SAVE_STATE ?? SAVE_P2S;
     if (!existsSync(saveP2s)) console.log(`skip save +0x118 check: ${saveP2s} missing`);
     else {
       const py = `import sys,struct,json\nsys.path.insert(0,sys.argv[1])\nfrom p2s import read_p2s\nm=read_p2s(sys.argv[2])['eeMemory.bin']\n` +
@@ -412,7 +413,7 @@ try {
     // +0x24 and length +0x1d each frame. The page's countdown after each frame must match, and the weight
     // it drew that frame (MP+0x408) = (len - the countdown before the frame) / len.
     const tf = path.join(here, '../../tools/trace/out/k_fire_emp15.jsonl');
-    if (!existsSync(tf)) ok(false, 'k_fire_emp15.jsonl missing (tools/trace/out; TRACE_EMP=1 run): blend weights unchecked');
+    if (!existsSync(tf)) { if (missingIsFail(tf)) ok(false, 'k_fire_emp15.jsonl missing (tools/trace/out; TRACE_EMP=1 run): blend weights unchecked'); }
     else {
       const R = readFileSync(tf, 'utf8').trim().split('\n').slice(1).map(l => JSON.parse(l));
       const game = [];

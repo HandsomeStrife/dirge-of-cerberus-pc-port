@@ -117,7 +117,7 @@ sampler path — `glTexImage2D` upload, `sampler2D`, `GL_REPEAT` wrap (visible a
 2×2 tile), bilinear filtering, directional lighting. When the loader lands real
 UVs, textured models render with **no change here**.
 
-Copies for the shared drive: `/srv/shared/dirge-port/gpu_render_01.png` (shaded),
+Copies for the shared drive: `$DIRGE_SHARE_DIR/gpu_render_01.png` (shaded),
 `…_02.png` (orbited), `…_03_texture.png` (texture proof).
 
 ## Purist shading — the RENDER-MATH integration
@@ -180,7 +180,7 @@ make validate            # -> ./validate_shading  (links libdtex, NOT doc_model)
 ./validate_shading -o out [TEXTURE_CONTAINER]
 ```
 
-Outputs in `out/` (copies in `/srv/shared/dirge-port/`):
+Outputs in `out/` (copies in `$DIRGE_SHARE_DIR`):
 
 | PNG | mode | proves |
 |-----|------|--------|
@@ -269,7 +269,7 @@ Pipeline:
   occludes the floor behind it and is occluded by the roof above).
 
 Output: `out/scene_char_in_env_{hero,corner,wide}.png`; the hero shot is copied to
-`/srv/shared/dirge-port/18_scene_character_in_environment.png`.
+`$DIRGE_SHARE_DIR/18_scene_character_in_environment.png`.
 
 ### Honest approximations (documented, not fabricated)
 

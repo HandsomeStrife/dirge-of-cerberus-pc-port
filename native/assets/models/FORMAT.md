@@ -707,7 +707,7 @@ character rendered natively** — is met.
 The static bind pose (§8) is now driven by real per-bone keyframe tracks. Format
 reversed from the game's own EE sampler/composer (`analysis/decomp/`); evaluator
 + renderer = `anim_eval.py` (this dir). Renders:
-`native/renderer/out/14_vincent_{bind,anim_f###}*.png` (+ `/srv/shared/dirge-port/`).
+`native/renderer/out/14_vincent_{bind,anim_f###}*.png` (+ the shared drive (`$DIRGE_SHARE_DIR`)).
 
 ### 9.1 Where motion lives — the clip is a `mod` chunk, VERSION 0x10
 

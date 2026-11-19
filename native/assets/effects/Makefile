@@ -23,8 +23,10 @@ clean:
 	rm -f $(BIN) $(OBJ)
 
 # Smoke test: parse a real sample if the extract tree is present.
-KEL ?= /srv/games/dirge-port/extract/_KEL
-ELF ?= /srv/games/dirge-port/elf/SLES_541.85
+DIRGE_EXTRACT ?= ../../../extract
+DIRGE_ELF ?= ../../../elf/SLES_541.85
+KEL ?= $(DIRGE_EXTRACT)/_KEL
+ELF ?= $(DIRGE_ELF)
 check: $(BIN)
 	@f="$(KEL)/data/effect/resident/r0000/r0001/fer/r0001.fed"; \
 	if [ -f "$$f" ]; then ./$(BIN) "$$f" | head -20; \

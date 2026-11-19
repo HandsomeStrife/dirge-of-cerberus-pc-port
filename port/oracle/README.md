@@ -28,7 +28,7 @@ outside `port/oracle/` is modified** — the stock `port/` sources and the stock
 Build & run:
 
 ```sh
-source /home/dan/.config/dirge-port.env      # (only needed to regenerate gen/)
+# (to regenerate gen/ you need the ELF and analysis/ee_boundaries.csv; see below)
 cd port/oracle
 make            # builds oracle-cli + oracle-bones
 make test       # builds + runs the self-test  (expect ALL SELF-TESTS PASS)
@@ -139,8 +139,8 @@ To regenerate `gen/` from scratch:
 
 ```sh
 python3 -I tools/recompile_keldraw.py emit \
-  --elf /srv/games/dirge-port/elf/SLES_541.85 \
-  --csv /srv/games/dirge-port/analysis/ee_boundaries.csv --outdir gen
+  --elf ../../elf/SLES_541.85 \
+  --csv ../../analysis/ee_boundaries.csv --outdir gen
 ```
 
 (This writes all 44 TUs; the Makefile only links `gen/eetu_0038` + `gen/eetu_0039`.)

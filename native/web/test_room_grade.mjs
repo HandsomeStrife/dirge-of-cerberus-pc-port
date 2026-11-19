@@ -25,6 +25,7 @@ import { spawn, execSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
+import { optionalExists } from './test_data.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const FIX = process.env.ROOM_GRADE || path.join(here, '../../tools/trace/out/room_grade');
@@ -333,7 +334,7 @@ try {
       if (!have(name)) { console.log(`SKIP back faces at ${name}: no fixture (room_grade_fixture.py)`); continue; }
       const m = meta(name);
       const uvf = path.join(FIX, `uvanim_${name}.json`);
-      if (existsSync(uvf)) m.uv = { slots: JSON.parse(readFileSync(uvf, 'utf8')).slots, frames: 3 };
+      if (optionalExists(uvf)) m.uv = { slots: JSON.parse(readFileSync(uvf, 'utf8')).slots, frames: 3 };
       const game = await pg.evaluate(u => window.png(u), `xfix/${name}_game.png`);
       const on = await pg.evaluate(mm => window.roomShot(mm), m), off = await pg.evaluate(mm => window.roomShot(mm, { noCull: true }), m);
       let n = 0, eOn = 0, eOff = 0, better = 0, worse = 0;
@@ -354,7 +355,7 @@ try {
       if (!haveF(name)) { console.log(`SKIP occluders at ${name}: no fixture (room_grade_fixture.py)`); continue; }
       const m = JSON.parse(readFileSync(path.join(FIX, name + '.json'), 'utf8'));
       const uvf = path.join(FIX, `uvanim_${name}.json`);
-      if (existsSync(uvf)) m.uv = { slots: JSON.parse(readFileSync(uvf, 'utf8')).slots, frames: 3 };
+      if (optionalExists(uvf)) m.uv = { slots: JSON.parse(readFileSync(uvf, 'utf8')).slots, frames: 3 };
       const game = await pg.evaluate(u => window.png(u), `xfix/${name}_game.png`);
       const on = await pg.evaluate(mm => window.roomShot(mm), m), info = await pg.evaluate(() => window.occlInfo);
       const off = await pg.evaluate(mm => window.roomShot(mm, { noOccl: true }), m);

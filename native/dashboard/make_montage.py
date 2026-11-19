@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 # -I invoked. Build the hero montage from the best renders.
 import os
+import sys
 from PIL import Image, ImageDraw, ImageFont
 
-SHARED = "/srv/shared/dirge-port"
+SHARED = os.environ.get("DIRGE_SHARE_DIR") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "out")   # ours: the shared drive (notes/HANDOFF.md)
 OUT = os.path.join(SHARED, "00_hero_montage.png")
 
 FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
@@ -73,9 +74,8 @@ for idx, (fn, cap, tag) in enumerate(tiles):
     path = os.path.join(SHARED, fn)
     try:
         im = Image.open(path).convert("RGB")
-    except Exception as e:
-        d.text((x+16, y+16), "missing: "+fn, font=font(16), fill=(200,90,90))
-        continue
+    except OSError as e:   # a missing render is an error, not a placeholder tile
+        sys.exit("%s: cannot read %s (%s); DIRGE_SHARE_DIR=%s" % (os.path.basename(__file__), path, e, SHARED))
     im = fit(im, IMG_W-20, IMG_H-20)
     ox = x + (IMG_W - im.size[0])//2
     oy = y + (IMG_H - im.size[1])//2

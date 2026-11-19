@@ -100,5 +100,5 @@ claimed, because the read-only renderer has no such entry.
 cd native/capstone && make && ./capstone -n 9
 # -> out/frame_00..08.png  +  out/run.log
 ```
-Hero frame copied to `/srv/shared/dirge-port/26_capstone_engine_gpu.png`,
-log to `/srv/shared/dirge-port/26_capstone_run.log`.
+Hero frame copied to `$DIRGE_SHARE_DIR/26_capstone_engine_gpu.png`,
+log to `$DIRGE_SHARE_DIR/26_capstone_run.log`.

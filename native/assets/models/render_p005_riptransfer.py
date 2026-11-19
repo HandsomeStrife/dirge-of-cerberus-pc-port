@@ -11,10 +11,11 @@ rip corner's UV + material-class, and sample the dump atlas for that class
 Run: python3 -I render_p005_riptransfer.py <dump.bin> <outdir> [--flipv]
 """
 import sys, os
+_REPO = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", ".."))  # repo root
 import numpy as np
 import xml.etree.ElementTree as ET
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, "/srv/games/dirge-port/tools/gsdump/src")
+sys.path.insert(0, os.path.join(_REPO, "tools/gsdump/src"))
 import render_p005 as P
 from render_p005_dumpbound import load_dump_atlases, BODY, HAIR, CLOAK
 

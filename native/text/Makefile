@@ -2,6 +2,8 @@
 # Build: make        (needs zlib: libz-dev)
 CC      ?= cc
 CFLAGS  ?= -O2 -Wall -Wextra -std=c11
+# where the demo images are copied (ours: the shared drive; see docs/CONTRIBUTING.md)
+DIRGE_SHARE_DIR ?= out/share
 LDLIBS  := -lz
 
 BINS := doctext docfont docrender
@@ -39,13 +41,14 @@ demo-font: docfont
 demo-render: docrender demo-font
 	./docrender fonttex/kelfnt4.gray 512 256 16 \
 	  128,129,130,131,132,133,134,135,136,137,138,139 fonttex/real_font_line.png
-	python3 -I render_sample.py fonttex/real_font_line.png /srv/shared/dirge-port/text_sample.png
+	mkdir -p $(DIRGE_SHARE_DIR)
+	python3 -I render_sample.py fonttex/real_font_line.png $(DIRGE_SHARE_DIR)/text_sample.png
 
 # render REAL decrypted dialogue with CORRECT glyphs via the reversed SJIS->cell map
 demo-dialogue: demo-font
 	python3 -I render_dialogue.py
-	mkdir -p /srv/shared/dirge-port
-	cp out/13_dialogue_native.png /srv/shared/dirge-port/13_dialogue_native.png
+	mkdir -p $(DIRGE_SHARE_DIR)
+	cp out/13_dialogue_native.png $(DIRGE_SHARE_DIR)/13_dialogue_native.png
 
 clean:
 	rm -f $(BINS)

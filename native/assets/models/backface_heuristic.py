@@ -36,12 +36,13 @@ Outputs: prints a report; writes result.json (metrics) and assignments.json
 from the project tree.
 """
 import sys, os, json, glob
-sys.path.insert(0, '/srv/games/dirge-port/native/assets/models')
+_REPO = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", ".."))  # repo root
+sys.path.insert(0, os.path.join(_REPO, 'native/assets/models'))
 import numpy as np
 from export_bmd_textured import find_bmd_payload, decode_packets, packet_tris
 
-EXT = '/srv/games/dirge-port/extract/_KEL/noPath'
-PF  = '/srv/games/dirge-port/native/assets/models/out/z143_pktfc'
+EXT = os.path.join(_REPO, 'extract/_KEL/noPath')
+PF  = os.path.join(_REPO, 'native/assets/models/out/z143_pktfc')
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(HERE, 'out', 'z143_backface')
 os.makedirs(OUT, exist_ok=True)

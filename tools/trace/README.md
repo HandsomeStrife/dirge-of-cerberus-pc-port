@@ -169,14 +169,16 @@ Notes on the log:
 
 ## Unit file
 
+Replace `<repo>` with the absolute path of your checkout (systemd needs absolute paths).
+
 ```
 [Unit]
 Description=PCSX2 DoC trace oracle (dirge-port tools/trace)
 [Service]
 Type=simple
-Environment=XDG_CONFIG_HOME=/srv/games/dirge-port/tools/trace/out/env/cfg
-EnvironmentFile=/srv/games/dirge-port/tools/trace/out/env/trace.env
-ExecStart=/srv/games/dirge-port/tools/trace/pcsx2_service.sh
+Environment=XDG_CONFIG_HOME=<repo>/tools/trace/out/env/cfg
+EnvironmentFile=<repo>/tools/trace/out/env/trace.env
+ExecStart=<repo>/tools/trace/pcsx2_service.sh
 KillSignal=SIGKILL
 TimeoutStopSec=5
 Restart=no

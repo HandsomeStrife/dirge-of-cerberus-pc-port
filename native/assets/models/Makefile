@@ -22,7 +22,8 @@ clean:
 .PHONY: all clean env-test
 
 # Vertex-exact parity: native doc_env decoder vs the Python oracle. Zone-agnostic.
-EXTD ?= /srv/games/dirge-port/extract/_KEL/noPath
+DIRGE_EXTRACT ?= ../../../extract
+EXTD ?= $(DIRGE_EXTRACT)/_KEL/noPath
 env-test: env_decode
 	@ok=1; for z in 068f0112 068f0212 06960212 06800212; do \
 	  f=$(EXTD)/$$z.bin; [ -f $$f ] || continue; \

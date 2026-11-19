@@ -14,6 +14,7 @@
 //   AIM_TRACES=<repo>/tools/trace/out/aim node --import ./test_hooks.mjs test_aim.mjs
 // The camera's weapon views (eye, look-at, switch lerp, kick) are checked by test_aim_camera.mjs.
 import { readFileSync, existsSync } from 'node:fs';
+import { missingIsFail } from './test_data.mjs';
 import { fileURLToPath } from 'node:url';
 const { WeaponSystem, fracStep } = await import('./aim_core.js');
 const { PlayerController, SpeedAnimator, GAME, STEP } = await import('./player.js');
@@ -67,7 +68,7 @@ const stubCol = { navMove() {}, nearestPoly() { return null; }, findPoly() { ret
 
 let fails = 0;
 for (const file of files) {
-  if (!existsSync(file)) { console.log('missing', file); fails++; continue; }
+  if (!existsSync(file)) { console.log('missing', file); fails += missingIsFail(file); continue; }
   const R = readFileSync(file, 'utf8').trim().split('\n').slice(1).map(l => rec(JSON.parse(l)));
   const sim = new WeaponSystem(W, RET);
   sim.P.acc = R[0].acc; sim.P.st = R[0].st; sim.P.T = R[0].T;

@@ -23,7 +23,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#define CONTAINER "/srv/games/dirge-port/extract/_KEL/noPath/0c064400.bin"
+#define CONTAINER "../../extract/_KEL/noPath/0c064400.bin"   /* repo-relative: run from port/oracle */
 #define MOD_PAYLOAD_OFF 0x60u     /* "km01vnw"/"mod" entry @0x50, data @entry+0x10 */
 
 #define FUN_MOD_PARSE   0x005aecf8u

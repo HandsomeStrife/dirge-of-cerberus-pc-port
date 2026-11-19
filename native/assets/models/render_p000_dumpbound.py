@@ -12,18 +12,19 @@ colour-variant issues).
 Run: python3 -I render_p000_dumpbound.py <dump.bin> <outdir>
 """
 import sys, os, glob, subprocess, tempfile, collections
+_REPO = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", ".."))  # repo root
 import numpy as np
 from PIL import Image
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, "/srv/games/dirge-port/tools/gsdump/src")
+sys.path.insert(0, os.path.join(_REPO, "tools/gsdump/src"))
 import render_p005 as P
 from char_dumpbind import dump_draws, tri_sig
 from gsrender2 import build as gbuild, TexCache, tex0_fields
 from gsparse import read_header
 
-CONT = "/srv/games/dirge-port/extract/_KEL/noPath/07700001.bin"   # p000 geometry
-TEXC = "/srv/games/dirge-port/extract/_KEL/noPath/07700002.bin"   # p000 textures
-DTEX = "/srv/games/dirge-port/native/assets/textures/dtex"
+CONT = os.path.join(_REPO, "extract/_KEL/noPath/07700001.bin")   # p000 geometry
+TEXC = os.path.join(_REPO, "extract/_KEL/noPath/07700002.bin")   # p000 textures
+DTEX = os.path.join(_REPO, "native/assets/textures/dtex")
 
 def load_p000_atlases():
     td = tempfile.mkdtemp()

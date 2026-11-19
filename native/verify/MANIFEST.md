@@ -1,7 +1,7 @@
 # Dirge of Cerberus — Native Port: Settled-Subsystem Manifest
 
 Index of the key deliverables per settled standalone subsystem (libraries, tools,
-format docs). Paths are relative to `/srv/games/dirge-port/`. Excludes the
+format docs). Paths are relative to the repository root. Excludes the
 in-progress subsystems (`native/engine`, `native/assets/models`, `native/gpu`,
 `native/text`, dashboard).
 

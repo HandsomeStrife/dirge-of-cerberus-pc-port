@@ -141,7 +141,7 @@ static int cap_pending(void *c){ return ((RoomApp*)c)->pending!=NULL; }
 
 int main(int argc, char **argv){
     const char *mdir="../assets/models/out/z143_loader_heur";
-    const char *xdir="/srv/games/dirge-port/extract/_KEL/noPath";
+    const char *xdir="../../extract/_KEL/noPath";
     RoomApp a; memset(&a,0,sizeof a); a.outdir="out"; a.dist=1.3f;
     int frames=3;
     for(int i=1;i<argc;i++){

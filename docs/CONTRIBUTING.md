@@ -162,8 +162,8 @@ repository; see "Gaps".
 
 These are how we check the port against the real game. Read `tools/trace/README.md` (how the tracer
 works, the script format, the systemd unit file) and `notes/pcsx2-headless-setup.md` (the headless
-setup) before you start. Both use our server's paths (install folders, save-state and dump
-locations). Substitute your own.
+setup) before you start. The notes use our server's paths (install folders, save-state and dump
+locations). Substitute your own; the tools themselves use the defaults in 1.8.
 
 What you need:
 
@@ -172,14 +172,15 @@ What you need:
 - **A PS2 BIOS dumped from your own console.** We don't supply one.
 - **A systemd user unit** `pcsx2trace`, which starts PCSX2. The Claude Code Bash tool kills a PCSX2
   that a command starts directly, so PCSX2 runs as a user unit. The unit file text is at the end of
-  `tools/trace/README.md`. It has our absolute paths in it: change them to your clone.
+  `tools/trace/README.md`. Replace its `<repo>` with your clone's absolute path (systemd needs one).
 - Its environment in `tools/trace/out/env/` (gitignored): `cfg/` (PCSX2.ini with
   `EnablePINE = true`, your BIOS folder, memory cards), `pcsx2/squashfs-root/` (the extracted
   AppImage) and `trace.env` (`PCSX2_DIR`, `ISO`, `STATEFILE`, `LOG`).
 - **Save states.** Every trace starts from a save state, not from boot. Ours is the start of the
   sea-of-flames stage (room z128) plus several mid-level "route states". They are not in the
-  repository: you make your own by playing to that point in PCSX2 and saving. `trace.py` has our
-  path as its default, so always pass `--state your.p2s`.
+  repository: you make your own by playing to that point in PCSX2 and saving. `trace.py` (and the
+  tools and tests that read the start state) default to `tools/trace/out/save-states/sea-of-flames.p2s`;
+  put yours there, set `DIRGE_SAVE_STATE`, or pass `--state your.p2s`.
 
 Commands (`--help` verified; the runs were not):
 
@@ -211,6 +212,27 @@ GS dumps (the exact primitive stream the game sends to the GS) are read by `tool
 
 See [NATIVE.md](NATIVE.md): gcc, cmake 3.21+, ninja, `native/scripts/fetch_deps.sh`, and for the other
 targets MinGW-w64 + wine64 + xvfb-run, and emsdk 3.1.74.
+
+### 1.8 Paths and environment variables
+
+Code, scripts and tests have no machine paths in them. Everything defaults to a place inside your
+clone (all gitignored); the variables below move it. Makefiles read them from the environment too.
+The old C tools (`port/`, `native/gpu/`, `native/capstone/`) use repo-relative defaults like
+`../../extract/...`, so run them from their own folder (their Makefile targets do).
+
+| Variable | Default | Read by |
+|---|---|---|
+| `DIRGE_REQUIRE_DATA` | unset: strict only if `tools/trace/out/.require-data` exists | the tests: `1` turns a missing trace, dump, save state or data file into a FAIL, `0` turns that off even with the marker (section 3) |
+| `DIRGE_SAVE_STATE` | `tools/trace/out/save-states/sea-of-flames.p2s` | `trace.py` (and `route.py`, `grab_gs.py` through it), `stage_keys.py`, `tools/audio/test_bgm.py`, `export_web_hud.py --state`, `test_enemy_ai`, `test_hud_setup`, `test_enemies_page` (the older `SAVE_STATE` / `HUD_STATE` still win in those tests) |
+| `DIRGE_ELF` | `elf/SLES_541.85` | `port/recomp/Makefile`, `port/oracle` (with `DIRGE_FILELIST`, `DIRGE_KELDAT` for `extract/FILELIST.BIN`, `extract/KEL.DAT`), `native/assets/effects/Makefile`, `native/verify/verify_all.sh` |
+| `DIRGE_EXTRACT` | `extract` | `native/assets/{audio,effects,models}/Makefile`, `native/verify/verify_all.sh` |
+| `DIRGE_EE_CSV` | `analysis/ee_boundaries.csv` | `port/recomp/Makefile`, `port/recomp/tools/recompile.py`, `port/oracle/tools/recompile_keldraw.py` |
+| `DIRGE_SHARE_DIR` | an `out/` folder next to the tool | where demo images and WAVs are copied: `native/text/Makefile`, `native/assets/audio/Makefile` (`sndcheck`), `native/dashboard/make_montage*.py`, `native/verify/verify_all.sh` |
+| `DIRGE_VINCENT_DAE` | unset | `native/assets/models/render_p005*.py`: a third-party Vincent `.dae` rip, for the old rip comparisons only |
+| `TRACE_OUT`, `CAM_TRACES`, ... | `tools/trace/out/...` | per-test trace folders (each test's header); tests always find traces under `tools/trace/out/` by default |
+
+The PCSX2 unit keeps its own names in `tools/trace/out/env/trace.env` (`PCSX2_DIR`, `ISO`, `STATEFILE`,
+`LOG`; the BIOS is set in PCSX2's own `cfg/`), see 1.5.
 
 ---
 
@@ -292,17 +314,38 @@ All commands run from the repository root.
 node --import ./native/web/test_hooks.mjs native/web/test_jump.mjs
 ```
 
-`test_hooks.mjs` stubs the `three` import so modules like `player.js` load in node. It is harmless for
-tests that don't need it, so always pass it. Most tests print `ok` / `FAIL` lines; check for `FAIL`,
+`test_hooks.mjs` stubs the `three` import so modules like `player.js` load in node, and loads
+`test_data.mjs` (below). Always pass it. Most tests print `ok` / `FAIL` lines; check for `FAIL`,
 `FAILED` or `Error:` in the output.
 
-Run them all (the single test above was verified; the full loop takes over ten minutes and was
-not run for this guide):
+**Missing data.** Our traces, GS dumps and save states are not in the repository, and `native/web/data/`
+comes from your disc. When a test looks for one of these and it isn't there, it prints
 
 ```
-for t in native/web/test_*.mjs; do case $t in *_page.mjs) continue;; esac
-  r=$(timeout 600 node --import ./native/web/test_hooks.mjs $t 2>&1)
-  n=$(echo "$r" | grep -cE '^FAIL|^ *[1-9][0-9]* FAILED|Error:'); [ "$n" != 0 ] && echo "$(basename $t): $n"; done
+SKIP test_aim: no trace tools/trace/out/aim/aim_c_walk.jsonl (see docs/CONTRIBUTING.md)
+```
+
+and still exits 0 (the checks that had their data ran as usual). `test_data.mjs` does this for every
+node test: it notices a lookup under `tools/trace/out/`, `tools/gsdump/dumps/`, the save-state folder,
+`native/web/data/`, `elf/` or `extract/` that finds nothing, and an uncaught "no such file" there. A
+SKIP checked nothing, so it is not a pass.
+
+**Strict mode** turns each of those SKIPs into a FAIL and exit 1: a renamed or deleted trace, or a typo
+in a trace path, must not pass as a skip on a machine that has the data. It is on when the gitignored
+marker file `tools/trace/out/.require-data` exists, or with `DIRGE_REQUIRE_DATA=1`; `DIRGE_REQUIRE_DATA=0`
+turns it off. Our machine has the marker, so every run there is strict, not only the full suite.
+Once you have recorded all the traces the tests read, create it too: `touch tools/trace/out/.require-data`.
+
+Two things fail in both modes: a missing path passed to `need()` that is not under a data folder (a
+bug in the test), and any test that printed a `FAIL` line (it exits 1 however it ends).
+
+Run them all (about ten minutes):
+
+```
+for t in native/web/test_*.mjs; do case $t in *_page.mjs|*/test_hooks.mjs|*/test_data.mjs) continue;; esac
+  r=$(timeout 600 node --import ./native/web/test_hooks.mjs $t 2>&1); rc=$?
+  n=$(echo "$r" | grep -cE '^FAIL|^ *[1-9][0-9]* FAILED|Error:'); s=$(echo "$r" | grep -c '^SKIP')
+  [ "$n$rc" != 00 ] && echo "$(basename $t): exit $rc, $n failing"; [ "$s" != 0 ] && echo "$(basename $t): $s SKIP"; done
 node --import ./native/web/test_hooks.mjs native/web/test_jump_page.mjs   # a node test despite its name
 ```
 
@@ -318,7 +361,9 @@ mkdir -p tools/trace/out
 flock tools/trace/out/.browser.lock timeout 900 node native/web/test_barrier_page.mjs
 ```
 
-(Not run for this guide; the form is the one in each page test's header comment.)
+(The form is the one in each page test's header comment.) Page tests don't load `test_hooks.mjs`, so
+most of them handle missing data their own way (usually a `SKIP` line or a failed check).
+`test_enemies_page` imports `test_data.mjs` and follows the rules above.
 
 The whole set takes well over an hour. Some are flaky under load (wall-clock checks); rerun a
 failure once on a quiet machine before you believe it. The current list of known flaky tests and
@@ -365,13 +410,14 @@ another wasm build, which is how C mutants are tested.
 |---|---|
 | nothing but the repo | the C unit tests (`ctest`) |
 | `native/web/data/` from your disc | almost all node and page tests (about 146 of 157 read it) |
-| PCSX2 traces in `tools/trace/out/` | about 87 tests. Some skip a missing trace, some count it as a failure. Ours are not shared: you have to record them. |
-| a save state | `test_hud_setup`, `test_enemy_ai`, `test_enemies_page` (set `HUD_STATE` / `SAVE_STATE`; the default path is ours) |
+| PCSX2 traces in `tools/trace/out/` | about 87 tests. A missing trace is a SKIP (FAIL under `DIRGE_REQUIRE_DATA=1`). Ours are not shared: you have to record them. |
+| a save state | `test_hud_setup`, `test_enemy_ai`, `test_enemies_page`, `tools/audio/test_bgm.py` (`DIRGE_SAVE_STATE`, 1.8) |
 | hand-made reference files in `data/` (1.2) | the HUD, pause and sky tests that read them |
 | the wasm build | `test_c_parity`, `test_play_c_page` (skip or fail without it) |
 
-So on a fresh clone with only the disc build, expect many trace-based tests to skip or fail. That
-is a missing input, not a broken port. Before you change a module, run its tests on the unchanged
+So on a fresh clone every node test exits 0: with nothing at all, 97 of the 98 print SKIP lines
+(only `test_audio` needs nothing); with the disc build but no traces, 67 do (2026-11-19). A SKIP is
+a missing input, not a broken port. Before you change a module, run its tests on the unchanged
 tree and keep that output: compare against it, not against "all green".
 
 ---
@@ -436,12 +482,12 @@ Rules that keep this working:
   in `tools/trace/scripts/` assume the save state each one was written for; which one is not always
   written down (search `notes/HANDOFF.md` for the script's name). Tests that compare against
   exact frames of our traces may not match traces you record from a slightly different state.
-- **Several tests and tools have our absolute paths written in** as defaults: `trace.py`'s save
-  state, three tests' save state, the `pcsx2trace` unit file, `port/recomp/Makefile`, and the
-  `csvpath` default in `port/recomp/tools/recompile.py` (also in
-  `port/oracle/tools/recompile_keldraw.py`). The notes (`notes/STATUS.md`,
-  `notes/pcsx2-headless-setup.md`, HANDOFF entries) use our server's paths too. Pass your
-  own paths with the documented options or environment variables.
+- **The notes use our server's paths** (`notes/STATUS.md`, `notes/pcsx2-headless-setup.md`, HANDOFF
+  entries). They are history and stay as written; substitute your own. The code, scripts and tests
+  have no machine paths left (1.8).
+- **Page tests and missing data.** Node tests SKIP a missing trace, dump or save state (FAIL in strict
+  mode: the `tools/trace/out/.require-data` marker or `DIRGE_REQUIRE_DATA=1`); most page tests do not
+  use that helper yet (section 3).
 - **Hand-made reference files in `native/web/data/`** (1.2) come from our captures, not from the disc
   build. The tests that read them fail without them.
 - **`analysis/ee_boundaries.csv`** (for the recompiler) was made by a script that is not in the

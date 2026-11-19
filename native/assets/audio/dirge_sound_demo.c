@@ -18,9 +18,9 @@
  * Usage:
  *   dirge_sound_demo [ASSET_DIR] [DECODER_DIR] [OUT_WAV]
  * Defaults:
- *   ASSET_DIR   = /srv/games/dirge-port/extract/_KEL/data/sound2
+ *   ASSET_DIR   = ../../../extract/_KEL/data/sound2  (repo-relative: run from native/assets/audio)
  *   DECODER_DIR = .  (where dirge_atdec / dirge_wd live)
- *   OUT_WAV     = /srv/shared/dirge-port/sound_mix_sample.wav
+ *   OUT_WAV     = out/sound_mix_sample.wav  (`make sndcheck` writes $(DIRGE_SHARE_DIR)/)
  */
 #include "dirge_sound.h"
 
@@ -99,9 +99,9 @@ static int write_wav_stereo(const char *path, const int16_t *pcm, size_t nframes
 }
 
 int main(int argc, char **argv) {
-    const char *asset = (argc>1)?argv[1]:"/srv/games/dirge-port/extract/_KEL/data/sound2";
+    const char *asset = (argc>1)?argv[1]:"../../../extract/_KEL/data/sound2";
     const char *decdir = (argc>2)?argv[2]:".";
-    const char *outwav = (argc>3)?argv[3]:"/srv/shared/dirge-port/sound_mix_sample.wav";
+    const char *outwav = (argc>3)?argv[3]:"out/sound_mix_sample.wav";
     const char *tmp = getenv("DS_TMP"); if (!tmp) tmp = "/tmp";
 
     char dbpath[512];

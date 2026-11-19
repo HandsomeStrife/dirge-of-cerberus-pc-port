@@ -7,11 +7,13 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { spawn, execSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { need } from './test_data.mjs';
 import net from 'node:net';
 import path from 'node:path';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const FIX = process.env.ROOM_CHUNKS || path.join(here, '../../tools/trace/out/w260/fit');
+need(FIX);
 const NAMES = process.argv.slice(2).length ? process.argv.slice(2) : ['r02_stairs3', 'r03_start', 'r04_east', 'r05_west', 'r06_market', 'r07_beat', 'r08_walk', 'r09_walk', 'r0b_walk'];
 const g = execSync('npm root -g', { encoding: 'utf8' }).trim();
 const { chromium } = createRequire(path.join(g, '/'))('playwright');

@@ -10,9 +10,10 @@ atlas from the rip and reconstructed its own atlases.
 Run: python3 -I render_p005_dumpbound.py <dump.bin> <binding.json> <outdir>
 """
 import sys, os, json
+_REPO = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", ".."))  # repo root
 import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, "/srv/games/dirge-port/tools/gsdump/src")
+sys.path.insert(0, os.path.join(_REPO, "tools/gsdump/src"))
 import render_p005 as P
 from gsparse import read_header
 from gsrender2 import build, TexCache, tex0_fields

@@ -147,7 +147,7 @@ static RVertex *place_character(const Mesh *src, float s, float yaw_deg,
 int main(int argc, char **argv) {
     const char *envpath  = "../assets/models/out/bmd_06960212.mesh";
     const char *charpath = "../assets/models/out/char_e000.mesh";
-    const char *tex_container = "/srv/games/dirge-port/extract/_KEL/noPath/07650002.bin";
+    const char *tex_container = "../../extract/_KEL/noPath/07650002.bin";
     const char *outdir = "out";
     /* hand-set placement defaults (see header + validation notes) */
     /* Stand the character on the middle floor slab (Y=0) near the OPEN +X/+Z

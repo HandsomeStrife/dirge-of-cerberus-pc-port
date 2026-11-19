@@ -6,6 +6,7 @@
 // matrix and CAM+0x1cc vs the recorded far point CAM+0xb0.
 // node --import ./test_hooks.mjs test_aim_camera.mjs [trace ...]
 import { readFileSync, existsSync } from 'node:fs';
+import { missingIsFail } from './test_data.mjs';
 import { fileURLToPath } from 'node:url';
 const { FollowCamera, cameraRays, padAxis } = await import('./player.js');
 const { WeaponSystem } = await import('./aim_core.js');
@@ -57,7 +58,7 @@ let fails = 0;
   order('aim.js hook.weapon', region(hookSrc, 'weapon(input', 'post(input'), ['core.stateMachine(', 'follow.pitch = core.cam.pitch', 'core.reticleFrame(', "core.events.find(e => e.type === 'shot')"]);
 }
 for (const file of files) {
-  if (!existsSync(file)) { console.log('missing', file); fails++; continue; }
+  if (!existsSync(file)) { console.log('missing', file); fails += missingIsFail(file); continue; }
   const R = readFileSync(file, 'utf8').trim().split('\n').slice(1).map(l => JSON.parse(l));
   const core = new WeaponSystem(W, RET);
   const r0 = R[0], c0 = r0.cam_170;

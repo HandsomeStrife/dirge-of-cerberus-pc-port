@@ -3,9 +3,10 @@
 # Matches the current dashboard montage aesthetic: dark bg, title + subtitle,
 # 3x2 grid of black-letterboxed tiles each with a caption bar.
 import os
+import sys
 from PIL import Image, ImageDraw, ImageFont
 
-SHARED = "/srv/shared/dirge-port"
+SHARED = os.environ.get("DIRGE_SHARE_DIR") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "out")   # ours: the shared drive (notes/HANDOFF.md)
 OUT = os.path.join(SHARED, "00_hero_montage.png")
 
 FONT  = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
@@ -84,8 +85,8 @@ for idx, (fn, title, sub, lead) in enumerate(tiles):
         ox = x + (TILE_W - im.size[0])//2
         oy = y + (IMG_H - im.size[1])//2
         canvas.paste(im, (ox, oy))
-    except Exception:
-        d.text((x+16, y+16), "missing: "+fn, font=font(16), fill=(200,90,90))
+    except OSError as e:   # a missing render is an error, not a placeholder tile
+        sys.exit("%s: cannot read %s (%s); DIRGE_SHARE_DIR=%s" % (os.path.basename(__file__), path, e, SHARED))
     # caption bar
     d.rectangle((x, y+IMG_H, x+TILE_W, y+TILE_H), fill=PANEL)
     d.text((x+14, y+IMG_H+8), title, font=font(16, True),

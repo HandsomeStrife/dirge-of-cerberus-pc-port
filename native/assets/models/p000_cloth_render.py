@@ -23,9 +23,9 @@ import p000_cloth as C
 import skd_skeleton as SK
 import anim_rot as AR
 
-ROOT = "/srv/games/dirge-port"
-GAME = ROOT + "/../../shared/dirge-port/save-states/sea-of-flames-gs-dumps/" \
-       "Dirge of Cerberus - Final Fantasy VII_SLES-54185_20261017163235.png"
+ROOT = os.path.abspath(os.path.join(HERE, "..", "..", ".."))   # repo root
+GAME = ROOT + "/tools/trace/out/save-states/sea-of-flames-gs-dumps/" \
+       "Dirge of Cerberus - Final Fantasy VII_SLES-54185_20261017163235.png"   # ours: a symlink to the shared drive
 GAME = os.path.normpath(GAME)
 ROOM = ROOT + "/native/assets/models/out/z128_room_v2/room.list"
 RENDERER = ROOT + "/native/gpu/render_scene_textured"

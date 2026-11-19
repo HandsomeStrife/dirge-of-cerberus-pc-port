@@ -29,7 +29,7 @@ import numpy as np  # noqa: E402
 import p2s  # noqa: E402
 
 KEL = os.path.join(ROOT, 'extract', '_KEL')
-STATE = '/srv/shared/dirge-port/save-states/sea-of-flames.p2s'
+STATE = os.environ.get('DIRGE_SAVE_STATE') or os.path.join(ROOT, 'tools', 'trace', 'out', 'save-states', 'sea-of-flames.p2s')
 ok = 0
 
 
@@ -39,6 +39,15 @@ def check(name, cond):
         print('FAIL', name); sys.exit(1)
     ok += 1; print('ok', name)
 
+
+# Missing data: SKIP, or FAIL in strict mode (the marker tools/trace/out/.require-data, or DIRGE_REQUIRE_DATA=1;
+# DIRGE_REQUIRE_DATA=0 turns it off), as native/web/test_data.mjs.
+_env = os.environ.get('DIRGE_REQUIRE_DATA')
+req = _env == '1' or (_env != '0' and os.path.exists(os.path.join(ROOT, 'tools', 'trace', 'out', '.require-data')))
+for need in (os.path.join(ROOT, 'elf', 'SLES_541.85'), STATE, KEL):
+    if not os.path.exists(need):
+        print('%s test_bgm: no %s (%s)' % ('FAIL' if req else 'SKIP', need, 'strict' if req else 'see docs/CONTRIBUTING.md'))
+        sys.exit(1 if req else 0)
 
 elf = open(os.path.join(ROOT, 'elf', 'SLES_541.85'), 'rb').read()
 k, d = bgm.scramble_keys(elf)

@@ -4,8 +4,8 @@ Parses PCSX2 `.gs.zst` dumps (the exact GIF primitive stream the real game sends
 to the Graphics Synthesizer) into triangles, textures, and the **texture↔geometry
 binding** — i.e. the runtime "oracle" the BMD room decoder was always missing.
 
-Built + validated 2026-10-15. Dumps live in `/srv/shared/dirge-port/gs-dumps/`
-(`doc_gsdump_01..04.gs.zst`). Capture how-to: `notes/pcsx2-headless-setup.md`.
+Built + validated 2026-10-15. Our dumps live on our shared drive (`gs-dumps/`,
+`doc_gsdump_01..04.gs.zst`; not in the repository). Capture how-to: `notes/pcsx2-headless-setup.md`.
 
 ## Pipeline (run with `python3 -I`, needs numpy+PIL; decompress first)
 ```

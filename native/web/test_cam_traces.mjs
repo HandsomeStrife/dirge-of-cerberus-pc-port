@@ -12,6 +12,7 @@
 //    float tie (pinned on a wall, |dNew - dOld| < TIE) are counted, not compared.
 // node --import ./test_hooks.mjs test_cam_traces.mjs [player.js path]
 import { readFileSync, existsSync } from 'node:fs';
+import { missingIsFail } from './test_data.mjs';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 const P = process.argv[2] ? pathToFileURL(process.argv[2]).href : new URL('./player.js', import.meta.url).href;
 const { FollowCamera, cameraRays, padAxis, CAM_TYPE_C, PlayerController, stickToWorld } = await import(P);
@@ -161,7 +162,7 @@ let fails = 0;
 }
 for (const [name, mode] of CASES) {
   const file = DIR + '/' + name + '.jsonl';
-  if (!existsSync(file)) { console.log('FAIL missing', file); fails++; continue; }
+  if (!existsSync(file)) { console.log('missing', file); fails += missingIsFail(file); continue; }
   const R = readFileSync(file, 'utf8').trim().split('\n').slice(1).map(l => JSON.parse(l));
   if (mode === 'page') { fails += runPage(name, R); continue; }
   // worker 0089 recorded idle / walk / turn / look before C+0xc0 was in the field set: fine while

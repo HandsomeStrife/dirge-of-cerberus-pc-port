@@ -1,8 +1,8 @@
 # CID map-collision format (Dirge of Cerberus, PS2) — reversed spec
 
-Reversed from the game's own EE code (`/srv/games/dirge-port/analysis/decomp/`,
+Reversed from the game's own EE code (`analysis/decomp/`,
 13,089 funcs) plus byte-level cross-checks against real samples in
-`/srv/games/dirge-port/extract/_KEL/noPath/`. Every field below cites the parser
+`extract/_KEL/noPath/`. Every field below cites the parser
 or collision-query function it comes from, or a byte pattern consistent across
 files. Nothing here is guessed.
 

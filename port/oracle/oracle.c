@@ -26,10 +26,11 @@
 extern sif_dev *g_sif;
 extern void vu1_vif1_sink(void *user, const uint8_t *qwords, size_t nqw);
 
-/* Defaults; overridable via env in oracle_create(). */
-#define DEF_ELF      "/srv/games/dirge-port/elf/SLES_541.85"
-#define DEF_FILELIST "/srv/games/dirge-port/extract/FILELIST.BIN"
-#define DEF_KELDAT   "/srv/games/dirge-port/extract/KEL.DAT"
+/* Defaults (repo-relative: run from port/oracle); overridable via env (DIRGE_ELF, DIRGE_FILELIST,
+ * DIRGE_KELDAT) in oracle_create(). */
+#define DEF_ELF      "../../elf/SLES_541.85"
+#define DEF_FILELIST "../../extract/FILELIST.BIN"
+#define DEF_KELDAT   "../../extract/KEL.DAT"
 
 /* Guest memory layout for the oracle arena + stack.  The ELF image + .bss of
  * SLES_541.85 ends well under 0x00800000 (code ~0x1xxxxx..0x45xxxx, globals

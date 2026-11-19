@@ -40,13 +40,14 @@ resolve to that slot, so the C test is self-checking against this baked ground t
   python3 -I emit_loader_manifest.py <chunk.bin> <pf.json> -o <manifest>
 """
 import sys, os, json, argparse, subprocess
+_REPO = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", ".."))  # repo root
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from export_bmd_textured import find_bmd_payload, decode_packets
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEF_DTEX = os.path.normpath(os.path.join(HERE, "..", "textures", "dtex"))
-DEF_TEXDIR = "/srv/games/dirge-port/extract/_KEL/noPath"
+DEF_TEXDIR = os.path.join(_REPO, "extract/_KEL/noPath")
 PSM_CT32 = 0  # the game's CLUTs are 32-bit RGBA (dtex_read_clut32) -> CPSM 0
 
 

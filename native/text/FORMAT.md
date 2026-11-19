@@ -8,7 +8,7 @@ Native, dependency-light C for the dialogue/UI text subsystem. Three tools:
 | `docfont`   | decode the **kelfnt** font atlases (RFD → TIM → PSMT4) to bitmaps |
 | `docrender` | composite **real kelfnt glyphs** into an in-game-style text box   |
 
-`render_sample.py` assembles the hero image (`/srv/shared/dirge-port/text_sample.png`).
+`render_sample.py` assembles the hero image (`$DIRGE_SHARE_DIR/text_sample.png`).
 Build: `make` (needs zlib). Demo: `make demo-text demo-font demo-render`.
 
 ---
@@ -121,5 +121,5 @@ it decodes kelfnt0 (linear), maps each ASCII code to its half-width cell via the
 table in `GLYPHMAP.md`, and composites the strings `Deactivate the barricade!` and
 `Find Reeve!` (plus the speaker tag and a confirmed-katakana strip) onto an in-game
 dialogue panel — readable in-game text in the genuine game font, rendered natively.
-Result: `out/13_dialogue_native.png` (copied to `/srv/shared/dirge-port/`). The older
+Result: `out/13_dialogue_native.png` (copied to the shared drive (`$DIRGE_SHARE_DIR`)). The older
 `render_sample.py` fallback-face image (`text_sample.png`) is superseded for Latin text.

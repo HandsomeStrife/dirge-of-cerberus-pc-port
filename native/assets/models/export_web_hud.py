@@ -59,7 +59,7 @@ import export_web_pause as P  # noqa: E402  (kelstr decode)
 
 ROOT = A.ROOT
 LOCALE = os.path.join(ROOT, 'extract/_KEL/data/etc/locale/uk')
-STATE = '/srv/shared/dirge-port/save-states/sea-of-flames.p2s'
+STATE = os.environ.get('DIRGE_SAVE_STATE') or os.path.join(ROOT, 'tools/trace/out/save-states/sea-of-flames.p2s')
 OUT = os.path.join(ROOT, 'native/web/data/hud')
 
 HUD_PTR = 0x471380                      # DAT_00471380 = the HUD object (FUN_003ad618)

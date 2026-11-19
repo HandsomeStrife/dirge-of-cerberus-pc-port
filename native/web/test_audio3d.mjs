@@ -11,6 +11,7 @@
 import assert from 'assert';
 import path from 'path';
 import { readFileSync, existsSync } from 'node:fs';
+import { missingIsFail } from './test_data.mjs';
 import { fileURLToPath, pathToFileURL } from 'url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -23,7 +24,7 @@ const name = u => Buffer.concat(u.map(x => { const b = Buffer.alloc(4); b.writeU
 
 let checked = 0, fails = 0;
 for (const file of files) {
-  if (!existsSync(file)) { console.log('missing', file); fails++; continue; }
+  if (!existsSync(file)) { console.log('missing', file); fails += missingIsFail(file); continue; }
   const L = readFileSync(file, 'utf8').trim().split('\n').slice(1).map(l => JSON.parse(l.replace(/\bNaN\b/g, 'null')));   // the logs write NaN for non-float words
   const lis = new Map(), plays = new Map(), sent = new Map();
   for (const e of L) {
@@ -85,14 +86,14 @@ t('volume from the camera when +0x3890 is clear', () =>
   const AM = await import(pathToFileURL(process.env.AMBIENT_JS || path.join(here, 'ambient.js')).href);
   const dataP = path.join(here, 'data/audio/ambient_z128.json'), seP = path.join(here, 'data/audio/se_z128.json');
   const ambTraces = (process.env.AMBIENT_TRACES || 'w215_ambfoot,w215_routeA,w215_routeB').split(',');
-  if (!existsSync(dataP) || !existsSync(seP)) { console.log('missing', dataP, 'or se_z128.json'); fails++; }
+  if (!existsSync(dataP) || !existsSync(seP)) { console.log('missing', dataP, 'or se_z128.json'); fails += missingIsFail(existsSync(dataP) ? seP : dataP); }
   else {
     const D = JSON.parse(readFileSync(dataP, 'utf8')), SE = JSON.parse(readFileSync(seP, 'utf8'));
     const objs = D.objects.map((o) => ({ o, sp: AM.soundSpace(o), id: (SE.names[o.name] || {}).id }));
     const Lof = (li) => ({ pos: li['a0+0x3810'].f, fwd: li['a0+0x3820'].f, alt: li['a0+0x3850'].f, useAlt: parseInt(li['a0+0x3890'].u[0], 16) !== 0 });
     for (const tn of ambTraces) {
       const rf = path.join(out, tn + '.jsonl'), cf = path.join(out, tn + '.calls.jsonl');
-      if (!existsSync(rf) || !existsSync(cf)) { console.log('missing', rf); fails++; continue; }
+      if (!existsSync(rf) || !existsSync(cf)) { console.log('missing', rf); fails += missingIsFail(existsSync(rf) ? cf : rf); continue; }
       const R = readFileSync(rf, 'utf8').trim().split('\n').slice(1).map((l) => JSON.parse(l));
       const Craw = readFileSync(cf, 'utf8').trim().split('\n').map((l) => JSON.parse(l.replace(/\bNaN\b/g, 'null')));
       const meta = Craw[0].meta, C = Craw.slice(1);

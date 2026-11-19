@@ -5,12 +5,13 @@ Also sanity-check decode_packets order == pf_*.json order (same length).
 Reads only; prints bounding boxes + centroids per chunk.
 """
 import sys, os, json, glob
-sys.path.insert(0, '/srv/games/dirge-port/native/assets/models')
+_REPO = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", ".."))  # repo root
+sys.path.insert(0, os.path.join(_REPO, 'native/assets/models'))
 import numpy as np
 from export_bmd_textured import find_bmd_payload, decode_packets
 
-EXT = '/srv/games/dirge-port/extract/_KEL/noPath'
-PF  = '/srv/games/dirge-port/native/assets/models/out/z143_pktfc'
+EXT = os.path.join(_REPO, 'extract/_KEL/noPath')
+PF  = os.path.join(_REPO, 'native/assets/models/out/z143_pktfc')
 
 def chunk_ids():
     return [os.path.basename(p)[3:11] for p in sorted(glob.glob(PF + '/pf_*.json'))]

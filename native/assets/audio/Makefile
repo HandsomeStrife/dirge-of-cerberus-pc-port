@@ -37,7 +37,9 @@ $(SNDDEMO): dirge_sound_demo.c $(SNDLIB) dirge_sound.h
 	$(CC) $(SNDCFLAGS) -o $@ dirge_sound_demo.c $(SNDLIB) -lm
 
 # quick self-check against the extracted assets
-EXT ?= /srv/games/dirge-port/extract/_KEL
+DIRGE_EXTRACT ?= ../../../extract
+DIRGE_SHARE_DIR ?= out
+EXT ?= $(DIRGE_EXTRACT)/_KEL
 check: $(BIN)
 	./$(BIN) $(EXT)/data/sound2/resat3/on_v132.at2 /tmp/_voice.wav
 	./$(BIN) $(EXT)/data/etc/title.at3            /tmp/_title.wav
@@ -51,7 +53,8 @@ wdcheck: $(WDBIN)
 
 # mixer validation: resolve a few db.bin ids + mix a real decoded scene to WAV
 sndcheck: $(SNDDEMO) $(BIN) $(WDBIN)
-	./$(SNDDEMO) $(EXT)/data/sound2 . /srv/shared/dirge-port/sound_mix_sample.wav
+	mkdir -p $(DIRGE_SHARE_DIR)
+	./$(SNDDEMO) $(EXT)/data/sound2 . $(DIRGE_SHARE_DIR)/sound_mix_sample.wav
 
 clean:
 	rm -f $(BIN) $(WDBIN) $(SNDLIB) $(SNDDEMO)

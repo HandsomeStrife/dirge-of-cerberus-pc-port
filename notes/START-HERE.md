@@ -4,6 +4,12 @@ A short map of the project. Rules: [CLAUDE.md](../CLAUDE.md). Setup, testing and
 [docs/CONTRIBUTING.md](../docs/CONTRIBUTING.md). The long, dated log is [HANDOFF.md](HANDOFF.md)
 (see the last section for how to search it).
 
+**Our tests are strict.** The gitignored marker `tools/trace/out/.require-data` exists on our machine,
+so a test whose trace, GS dump, save state or `native/web/data/` file is missing FAILs (exit 1), in
+every run, with no variable to set. Without the marker (an outside contributor's fresh clone) the
+same miss prints `SKIP` and exits 0. `DIRGE_REQUIRE_DATA=0` / `=1` overrides the marker. Our save state
+is found through the gitignored symlink `tools/trace/out/save-states` (docs/CONTRIBUTING.md 1.8, section 3).
+
 ## What this is
 
 A faithful port of *Dirge of Cerberus: Final Fantasy VII*, PAL disc SLES-54185 (ELF `SLES_541.85`).

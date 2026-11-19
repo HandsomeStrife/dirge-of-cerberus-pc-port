@@ -452,7 +452,7 @@ static const char *state_name(int32_t s) {
 int main(int argc, char **argv) {
     const char *listpath = "../assets/models/out/bmd_06960212_tex.list";
     const char *charpath = "../assets/models/out/char_e000.mesh";
-    const char *chartex  = "/srv/games/dirge-port/extract/_KEL/noPath/07650002.bin";
+    const char *chartex  = "../../extract/_KEL/noPath/07650002.bin";
     const char *outdir   = "out";
     int nframes = 9;
     /* hero placement (TUNED values from render_scene_textured.c) */

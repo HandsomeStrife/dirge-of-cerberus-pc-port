@@ -13,6 +13,7 @@
 // flag 0x400000, CAM+0x230).
 //   node --import ./native/web/test_hooks.mjs native/web/test_death_camera.mjs
 import { readFileSync, existsSync } from 'node:fs';
+import { missingIsFail } from './test_data.mjs';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 import path from 'node:path';
 
@@ -153,7 +154,7 @@ const RATE = 0.3 * 0.05 * 1.2;                    // look y 0.3 x type 0xc +0x34
 const IDLE = () => ({ x: 0, z: 0, stick: 0, keys: new Set(), pressed: new Set() });
 function closedLoop(name, { mouse = false } = {}) {
   const file = path.join(DIR, name + '.jsonl');
-  if (!existsSync(file)) { ok(false, 'missing ' + file); return null; }
+  if (!existsSync(file)) { if (missingIsFail(file)) ok(false, 'missing ' + file); else console.log('missing', file); return null; }
   const recs = new Map();
   for (const l of readFileSync(file, 'utf8').split('\n')) { if (!l) continue; const r = JSON.parse(l); if (r.frame !== undefined) recs.set(r.frame, r); }
   // the player: test_death's closed loop (the f788 bullet kills; its direction from the f799-802 slide)

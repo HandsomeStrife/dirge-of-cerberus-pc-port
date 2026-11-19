@@ -21,7 +21,8 @@ import fields  # noqa: E402
 import hook  # noqa: E402
 from p2s import read_p2s, write_p2s  # noqa: E402
 
-DEFAULT_STATE = "/srv/shared/dirge-port/save-states/sea-of-flames.p2s"
+# DIRGE_SAVE_STATE, or tools/trace/out/save-states/ (gitignored; ours is a symlink to the shared drive)
+DEFAULT_STATE = os.environ.get("DIRGE_SAVE_STATE") or os.path.join(HERE, "out", "save-states", "sea-of-flames.p2s")
 DEFAULT_OUT = os.path.join(HERE, "out")       # gitignored (default-deny .gitignore)
 UNIT = "pcsx2trace"
 TRACE_DIR = os.path.join(HERE, "out", "env")  # the unit's durable dir (cfg/, pcsx2/, trace.env); gitignored

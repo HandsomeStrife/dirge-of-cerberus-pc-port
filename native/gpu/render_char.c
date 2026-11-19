@@ -119,7 +119,7 @@ static int render_png(const CharMesh *m, const rgl_params *p, const char *path) 
 
 int main(int argc, char **argv) {
     const char *meshpath = "../assets/models/out/char_e000.mesh";
-    const char *tex_container = "/srv/games/dirge-port/extract/_KEL/noPath/07650002.bin";
+    const char *tex_container = "../../extract/_KEL/noPath/07650002.bin";
     const char *outdir = "out";
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "-m") && i + 1 < argc) meshpath = argv[++i];

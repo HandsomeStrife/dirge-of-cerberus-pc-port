@@ -1385,3 +1385,27 @@ exercised in a browser.
   Audit row 'FUN_00340c00(C, 0)' updated. **test_kidnap_page's noplace mutant string is stale** (`placeBody(a)` -> now `placeBody(a, 0)`):
   in the repo it throws 'mutant does not apply'; from a scratch copy with the string fixed it is red as before (the child 1107 u off at
   +401). Tests: node suite (PAL) 97/97; test_kidnap_page, test_dog_page, test_heli_page, test_rescue_page all ok. Not committed.
+- Worker 0301, portable paths + data-dependent tests (2026-11-19, fixes after worker 0302's review included; docs/CONTRIBUTING.md
+  1.8, section 3, Gaps). No game behaviour changed. **Paths:** no `/srv/`, `/home/` or `/tmp/claude` paths left in tracked files
+  outside notes/. Env vars (table in CONTRIBUTING 1.8): `DIRGE_SAVE_STATE` (default `tools/trace/out/save-states/sea-of-flames.p2s`;
+  trace.py, stage_keys.py, test_bgm.py, export_web_hud.py, test_enemy_ai / test_hud_setup / test_enemies_page, where SAVE_STATE /
+  HUD_STATE still win), `DIRGE_ELF`, `DIRGE_EXTRACT`, `DIRGE_EE_CSV` (Makefiles, recompile.py / recompile_keldraw.py csvpath,
+  verify_all.sh), `DIRGE_SHARE_DIR` (demo copies; default an `out/` folder; verify_all.sh passes its absolute SHARED to `make
+  sndcheck`; make_montage*.py exit 1 on a missing input instead of drawing a 'missing:' tile), `DIRGE_VINCENT_DAE` (render_p005's
+  old rip, was a scratchpad path). The C tools take repo-relative `../../...` defaults (run from their folder, as their Makefile
+  targets do). The pcsx2trace unit text in tools/trace/README.md uses `<repo>`.
+  **Our setup:** `tools/trace/out/save-states` is a gitignored symlink to /srv/shared/dirge-port/save-states (every save-state default
+  resolves to ours); `tools/trace/out/.require-data` (gitignored marker) makes every test run here strict; ~/.config/dirge-port.env
+  now also exports `DIRGE_REQUIRE_DATA=1` and `DIRGE_SHARE_DIR=/srv/shared/dirge-port`. **That file is not sourced by any shell
+  start-up file** (only by hand, per notes/STATUS.md): the Makefiles and montage scripts copy to a local out/ unless it is sourced.
+  The marker, not the env file, is what keeps tests strict.
+  **Tests:** native/web/test_data.mjs (loaded by test_hooks.mjs) wraps the fs lookups: a miss under tools/trace/out,
+  tools/gsdump/dumps, the save-state folder, native/web/data, elf/ or extract/ prints `SKIP <test>: no <kind> <path>` at exit,
+  an uncaught ENOENT there ends the test as SKIP; **strict (marker, or DIRGE_REQUIRE_DATA=1; =0 turns it off): each is a FAIL and
+  exit 1.** In both modes: a test that printed a FAIL line (console.log / console.error, the suite's pattern) exits 1 on every
+  exit path, and `need()` of a missing path outside the data folders is FAIL + exit 1 (a test bug). `optionalExists` for files we
+  don't have either (test_room_grade's uvanim_hero / _npc), `missingIsFail` where a test counted a missing trace as a failure
+  (test_aim, test_aim_camera, test_audio3d, test_cam_traces, test_death_camera, test_enemies_page), `dataMissing` for 'none replayed'
+  (test_jump, test_ntsc_traces, whose child runs set DIRGE_REQUIRE_DATA=0: it checks its own w295 inputs), `need` (test_room_chunks'
+  fixture folder). test_bgm.py follows the same marker / variable. Page tests don't load the helper (only test_enemies_page
+  imports it; its block-local `SAVE_STATE` table shadowed the import, caught by its first run: now imported as SAVE_P2S).

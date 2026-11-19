@@ -42,9 +42,10 @@
 #define DAT_STATE_PREV  0x004b8b30u
 #define DAT_MODEFLAGS   0x004b8980u   /* mode-flag bitmask                 */
 
-#define PATH_ELF        "/srv/games/dirge-port/elf/SLES_541.85"
-#define PATH_FILELIST   "/srv/games/dirge-port/extract/FILELIST.BIN"
-#define PATH_KELDAT     "/srv/games/dirge-port/extract/KEL.DAT"
+/* repo-relative: run from port/boot (`make run`) */
+#define PATH_ELF        "../../elf/SLES_541.85"
+#define PATH_FILELIST   "../../extract/FILELIST.BIN"
+#define PATH_KELDAT     "../../extract/KEL.DAT"
 
 extern sif_dev *g_sif;                 /* set for boot/sif_glue.c           */
 extern unsigned long g_vif1_qwords_seen;

@@ -4,7 +4,7 @@
 **Scope:** the SETTLED, standalone native subsystems only. Excluded (active agents):
 `native/engine`, `native/assets/models`, `native/gpu`, `native/text`, and the shared dashboard — none were built, run, or touched.
 **Method:** forced clean rebuild (`make clean` + build) via each subsystem's own Makefile to surface `-Wall -Wextra` warnings (not just "up to date"), then the subsystem's test/validate/smoke target. No subsystem source was edited. Run via `./verify_all.sh`; full output in `logs/`.
-**Toolchain:** cc (gcc) 11.4.0, Python 3.10.12, pkg-config; libavcodec/libavutil/libswresample present; zlib present; extract tree `/srv/games/dirge-port/extract/_KEL` present.
+**Toolchain:** cc (gcc) 11.4.0, Python 3.10.12, pkg-config; libavcodec/libavutil/libswresample present; zlib present; extract tree `extract/_KEL` present.
 
 ## Aggregate health
 
@@ -31,7 +31,7 @@ No cross-agent breakage, missing dependency, or regression was found in any sett
 
 ### audio — dirge_atdec / dirge_wd / dirge_sound (`assets/audio/`)
 - **Build:** `make all` clean — `dirge_atdec` (links libavcodec atrac3/atrac3plus), self-contained `dirge_wd`, `dirge_sound.o` + `dirge_sound_demo`. 0 warnings.
-- **Test:** `make sndcheck` — the mixer demo resolves db.bin sound ids, **shells out read-only to `dirge_atdec`/`dirge_wd`** to decode real voice + SFX samples, mixes a 5.0s stereo scene and wrote `sound_mix_sample.wav` (220500 frames, stereo 16-bit @ 44100 Hz) to `/srv/shared/dirge-port/`. Sibling shell-out handled cleanly.
+- **Test:** `make sndcheck` — the mixer demo resolves db.bin sound ids, **shells out read-only to `dirge_atdec`/`dirge_wd`** to decode real voice + SFX samples, mixes a 5.0s stereo scene and wrote `sound_mix_sample.wav` (220500 frames, stereo 16-bit @ 44100 Hz) to the shared drive (`$DIRGE_SHARE_DIR`). Sibling shell-out handled cleanly.
 - **Health:** HEALTHY. libav path links and decodes; self-contained paths and the mixer all work.
 
 ### collision — cid + OBJ export (`assets/collision/`)
@@ -56,7 +56,7 @@ No cross-agent breakage, missing dependency, or regression was found in any sett
 - **Health:** HEALTHY.
 
 ### kel loader — kel.c / kel_tool
-- **Location note:** the kel.c loader is at **`/srv/games/dirge-port/port/`** (`port/src/kel.c`, `port/Makefile` → `kel_tool`), **not** at `native/src/` — `native/src/` does not exist. Verified the real one.
+- **Location note:** the kel.c loader is at **`port/`** (`port/src/kel.c`, `port/Makefile` → `kel_tool`), **not** at `native/src/` — `native/src/` does not exist. Verified the real one.
 - **Build:** `make all` clean — `kel_tool` from `src/kel_tool.c` + `src/kel.c`, `-O2 -Wall -Wextra -std=c11 -lz`. 0 warnings.
 - **Test:** no Makefile test target. Binary smoke: `./kel_tool` with no args prints usage, exit 0.
 - **Health:** HEALTHY.

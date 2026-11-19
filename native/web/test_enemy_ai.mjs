@@ -26,6 +26,7 @@
 // in k_enemy_engage7 the body flag C+0x564 (not in that trace's fields), which decides #67's f799
 // 'round used, no shot' branch; #66's facing there while Vincent walks past within ~5 u.
 import { readFileSync, existsSync } from 'node:fs';
+import { SAVE_STATE } from './test_data.mjs';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { loadPoses, boneWorldAt } from './trace_pose.mjs';
@@ -53,7 +54,7 @@ const pos = r => r.matrix[3].slice(0, 3);
 // old top bit is lost, so one of the two choices must give the RAM word back. Checks twist() and
 // the read-then-twist order; the tempering and the seed are not checked. Skipped without the save.
 {
-  const save = process.env.SAVE_STATE ?? '/srv/shared/dirge-port/save-states/sea-of-flames.p2s';
+  const save = process.env.SAVE_STATE ?? SAVE_STATE;
   if (!existsSync(save)) console.log(`skip GameRandom check: ${save} missing`);
   else {
     const { execFileSync } = await import('node:child_process');

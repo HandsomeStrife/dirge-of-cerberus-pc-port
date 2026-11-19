@@ -10,18 +10,19 @@ procedural cloth (not in p000's mesh) and is intentionally absent.
 Run: python3 -I export_p000_gpu.py <dump.bin> <outdir>
 """
 import sys, os, glob, subprocess, tempfile, struct, array, collections
+_REPO = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", ".."))  # repo root
 import numpy as np
 from PIL import Image
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, "/srv/games/dirge-port/tools/gsdump/src")
+sys.path.insert(0, os.path.join(_REPO, "tools/gsdump/src"))
 import render_p005 as P
 from char_dumpbind import dump_draws, tri_sig
 from gsrender2 import build as gbuild, TexCache, tex0_fields
 from gsparse import read_header
 
-CONT = "/srv/games/dirge-port/extract/_KEL/noPath/07700001.bin"
-TEXC = "/srv/games/dirge-port/extract/_KEL/noPath/07700002.bin"
-DTEX = "/srv/games/dirge-port/native/assets/textures/dtex"
+CONT = os.path.join(_REPO, "extract/_KEL/noPath/07700001.bin")
+TEXC = os.path.join(_REPO, "extract/_KEL/noPath/07700002.bin")
+DTEX = os.path.join(_REPO, "native/assets/textures/dtex")
 
 def load_atlases():
     td = tempfile.mkdtemp(); subprocess.run([DTEX, TEXC, "-o", td], capture_output=True, timeout=60)

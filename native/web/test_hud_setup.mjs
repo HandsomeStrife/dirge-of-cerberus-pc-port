@@ -4,13 +4,14 @@
 // Run: node native/web/test_hud_setup.mjs   (needs the ELF, extract/_KEL locale uk, the save; SKIP without)
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { SAVE_STATE } from './test_data.mjs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '../..');
-const SAVE = process.env.HUD_STATE || '/srv/shared/dirge-port/save-states/sea-of-flames.p2s';
+const SAVE = process.env.HUD_STATE || SAVE_STATE;
 const ELF = path.join(root, 'elf/SLES_541.85');
 const LOC = path.join(root, 'extract/_KEL/data/etc/locale/uk');
 const EXP = path.join(root, 'native/assets/models/export_web_hud.py');

@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from p2s import read_p2s  # noqa: E402
 
 ap = argparse.ArgumentParser()
-ap.add_argument('state', nargs='?', default='/srv/shared/dirge-port/save-states/sea-of-flames.p2s')
+ap.add_argument('state', nargs='?', default=os.environ.get('DIRGE_SAVE_STATE') or os.path.join(os.path.dirname(os.path.abspath(__file__)), 'out', 'save-states', 'sea-of-flames.p2s'))
 ap.add_argument('-o', '--out', default=os.path.join(os.path.dirname(os.path.abspath(__file__)), 'out', 'w219_keys.json'))
 a = ap.parse_args()
 ee = read_p2s(a.state)['eeMemory.bin']

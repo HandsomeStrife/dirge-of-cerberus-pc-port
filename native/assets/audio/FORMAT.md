@@ -10,7 +10,7 @@
 Recovered spec for the game's headerless ATRAC3-family voice/SE/BGM streams, the
 sound database (`db.bin`), and the wave-dictionary banks (`*.wd`). Decoder:
 `dirge_atdec.c` (links libavcodec's atrac3 / atrac3plus). Validation WAVs in
-`/srv/shared/dirge-port/`.
+the shared drive (`$DIRGE_SHARE_DIR`).
 
 ## 1. The two stream codecs (DECISIVE EVIDENCE)
 
@@ -140,7 +140,7 @@ Decoded with the canonical Sony filter table (×64 fixed point):
   (flag 3) markers; most SE are one-shots. `dirge_wd` reports loop block indices in its
   listing; WAV output has no loop metadata.
 
-## 4. Validation (see `/srv/shared/dirge-port/`)
+## 4. Validation (see the shared drive (`$DIRGE_SHARE_DIR`))
 - `voice_sample.wav`  on_v132.at2  — ATRAC3, 96-byte frames, 315 frames, 0 errors, 2.23s.
   Per-0.2s RMS `3910 6224 1932 6901 6927 9219 4121 224 55 12 3 0` = clear speech envelope
   (syllables then decay to silence).

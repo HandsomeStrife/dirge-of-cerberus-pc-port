@@ -6,7 +6,8 @@ Restart (OK) after the rescue's battle(), cross every 60 frames only while the g
 save states at: the record filled (after scene_save), just before the Restart, the reload's first 0x15 frame and
 +150 / +400 / +800 frames after it. Output: OUT/w242_<tag>.p2s and OUT/w242_log.json (polled values)."""
 import glob, json, os, shutil, struct, sys, time
-sys.path.insert(0, '/srv/games/dirge-port/tools/trace')
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
 import fields, hook
 import trace as T
 from p2s import read_p2s, write_p2s
@@ -25,7 +26,7 @@ print('HP in state', u32(ee, PS + 0x20))
 pokes = [(0xa06338, 0x91379f02), (PS + 0x20, 500)]
 for ad, w in pokes:
     print('poke %#x: %#x -> %#x' % (ad, u32(ee, ad), w)); struct.pack_into('<I', ee, ad, w)
-script = json.load(open('/srv/games/dirge-port/tools/trace/scripts/w229_rescue.json'))
+script = json.load(open(os.path.join(HERE, 'scripts', 'w229_rescue.json')))
 script = dict(script, frames=N, events=script['events'] + [
     dict({'from': 2200, 'to': 2204, 'buttons': ['start']}),
     dict({'from': 2270, 'to': 2274, 'buttons': ['cross']}),

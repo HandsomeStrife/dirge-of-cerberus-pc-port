@@ -20,16 +20,18 @@
 
 set -u
 
-BASE=/srv/games/dirge-port/native
-PORT=/srv/games/dirge-port/port           # the kel.c loader actually lives here
-EXTRACT=/srv/games/dirge-port/extract/_KEL
-ELF=/srv/games/dirge-port/elf/SLES_541.85         # the user's ELF: the class / fez / text ciphers are read from it
-SHARED=/srv/shared/dirge-port
 VERIFY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO="$(cd "$VERIFY/../.." && pwd)"
+BASE=$REPO/native
+PORT=$REPO/port           # the kel.c loader actually lives here
+EXTRACT=${DIRGE_EXTRACT:-$REPO/extract}/_KEL
+ELF=${DIRGE_ELF:-$REPO/elf/SLES_541.85}         # the user's ELF: the class / fez / text ciphers are read from it
+SHARED=${DIRGE_SHARE_DIR:-$VERIFY/out}          # ours: the shared drive (notes/HANDOFF.md)
 LOGDIR="$VERIFY/logs"
 RESULTS="$VERIFY/results.tsv"
 
 mkdir -p "$LOGDIR" "$SHARED"
+SHARED="$(cd "$SHARED" && pwd)"   # absolute: make runs in another folder
 : > "$RESULTS"
 printf 'subsystem\tbuild\twarnings\ttest\tdetail\n' >> "$RESULTS"
 
@@ -97,7 +99,7 @@ record textures "$B_STATUS" "$B_WARN" "$T_STATUS" "$T_DETAIL"
 banner "audio (dirge_atdec / dirge_wd / dirge_sound)"
 do_build audio "$BASE/assets/audio" all
 TLOG="$LOGDIR/audio.test.log"
-( cd "$BASE/assets/audio" && make sndcheck ) > "$TLOG" 2>&1
+( cd "$BASE/assets/audio" && make sndcheck DIRGE_SHARE_DIR="$SHARED" ) > "$TLOG" 2>&1   # the WAV lands where we check it
 trc=$?
 OUTWAV="$SHARED/sound_mix_sample.wav"
 if [ $trc -eq 0 ] && [ -s "$OUTWAV" ]; then

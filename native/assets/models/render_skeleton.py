@@ -7,13 +7,14 @@ the skeleton as a shaded 3D figure. Uses ONLY real recovered data
     python3 render_skeleton.py [container.bin]
 """
 import sys, math, os
+_REPO = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", ".."))  # repo root
 import numpy as np
 from PIL import Image
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from skd_skeleton import load_skeleton
 
 CONT = sys.argv[1] if len(sys.argv) > 1 else \
-    "/srv/games/dirge-port/extract/_KEL/noPath/07650001.bin"
+    os.path.join(_REPO, "extract/_KEL/noPath/07650001.bin")
 OUT = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "..", "renderer", "out"))
 
 sk = load_skeleton(CONT)

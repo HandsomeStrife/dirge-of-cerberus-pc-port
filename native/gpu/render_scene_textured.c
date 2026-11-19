@@ -281,7 +281,7 @@ static void vis_probe(const VisChunk *cs, int nc, const float eye[3], const int 
 int main(int argc, char **argv) {
     const char *listpath = "../assets/models/out/bmd_06960212_tex.list";
     const char *charpath = "../assets/models/out/char_e000.mesh";
-    const char *chartex  = "/srv/games/dirge-port/extract/_KEL/noPath/07650002.bin";
+    const char *chartex  = "../../extract/_KEL/noPath/07650002.bin";
     const char *outdir   = "out";
     const char *tag      = "21_scene_textured";
     /* HAND-SET placement (see place_character + header). Same room coordinate frame

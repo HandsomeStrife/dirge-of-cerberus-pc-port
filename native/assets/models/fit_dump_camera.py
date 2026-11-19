@@ -12,14 +12,15 @@ Run: python3 -I fit_dump_camera.py <dump.bin> <out.json> --body 0x2e60 --cape 0x
      (Vincent's TBPs in that dump; written into the JSON for export_p000_gpu2 --dump-camera)
 """
 import sys, os, collections, json
+_REPO = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", ".."))  # repo root
 import numpy as np
-sys.path.insert(0, "/srv/games/dirge-port/native/assets/models"); sys.path.insert(0, "/srv/games/dirge-port/tools/gsdump/src")
+sys.path.insert(0, os.path.join(_REPO, "native/assets/models")); sys.path.insert(0, os.path.join(_REPO, "tools/gsdump/src"))
 import p000_cape as C
 from gsparse import read_header
 from gsrender2 import build, tex0_fields
 from char_dumpbind import tri_sig
 import char_dumpbind; char_dumpbind.ROUND = 4096
-HERO = '/srv/games/dirge-port/tools/gsdump/dumps/z128_hero_163235.bin'
+HERO = os.path.join(_REPO, 'tools/gsdump/dumps/z128_hero_163235.bin')
 EXCL = {0x2cd4, 0x2e68, 0x2ee8, 0x2eec}   # hero Vincent; the target's are added from argv
 cam = C.HERO_CAM
 def tris(path, vframe):

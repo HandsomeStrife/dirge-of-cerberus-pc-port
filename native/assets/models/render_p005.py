@@ -58,9 +58,7 @@ from skd_skeleton import load_skeleton
 CONT = _REPO + "/extract/_KEL/noPath/07700141.bin"
 TEXC = _REPO + "/extract/_KEL/noPath/07700142.bin"
 DTEX = _REPO + "/native/assets/textures/dtex"
-RIP  = ("/tmp/claude-1000/-srv-games-dirge-port/"
-        "9bdd650d-972a-4ab8-9c5a-73a606c34b4a/scratchpad/viprip/"
-        "Vincent Valentine/Vincent.dae")
+RIP  = os.environ.get("DIRGE_VINCENT_DAE", "")   # a third-party Vincent .dae rip (not in the repo; ours was in a scratchpad)
 
 BODY, HAIR, CLOAK = 0, 1, 2
 ATLAS_NAME = {BODY: "p005_1_a(BODY)", HAIR: "p005_2(HAIR)", CLOAK: "p005_3(CLOAK)"}

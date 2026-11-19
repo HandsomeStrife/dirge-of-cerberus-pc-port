@@ -196,7 +196,7 @@ static int render_mesh_png(const Mesh *m, const rgl_params *base,
 
 int main(int argc, char **argv){
     const char *outdir = "out";
-    const char *tex_container = "/srv/games/dirge-port/extract/_KEL/noPath/06d1ff0b.bin";
+    const char *tex_container = "../../extract/_KEL/noPath/06d1ff0b.bin";
     for (int i=1;i<argc;i++){
         if (!strcmp(argv[i],"-o") && i+1<argc) outdir = argv[++i];
         else tex_container = argv[i];

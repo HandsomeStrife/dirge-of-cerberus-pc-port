@@ -9,8 +9,10 @@ CC      ?= gcc
 CFLAGS  ?= -O2 -Wall -Wextra -std=c11 -I.
 PY      ?= python3
 
-ELF     := /srv/games/dirge-port/elf/SLES_541.85
-CSV     := /srv/games/dirge-port/analysis/ee_boundaries.csv
+DIRGE_ELF    ?= ../../elf/SLES_541.85
+DIRGE_EE_CSV ?= ../../analysis/ee_boundaries.csv
+ELF     := $(DIRGE_ELF)
+CSV     := $(DIRGE_EE_CSV)
 TU_SIZE ?= 300
 # Leaf functions recompiled for the prototype (space-separated guest VAs):
 FUNCS   := 0x00417940 0x0036c338

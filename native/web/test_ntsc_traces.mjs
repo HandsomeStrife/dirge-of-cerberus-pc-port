@@ -9,6 +9,7 @@
 // cape's settle window MP+0x434 / +0x438 (cloth.js: armed by the clip starts the page chose, counting down once a
 // frame, re-armed by the facing). Then test_jump.mjs and test_wall.mjs run on the NTSC traces in this mode.
 import { readFileSync, existsSync, mkdirSync, symlinkSync, rmSync } from 'node:fs';
+import { dataMissing } from './test_data.mjs';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -109,13 +110,13 @@ if (NTSC) {
   }
   for (const t of ['test_jump.mjs', 'test_wall.mjs']) {
     const r = spawnSync(process.execPath, ['--import', path.join(WEB, 'test_hooks.mjs'), path.join(WEB, t)],
-                        { env: { ...process.env, DIRGE_VIDEO: 'ntsc', TRACE_OUT: tmp }, encoding: 'utf8' });
-    const lines = (r.stdout + r.stderr).trim().split('\n').filter(l => !/^skip /.test(l));
+                        { env: { ...process.env, DIRGE_VIDEO: 'ntsc', TRACE_OUT: tmp, DIRGE_REQUIRE_DATA: '0' }, encoding: 'utf8' });   // only 2 of its traces are linked: the rest skip (this test checks its own)
+    const lines = (r.stdout + r.stderr).trim().split('\n').filter(l => !/^(skip|SKIP) /.test(l));
     for (const l of lines) console.log('  ' + t + ': ' + l);
     ok(r.status === 0, `${t} on the NTSC traces in NTSC mode (exit ${r.status})`);
   }
   rmSync(tmp, { recursive: true, force: true });
 }
-if (!ran) { console.log('no traces found'); process.exit(1); }
+if (!ran) { console.log('no traces found'); process.exit(dataMissing() ? 0 : 1); }   // missing ones: SKIP (test_data.mjs)
 console.log(fail ? `${fail} FAILED` : 'all ok');
 process.exit(fail ? 1 : 0);

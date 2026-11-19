@@ -33,6 +33,7 @@ Usage:
     (defaults to the 06960212 gallery room -> out/bmd_06960212.mesh)
 """
 import os
+_REPO = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", ".."))  # repo root
 import sys
 import math
 import struct
@@ -147,7 +148,7 @@ def export(container, out_prefix):
 
 def main():
     container = (sys.argv[1] if len(sys.argv) > 1
-                 else "/srv/games/dirge-port/extract/_KEL/noPath/06960212.bin")
+                 else os.path.join(_REPO, "extract/_KEL/noPath/06960212.bin"))
     base = os.path.splitext(os.path.basename(container))[0]
     out_prefix = (sys.argv[2] if len(sys.argv) > 2
                   else os.path.join(OUT, "bmd_" + base))
